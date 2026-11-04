@@ -51,13 +51,13 @@ async function main() {
     const host = new Runtime(loadConfig(args[0]))
     try {
       const result = await serve(host)
-      process.stdout.write(JSON.stringify({ url: result.url, tokenFile: result.tokenPath }) + '\n')
+      process.stdout.write(JSON.stringify({ url: result.url+'/configure', tokenFile: result.tokenPath,connectionFile:result.connectionFile }) + '\n')
       let stopping = false
       const shutdown = async () => {
         if (stopping) return
         stopping = true
         result.server.close()
-        await host.close()
+        await result.closeRuntime()
       }
       process.once('SIGINT', () => { void shutdown() })
       process.once('SIGTERM', () => { void shutdown() })

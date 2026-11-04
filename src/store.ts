@@ -22,7 +22,7 @@ export class Store implements Repositories {
     chmodSync(path, 0o600)
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000')
     const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version)
-    if (version > 4) {
+    if (version > 5) {
       this.db.close()
       throw new Error('Database is newer than this program. Use the matching version.')
     }
@@ -33,7 +33,7 @@ export class Store implements Repositories {
       CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
         attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT);
       CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, at TEXT NOT NULL, body TEXT NOT NULL);
-      PRAGMA user_version=4;
+      PRAGMA user_version=5;
     `)
   }
   atomic<T>(work: () => T): T {

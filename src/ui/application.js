@@ -66,11 +66,32 @@ function updateBar() {
     announce(msg)
   }
 }
+function languagePicker() {
+  const language = el('select', 'lang')
+  language.id = 'language'
+  language.setAttribute('aria-label', L('Language', '界面语言'))
+  language.add(new Option('English', 'en'))
+  language.add(new Option('简体中文', 'zh-CN'))
+  language.value = lang
+  language.onchange = () => {
+    lang = language.value
+    try {
+      localStorage.setItem('agenthub.configuration.language', lang)
+    } catch {}
+    render()
+  }
+  return language
+}
 function render(focusTitle = false) {
   const focused = document.activeElement,
     focusId = focused?.id,
     start = focused?.selectionStart,
     end = focused?.selectionEnd
+  if (S.surface === 'guide') {
+    renderGuide()
+    restorePageFocus(focusTitle, focusId, start, end)
+    return
+  }
   const section = sections.find((s) => s[0] === S.page) || sections[0],
     name = L(section[1], section[2])
   document.documentElement.lang = lang
@@ -118,19 +139,7 @@ function render(focusTitle = false) {
     S.health?.version ? el('span', 'mono', 'v' + S.health.version) : null
   )
   const rail = add(el('aside', 'rail'), brand, nav, foot)
-  const language = el('select', 'lang')
-  language.id = 'language'
-  language.setAttribute('aria-label', L('Language', '界面语言'))
-  language.add(new Option('English', 'en'))
-  language.add(new Option('简体中文', 'zh-CN'))
-  language.value = lang
-  language.onchange = () => {
-    lang = language.value
-    try {
-      localStorage.setItem('agenthub.configuration.language', lang)
-    } catch {}
-    render()
-  }
+  const language = languagePicker()
   const home = add(el('a', 'text-action'), el('span', '', L('Console', '操作台')), icon('out'))
   home.href = '/'
   const head = add(
@@ -139,9 +148,14 @@ function render(focusTitle = false) {
       el('div', 'crumb'),
       el('span', '', 'AgentHub'),
       icon('forward'),
-      el('strong', '', L('Configuration', '配置中心'))
+      el('strong', '', L('Advanced settings', '高级设置'))
     ),
-    add(el('div', 'tools'), add(el('label', 'inline'), icon('lang'), language), home)
+    add(
+      el('div', 'tools'),
+      action(L('Setup guide', '设置向导'), () => switchSurface('guide'), 'text-action'),
+      add(el('label', 'inline'), icon('lang'), language),
+      home
+    )
   )
   const mobile = el('select')
   mobile.id = 'section-nav'
@@ -209,8 +223,11 @@ function render(focusTitle = false) {
   layout.id = 'layout'
   app.replaceChildren(skip, layout)
   updateBar()
+  restorePageFocus(focusTitle, focusId, start, end)
+}
+function restorePageFocus(focusTitle, focusId, start, end) {
   if (focusTitle) {
-    title.focus({ preventScroll: true })
+    document.getElementById('page-title')?.focus({ preventScroll: true })
     window.scrollTo(0, 0)
   } else if (focusId) {
     const input = document.getElementById(focusId)
@@ -246,7 +263,9 @@ async function api(path, body, publicRead = false) {
     cache: 'no-store',
     redirect: 'error',
     credentials: 'omit',
-    signal: AbortSignal.timeout(path === '/setup-check' ? 120000 : 30000)
+    signal: AbortSignal.timeout(
+      ['/setup-check', '/onboarding/check', '/onboarding/apply'].includes(path) ? 120000 : 30000
+    )
   })
   const payload = await res.json().catch(() => null)
   if (!res.ok || !payload) throw new ApiError(res.status, payload)
@@ -363,16 +382,14 @@ async function run(label, fn) {
     if (S.latest || (label === 'save' && S.notice?.level === 'error')) revealRecovery()
   }
 }
-async function connectHost() {
-  if (!S.typed.trim()) return
+async function connectHost(credential = S.typed) {
+  if (!credential.trim()) return
   await run('connect', async () => {
-    S.token = S.typed.trim()
+    S.token = credential.trim()
     S.typed = ''
-    const snap = await snapshot()
-    await runtimeStatus()
+    const [snap] = await Promise.all([snapshot(), runtimeStatus(), loadGuideContext(), health()])
     adopt(snap)
     S.authed = true
-    await health()
     if (!S.latest) announce(L('Connected to the host.', '已连接到宿主。'))
   })
 }
@@ -422,6 +439,7 @@ function disconnect() {
   })
   S.buffers.clear()
   S.errors.clear()
+  resetGuideSession()
   render(true)
 }
 async function save() {
@@ -643,10 +661,10 @@ async function previewPrompt() {
   })
 }
 window.addEventListener('beforeunload', (e) => {
-  if (dirty()) {
+  if (dirty() || guideHasDraft()) {
     e.preventDefault()
     e.returnValue = ''
   }
 })
 render()
-health().then(() => render())
+Promise.all([health(), loadConnectInfo()]).then(() => render())

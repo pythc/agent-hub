@@ -5,9 +5,9 @@ import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import {backupState,verifyBackup,restoreState} from '../src/backup.ts'
 const oldRoot=process.argv[2]
-if(!oldRoot)throw Error('Provide an extracted AgentHub 0.5.0 or 0.6.0 source directory')
-const baselineVersion=JSON.parse(readFileSync(resolve(oldRoot,'package.json'),'utf8')).version,baselineSchema=baselineVersion==='0.5.0'?2:baselineVersion==='0.6.0'?3:undefined
-if(!baselineSchema)throw Error('Baseline must be AgentHub 0.5.0 or 0.6.0')
+if(!oldRoot)throw Error('Provide an extracted AgentHub 0.5.0, 0.6.0, 0.7.0 or 0.8.0 source directory')
+const baselineVersion=JSON.parse(readFileSync(resolve(oldRoot,'package.json'),'utf8')).version,baselineSchema=baselineVersion==='0.5.0'?2:baselineVersion==='0.6.0'?3:['0.7.0','0.8.0'].includes(baselineVersion)?4:undefined
+if(!baselineSchema)throw Error('Baseline must be AgentHub 0.5.0, 0.6.0, 0.7.0 or 0.8.0')
 const {Store:OldStore}=await import(pathToFileURL(resolve(oldRoot,'src/store.ts')).href)
 const {Runtime:OldRuntime}=await import(pathToFileURL(resolve(oldRoot,'src/runtime.ts')).href)
 const {loadConfig:loadOldConfig}=await import(pathToFileURL(resolve(oldRoot,'src/config.ts')).href)

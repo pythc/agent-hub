@@ -25,6 +25,7 @@ import {Setup} from './setup.ts'
 import {Reviews} from './review.ts'
 import {Merger} from './merge.ts'
 import type {GithubApi} from './connectors/github.ts'
+import {loadManagedConfig} from './managed-config.ts'
 
 
 
@@ -74,7 +75,7 @@ export class Runtime {
         closeSync(descriptor)
       }
     }
-    try { this.store = new Store(join(config.stateDir, 'state.sqlite')) }
+    try { loadManagedConfig(config);validateBackendSelection(config);this.store = new Store(join(config.stateDir, 'state.sqlite')) }
     catch (error) { unlinkSync(this.lock); throw error }
     this.approvals = new Approvals(this.store)
     try{this.settings = new Settings(this.store,config);this.model = options.model ?? new BackendRegistry(config,this.store)}
@@ -194,6 +195,13 @@ export class Runtime {
   }
   /** Only a trusted adapter supplies actor identity; MCP clients use the configured local operator. */
   canWrite(){return !this.closing&&!this.paused}
+  async pauseForConfiguration(){
+    const previous=this.paused;this.pause(true);await this.tickIdle
+    if(this.runningJobs.size||this.controllers.size||this.work.list().some(w=>['starting','running'].includes(w.state))||this.store.list<Run>('run').some(r=>r.phase==='merging')){
+      this.pause(previous);throw Error('configuration_busy')
+    }
+    return previous
+  }
   receive(sourceId: string, actor: string, value: Incoming, human = true): unknown {
     if (this.closing) throw new Error('Host is stopping')
     const source = this.sources.get(sourceId)

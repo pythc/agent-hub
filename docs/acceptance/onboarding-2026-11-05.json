@@ -1,0 +1,58 @@
+{
+  "at": "2026-11-04T18:02:16.437565+00:00",
+  "version": "0.9.0",
+  "rootBrowser": {
+    "fourStepChinesePath": true,
+    "connectionFilePicker": true,
+    "codexChecks": true,
+    "configurationApplied": true,
+    "realCodexReplyDisplayed": true,
+    "restartAndReconnectRecoveredSettingsAndReply": true,
+    "advancedSettingsKept": true,
+    "languageSwitch": true,
+    "mobileGuide": [
+      {
+        "language": "en",
+        "requestedViewport": 390,
+        "actualCssWidth": 354,
+        "horizontalOverflow": false
+      },
+      {
+        "language": "zh-CN",
+        "requestedViewport": 390,
+        "actualCssWidth": 354,
+        "horizontalOverflow": false
+      }
+    ]
+  },
+  "frontendChatReport": {
+    "completed": true,
+    "realRuntimeWithLocalModelFixture": true,
+    "customTaskComposer": true,
+    "sourceAndThreadIdsGeneratedInternally": true,
+    "connectionLabelsLocalizedOrHumanReadable": true,
+    "queuedRequestCopyUsesProgressInsteadOfMissingRecord": true
+  },
+  "automated": {
+    "macOS": {
+      "tests": 312,
+      "passed": true
+    },
+    "linux": {
+      "tests": 312,
+      "passed": true,
+      "skipped": 0,
+      "scope": "ARM64 Linux VM, ordinary user"
+    }
+  },
+  "observedTestFlake": {
+    "test": "existing lark CLI fixture",
+    "event": "One parallel macOS run exceeded its unchanged 5-second test timeout. Focused rerun (16 cases) and subsequent complete run (312 cases) passed."
+  },
+  "boundaries": [
+    "This is a walked-through first-run flow, not a study with independent novice users.",
+    "Three API protocol checks and first replies used local provider fixtures; commercial API providers remain unverified.",
+    "Office integrations were intentionally deferred; no platform privileges were bypassed.",
+    "Dedicated read-only local demonstration instance; existing production hosts were not changed."
+  ]
+}

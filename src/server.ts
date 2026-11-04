@@ -7,20 +7,33 @@ import { Runtime } from './runtime.ts'
 import { incomingSchema } from './sources.ts'
 import { deliverDraft } from './delivery.ts'
 import { dashboard } from './web.ts'
-import {configSchema} from './config.ts'
+import {configSchema,type Config} from './config.ts'
 import {randomUUID} from 'node:crypto'
 import {readSchema} from './resources.ts'
 import {compose,promptStatus} from './prompts.ts'
 import {configurationSnapshot} from './configuration.ts'
 import {SettingsError} from './settings.ts'
 import {configurationPage} from './ui/configuration.ts'
+import {Onboarding,OnboardingError} from './onboarding.ts'
+import {atomicPrivateFile} from './managed-config.ts'
 
-export async function serve(runtime: Runtime,options:{configurationPreview?:boolean}={}) {
+export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config)=>Runtime}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
+  const connectionFile=join(runtime.config.stateDir,'connection.json')
+  let changing=false,unavailable=false,runtimeClosed=false,endpoint='',stopping=false,closingRuntime:Promise<void>|undefined
+  const onboarding=new Onboarding(()=>runtime,options.configurationPreview===true)
+  async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=runtime.close()}await closingRuntime}
+  async function rebuild(config:Config){
+    await stopRuntime()
+    if(stopping)throw Error('Host is stopping')
+    const next=options.createRuntime?options.createRuntime(configSchema.parse(config)):new Runtime(configSchema.parse(config))
+    runtime=next;runtimeClosed=false;closingRuntime=undefined;runtime.endpoint=endpoint;runtime.start()
+  }
   let token: string
   try { token = readFileSync(tokenPath, 'utf8').trim() }
   catch { token = randomBytes(32).toString('hex'); writeFileSync(tokenPath, token, { mode: 0o600, flag: 'wx' }) }
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
+    if(error instanceof OnboardingError){if(error.code==='setup_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof SettingsError){send(response,error.status,{error:error.message,code:error.code,...(error.code==='settings_conflict'?{currentRevision:runtime.settings.current().revision}:{})});return}
     if(error instanceof z.ZodError){send(response,400,{error:'Configuration or request validation failed',code:'validation_error',issues:error.issues.map(issue=>({path:issue.path,message:issue.message}))});return}
     send(response,400,{error:String(error).slice(0,500),code:'request_failed'})
@@ -38,7 +51,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if (bytes > 256_000) throw new Error('Request exceeds 256KB')
       chunks.push(chunk)
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Request body must be valid JSON')}
   }
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const path = new URL(req.url!, 'http://localhost').pathname
@@ -49,8 +62,10 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       res.end(path==='/'?dashboard:configurationPage)
       return
     }
-    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: true, version: '0.8.0' }); return }
-    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check'].includes(path)){
+    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: !unavailable, version: '0.9.0',...(changing?{restarting:true}:{}) }); return }
+    if(req.method==='GET'&&path==='/connect-info'){send(res,200,{connectionFile,preview:options.configurationPreview===true});return}
+    if(changing||unavailable){send(res,503,{error:'The host is applying configuration. Please try again shortly.',code:unavailable?'setup_recovery_required':'configuration_restarting'});return}
+    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply'].includes(path)){
       if(!authorized(req)){send(res,401,{error:'Access token required',code:'token_required'});return}
       send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
     }
@@ -70,6 +85,14 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       return
     }
     if (!authorized(req)) { send(res, 401, { error: 'Access token required',code:'token_required' }); return }
+    if(req.method==='GET'&&path==='/onboarding'){send(res,200,onboarding.info());return}
+    if(req.method==='POST'&&path==='/onboarding/plan'){send(res,200,onboarding.plan(await body(req)));return}
+    if(req.method==='POST'&&path==='/onboarding/check'){const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));send(res,200,await onboarding.check(input.id));return}
+    if(req.method==='POST'&&path==='/onboarding/apply'){
+      const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));if(changing)throw new OnboardingError('configuration_busy','Another setup is being applied.',409);changing=true
+      try{send(res,200,await onboarding.apply(input.id,rebuild))}finally{changing=false}
+      return
+    }
     if(req.method==='GET'&&path==='/configuration'){send(res,200,{...configurationSnapshot(runtime),preview:options.configurationPreview===true});return}
     if(req.method==='POST'&&path==='/merge-authorize'){
       const input=z.object({id:z.string(),source:z.string(),number:z.number().int().positive(),head:z.string().regex(/^[a-f0-9]{40}$/)}).strict().parse(await body(req))
@@ -175,10 +198,12 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   }
   server.requestTimeout = 30_000
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(runtime.config.port, '127.0.0.1', resolve) })
-  runtime.start()
   const address = server.address() as { port: number }
   runtime.endpoint='http://127.0.0.1:'+address.port
-  return { server, url: 'http://127.0.0.1:' + address.port, tokenPath }
+  endpoint=runtime.endpoint
+  try{atomicPrivateFile(connectionFile,JSON.stringify({application:'agent-hub',version:1,url:endpoint,accessToken:token},null,2)+'\n')}catch(error){await new Promise<void>(r=>server.close(()=>r()));throw error}
+  runtime.start()
+  return {server,url:endpoint,tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await stopRuntime()}}
 }
 function send(response: ServerResponse, status: number, value: unknown) {
   if (!response.headersSent) response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })

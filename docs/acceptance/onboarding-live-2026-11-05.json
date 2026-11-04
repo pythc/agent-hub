@@ -1,0 +1,21 @@
+{
+  "at": "2026-11-04T17:53:00.545Z",
+  "version": "0.9.0",
+  "firstRun": {
+    "connectionFileSelectedInBrowser": true,
+    "codexInstallationAndSignInChecks": true,
+    "savedAndReloadedRuntime": true,
+    "naturalLanguageRequest": true,
+    "realBackend": "codex",
+    "model": "gpt-6.1-terra",
+    "phase": "idle",
+    "outcome": "completed",
+    "acknowledgementSent": true,
+    "replySent": true,
+    "replyVisibleInBrowser": true,
+    "workspaceReadOnly": true,
+    "officeIntegrations": false
+  },
+  "onboardingPersisted": true,
+  "scope": "Independent local instance using the existing Codex sign-in. No existing production host was upgraded."
+}

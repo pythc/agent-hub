@@ -413,47 +413,128 @@ function stateLabel(value) {
   return value ? L('Unrecognized status', '未识别状态') + ' (' + value + ')' : notReported()
 }
 function accessPanel() {
-  const form = el('form', 'authform'),
-    label = el('label', '', L('Access token', '访问令牌')),
-    input = el('input')
-  input.id = 'access-token'
-  input.name = 'access-token'
-  input.type = 'password'
-  input.autocomplete = 'off'
-  input.spellcheck = false
-  input.required = true
-  input.value = S.typed
-  input.oninput = () => {
-    S.typed = input.value
+  const file = el('input')
+  file.type = 'file'
+  file.accept = '.json,application/json'
+  file.id = 'connection-file'
+  file.className = 'connection-file'
+  const pick = action(L('Choose connection file', '选择连接文件'), () => file.click(), 'btn primary', 'key')
+  pick.id = 'choose-connection'
+  file.onchange = async () => {
+    const selected = file.files?.[0]
+    file.value = ''
+    if (!selected) return
+    try {
+      if (selected.size > 32768) throw Error()
+      const data = JSON.parse(await selected.text())
+      if (
+        data.application !== 'agent-hub' ||
+        data.version !== 1 ||
+        typeof data.accessToken !== 'string' ||
+        !data.accessToken.trim()
+      )
+        throw Error()
+      if (data.url !== location.origin) {
+        setNotice(
+          'error',
+          'This file belongs to another AgentHub address. Choose the file for this page.',
+          '此文件属于其他 AgentHub 地址。请选择当前页面对应的连接文件。'
+        )
+        render()
+        revealRecovery()
+        return
+      }
+      await connectHost(data.accessToken)
+    } catch {
+      setNotice(
+        'error',
+        'Choose the connection.json created by AgentHub on this computer.',
+        '请选择 AgentHub 在这台电脑上生成的 connection.json。'
+      )
+      render()
+      revealRecovery()
+    }
   }
-  label.htmlFor = input.id
-  label.append(input)
-  const connect = action(
-    S.busy === 'connect' ? L('Connecting…', '连接中…') : L('Connect', '连接'),
-    undefined,
-    'btn primary',
-    'arrow'
+  const path = S.connectInfo?.connectionFile
+  const copyPath = action(
+    L('Copy file path', '复制文件路径'),
+    async () => {
+      try {
+        await navigator.clipboard.writeText(path)
+        copyPath.textContent = L('Path copied', '已复制路径')
+      } catch {
+        const range = document.createRange()
+        range.selectNodeContents(pathCode)
+        const selection = window.getSelection()
+        selection.removeAllRanges()
+        selection.addRange(range)
+        copyPath.textContent = L('Path selected · copy now', '已选中路径，请复制')
+      }
+    },
+    'text-action'
   )
-  connect.type = 'submit'
-  connect.disabled = !!S.busy
-  form.onsubmit = (e) => {
-    e.preventDefault()
-    connectHost()
-  }
-  add(form, label, connect)
-  return add(
-    el('section', 'panel access'),
-    add(el('div', 'access-head'), icon('key'), el('h2', '', L('Connect to this host', '连接到当前宿主'))),
+  const pathCode = el('code', '', path)
+  const pickerHelp = detail(
+    L('How to locate this file', '如何找到这个文件'),
     el(
       'p',
       'hint',
       L(
-        'Enter the host access token to load its configuration and revision history.',
-        '输入宿主访问令牌以读取配置和版本历史。'
+        'Copy the path and paste it into the file chooser. On macOS, press Shift–Command–G in the chooser first.',
+        '复制完整路径并将它粘贴到文件选择器。在 macOS 上，先在选择窗口按 Shift–Command–G。'
+      )
+    )
+  )
+
+  const input = el('input')
+  input.type = 'password'
+  input.id = 'access-token'
+  input.value = S.typed
+  input.autocomplete = 'off'
+  input.spellcheck = false
+  input.required = true
+  input.oninput = () => {
+    S.typed = input.value
+  }
+  const label = el('label', '', L('Access token', '访问令牌'))
+  label.htmlFor = input.id
+  label.append(input)
+  const submit = action(L('Connect', '连接'), null, 'btn')
+  submit.type = 'submit'
+  const form = add(el('form', 'authform'), label, submit)
+  form.onsubmit = (e) => {
+    e.preventDefault()
+    connectHost()
+  }
+  const manual = detail(L('Use an access token instead', '改用访问令牌'), form)
+  return add(
+    el('section', 'panel access'),
+    el('h2', '', L('Connect this browser to AgentHub', '让此浏览器连接 AgentHub')),
+    el(
+      'p',
+      'hint',
+      L(
+        'Choose the connection file that AgentHub created at startup. It gives this tab permission to apply your setup.',
+        '选择 AgentHub 启动时生成的连接文件，授权当前标签页应用设置。'
       )
     ),
-    form,
-    el('p', 'aux', L('The token stays in memory for this tab.', '令牌仅保存在当前标签页内存中。'))
+    path
+      ? add(
+          el('div', 'guide-path'),
+          el('span', 'hint', L('File location', '文件位置')),
+          pathCode,
+          pickerHelp
+        )
+      : el(
+          'p',
+          'hint',
+          L(
+            'Look for connection.json in the host’s state folder, or use its access token below.',
+            '在宿主的状态目录查找 connection.json，或使用下方的访问令牌。'
+          )
+        ),
+    add(el('div', 'actions'), pick, file, path ? copyPath : null),
+    manual
   )
 }
 function hostPanel() {

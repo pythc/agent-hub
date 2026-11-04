@@ -4,6 +4,7 @@ import {configSchema} from '../src/config.ts'
 import {Runtime} from '../src/runtime.ts'
 import {serve} from '../src/server.ts'
 import {MessageSource} from '../src/sources.ts'
+import type {Config} from '../src/config.ts'
 
 /** An isolated, persistent configuration playground. No model or office credentials required. */
 const root=resolve(process.argv[2]??'.local/configuration-preview'),cwd=join(root,'workspace')
@@ -27,10 +28,11 @@ class PreviewSource extends MessageSource {
  async identity(){return {id:this.config.id+'-preview',type:'preview',verified:false}}
  async deliver(){throw Error('Preview connector cannot deliver messages')}
 }
-const runtime=new Runtime(config,{sources:config.sources.map(source=>new PreviewSource(source))})
+const createRuntime=(config:Config)=>new Runtime(config,{sources:config.sources.map(source=>new PreviewSource(source))})
+const runtime=createRuntime(config)
 runtime.pause(true)
-const {server,url,tokenPath}=await serve(runtime,{configurationPreview:true})
-writeFileSync(join(root,'connection.json'),JSON.stringify({url:url+'/configure',tokenPath},null,2)+'\n',{mode:0o600})
-console.log(JSON.stringify({url:url+'/configure',tokenPath,isolated:true,taskExecution:false}))
+const host=await serve(runtime,{configurationPreview:true,createRuntime}),{server,url,tokenPath}=host
+writeFileSync(join(root,'preview-info.json'),JSON.stringify({url:url+'/configure',connectionFile:host.connectionFile},null,2)+'\n',{mode:0o600})
+console.log(JSON.stringify({url:url+'/configure',connectionFile:host.connectionFile,isolated:true,taskExecution:false}))
 let stopping=false
-for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{if(stopping)return;stopping=true;server.close();void runtime.close()})
+for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{if(stopping)return;stopping=true;server.close();void host.closeRuntime()})

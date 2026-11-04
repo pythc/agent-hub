@@ -19,11 +19,11 @@ const errorText=(result:ToolResult)=>result.contentItems.filter(c=>c.type==='inp
 /** Provider-neutral agent loop. Providers propose calls; only the host executes scoped tools. */
 export class ApiModel implements Model {
  private active=new Set<string>()
- constructor(readonly id:string,readonly definition:ApiDefinition,private store:ThreadStore,private turnTimeoutMs:number){}
+ constructor(readonly id:string,readonly definition:ApiDefinition,private store:ThreadStore,private turnTimeoutMs:number,private credential?:()=>string|undefined){}
  describe():BackendDescription{return {id:this.id,kind:this.definition.kind,model:this.definition.model,nativeTakeover:false,images:this.definition.images,resume:true,tools:true,steering:true,promptRefresh:true}}
  private endpoint(path:string){return this.definition.baseUrl.replace(/\/+$/,'')+'/'+path}
  private async http(path:string,signal:AbortSignal,body?:unknown):Promise<any>{
-  const d=this.definition,credential=d.apiKeyEnv?process.env[d.apiKeyEnv]:undefined
+  const d=this.definition,credential=this.credential?this.credential():d.apiKeyEnv?process.env[d.apiKeyEnv]:undefined
   if(d.apiKeyEnv&&!credential?.trim())throw Error('Backend '+this.id+' requires environment variable '+d.apiKeyEnv)
   const headers:Record<string,string>={'content-type':'application/json'}
   if(d.kind==='anthropic'){headers['anthropic-version']='2023-06-01';if(credential)headers['x-api-key']=credential}

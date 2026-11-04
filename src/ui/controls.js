@@ -127,6 +127,7 @@ const sourceKeys = [
   'memberSync'
 ]
 let S = {
+  surface: location.hash === '#advanced' ? 'advanced' : 'guide',
   page: 'overview',
   health: null,
   healthDone: false,

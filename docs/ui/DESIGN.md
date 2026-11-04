@@ -79,7 +79,9 @@ components:
 
 ## Overview
 
-The `/configure` workspace extends AgentHub’s green, system-font console. Before connecting, an operator can check the host and enter a token. After connecting, the overview shows saved settings. Editors across all sections share one in-memory draft tied to the host revision.
+AgentHub opens with a four-step task guide at /configure. First-time users choose an AI service, a place to give requests and a dedicated work folder, then check their choices and try a first request. Advanced settings remain one action away, including a direct /configure#advanced bookmark. Both views retain their own draft while the tab stays open.
+
+The previous entrance asked for a host token before explaining the task, gave eight internal sections equal weight and showed runtime health without saying whether a first request could run. It also offered backend selection before a new user had a connection to select. The guide defers authorization until needed, separates preparing choices from applying them, and gives provider setup a direct path.
 
 ## Colors
 
@@ -90,6 +92,9 @@ Use ink for headings, body for supporting labels and muted for explanations. The
 The system stack supports English and Simplified Chinese. The page title sits above a single explanatory paragraph. Use monospace for host identifiers, JSON and prompt output. Runtime values in key–value rows use tabular numerals. Long values and error paths wrap within the available width.
 
 ## Layout
+
+- The guide uses a single reading column up to 800px wide. Four ordered steps show the route to a first task. The current step asks one question and uses native radio groups, labeled inputs and a primary continuation action. On a narrow display the step names sit below their markers.
+- Advanced settings use the existing sidebar layout described below.
 
 - On desktop, a sticky 232px rail contains grouped navigation and host status. A 64px top bar carries the language selector and console link. Main content is capped at 1140px. The overview pairs a larger task panel with a narrower runtime summary.
 - At 1050px and below, the rail narrows to 204px and panel padding drops to 20px.
@@ -105,6 +110,10 @@ Use surface tone and a 1px border for separation. The access panel has a pale gr
 Buttons and navigation have 7px corners, inputs 6px and panels 12px. The native checkbox is styled as a 38 × 22px switch with a sliding thumb. Outline icons inherit the text color and are hidden from assistive technology.
 
 ## Components
+
+- **First use.** Collect choices before asking for operator access. Pair by selecting the private connection file for this origin. Opening the token fallback is optional. Pairing does not check a provider, and checking does not apply the setup.
+- **First task and later requests.** On success the stepper gives way to a task inbox. Keep a labeled natural-language composer, examples that fill the draft and a separate optional no-file test. A sent request and its eventual reply stay together. Each new request gets an independent discussion. A transport retry reuses the original event. Restore recent requests from the saved source when the user reconnects.
+- **Preview.** The guide explains on entry that live AI checks and delivery are disabled. Its final inbox has a disabled composer. A saved preview receipt never appears as a verified live assistant.
 
 - **Navigation and language.** A skip link targets main content. The active rail control exposes `aria-current="page"`. Section changes move focus to the page heading. English is the initial language. Selecting 简体中文 updates the document language, page title, labels and formatted dates, and retains the draft. The language preference can persist across tabs and reloads.
 - **Fields and feedback.** Associate each control with a visible label. Hints use `aria-describedby`. Invalid inputs expose `aria-invalid` and link to the error message. Keep invalid input available for correction. Keyboard focus uses a 2px accent outline with a 3px offset. Error notices use an alert role. Ordinary updates use status announcements.

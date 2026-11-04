@@ -1,36 +1,48 @@
-# Configuration console / 双语配置台
+# Get started / 首次使用
 
-Open `/configure` on the running AgentHub host. English is the default interface language; select 简体中文 to switch. The existing operations console stays available at `/`.
+Open `/configure` on your AgentHub. The default screen guides you to a working browser inbox. English is the initial language; 简体中文 is available in the top bar.
 
-The page reads and saves the host's real configuration. Connect with the access token in `<stateDir>/access-token`. The page keeps that token in memory for the current page session, never in the URL or browser storage. Language preference is stored locally. Keep this local operator token private.
+1. **Choose your AI service.** Use an existing Codex sign-in, or enter the service address, model name and API key provided by your service or team. OpenAI and Anthropic have presets; custom services retain all three supported API formats. Credentials stay in the current draft until you apply the setup.
+2. **Start in the browser.** No office account is required. Feishu and WeCom can be connected later, after your browser request works.
+3. **Choose a dedicated work folder.** The suggested folder is created for you. It starts with read-only access; the assistant can analyze files there. Changing files requires a separately configured write-capable source.
+4. **Check and apply.** When asked to connect this browser, select the private `connection.json` file whose location appears on the page. Then check the AI service and save. AgentHub preserves existing connections and conversations, adds this workspace and reloads the host while keeping its address and connection key.
 
-## Isolated preview
+After saving, type a normal request and see its progress and reply on the same page. Source, discussion and request IDs are handled internally. Each message starts a separate task; the operations console remains available for deeper task control.
+
+Returning users can select their connection file and open the last saved browser inbox. Saved settings and request history survive a restart; browser authorization must be supplied again after reloading the page.
+
+## Local examples
+
+Install the repository dependencies first. With Codex already installed and signed in, run:
+
+```sh
+node --import tsx examples/getting-started-demo.ts
+```
+
+This starts an independent functional instance at `http://127.0.0.1:4335/configure`, using an isolated state directory and read-only work folder. It makes real Codex model calls through the existing login and has no office integrations. The terminal prints the connection file path, never the key itself.
+
+For an offline configuration playground:
 
 ```sh
 node --import tsx examples/configuration-preview.ts
 ```
 
-The script prints the preview URL (`http://127.0.0.1:4335/configure`) and token file path. Paste that file's token into the connection form. Preview settings are persisted under `.local/configuration-preview/state`, separate from other hosts. Re-running the script keeps its saved revisions.
+It uses the same port, so stop one example before starting the other. The offline preview can save choices, but its connection checks remain pending and it cannot execute tasks. This restriction is visible before applying setup.
 
-The preview uses the real settings, revision, validation and database interfaces. It does not authenticate real model services or office bots. Its connectors do not contact platforms, operational requests are rejected, and tasks cannot be submitted. It is a configuration playground, not a running office assistant.
+## Advanced settings and recovery
 
-## Save and recovery semantics
+“Advanced settings” retains the complete execution, sources, policy, background work, delivery, prompts, JSON and revision editors. Changing existing backend endpoints or source deployment properties still requires a controlled configuration change. The first-run guide adds a connection and workspace through its own validated, reversible deployment path; it does not rewrite existing connection identities.
 
-- A successful save creates a new immutable revision. Reloading or restarting the host retains it.
-- A stale revision returns HTTP 409 with `code=settings_conflict`; the newer server version is not overwritten. Compare the latest version before applying the intended edits again.
-- Invalid values return `code=validation_error` and field paths. Failed saves do not create partial revisions.
-- Model backend definitions and source connection/deployment settings require an edited startup configuration and controlled restart. They cannot be hot-saved through this page. `code=restart_required` protects source deployment fields.
-- Selecting an execution backend changes future sessions. Existing sessions remain bound to their original backend.
-- Restoring history is a new settings revision. It does not undo files, messages, publication or merges.
+Settings saves use version checks. A stale draft receives HTTP 409, and newer settings remain intact. Applying first-run setup while background work is active is refused. If reloading the new configuration fails, the previous settings and managed connection files are restored. An interrupted file update is reconciled with its database commit marker on startup.
 
-Credentials remain in the host environment or private environment file. Configuration contains environment variable names, not secret values. Changing those names does not create credentials or authenticate a provider.
+Managed connection definitions are stored in `<stateDir>/setup/connections.json`; API key values are in the private `credentials.json` beside it. The browser's connection file contains an operator key and must remain private. The page keeps keys in memory, not its URL or browser storage. Advanced manual token entry remains available.
 
-## 中文说明
+Version 0.9.0 backups include managed connections and API credentials with checksums. Keep those backups private. Environment variables or external credential files managed outside the guide still require their own backup. Work files, attachments and external actions are outside SQLite/configuration rollback.
 
-在现有宿主地址后添加 `/configure`，输入该实例状态目录中的访问令牌。默认英文，可切换简体中文。这个页面直接使用真实设置接口；保存成功后产生版本，刷新及重启后仍保留。
+## 中文快速说明
 
-隔离预览使用单独端口和状态库，可以实际修改配置、验证持久化和版本冲突；不连接办公平台，也不执行任务。真实实例仍应使用自己的配置和访问令牌。
+默认页面按四步完成首次配置：**选 AI 服务 → 先在浏览器试用 → 选专用文件夹 → 检查并保存**。不需要先理解路由器、后端协议、准入矩阵或作业期限。API 的自定义协议和全部专业参数仍可使用，但不再是默认入口。
 
-后端定义、来源的连接参数、路径等部署设置需要修改启动 JSON 并受控重启。人员允许列表、规则、模型角色选择、后台作业和提示词等可热更新字段按宿主能力保存。配置成功、服务在线、平台认证成功分别显示，不能相互替代。
+连接浏览器时，点击“选择连接文件”，选择页面提示位置的 `connection.json`；无需手抄令牌。保存后直接用普通语言交代任务，在“最近任务”中查看处理进度和回复。刷新后重新连接，再打开上次保存的入口即可。
 
-接入飞书或企业微信前仍需完成平台权限及凭据准备，见 [办公接入](OFFICE.md)。升级前保留原配置和状态备份，见 [备份与升级](../README.md#检查升级和回退)。
+建议文件夹默认只读。飞书、企业微信可以后续接入，不阻塞第一条浏览器请求。办公平台的创建权限、凭据和真实收发仍需分别完成，见 [办公接入](OFFICE.md)。升级前保留原启动配置和备份，见 [0.9.0 验收与回退](ACCEPTANCE_0.9.md)。
