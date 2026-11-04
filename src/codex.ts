@@ -2,40 +2,19 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { Config } from './config.ts'
 
-export interface NativeControl { steer(text:string):Promise<void>; interrupt():Promise<void>;refresh?(instructions:string):Promise<void> }
-export interface NativeRequest { id:string; method:string; params:any }
-export interface ToolSpec {type:'function';name:string;description:string;inputSchema:Record<string,unknown>}
-export interface ToolContent {type:'inputText'|'inputImage';text?:string;imageUrl?:string}
-export interface ModelRequest {
-  cwd: string; instructions: string; input: string; schema: Record<string, unknown>
-  model?:string;onModel?:(model:string)=>void
-  title?: string; threadId?: string; ephemeral?: boolean; sandbox?: 'read-only' | 'workspace-write'
-  signal?: AbortSignal
-  operator?:boolean
-  archiveOnComplete?:boolean
-  tools?:ToolSpec[]
-  onTool?:(name:string,args:unknown,callId:string)=>Promise<{contentItems:ToolContent[];success:boolean}>
-  workerMcp?:{command:string;args:string[]}
-  managed?:boolean
-  privateState?:string
-  onCapabilities?:(value:{mcpServers:string[];disabledPlugins:string[];managed:boolean})=>void
-  onActive?: (control:NativeControl)=>void
-  onHumanRequest?: (request:NativeRequest)=>Promise<unknown>
-  onProgress?: (event:string)=>void
-  onThread?: (id: string) => void; onTurn?: (id: string) => void
-}
-export interface ModelResult { threadId: string; turnId: string; text: string }
-export interface Model { run(request: ModelRequest): Promise<ModelResult>; expose?(threadId:string,cwd:string):Promise<void>;history?(threadId:string,cwd:string):Promise<any>;catalog?(provider?:string):Promise<any> }
+import type {Model,ModelRequest,ModelResult,ToolContent} from './model.ts'
+export type {Model,ModelRequest,ModelResult,NativeControl,NativeRequest,ToolSpec,ToolContent} from './model.ts'
 interface RpcMessage { id?: number | string; method?: string; params?: any; result?: any; error?: { code: number; message: string } }
 
 /** One owned stdio process per activation. Persistent threads survive activations. */
 export class CodexModel implements Model {
   constructor(private readonly config: Pick<Config, 'codex' | 'model' | 'effort' | 'turnTimeoutMs'>, private readonly extraArgs: string[] = []) {}
+  describe(){return {id:'codex',kind:'codex',nativeTakeover:true,images:true,resume:true,tools:true,steering:true,promptRefresh:true,model:this.config.model}}
   async expose(threadId:string,cwd:string):Promise<void>{
     const client=new AppServer(this.config.codex,this.extraArgs,cwd)
     const timer=setTimeout(()=>client.fail(Error('Expose deadline exceeded')),20000)
     try{
-      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.5.0'}})
+      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.6.0'}})
       client.notify('initialized')
       await client.call('thread/unarchive',{threadId})
     }finally{clearTimeout(timer);await client.close()}
@@ -43,14 +22,14 @@ export class CodexModel implements Model {
   async history(threadId:string,cwd:string):Promise<any>{
     const client=new AppServer(this.config.codex,this.extraArgs,cwd)
     const timer=setTimeout(()=>client.fail(Error('History deadline exceeded')),20000)
-    try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.5.0'}});client.notify('initialized');return (await client.call('thread/read',{threadId,includeTurns:true})).thread}
+    try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.6.0'}});client.notify('initialized');return (await client.call('thread/read',{threadId,includeTurns:true})).thread}
     finally{clearTimeout(timer);await client.close()}
   }
   async catalog(provider?:string):Promise<any>{
     const client=new AppServer(this.config.codex,this.extraArgs,process.cwd())
     const timer=setTimeout(()=>client.fail(Error('Model catalog deadline exceeded')),20000)
     try{
-      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.5.0'}});client.notify('initialized')
+      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.6.0'}});client.notify('initialized')
       const current=(await client.call('config/read',{includeLayers:false})).config.model_provider??'openai'
       if(provider&&!['codex',current].includes(provider))throw Error('Only the configured Codex provider catalog is available: '+current)
       return {...await client.call('model/list',{}),provider:current}
@@ -66,7 +45,7 @@ export class CodexModel implements Model {
     const timer = setTimeout(() => client.fail(new Error('Turn deadline exceeded; inspect workspace before retrying')), this.config.turnTimeoutMs)
     try {
       if (request.signal?.aborted) throw new Error('Cancelled')
-      await client.call('initialize', { clientInfo: { name: 'agent-hub', version: '0.5.0' },capabilities:{experimentalApi:true} })
+      await client.call('initialize', { clientInfo: { name: 'agent-hub', version: '0.6.0' },capabilities:{experimentalApi:true} })
       client.notify('initialized')
       let isolated:Record<string,unknown>|undefined
       if(request.managed){

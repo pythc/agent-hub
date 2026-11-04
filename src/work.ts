@@ -61,18 +61,21 @@ export class WorkManager {
   })
  }
  async shell(owner:WorkOwner,command:string,requestId:string,yieldMs=5000){
+  if(this.config.work.sandboxDriver==='disabled')throw Error('Managed shell is disabled; configure a sandbox driver before requesting commands')
+  if(this.config.work.sandboxDriver==='seatbelt'&&process.platform!=='darwin')throw Error('Seatbelt sandbox requires macOS')
+  if(this.config.work.sandboxDriver==='bubblewrap'&&process.platform!=='linux')throw Error('Bubblewrap sandbox requires Linux')
   const {item,fresh}=this.create(owner,'shell',requestId,{command})
   if(fresh){
    const spec=join(this.directory,item.id+'.spec.json'),runner=fileURLToPath(new URL('./work-runner.ts',import.meta.url))
    let gitDirectory:string|undefined
    try{gitDirectory=resolve(owner.cwd,execFileSync('git',['rev-parse','--git-common-dir'],{cwd:owner.cwd,encoding:'utf8',timeout:2000,stdio:['ignore','pipe','ignore']}).trim())}catch{}
    const attachments=this.store.list<any>('asset').filter(a=>a.ticketId===owner.ticketId).map(a=>a.path)
-   writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,network:this.config.work.network,privateState:this.config.stateDir,gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
+   writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,sandboxDriver:this.config.work.sandboxDriver,network:this.config.work.network,privateState:this.config.stateDir,gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
    try{
     const child=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),runner,spec],{detached:process.platform!=='win32',stdio:'ignore',shell:false})
     this.runners.set(item.id,child)
     child.once('error',()=>{this.put({...this.store.get<WorkItem>('work',item.id)!,state:'failed',endedAt:Date.now(),error:'Unable to start managed command'})})
-    child.once('exit',()=>this.runners.delete(item.id))
+    child.once('exit',()=>{this.runners.delete(item.id);const current=this.store.get<WorkItem>('work',item.id);if(current&&['starting','running'].includes(current.state)&&!existsSync(join(this.directory,item.id+'.result.json')))this.put({...current,state:'interrupted',endedAt:Date.now(),error:'Managed runner exited without a durable receipt; inspect retained output before retrying'})})
     await new Promise<void>((resolve,reject)=>{child.once('spawn',()=>resolve());child.once('error',reject)})
     this.put({...item,state:'running',pid:child.pid})
    }catch(error){this.put({...item,state:'failed',endedAt:Date.now(),error:String(error)})}

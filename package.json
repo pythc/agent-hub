@@ -1,9 +1,9 @@
 {
   "name": "agent-hub",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "General-purpose background agent hub with multi-client MCP access and native Codex execution.",
+  "description": "General-purpose agent hub with OpenAI Responses, Chat Completions, Anthropic and native Codex execution.",
   "engines": {
     "node": ">=22.19"
   },
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
+    "ajv": "8.20.0",
     "jsonc-parser": "3.3.1",
     "zod": "3.25.76"
   },

@@ -11,6 +11,10 @@ message after transport failure. Never associate people by display-name similari
 Do not ask the user to fill out a ticket. Ask one short question when the target
 discussion or authority is ambiguous.
 agent_status reports current work, answers, questions and native thread ids.
+The execution backend is independent of this client. Read execution.roles and
+execution.backends before assuming Codex executes a task. API backends retain
+host-owned conversation history and support stop/follow-up; native desktop
+takeover is available only when nativeTakeover is true.
 An accepted request means queued work, not a verified result. Distinguish the
 operator's request, execution state and actual evidence.
 Use agent_stop for the selected work, agent_takeover for explicit handover, and

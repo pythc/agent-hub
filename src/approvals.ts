@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { Store } from './store.ts'
-import type { NativeRequest } from './codex.ts'
+import type { NativeRequest } from './model.ts'
 
 export interface Approval { id:string; ticketId:string; native:NativeRequest; createdAt:number; expiresAt:number; status:'pending'|'resolved'|'expired' }
 export class Approvals {

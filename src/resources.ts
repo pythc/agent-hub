@@ -50,7 +50,11 @@ export class Resources {
  async read(value:unknown,principal:Principal={}):Promise<any>{
   this.host.store.prunePages()
   const input=readSchema.parse(value),{resource,offset,limit,pageSize}=input
-  if(resource==='catalog')return {resources:resourceCatalog,worker:!!principal.ticketId}
+  if(resource==='catalog'){
+   const run=principal.ticketId?this.host.store.get<Run>('run',this.ticket(principal).id):undefined
+   const threadId=principal.agentId?this.host.store.get<{threadId?:string}>('work',principal.agentId)?.threadId:run?.threadId
+   return {resources:resourceCatalog,worker:!!principal.ticketId,backend:this.host.model.describe?.(threadId,principal.agentId?'subagent':'worker'),commandSandbox:{driver:this.host.config.work.sandboxDriver,enabled:this.host.config.work.sandboxDriver!=='disabled'}}
+  }
   if(input.cursor){
    const cached=this.host.store.get<any>('resource-page',input.cursor)
    if(!cached||cached.expires<Date.now()||cached.resource!==resource||cached.principal!==JSON.stringify(principal))throw Error('Unknown or expired page cursor')
@@ -102,9 +106,10 @@ export class Resources {
    if(section==='transcript'||section==='message'){
     const data=run?.threadId&&this.host.model.history?await this.host.model.history(run.threadId,run.cwd):{turns:store.list<any>('transcript').filter(x=>x.ticketId===t.id&&!x.agentId)}
     const turns=[...(data.turns??[])].reverse()
-    const nativeThreadId=data.id??run?.threadId
-    if(section==='transcript')return turns.map((turn:any,index:number)=>({index,id:turn.id??turn.turnId,nativeThreadId,nativeTurnId:turn.id??turn.turnId,status:turn.status,resource:'ticket/'+t.id+'/message/'+index}))
-    const n=Number(parts[3]);if(!Number.isSafeInteger(n)||!turns[n])throw Error('Unknown transcript message');return {...turns[n],nativeThreadId,nativeTurnId:turns[n].id??turns[n].turnId}
+    const threadId=data.id??run?.threadId,backendId=run?.backendId??'codex',native=!run?.backendKind||run.backendKind==='codex'
+    const identity=(turn:any)=>({threadId,turnId:turn.id??turn.turnId,backendId,...(native?{nativeThreadId:threadId,nativeTurnId:turn.id??turn.turnId}:{})})
+    if(section==='transcript')return turns.map((turn:any,index:number)=>({index,id:turn.id??turn.turnId,...identity(turn),status:turn.status,resource:'ticket/'+t.id+'/message/'+index}))
+    const n=Number(parts[3]);if(!Number.isSafeInteger(n)||!turns[n])throw Error('Unknown transcript message');return {...turns[n],...identity(turns[n])}
    }
   }
   if(head==='prompt-preview'){this.admin(p);if(id==='worker'||id==='router')return {role:id,revision:this.host.settings.current().revision,text:compose(this.host.config,id,{preview:true,cwd:'<task directory>'},'preview')};const preview=store.get('prompt-preview',id!);if(!preview)throw Error('Unknown prompt preview');return preview}

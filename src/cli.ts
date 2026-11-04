@@ -7,10 +7,17 @@ import { serve } from './server.ts'
 import { startMcp } from './mcp.ts'
 import {startWorkerMcp} from './worker-mcp.ts'
 import {backupState,verifyBackup,restoreState} from './backup.ts'
+import {BackendRegistry} from './backends/registry.ts'
 
 const [command, ...args] = process.argv.slice(2)
 async function main() {
-  if(command==='clients'){
+  if(command==='backends'){
+    if(args[0]!=='list')throw Error('Use backends list [config.json]')
+    if(!args[1]){console.log(JSON.stringify({supported:['codex','openai-responses','openai-chat','anthropic']}));return}
+    const config=loadConfig(args[1]),registry=new BackendRegistry(config,{get:()=>undefined,put:()=>{}})
+    console.log(JSON.stringify({roles:config.execution,backends:registry.configured(),sandboxDriver:config.work.sandboxDriver},null,2));return
+  }
+  else if(command==='clients'){
     const [action,client,...rest]=args
     const option=(key:string)=>{const i=rest.indexOf('--'+key);if(i<0)return undefined;const value=rest[i+1];if(!value||value.startsWith('--'))throw Error('Missing value for --'+key);return value}
     if(action==='list'){console.log(JSON.stringify(clientIds));return}

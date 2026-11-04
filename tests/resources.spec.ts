@@ -47,6 +47,12 @@ it('labels native thread and turn identities separately in history resources',as
  expect(message.text).toContain('"nativeThreadId": "native-test"')
  expect(message.text).toContain('"nativeTurnId": "turn-first"')
 })
+it('describes the subagent backend in its catalog rather than the parent worker backend',async()=>{
+ const f=await fixture();f.h.store.put('work','child',{threadId:'child-conversation'})
+ f.h.model.describe=(threadId,role)=>({id:threadId==='child-conversation'&&role==='subagent'?'child-backend':'parent-backend',kind:'anthropic',nativeTakeover:false,images:false,resume:true,tools:true,steering:true,promptRefresh:true})
+ expect((await f.h.resources.read({resource:'catalog'},{...f.owner,agentId:'child'})).backend.id).toBe('child-backend')
+ expect((await f.h.resources.read({resource:'catalog'},f.owner)).backend.id).toBe('parent-backend')
+})
 it('fences worker grants to an assignment instead of the admin identity',async()=>{
  const f=await fixture(),grant=f.h.workerTools.grant(f.owner)
  const {readFileSync}=await import('node:fs');const header='Bearer '+readFileSync(grant,'utf8')

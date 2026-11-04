@@ -1,11 +1,11 @@
-export const dashboard = String.raw`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Super-agent</title>
+export const dashboard = String.raw`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AgentHub</title>
 <style>
 body{font:16px system-ui;background:#f6f7f4;color:#27322c;max-width:1100px;margin:36px auto;padding:0 24px}h1{font-size:28px}h2{font-size:20px}h3{font-size:17px}
 fieldset{border:1px solid #dce2dd;margin:12px 0;min-width:0}label{display:block;margin:8px 0}input,textarea,button,select{max-width:100%;box-sizing:border-box;font:inherit;border:1px solid #c6cec8;border-radius:6px;padding:9px;background:#fff}button{cursor:pointer}button:hover{background:#edf3ef}
 textarea{display:block;width:95%;min-height:100px;margin:12px 0}article{background:white;border:1px solid #dce2dd;border-radius:10px;padding:18px;margin:15px 0}
 nav{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}p{white-space:pre-wrap}small,.muted{color:#647269}#error{color:#a52727}
 pre{white-space:pre-wrap;word-break:break-word;font-size:13px;background:#f5f7f5;padding:12px;border-radius:6px}a{color:#216d4b}.tag{font-size:13px;color:#647269}
-</style><header><h1>Super-agent</h1><p class="muted">从原对话继续协作，在需要你决定或结果可用时回到这里。</p></header>
+</style><header><h1>AgentHub</h1><p class="muted">从原对话继续协作，在需要你决定或结果可用时回到这里。</p></header>
 <input id="token" type="password" placeholder="本机 access-token 文件中的令牌"><button id="connect">连接</button><span id="health"></span>
 <section id="controls" hidden><nav id="tabs"></nav><input id="search" placeholder="搜索请求、讨论、结果或记录 ID"><button id="refresh">刷新</button>
 <article><nav><input id="source" value="local" aria-label="来源"><input id="thread" value="conversation" aria-label="讨论标识"></nav>
@@ -27,7 +27,7 @@ function render(){
  for(const [key,label] of [['overview','需要关注'],['sources','来源'],['threads','讨论与事件'],['decisions','判断'],['execution','执行记录'],['eval','Eval'],['resources','资源'],['models','模型'],['prompts','提示词'],['settings','设置与历史']])tabs.append(button(label,async()=>{view=key;if(view==='settings')settings=await api('/settings');if(view==='models')models=await api('/read',{resource:'models'});if(view==='prompts')prompts=await api('/prompts');render()}));
  if(view==='settings'){renderSettings();return}
  if(view==='resources'){renderResources();return}
- if(view==='models'){root.append(text('h2','Codex 原生模型目录'),json(models));return}
+ if(view==='models'){root.append(text('h2','执行后端与模型目录'),text('p','客户端只是入口；实际执行由所选后端承担。已有会话固定原后端。API 后端的配置模型清单不代表已验证远端认证。'),json(models));return}
  if(view==='prompts'){root.append(text('h2','提示词部分与使用版本'),button('预览 Worker 提示词',async()=>{root.append(json(await api('/prompt-preview',{role:'worker'})))}));for(const part of prompts.parts)if(matches(part))root.append(detail(part.id+(part.defaultChanged?' · 默认内容已升级':''),part));root.append(detail('实际使用版本',prompts.history));return}
  if(view==='eval'){root.append(text('h2','评估队列'));for(const thread of state.threads.filter(t=>(t.evaluating||t.pending.length)&&matches(t)))root.append(detail(thread.key,thread));for(const d of state.decisions.filter(matches))root.append(detail(d.kind+' · '+d.threadKey,d));return}
  if(view==='sources'){root.append(button('检查环境与身份',async()=>{root.append(json(await api('/setup-check',{})))}));for(const s of state.sources.filter(matches)){const a=document.createElement('article');a.append(text('h2',s.source),text('p',s.status==='ok'?'最近轮询成功':s.error||'尚未核实'),detail('来源状态',s),button('预览成员同步',async()=>{const preview=await api('/members-preview',{source:s.source});a.append(json(preview),button('应用此成员列表',async()=>{await api('/members-apply',{id:preview.id});await refresh()}))}));root.append(a)}return}
@@ -39,14 +39,15 @@ function render(){
   if(view==='overview'&&t.stage.stage==='ended'&&!t.run?.result)continue;
   const a=document.createElement('article');a.append(text('h2',t.title),text('small',t.stage.stage+(t.stage.action?' · '+t.stage.action:'')),text('p',(t.run?.waitingForWriter?'等待桌面释放此聊天。请在操作员聊天执行交还步骤，随后重试。':'')||t.attention?.question||t.run?.result||t.assignments.at(-1)?.report?.summary||t.mandate.scope));
   const nav=document.createElement('nav');
-  for(const [action,label] of [['stop','停止'],['takeover','接管'],['return','交还'],['retry','核对后重试']])nav.append(button(label,async()=>{await api('/action',{action,id:t.id});await refresh()}));
-  if(t.run?.threadId){const link=text('a','打开原生 Codex 会话');link.href='codex://threads/'+encodeURIComponent(t.run.threadId);nav.append(link)}
+  const native=t.run?.backendKind?t.run.backendKind==='codex':t.run?.threadId?true:state.execution?.backends.find(b=>b.id===state.execution.roles.worker)?.nativeTakeover;
+  for(const [action,label] of [['stop','停止'],...(native?[['takeover','接管'],['return','交还']]:[]),['retry','核对后重试']])nav.append(button(label,async()=>{await api('/action',{action,id:t.id});await refresh()}));
+  if(t.run?.threadId&&(!t.run.backendKind||t.run.backendKind==='codex')){const link=text('a','打开原生 Codex 会话');link.href='codex://threads/'+encodeURIComponent(t.run.threadId);nav.append(link)}
   a.append(nav,detail('授权、输入与执行历史',t));for(const job of (state.work||[]).filter(w=>w.ticketId===t.id))a.append(detail(job.kind+' · '+job.state+' · '+job.id,job));for(const grant of (state.mergeGrants||[]).filter(g=>g.ticketId===t.id))a.append(detail('合并授权 · '+grant.head,grant),button('撤销合并授权',async()=>{await api('/merge-revoke',{source:grant.source,number:grant.number});await refresh()}));root.append(a);
  }
  for(const m of state.deliveries.filter(m=>(m.status==='uncertain'||m.status==='pending')&&matches(m))){const a=document.createElement('article');a.append(text('h3','待交付或需核对'),text('p',m.error||m.text),button('核对后重试交付',async()=>{await api('/retry-delivery',{id:m.id});await refresh()}));root.append(a)}
  if(!root.children.length)root.append(text('p','当前没有需要处理的记录。'));
 }
-function editable(config){const result={};for(const key of ['model','models','effort','concurrency','acceptMode','rules','prompts','sources','watchdog','work','delivery'])if(key in config)result[key]=config[key];return result}
+function editable(config){const result={};for(const key of ['execution','model','models','effort','concurrency','acceptMode','rules','prompts','sources','watchdog','work','delivery'])if(key in config)result[key]=config[key];return result}
 function renderResources(){
  const a=document.createElement('article'),input=document.createElement('input'),scope=document.createElement('select'),output=document.createElement('div');
  input.id='resource-path';input.value='catalog';input.setAttribute('aria-label','资源路径');scope.id='resource-scope';scope.append(new Option('操作员全局资源',''));for(const t of state.tickets)scope.append(new Option(t.title,t.id));
@@ -69,7 +70,11 @@ function field(label,value,onChange){
 }
 function renderSettings(){
  const a=document.createElement('article'),draft=editable(structuredClone(settings.current.config));draft.models={router:'',worker:'',subagent:'',...draft.models};a.append(text('h2','配置版本 '+settings.current.revision),text('p','按组编辑并保存。来源部署字段更改需要受控重启。自动合并需要独立合并身份；可选逐提交授权或显式团队策略，且必须通过审批与 CI 检查。'));
- for(const [key,label] of [['acceptMode','主动工作模式'],['rules','准入规则'],['sources','来源与允许列表'],['prompts','团队提示词'],['model','默认模型'],['models','各角色模型'],['effort','推理强度'],['concurrency','执行槽位'],['work','后台作业'],['delivery','交付与合并'],['watchdog','监控']])if(key in draft){const d=document.createElement('details');d.append(text('summary',label),field(key,draft[key],value=>draft[key]=value));a.append(d)}
+ for(const [key,label] of [['acceptMode','主动工作模式'],['rules','准入规则'],['sources','来源与允许列表'],['prompts','团队提示词'],['execution','执行后端与角色分配'],['model','Codex 默认模型（旧配置兼容）'],['models','各角色模型覆盖'],['effort','Codex 推理强度'],['concurrency','执行槽位'],['work','后台作业'],['delivery','交付与合并'],['watchdog','监控']])if(key in draft){const d=document.createElement('details');d.append(text('summary',label));if(key==='execution'){
+  const names=[...new Set(['codex',...Object.keys(settings.current.config.backends||{})])];draft.execution.roles=draft.execution.roles||{};
+  for(const [role,title] of [['default','默认后端'],['router','路由后端'],['worker','主执行后端'],['subagent','子代理后端']]){const wrap=text('label',title),select=document.createElement('select');select.setAttribute('aria-label',title);if(role!=='default')select.append(new Option('沿用默认后端',''));for(const name of names)select.append(new Option(name,name));select.value=role==='default'?draft.execution.backend:draft.execution.roles[role]||'';select.onchange=()=>{if(role==='default')draft.execution.backend=select.value;else if(select.value)draft.execution.roles[role]=select.value;else delete draft.execution.roles[role]};wrap.append(select);d.append(wrap)}
+  d.append(text('p','已有会话固定原后端；新配置用于新会话。新增后端地址及凭据环境变量名需在配置文件中设置后受控重启。'));
+ }else d.append(field(key,draft[key],value=>draft[key]=value));a.append(d)}
  a.append(button('保存分组设置',async()=>{await api('/settings',{revision:settings.current.revision,patch:draft});settings=await api('/settings');await refresh()}));
  const advanced=document.createElement('details'),input=document.createElement('textarea');input.style.minHeight='300px';input.value=JSON.stringify(draft,null,2);advanced.append(text('summary','高级 JSON 编辑'),input,button('保存此版本',async()=>{await api('/settings',{revision:settings.current.revision,patch:JSON.parse(input.value)});settings=await api('/settings');await refresh()}));a.append(advanced);
  for(const item of settings.history)a.append(detail('版本 '+item.revision+' · '+item.at,item),button('恢复为版本 '+item.revision,async()=>{await api('/settings',{revision:settings.current.revision,patch:editable(item.config)});settings=await api('/settings');await refresh()}));root.append(a);

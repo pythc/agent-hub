@@ -13,7 +13,7 @@ it('backs up WAL state, verifies integrity and refuses restoring under a live ho
  const store=new Store(join(config.stateDir,'state.sqlite'));store.put('sample','a',{value:1})
  try{
   await backupState(config,join(root,'backup'))
-  expect(verifyBackup(join(root,'backup')).schema).toBe(2)
+  expect(verifyBackup(join(root,'backup')).schema).toBe(3)
   writeFileSync(join(config.stateDir,'host.lock'),String(process.pid))
   await expect(restoreState(config,join(root,'backup'))).rejects.toThrow('Stop the host')
   appendFileSync(join(root,'backup','state.sqlite'),'tampered')
@@ -27,7 +27,7 @@ it('restores offline state and retains a backup of the previous database',async(
  await backupState(config,join(root,'backup'))
  const second=new Store(join(config.stateDir,'state.sqlite'));second.put('sample','a',{value:2});second.close()
  const result=await restoreState(config,join(root,'backup'))
- expect(verifyBackup(result.previous).schema).toBe(2)
+ expect(verifyBackup(result.previous).schema).toBe(3)
  const restored=new Store(join(config.stateDir,'state.sqlite'))
  try{expect(restored.get('sample','a')).toEqual({value:1})}finally{restored.close()}
 })

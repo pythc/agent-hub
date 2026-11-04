@@ -1,8 +1,8 @@
 # 客户端接入
 
-AgentHub 是独立后台宿主，客户端通过 stdio MCP 桥访问它。关闭客户端不会关闭宿主。当前真正执行任务的是 Codex 原生会话；客户端自己的聊天模型负责调用操作员工具。
+AgentHub 是独立后台宿主，客户端通过 stdio MCP 桥访问它。关闭客户端不会关闭宿主。执行任务的后端可选择原生 Codex、OpenAI 两种协议或 Anthropic Messages；客户端自己的聊天模型负责调用操作员工具，二者独立。见 [后端配置](../BACKENDS.md)。
 
-先安装 Node 22.19+、登录 Codex CLI，在源码根目录运行 `npm ci`，然后 `./start.sh serve examples/config.json`。宿主 URL 默认是 `http://127.0.0.1:4319`，令牌文件默认 `.superagent/access-token`。多个实例必须使用不同端口与状态目录。
+先安装 Node 22.19+、配置执行后端（默认需要登录 Codex CLI），在源码根目录运行 `npm ci`，然后 `./start.sh serve examples/config.json`。宿主 URL 默认是 `http://127.0.0.1:4319`，令牌文件默认 `.superagent/access-token`。多个实例必须使用不同端口与状态目录。
 
 ## 生成、安装和回退
 

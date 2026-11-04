@@ -1,0 +1,43 @@
+{
+  "stateDir": "../.agenthub-api",
+  "port": 4330,
+  "execution": {
+    "backend": "responses",
+    "roles": {}
+  },
+  "backends": {
+    "responses": {
+      "kind": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "YOUR_OPENAI_MODEL",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "outputFormat": "json-schema"
+    },
+    "chat": {
+      "kind": "openai-chat",
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "YOUR_CHAT_MODEL",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "outputFormat": "json-schema"
+    },
+    "anthropic": {
+      "kind": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "model": "YOUR_ANTHROPIC_MODEL",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "outputFormat": "json-schema"
+    }
+  },
+  "work": {
+    "sandboxDriver": "disabled"
+  },
+  "sources": [
+    {
+      "id": "local",
+      "kind": "local",
+      "allowedActors": ["operator"],
+      "cwd": ".",
+      "sandbox": "read-only"
+    }
+  ]
+}

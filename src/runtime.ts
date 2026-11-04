@@ -6,12 +6,14 @@ import { makePolicy, makeScope } from './policy.ts'
 import { MessageSource, UncertainDelivery, incomingSchema, bodyDigest, type Source, type Incoming } from './sources.ts'
 import type { Config } from './config.ts'
 import { Approvals } from './approvals.ts'
-import type { NativeControl } from './codex.ts'
+import type { NativeControl } from './model.ts'
 import { Settings } from './settings.ts'
 import {compose,promptStatus,digest} from './prompts.ts'
 import { GithubSource } from './connectors/github.ts'
 import { FeishuSource } from './connectors/feishu.ts'
-import { CodexModel, type Model,type ModelRequest,type ModelResult } from './codex.ts'
+import type {Model,ModelRequest,ModelResult} from './model.ts'
+import {BackendRegistry} from './backends/registry.ts'
+import {validateBackendSelection} from './backend-config.ts'
 import { prepareWorkspace } from './workspace.ts'
 import { assessment, assessmentSchema, report, reportSchema } from './schemas.ts'
 import {WorkManager,type WorkOwner,type WorkItem} from './work.ts'
@@ -53,6 +55,7 @@ export class Runtime {
   private lock: string
   private paused = false
   constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi } = {}) {
+    validateBackendSelection(config)
     mkdirSync(config.stateDir, { recursive: true, mode: 0o700 })
     this.lock = join(config.stateDir, 'host.lock')
     try {
@@ -73,9 +76,9 @@ export class Runtime {
     try { this.store = new Store(join(config.stateDir, 'state.sqlite')) }
     catch (error) { unlinkSync(this.lock); throw error }
     this.approvals = new Approvals(this.store)
-    this.settings = new Settings(this.store,config)
+    try{this.settings = new Settings(this.store,config);this.model = options.model ?? new BackendRegistry(config,this.store)}
+    catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.paused = this.store.get<boolean>('settings', 'paused') ?? false
-    this.model = options.model ?? new CodexModel(config)
     for (const source of config.sources) this.sources.set(source.id, options.sources?.find(s => s.config.id === source.id) ?? (source.kind==='github'?new GithubSource(source):source.kind==='feishu'?new FeishuSource(source):new MessageSource(source)))
     let logicalNow = this.store.get<number>('clock', 'last') ?? 0
     this.engine = new Engine({
@@ -165,6 +168,7 @@ export class Runtime {
     const grant=this.workerTools.grant(owner)
     return {command:process.execPath,args:['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('./cli.ts',import.meta.url)),'worker-mcp',this.endpoint,grant]}
   }
+  private availableWorkerSpecs(){return workerSpecs.filter(s=>this.config.work.sandboxDriver!=='disabled'||s.name!=='superagent_shell')}
   private async runAgent(item:WorkItem,signal:AbortSignal):Promise<{threadId:string;result:unknown}>{
     const owner:WorkOwner={ticketId:item.ticketId,assignmentId:item.assignmentId,cwd:item.cwd,sandbox:item.sandbox,agentId:item.id,depth:item.depth+1}
     const ticket=this.store.tickets.get(item.ticketId)!
@@ -175,7 +179,7 @@ export class Runtime {
       const instructions=compose(this.config,'worker',{cwd:owner.cwd,mandate:ticket.mandate.scope,subagent:true},ticket.mandate.policyVersion)+'\nYou are a managed subagent, not the parent orchestrator. The parent mandate is an upper bound, not a checklist to repeat. Perform only the delegated subtask in the input. Read files directly with superagent_read; do not launch another subagent unless that subtask actually needs delegation. Use superagent_shell for commands, never native shell or native subagents. Do not publish or contact people. Return waiting while owned jobs still run; return ready only with the final subtask result.'
       const revision=this.settings.current().revision,key='agent:'+item.id
       let result
-      try{result=await this.runModel({cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??this.config.models.worker,threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,tools:workerSpecs,onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}})}
+      try{result=await this.runModel({role:'subagent',cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??this.config.models.worker,threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,tools:this.availableWorkerSpecs(),onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}})}
       finally{this.controls.delete(key);this.controlRevisions.delete(key)}
       const output=report.parse(JSON.parse(result.text));threadId=result.threadId
       this.store.put('transcript',result.turnId,{ticketId:item.ticketId,agentId:item.id,threadId,turnId:result.turnId,text:result.text,at:Date.now()})
@@ -385,13 +389,14 @@ export class Runtime {
       const instructions=compose(this.config,'worker',{cwd:run.cwd,ticketId:ticket.id,mandate:ticket.mandate.scope,matchedRules:this.config.rules.filter(r=>ticket.mandate.basis.rules?.includes(r.id))},ticket.mandate.policyVersion)
         +'\nUse only superagent_shell for commands and superagent_spawn for delegation. These tools survive this turn. Use superagent_read for bounded resources. Return waiting while managed background work is running. A ready report or a question hands control to a person and stops subagents. A review server may remain until this assignment ends.'
       const owner:WorkOwner={ticketId:ticket.id,assignmentId,cwd:run.cwd,sandbox:source.sandbox,depth:0}
-      const toolsDigest=digest(JSON.stringify(workerSpecs)),legacy=!!saved?.threadId&&saved.toolsDigest!==toolsDigest
+      const specs=this.availableWorkerSpecs(),toolsDigest=digest(JSON.stringify(specs)),legacy=!!saved?.threadId&&saved.toolsDigest!==toolsDigest&&(!this.model.describe||this.model.describe(saved.threadId).kind==='codex')
       this.work.turnStarted(ticket.id,assignmentId)
       const result = await this.runModel({
+        role:'worker',onBackend:id=>{run.backendId=id;run.backendKind=this.model instanceof BackendRegistry?this.model.definition(id).kind:'custom';persist()},
         model:saved?.threadId?undefined:this.config.models.worker,
         title: ticket.title, cwd: run.cwd, sandbox: source.sandbox, threadId: saved?.threadId, schema: reportSchema,archiveOnComplete:true,
         instructions,
-        managed:true,privateState:this.config.stateDir,...(legacy?{workerMcp:this.workerMcp(owner)}:{tools:workerSpecs}),onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),
+        managed:true,privateState:this.config.stateDir,...(legacy?{workerMcp:this.workerMcp(owner)}:{tools:specs}),onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),
         input: JSON.stringify({ sourceContext, mandate: ticket.mandate, relatedThreads:ticket.follows, ...(!saved ? { origin: ticket.origin.triggerIds.map(id => this.store.triggers.get(id)) } : {}), inputs: inputs.map(i => i.kind === 'trigger' ? { ...i, event: this.store.triggers.get(i.triggerId) } : i) }),
         signal: controller.signal,
         onHumanRequest:request=>this.approvals.request(ticket.id,request),
@@ -471,6 +476,7 @@ export class Runtime {
   }
   status() {
     return {
+      execution:this.model instanceof BackendRegistry?{roles:{router:this.model.selected('router'),worker:this.model.selected('worker'),subagent:this.model.selected('subagent')},backends:this.model.configured(),sandboxDriver:this.config.work.sandboxDriver}:undefined,
       stalled:this.store.tickets.open().filter(t=>this.store.get<Run>('run',t.id)?.phase==='running'&&Date.now()-(this.store.get<{at:number}>('progress',t.id)?.at??Date.parse(t.updatedAt))>this.config.watchdog.staleMs).map(t=>t.id),
       approvals:this.store.list('approval'), health:this.store.list('health'),watchdog:this.config.watchdog,
       threadProblems:this.store.list<any>('thread-health').filter(h=>h.consecutiveFailures>=3),
@@ -530,6 +536,7 @@ export class Runtime {
     const ticket = this.store.tickets.get(id)
     if (!ticket) throw new Error('Unknown work')
     const source = this.sources.get(ticket.mandate.actor.source)!.config
+    const existing=this.store.get<Run>('run',id);if(this.model.describe&&!this.model.describe(existing?.threadId).nativeTakeover)throw Error('This backend has no native desktop takeover. Use stop/steer, resource history and an explicit follow-up in AgentHub.')
     if(['delivering','merging'].includes(this.store.get<Run>('run',id)?.phase??''))throw Error('Wait for the current delivery to finish before taking over')
     const run: Run = { ticketId: id, assignmentId: latestAssignment(ticket)!.id, cwd: source.cwd, ...this.store.get<Run>('run', id), phase: 'human' }
     this.store.put('run', id, run)

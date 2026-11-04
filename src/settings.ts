@@ -2,8 +2,9 @@ import {builtins} from './prompts.ts'
 import { z } from 'zod'
 import { configSchema, type Config } from './config.ts'
 import type { Store } from './store.ts'
+import {validateBackendSelection} from './backend-config.ts'
 
-export const patchSchema = configSchema.pick({models:true,model:true,effort:true,concurrency:true,acceptMode:true,rules:true,prompts:true,sources:true,watchdog:true,work:true,delivery:true}).partial()
+export const patchSchema = configSchema.pick({execution:true,models:true,model:true,effort:true,concurrency:true,acceptMode:true,rules:true,prompts:true,sources:true,watchdog:true,work:true,delivery:true}).partial()
 export interface SettingsVersion { revision:number; at:string; config:Config }
 export class Settings {
   constructor(private readonly store:Store, readonly config:Config) {
@@ -16,7 +17,7 @@ export class Settings {
         const keys=['allowedActors','allowedBots','enabled','admission','listenScopes','pollSeconds','memberSync']
         return {...source,...Object.fromEntries(keys.filter(k=>k in previous).map(k=>[k,(previous as any)[k]]))}
       })
-      Object.assign(config,configSchema.parse({...config,...dynamic,sources}))
+      Object.assign(config,configSchema.parse({...config,...dynamic,sources}));validateBackendSelection(config)
       store.put('settings','current',{...saved,config})
     }
     else store.put('settings','current',{revision:0,at:new Date().toISOString(),config})
@@ -28,6 +29,7 @@ export class Settings {
       const previous=this.current()
       if(previous.revision!==expected)throw Error('Settings conflict. Read current revision before saving.')
       const config=configSchema.parse({...this.config,...update})
+      validateBackendSelection(config)
       for(const [key,override] of Object.entries(config.prompts.overrides))if(override.text===builtins[key as keyof typeof builtins])delete config.prompts.overrides[key]
       if(new Set(config.sources.map(s=>s.id)).size!==config.sources.length)throw Error('Duplicate source id')
       const deployment=(s:Config['sources'][number])=>({id:s.id,kind:s.kind,cwd:s.cwd,workspace:s.workspace,sandbox:s.sandbox,repository:s.repository,feishu:s.feishu,github:s.github,replyUrl:s.replyUrl,tokenEnv:s.tokenEnv})

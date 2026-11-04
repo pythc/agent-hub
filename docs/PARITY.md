@@ -1,8 +1,8 @@
-# 原型逐项对照与验收 — AgentHub 0.5.0
+# 原型逐项对照与验收 — AgentHub 0.6.0
 
 基线为 2026-11-04 下载的官方原型文档 51 个二级章节。47 个功能章节均有对应实现和下列验收证据，另有 4 个说明章节。**这是实现映射，不是“51/51 实机测试通过”，也不是对所有模型行为和平台环境的等价证明。**
 
-沿用 0.4.0 的逐项实现核对。下列历史实机记录保留在本机，未随源码发布；源码中的自动化用例可重新执行。0.5.0 新增的客户端实机结果见 [客户端验收](clients/ACCEPTANCE.md)。
+沿用 0.4.0 的逐项实现核对。下列历史实机记录保留在本机，未随源码发布；源码中的自动化用例可重新执行。0.5.0 的客户端实机结果见 [客户端验收](clients/ACCEPTANCE.md)。
 
 | ID | 原型章节 | 实现 | 行为/范围 | 验收层级 | 证据 |
 |---|---|---|---|---|---|
@@ -23,12 +23,12 @@
 | P15 | [002-authorization.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/002-authorization.md) / Resume and stop | 实现完成 | 停止、暂停跨重启、接管、交还和同 thread 续办；桌面用后台归档释放 writer。 | 见所列测试或真实记录，不代表所有边界均已实测 | tests/runtime.spec.ts; 本机历史证据（未发布） |
 | P16 | [002-authorization.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/002-authorization.md) / When Eval does not finish | 实现完成 | 原型 Eval 超时重排及 unavailable 保留；模型失败不误报受理成功。 | 见所列测试或真实记录，不代表所有边界均已实测 | tests/upstream/core-engine.spec.ts; tests/runtime.spec.ts |
 | P17 | [003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md) / Ticket stages | 实现完成 | 阶段由原型 ticketStage 计算并在控制台显示。 | 见所列测试或真实记录，不代表所有边界均已实测 | src/runtime.ts; 本机历史证据（未发布） |
-| P18 | [003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md) / The Executor | 实现完成 | 原生持久会话；5/60 秒等待、后台占槽、30 分钟期限、交接豁免、子代理树回收、Assignment 关闭屏障及人类额外槽。 | 自动化＋真实 Codex/进程 | tests/work.spec.ts; tests/runtime.spec.ts; 本机历史证据（未发布）; 本机历史证据（未发布） |
+| P18 | [003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md) / The Executor | 实现完成 | 原生 Codex 或宿主 API 持久会话；5/60 秒等待、后台占槽、30 分钟期限、交接豁免、子代理树回收、Assignment 关闭屏障及人类额外槽。 | 自动化＋真实 Codex/进程 | tests/work.spec.ts; tests/runtime.spec.ts; 本机历史证据（未发布）; 本机历史证据（未发布） |
 | P19 | [003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md) / Merging | 实现完成 | 逐 SHA 或团队策略授权；自有 PR、ready、审批、CI、行数、独立身份、撤权、预期 head PUT 和不确定合并核对。 | 隔离 HTTP 成功/故障验收；未真实合并 | tests/merge.spec.ts; 本机历史证据（未发布） |
 | P20 | [003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md) / How a Ticket ends | 实现完成 | 分析 ready 结束；绑定 PR 等关闭；人工停止保持停止。 | 见所列测试或真实记录，不代表所有边界均已实测 | tests/upstream/core-engine.spec.ts; 本机历史证据（未发布） |
 | P21 | [003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md) / Failure and recovery | 实现完成 | 忙碌执行重启恢复原 thread 并加入核对说明；不重放旧命令；短暂模型故障三次退避；未知外部写入保留核对。 | 自动化＋真实 SIGKILL | tests/runtime.spec.ts; 本机历史证据（未发布）; 本机历史证据（未发布） |
 | P22 | [004-prompts.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/004-prompts.md) / What a team writes | 实现完成 | 原型 15 个内置键兼容，另保留旧键别名、团队角色文本、技能及生成占位符校验。 | 自动化 | src/prompts.ts; tests/resources.spec.ts; tests/settings-approval.spec.ts |
-| P23 | [004-prompts.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/004-prompts.md) / Assembly and precedence | 实现完成 | 每轮及工具边界重组提示词；同一 native turn 中注入最新版本，保留不可变授权。 | 真实 Codex，动态工具与旧 MCP 两路 | 本机历史证据（未发布）; src/runtime.ts |
+| P23 | [004-prompts.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/004-prompts.md) / Assembly and precedence | 实现完成 | 每轮及工具边界重组提示词；Codex 同一 turn 注入，API 下一 HTTP 步生效，保留不可变授权。 | 真实 Codex，动态工具与旧 MCP 两路 | 本机历史证据（未发布）; src/runtime.ts |
 | P24 | [004-prompts.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/004-prompts.md) / Principles of the built-in text | 实现完成 | 一次请求确认、原线程/内联线程回复、修复验证后解决/拒绝解释后解决；机器人审查按 head 限轮。 | 自动化；语义判断仍由模型承担 | src/prompts.ts; src/review.ts; tests/review.spec.ts; tests/connectors.spec.ts |
 | P25 | [004-prompts.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/004-prompts.md) / Versions | 实现完成 | 不可变历史、冲突与占位符校验、默认升级提示；turn 和实际注入工具步记录版本与摘要。 | 自动化＋真实 Codex | tests/settings-approval.spec.ts; 本机历史证据（未发布） |
 | P26 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Three questions | 实现完成 | 展示当前工作、谁需行动和实际结果，待审批及不确定投递可见。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布）; 本机历史证据（未发布） |
@@ -36,8 +36,8 @@
 | P28 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Settings groups | 实现完成 | 分组设置、允许列表、执行、作业、交付/合并和提示词表单；高级字典 JSON、版本保存与回退。 | 真实 Chromium＋自动化 | src/web.ts; 本机历史证据（未发布）; tests/settings-approval.spec.ts |
 | P29 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Search | 实现完成 | 搜索工作、事件、判断与投递；浏览器发现的投递搜索遗漏已修复。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
 | P30 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Principles | 实现完成 | 原生审批按问题显示、结果与证据可追溯、无横向溢出；不把受理当成功。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
-| P31 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / What runs | 实现完成 | 独立宿主 supervisor、来源轮询、Codex 进程和外置 watchdog。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
-| P32 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / Prerequisites | 实现完成 | 本机 Node 26、Codex 登录、GitHub/飞书权限实际检查。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布）; 本机历史证据（未发布） |
+| P31 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / What runs | 实现完成 | 独立宿主 supervisor、来源轮询、Codex 进程或 API agent loop 和外置 watchdog。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
+| P32 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / Prerequisites | 实现完成 | Node 和所选后端/沙箱检查；API 密钥变量存在检查不冒充远端认证。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布）; 本机历史证据（未发布） |
 | P33 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / Accounts | 实现完成 | 独立 gh/飞书 bot CLI 与凭据入口可配置，managed worker 隔离宿主能力；本机仍使用现有账号，未建立独立 OS 账号。 | 真实身份读取；专用账号部署未验证 | src/config.ts; src/codex.ts; src/work-runner.ts; 本机历史证据（未发布） |
 | P34 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / Install | 实现完成 | 0.4.0 已用官方 CLI 安装；新连接 20 工具。旧桌面目录缓存通过稳定 agent_context 入口兼容，未声称新名称已刷新。 | SDK＋真实桌面兼容调用 | 本机历史证据（未发布）; 本机历史证据（未发布）; ../plugins/codex/plugin.json |
 | P35 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / Machine configuration | 实现完成 | 配置验证、绝对路径、单状态目录锁、通用来源和工作目录。 | 见所列测试或真实记录，不代表所有边界均已实测 | src/config.ts; tests/workspace.spec.ts |
@@ -49,14 +49,16 @@
 | P41 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / Troubleshooting | 说明 | 提供 writer 冲突、外部不确定写入、备份、停止服务处理方法。 | 文档/范围说明 | README.md |
 | P42 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Core classes and glue | 实现完成 | 领域核心原样复制；本宿主实现 ports。 | 见所列测试或真实记录，不代表所有边界均已实测 | docs/upstream-core-sha256.json |
 | P43 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Dependency rules | 实现完成 | 领域不依赖 Codex、HTTP、SQLite 或具体平台。 | 见所列测试或真实记录，不代表所有边界均已实测 | src/vendor/dsh-core |
-| P44 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Modules | 实现完成 | 领域、原生执行、作业、作用域工具、资源、来源、审查、交付/合并、设置、监督与 MCP 分离。 | 见所列测试或真实记录，不代表所有边界均已实测 | src/ |
-| P45 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Tests | 实现完成 | TypeScript 检查和 231 项测试通过，其中 113 项来自原型核心；真实和隔离验收另列证据。 | 自动化＋分层验收 | 本机历史证据（未发布） |
+| P44 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Modules | 实现完成 | 领域、多后端执行、作业、作用域工具、资源、来源、审查、交付/合并、设置、监督与 MCP 分离。 | 见所列测试或真实记录，不代表所有边界均已实测 | src/ |
+| P45 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Tests | 实现完成 | TypeScript 检查和 274 项测试通过，其中 113 项来自原型核心；真实和隔离验收另列证据。 | 自动化＋分层验收 | 本机历史证据（未发布） |
 | P46 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Persistence | 实现完成 | 事务化业务/队列/出箱；发送前持久意图；重启不会盲目重发 uncertain。 | 见所列测试或真实记录，不代表所有边界均已实测 | tests/runtime.spec.ts; src/store.ts |
 | P47 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Model-facing interfaces | 实现完成 | 共享分页 reader 覆盖原型资源族与图片；原生工具、scoped MCP、操作员 MCP、HTTP、控制台共用；工作与父代理能力有撤销检查。 | 自动化＋真实 Codex/来源＋SDK | tests/resources.spec.ts; 本机历史证据（未发布）; 本机历史证据（未发布）; 本机历史证据（未发布） |
 | P48 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Configuration reload | 实现完成 | 策略/团队提示词动态生效，工具步与后续 turn 记录版本；来源部署变更采用受控重启，保留输入与原生会话。 | 真实 Codex＋真实服务重启 | src/settings.ts; 本机历史证据（未发布）; 本机历史证据（未发布） |
 | P49 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Reviewing a change against real data | 说明 | 真实来源验收只在用户授权仓库/群及隔离 worktree；原 checkout 未改业务内容。 | 文档/范围说明 | 本机历史证据（未发布） |
 | P50 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Open questions | 说明 | 保留原型的信任与独立部署问题，不以单机测试证明团队隔离。 | 文档/范围说明 | README.md |
 | P51 | [008-cookbook.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/008-cookbook.md) / Add a Source | 实现完成 | 新来源通过 Source 接口实现身份、线程、投递、上下文、轮询与可选去重，不改核心。 | 见所列测试或真实记录，不代表所有边界均已实测 | tests/runtime.spec.ts; src/sources.ts |
+
+0.6.0 新增三个直接 API 执行后端；各后端验收层级独立记录在 [后端验收](BACKEND_ACCEPTANCE.md)。API 能力不能从历史 Codex 实测推定。
 
 ## 适配差异
 
