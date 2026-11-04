@@ -1,4 +1,4 @@
-# AgentHub 0.7.0 · 智能助手中心
+# AgentHub 0.8.0 · 智能助手中心
 
 一个可选择 OpenAI Responses、Chat Completions、Anthropic Messages 或原生 Codex 的通用后台协作宿主。用户从普通对话提出请求，在原话题继续跟进；内部 Ticket 负责持久化，不要求用户填工单。文档、分析、非 Git 工作目录、代码 worktree 和自定义来源都受支持。
 
@@ -18,6 +18,18 @@ npm ci
 ```
 
 同一讨论沿用 discussion；同一消息重试沿用 request-id；新消息使用新 ID。本地操作员身份来自配置，客户端不能自行指定。
+
+## 英文 / 中文配置页面
+
+打开宿主的 `/configure`，使用本机访问令牌连接。英文为默认语言，可切换简体中文。页面直接接入真实配置、版本历史和提示词预览，支持保存、冲突提示和持久化。需要重启的部署参数只读展示；原操作台保留在 `/`。
+
+不连接模型和办公平台的独立预览：
+
+```sh
+node --import tsx examples/configuration-preview.ts
+```
+
+完整说明见 [Configuration console / 双语配置台](docs/CONFIGURATION.md)，测试与边界见 [0.8.0 验收](docs/ACCEPTANCE_0.8.md)。
 
 ## 执行后端和后台生命周期
 
@@ -117,7 +129,7 @@ Codex 输出 TOML，不自动改写已有 TOML；通过官方 MCP 配置入口�
 
 ## 验证与范围
 
-`npm run check` 执行 TypeScript 检查及 293 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
+`npm run check` 执行 TypeScript 检查及 297 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
 
 三个 API 后端已通过隔离 HTTP 与真实 Runtime 的工具、子代理、重启后接续测试，测试使用不存在的 Codex 路径。真实商业 API 模型调用尚未验收，详见 [后端验收](docs/BACKEND_ACCEPTANCE.md)。
 

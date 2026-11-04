@@ -11,13 +11,20 @@ import {configSchema} from './config.ts'
 import {randomUUID} from 'node:crypto'
 import {readSchema} from './resources.ts'
 import {compose,promptStatus} from './prompts.ts'
+import {configurationSnapshot} from './configuration.ts'
+import {SettingsError} from './settings.ts'
+import {configurationPage} from './ui/configuration.ts'
 
-export async function serve(runtime: Runtime) {
+export async function serve(runtime: Runtime,options:{configurationPreview?:boolean}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
   let token: string
   try { token = readFileSync(tokenPath, 'utf8').trim() }
   catch { token = randomBytes(32).toString('hex'); writeFileSync(tokenPath, token, { mode: 0o600, flag: 'wx' }) }
-  const server = createServer((request, response) => { void handle(request, response).catch(error => send(response, 400, { error: String(error).slice(0,500) })) })
+  const server = createServer((request, response) => { void handle(request, response).catch(error => {
+    if(error instanceof SettingsError){send(response,error.status,{error:error.message,code:error.code,...(error.code==='settings_conflict'?{currentRevision:runtime.settings.current().revision}:{})});return}
+    if(error instanceof z.ZodError){send(response,400,{error:'Configuration or request validation failed',code:'validation_error',issues:error.issues.map(issue=>({path:issue.path,message:issue.message}))});return}
+    send(response,400,{error:String(error).slice(0,500),code:'request_failed'})
+  }) })
   function authorized(request: IncomingMessage, secret = token): boolean {
     const actual = Buffer.from(request.headers.authorization ?? '')
     const expected = Buffer.from('Bearer ' + secret)
@@ -37,12 +44,16 @@ export async function serve(runtime: Runtime) {
     const path = new URL(req.url!, 'http://localhost').pathname
     res.setHeader('cache-control', 'no-store')
     res.setHeader('x-content-type-options', 'nosniff')
-    if (req.method === 'GET' && path === '/') {
+    if (req.method === 'GET' && ['/', '/configure', '/configure/'].includes(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
-      res.end(dashboard)
+      res.end(path==='/'?dashboard:configurationPage)
       return
     }
-    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: true, version: '0.7.0' }); return }
+    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: true, version: '0.8.0' }); return }
+    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check'].includes(path)){
+      if(!authorized(req)){send(res,401,{error:'Access token required',code:'token_required'});return}
+      send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
+    }
     if(req.method==='POST'&&path==='/worker'){
       const owner=runtime.workerTools.authenticate(req.headers.authorization)
       const input=z.object({name:z.string(),args:z.unknown()}).strict().parse(await body(req))
@@ -58,7 +69,8 @@ export async function serve(runtime: Runtime) {
       send(res, 202, runtime.receive(id, input.actor, input.event, input.human))
       return
     }
-    if (!authorized(req)) { send(res, 401, { error: 'Access token required' }); return }
+    if (!authorized(req)) { send(res, 401, { error: 'Access token required',code:'token_required' }); return }
+    if(req.method==='GET'&&path==='/configuration'){send(res,200,{...configurationSnapshot(runtime),preview:options.configurationPreview===true});return}
     if(req.method==='POST'&&path==='/merge-authorize'){
       const input=z.object({id:z.string(),source:z.string(),number:z.number().int().positive(),head:z.string().regex(/^[a-f0-9]{40}$/)}).strict().parse(await body(req))
       send(res,200,await runtime.merger.authorize(input.id,input.source,input.number,input.head));return

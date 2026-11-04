@@ -14,7 +14,7 @@ export async function backupState(config:Config,destination:string){
  let schema:number
  try{schema=Number(db.prepare('PRAGMA user_version').get()!.user_version);await backup(db,target)}finally{db.close()}
  chmodSync(target,0o600)
- const manifest={format:1,application:'0.7.0',schema,at:new Date().toISOString(),sha256:hash(target)}
+ const manifest={format:1,application:'0.8.0',schema,at:new Date().toISOString(),sha256:hash(target)}
  writeFileSync(join(directory,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{mode:0o600})
  writeFileSync(join(directory,'config.json'),JSON.stringify(config,null,2)+'\n',{mode:0o600})
  return {directory,...manifest}

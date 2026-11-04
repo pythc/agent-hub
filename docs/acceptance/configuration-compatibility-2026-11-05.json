@@ -1,0 +1,11 @@
+{
+  "at": "2026-11-04T16:59:34.457Z",
+  "baseline": "0.7.0",
+  "current": "0.8.0",
+  "schema": 4,
+  "passed": true,
+  "oldRuntimeReopenedNewSettings": true,
+  "revision": 1,
+  "nativeIdentityRetained": true,
+  "scope": "Isolated configuration persistence and unchanged schema compatibility; no external actions or work files were rolled back."
+}

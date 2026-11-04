@@ -1,0 +1,73 @@
+{
+  "at": "2026-11-04T17:01:09.053078+00:00",
+  "version": "0.8.0",
+  "scope": "Isolated real Runtime configuration acceptance; no production configuration or external platform was changed.",
+  "rootBrowser": {
+    "defaultLanguage": "en",
+    "chineseSwitchPreservesDraft": true,
+    "invalidTokenRejected": true,
+    "numericAndJsonValidation": true,
+    "realSave": true,
+    "actualConflictStatus": 409,
+    "conflictDraftRetained": true,
+    "independentPromptEditPreserved": true,
+    "promptPreviewUsesDraft": true,
+    "historyRestoredAsNewRevision": 4,
+    "historyRevisionsRetained": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "serverRestartPersistence": true,
+    "pageReloadRequiresTokenAgain": true,
+    "desktopSectionsChecked": 8,
+    "desktopHorizontalOverflow": false,
+    "mobileExecution": {
+      "width": 390,
+      "languages": [
+        "en",
+        "zh-CN"
+      ],
+      "horizontalOverflow": false
+    },
+    "serverValidationAlertReceivesFocus": true,
+    "finalPreviewClean": true
+  },
+  "frontendDesignerReport": {
+    "chat": "前端专家",
+    "completed": true,
+    "separateRuntimePort": 4336,
+    "checkInstanceClosed": true,
+    "mobileSectionsPerLanguage": 8,
+    "languages": [
+      "en",
+      "zh-CN"
+    ],
+    "wecomStatusTranslationAssertions": 14,
+    "keyboardRecoveryFocus": true,
+    "source": "Completion report from the user-designated frontend chat; separate from root browser observations."
+  },
+  "automated": {
+    "macOS": {
+      "tests": 297,
+      "passed": true,
+      "typecheck": true
+    },
+    "linux": {
+      "tests": 297,
+      "passed": true,
+      "pending": 0,
+      "architecture": "arm64",
+      "kernel": "6.12.76-linuxkit",
+      "uid": 1000
+    }
+  },
+  "boundaries": [
+    "Local preview uses independent state and inert office connectors.",
+    "Real provider authentication and real WeCom send/receive were not part of this UI acceptance.",
+    "The original operations console remains separate and primarily Chinese.",
+    "No production service was upgraded and no exhaustive accessibility or performance audit is claimed."
+  ]
+}

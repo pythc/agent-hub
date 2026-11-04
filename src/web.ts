@@ -5,7 +5,7 @@ fieldset{border:1px solid #dce2dd;margin:12px 0;min-width:0}label{display:block;
 textarea{display:block;width:95%;min-height:100px;margin:12px 0}article{background:white;border:1px solid #dce2dd;border-radius:10px;padding:18px;margin:15px 0}
 nav{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}p{white-space:pre-wrap}small,.muted{color:#647269}#error{color:#a52727}
 pre{white-space:pre-wrap;word-break:break-word;font-size:13px;background:#f5f7f5;padding:12px;border-radius:6px}a{color:#216d4b}.tag{font-size:13px;color:#647269}
-</style><header><h1>AgentHub</h1><p class="muted">从原对话继续协作，在需要你决定或结果可用时回到这里。</p></header>
+</style><header><h1>AgentHub</h1><p class="muted">从原对话继续协作，在需要你决定或结果可用时回到这里。</p><a href="/configure">Configuration / 配置</a></header>
 <input id="token" type="password" placeholder="本机 access-token 文件中的令牌"><button id="connect">连接</button><span id="health"></span>
 <section id="controls" hidden><nav id="tabs"></nav><input id="search" placeholder="搜索请求、讨论、结果或记录 ID"><button id="refresh">刷新</button>
 <article><nav><input id="source" value="local" aria-label="来源"><input id="thread" value="conversation" aria-label="讨论标识"></nav>
