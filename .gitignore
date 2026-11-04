@@ -1,0 +1,17 @@
+node_modules/
+.superagent/
+coverage/
+*.log
+
+examples/native-run-*/
+examples/code-run-*/
+plugins/codex/mcp.json
+validation/managed-native-*/
+examples/clients/
+
+.local/
+validation/
+examples/acceptance-config.json
+plugins/codex/.mcp.json
+deployment/*.plist
+.DS_Store

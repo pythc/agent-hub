@@ -1,0 +1,28 @@
+{
+  "name": "agent-hub",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "description": "General-purpose background agent hub with multi-client MCP access and native Codex execution.",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "demo": "tsx examples/native-smoke.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "jsonc-parser": "3.3.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "26.0.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  }
+}

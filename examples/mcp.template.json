@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "superagent": {
+      "command": "/ABSOLUTE/PATH/TO/node",
+      "args": [
+        "--import", "/ABSOLUTE/PATH/TO/agent-hub/node_modules/tsx/dist/loader.mjs",
+        "/ABSOLUTE/PATH/TO/agent-hub/src/cli.ts",
+        "mcp", "http://127.0.0.1:4319",
+        "/ABSOLUTE/PATH/TO/agent-hub/.superagent/access-token"
+      ]
+    }
+  }
+}

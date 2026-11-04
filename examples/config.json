@@ -1,0 +1,14 @@
+{
+  "stateDir": "../.superagent",
+  "port": 4319,
+  "model": "gpt-6.1-terra",
+  "effort": "high",
+  "concurrency": 2,
+  "sources": [{
+    "id": "local",
+    "kind": "local",
+    "allowedActors": ["operator"],
+    "cwd": ".",
+    "sandbox": "read-only"
+  }]
+}

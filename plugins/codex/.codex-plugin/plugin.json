@@ -1,0 +1,19 @@
+{
+  "name": "agent-hub",
+  "version": "0.5.0",
+  "description": "Delegate and follow background work through a local Codex-native agent host.",
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "AgentHub",
+    "shortDescription": "跨客户端后台协作",
+    "longDescription": "通过本地 Codex 会话持续处理授权请求并跟进结果。",
+    "developerName": "Local",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ]
+  }
+}
