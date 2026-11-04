@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-04T16:52:06Z",
+  "title": "Design System: AgentHub Configuration",
+  "extensions": {
+    "motion": [
+      {
+        "name": "motion",
+        "value": "155ms cubic-bezier(0.22, 0.7, 0.25, 1)",
+        "purpose": "Navigation and control state transitions, switch movement and the sticky draft bar entrance. Reduced motion disables them."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow-rail",
+        "value": "1050px"
+      },
+      {
+        "name": "section-selector",
+        "value": "780px"
+      },
+      {
+        "name": "stacked-fields",
+        "value": "540px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Save changes in the configuration workspace.",
+      "html": "<button type=\"button\" class=\"ds-button-primary\"><svg aria-hidden=\"true\" width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12l5 5L20 6\"/></svg>Save changes</button>",
+      "css": ".ds-button-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; background: var(--accent, #226349); color: white; border: 1px solid var(--accent, #226349); border-radius: 7px; padding: 8px 13px; font: 570 0.88rem/1.35 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background-color var(--motion, 155ms cubic-bezier(0.22, 0.7, 0.25, 1)), border-color var(--motion, 155ms cubic-bezier(0.22, 0.7, 0.25, 1)); } @media (hover: hover) { .ds-button-primary:hover { background: #174d37; border-color: #174d37; } } .ds-button-primary:focus-visible { outline: 2px solid var(--accent, #226349); outline-offset: 3px; } @media (prefers-reduced-motion: reduce) { .ds-button-primary { transition: none; } }"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Discard in the configuration workspace.",
+      "html": "<button type=\"button\" class=\"ds-button-secondary\">Discard</button>",
+      "css": ".ds-button-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; background: white; color: var(--ink, #182822); border: 1px solid var(--control-line, #78887b); border-radius: 7px; padding: 8px 13px; font: 570 0.88rem/1.35 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background-color var(--motion, 155ms cubic-bezier(0.22, 0.7, 0.25, 1)), border-color var(--motion, 155ms cubic-bezier(0.22, 0.7, 0.25, 1)); } @media (hover: hover) { .ds-button-secondary:hover { background: #f3f7f2; border-color: #739781; } } .ds-button-secondary:focus-visible { outline: 2px solid var(--accent, #226349); outline-offset: 3px; } @media (prefers-reduced-motion: reduce) { .ds-button-secondary { transition: none; } }"
+    },
+    {
+      "name": "Text action",
+      "kind": "button",
+      "refersTo": "text-action",
+      "description": "Refresh status in the configuration workspace.",
+      "html": "<button type=\"button\" class=\"ds-text-action\"><svg aria-hidden=\"true\" width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 5v6h-6m6 0a8 8 0 1 0-1 6\"/></svg>Refresh status</button>",
+      "css": ".ds-text-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; background: transparent; color: var(--accent, #226349); border: 0; border-radius: 7px; padding: 5px 6px; font: 570 0.88rem/1.35 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background-color var(--motion, 155ms cubic-bezier(0.22, 0.7, 0.25, 1)), border-color var(--motion, 155ms cubic-bezier(0.22, 0.7, 0.25, 1)); } @media (hover: hover) { .ds-text-action:hover { background: #e9f0e9; } } .ds-text-action:focus-visible { outline: 2px solid var(--accent, #226349); outline-offset: 3px; } @media (prefers-reduced-motion: reduce) { .ds-text-action { transition: none; } }"
+    },
+    {
+      "name": "Access token field",
+      "kind": "input",
+      "refersTo": "text-field",
+      "description": "The masked host access field has a visible label.",
+      "html": "<label class=\"ds-label\" for=\"ds-token\">Access token</label><input class=\"ds-token\" id=\"ds-token\" type=\"password\" autocomplete=\"off\" spellcheck=\"false\" required>",
+      "css": ".ds-label { display: block; font: 600 1rem/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: var(--ink, #182822); } .ds-token { width: 100%; min-height: 39px; padding: 8px 10px; margin-top: 6px; font: 0.93rem/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: var(--ink, #182822); background: white; border: 1px solid var(--control-line, #78887b); border-radius: 6px; caret-color: var(--accent, #226349); } .ds-token:focus-visible { outline: 2px solid var(--accent, #226349); outline-offset: 3px; } @media (max-width: 540px) { .ds-token { font-size: 16px; } }"
+    },
+    {
+      "name": "Current section",
+      "kind": "nav",
+      "refersTo": "nav-current",
+      "description": "The selected section of the desktop rail.",
+      "html": "<button class=\"ds-nav\" type=\"button\" aria-current=\"page\"><svg aria-hidden=\"true\" width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 5h6v5H4zM14 14h6v5h-6zM7 10v5a2 2 0 0 0 2 2h5M10 7h7v4\"/></svg>Execution</button>",
+      "css": ".ds-nav { width: 100%; display: flex; align-items: center; gap: 11px; min-height: 39px; padding: 9px 12px; border: 0; border-radius: 7px; background: var(--tint, #dfece3); color: #194e35; font: 630 0.94rem/1.35 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background-color var(--motion, 155ms cubic-bezier(0.22, 0.7, 0.25, 1)); } @media (hover: hover) { .ds-nav:hover { background: #e9f0e9; } } .ds-nav:focus-visible { outline: 2px solid var(--accent, #226349); outline-offset: 3px; } @media (prefers-reduced-motion: reduce) { .ds-nav { transition: none; } }"
+    },
+    {
+      "name": "Preview workspace",
+      "kind": "chip",
+      "refersTo": "badge-preview",
+      "description": "Display only when the host signals preview mode.",
+      "html": "<span class=\"ds-badge\">Preview workspace</span>",
+      "css": ".ds-badge { display: inline-flex; padding: 4px 8px; border-radius: 5px; font: 600 0.76rem/1.35 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f5ebd9; color: #70501d; }"
+    },
+    {
+      "name": "Revision review panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "The base and newer host revisions precede conflict details.",
+      "html": "<section class=\"ds-panel\"><h2>Review newer revision</h2><p>Revision 1 → Revision 2</p></section>",
+      "css": ".ds-panel { display: grid; gap: 12px; padding: 23px 24px; color: var(--ink, #182822); background: white; border: 1px solid var(--line, #d9e1db); border-radius: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-panel h2 { margin: 0; font-size: 1.22rem; line-height: 1.35; letter-spacing: -0.023em; } .ds-panel p { margin: 6px 0 0; color: var(--muted, #586b61); line-height: 1.5; } @media (max-width: 1050px) { .ds-panel { padding: 20px; } } @media (max-width: 540px) { .ds-panel { padding: 17px; } }"
+    }
+  ],
+  "narrative": {
+    "overview": "The /configure workspace extends AgentHub’s green, system-font console. Before connecting, an operator can check the host and enter a token. After connecting, the overview shows saved settings. Editors across all sections share one in-memory draft tied to the host revision.",
+    "dos": [
+      "Show whether a value comes from the saved host revision or the editable draft.",
+      "Keep the operator’s edits available across section and language changes."
+    ],
+    "donts": [
+      "Never use a health dot or color change as the only status message.",
+      "Never present history restoration or conflict resolution as a completed save."
+    ]
+  }
+}
