@@ -1,0 +1,1509 @@
+{
+  "at": "2026-11-04T16:26:47.400Z",
+  "version": "0.7.0",
+  "platform": "linux",
+  "architecture": "arm64",
+  "kernel": "6.12.76-linuxkit",
+  "node": "v24.21.0",
+  "uid": 1000,
+  "bubblewrap": "bubblewrap 0.12.0",
+  "probe": {
+    "driver": "bubblewrap",
+    "commandsEnabled": true,
+    "verified": true,
+    "platform": "linux"
+  },
+  "typecheckPassed": true,
+  "tests": 293,
+  "passedTests": 293,
+  "failedTests": 0,
+  "pendingTests": 0,
+  "mandatorySandboxCases": 22,
+  "passed": true,
+  "assertions": [
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat executes a real HTTP tool loop and resumes persisted history without Codex",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses executes a real HTTP tool loop and resumes persisted history without Codex",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic executes a real HTTP tool loop and resumes persisted history without Codex",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat returns scoped tool errors for unknown tools or invalid arguments without invoking them",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses returns scoped tool errors for unknown tools or invalid arguments without invoking them",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic returns scoped tool errors for unknown tools or invalid arguments without invoking them",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat bounds malformed final-output repair instead of accepting an invalid report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses bounds malformed final-output repair instead of accepting an invalid report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic bounds malformed final-output repair instead of accepting an invalid report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat refuses duplicate call IDs before repeating side effects",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses refuses duplicate call IDs before repeating side effects",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic refuses duplicate call IDs before repeating side effects",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat recovers a lost tool receipt without replaying the side effect",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses recovers a lost tool receipt without replaying the side effect",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic recovers a lost tool receipt without replaying the side effect",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "pins existing conversations to their backend while new roles select different backends",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "reserves the codex backend ID so legacy native conversations cannot be reinterpreted as API sessions",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat preserves tool/image ordering and applies prompt refresh and steering at the next step",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses preserves tool/image ordering and applies prompt refresh and steering at the next step",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic preserves tool/image ordering and applies prompt refresh and steering at the next step",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "cancels an in-flight API request and retains an interrupted turn",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "rejects unsafe endpoints and protocol-owned parameter overrides before network access",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat maps structured output to the protocol-specific server schema field",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses maps structured output to the protocol-specific server schema field",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic maps structured output to the protocol-specific server schema field",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "enforces the tool-call budget before a large batch can execute any tool",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat executes managed subagents through the same protocol without any Codex installation",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses executes managed subagents through the same protocol without any Codex installation",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic executes managed subagents through the same protocol without any Codex installation",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat runs the actual Runtime routing/file/result/follow-up path with a missing Codex binary",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses runs the actual Runtime routing/file/result/follow-up path with a missing Codex binary",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic runs the actual Runtime routing/file/result/follow-up path with a missing Codex binary",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-chat executes a real managed shell through the platform sandbox with no Codex binary",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "openai-responses executes a real managed shell through the platform sandbox with no Codex binary",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backend-api.spec.ts",
+      "name": "anthropic executes a real managed shell through the platform sandbox with no Codex binary",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backup.spec.ts",
+      "name": "backs up WAL state, verifies integrity and refuses restoring under a live host",
+      "status": "passed"
+    },
+    {
+      "file": "tests/backup.spec.ts",
+      "name": "restores offline state and retains a backup of the previous database",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented generic stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented cursor stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented vscode stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented copilot stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented workbuddy stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented claude-code stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented claude-desktop stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented gemini stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented qwen stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented opencode stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented cline stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented roo stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented kiro stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "generates the documented codex stdio schema with literal path arguments",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "preserves JSONC comments, other servers and top-level settings, then restores exact bytes and mode",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "treats reordered JSON keys as an unchanged server",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "restores a newly created file by removing only that file",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "refuses rollback after a user edit",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "requires explicit replacement even for an existing falsy entry null",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "requires explicit replacement even for an existing falsy entry false",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "requires explicit replacement even for an existing falsy entry {\"command\":\"different\"}",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "rejects malformed configuration without changing it: [1,2]",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "rejects malformed configuration without changing it: {\"mcpServers\":[]}",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "rejects malformed configuration without changing it: {bad json",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "refuses to replace symlinks, including broken ones",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "rejects non-loopback origins and embedded credentials: https://example.com",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "rejects non-loopback origins and embedded credentials: http://localhost:4326/path",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "rejects non-loopback origins and embedded credentials: http://user:pass@localhost:4326",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "rejects non-loopback origins and embedded credentials: http://127.0.0.1:4326/?key=x",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "supports a distinct server name without overwriting other entries",
+      "status": "passed"
+    },
+    {
+      "file": "tests/clients.spec.ts",
+      "name": "uses project scopes and refuses undocumented scopes or TOML rewriting",
+      "status": "passed"
+    },
+    {
+      "file": "tests/codex.spec.ts",
+      "name": "waits for a native writer to release, resuming the same thread without forking",
+      "status": "passed"
+    },
+    {
+      "file": "tests/codex.spec.ts",
+      "name": "does not create invalid startup entries for absent MCP aliases and disables only actual managed capabilities",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "polls GitHub, preserves source identities, ignores own markers and maintains a durable cursor",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "does not repeat an already published GitHub reply",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "polls Feishu topics and replies with a stable idempotency uuid",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "normalizes typed CLI paths and converts real CLI message output",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "finds a GitHub delivery marker on later pages before attempting a replay",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "keeps bridged Feishu event IDs separate when platform message metadata is absent",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "refuses credential-bearing HTTP requests to a different origin",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "retains approval reviews with empty bodies and serves paginated source resources",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "anchors Feishu root, parent and image reads to the source chat and returned image key",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "paginates every inline review thread and refuses a nonadvancing cursor",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "replies inline and deduplicates an uncertain review reply by its exact marker",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "discovers only explicitly enabled Feishu mentions and uses the original for deduplication",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "does not sync an empty Feishu directory or read members from an unconfigured chat",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "discovers an owned PR by its exact task branch even when its body has a host marker",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "isolates a failing subscribed GitHub thread and keeps its own review cursor",
+      "status": "passed"
+    },
+    {
+      "file": "tests/connectors.spec.ts",
+      "name": "retains explicitly enabled direct-message resource access across source restart",
+      "status": "passed"
+    },
+    {
+      "file": "tests/delivery.spec.ts",
+      "name": "rejects a hidden alternate push URL before staging, committing or pushing anything",
+      "status": "passed"
+    },
+    {
+      "file": "tests/interface.spec.ts",
+      "name": "serves authenticated APIs and connects a real stdio MCP client to the same host",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "admits only a current-head approved, checked PR below the line threshold",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "rejects stale and dismissed approvals and enforces named reviewers",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "rejects changes requested, failing checks, unresolved threads and externally queued merges",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "treats missing CI, incomplete review pages, unknown mergeability and bot approvals as blockers",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "submits one atomic expected-head merge and keeps distinct accounts",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "withdraws authorization before push and fences a revocation during preflight",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "blocks stale heads, self approvals, same merge account, pending inputs and stopped tasks",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "retains uncertain write intent through restart and never retries a possible merge",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "does not submit after shutdown begins or silently approve a different branch",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "supports explicit team-policy automatic authorization without a per-head operator call",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "retains uncertain merge intent when a new push or revoke is attempted",
+      "status": "passed"
+    },
+    {
+      "file": "tests/merge.spec.ts",
+      "name": "blocks disabled policy, pauses, stopped work and expired authorizations",
+      "status": "passed"
+    },
+    {
+      "file": "tests/office.spec.ts",
+      "name": "creates an isolated feishu setup without granting sender access or overwriting credentials",
+      "status": "passed"
+    },
+    {
+      "file": "tests/office.spec.ts",
+      "name": "creates an isolated wecom setup without granting sender access or overwriting credentials",
+      "status": "passed"
+    },
+    {
+      "file": "tests/office.spec.ts",
+      "name": "initializes a configured Feishu test chat with an explicit sender",
+      "status": "passed"
+    },
+    {
+      "file": "tests/office.spec.ts",
+      "name": "allows a confirmed sender for future messages without replaying an ignored earlier request",
+      "status": "passed"
+    },
+    {
+      "file": "tests/policy.spec.ts",
+      "name": "revalidates inferred admission at its original strength and with current membership",
+      "status": "passed"
+    },
+    {
+      "file": "tests/policy.spec.ts",
+      "name": "preserves explicit follow-up authority while checking source scope",
+      "status": "passed"
+    },
+    {
+      "file": "tests/policy.spec.ts",
+      "name": "treats a listed unaddressed follow-up as explicit and bots only as inferred",
+      "status": "passed"
+    },
+    {
+      "file": "tests/policy.spec.ts",
+      "name": "does not infer new work from unaddressed GitHub events in mention-only scopes",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "paginates stable text snapshots and keeps cursors scoped to their reader",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "materializes long Unicode office filenames within filesystem byte limits while retaining the extension",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "does not expose the host environment file through task file resources",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "refuses global records, another task, stale prompts, escaping paths and symlinks",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "returns actual image bytes through the scoped native tool bridge",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "labels native thread and turn identities separately in history resources",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "describes the subagent backend in its catalog rather than the parent worker backend",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "fences worker grants to an assignment instead of the admin identity",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "previews member policy changes and rejects stale or empty directory snapshots",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "supports all original prompt keys and validates generated placeholders",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "does not allow source resource aliases to bypass a worker conversation scope",
+      "status": "passed"
+    },
+    {
+      "file": "tests/resources.spec.ts",
+      "name": "exercises every host resource family through the shared paginated reader",
+      "status": "passed"
+    },
+    {
+      "file": "tests/review.spec.ts",
+      "name": "queues one inline decline explanation and resolves only after it is delivered",
+      "status": "passed"
+    },
+    {
+      "file": "tests/review.spec.ts",
+      "name": "refuses unverified fixes, subagent decisions, and assignments ended during verification",
+      "status": "passed"
+    },
+    {
+      "file": "tests/review.spec.ts",
+      "name": "does not resolve a fixed thread after the verified PR head changes",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "source-independent host handles an answer and follow-up without Git, preserving the native thread",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "source-independent host rejects altered idempotency retries and ignores unauthorized new requests",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "source-independent host does not execute a router-classified casual message",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "source-independent host keeps read/write intents and their effects in one rollback boundary",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "source-independent host prevents a second host from writing the same state directory",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "source-independent host persists completed work and routes a follow-up after host restart",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "source-independent host quarantines an ambiguous in-flight activation at restart",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "accepts a custom source kind through the source port, with no repository assumptions",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "stops an in-flight activation and fences its late result",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "records proactive observations without executing them",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "keeps an explicit processing pause across restarts",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "stores follow-ups while human control holds automatic execution",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "refuses proactive acceptance when a rule was omitted from the assessment",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "routes a human stop follow-up while its worker turn remains active",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "cancels in-flight source polling during a graceful shutdown",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "quarantines a delivery interrupted after its sending intent was persisted",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "retrieves a cross-discussion task only from its exact reference, including ended work",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "holds a background slot and reserves the extra slot for a human follow-up",
+      "status": "passed"
+    },
+    {
+      "file": "tests/runtime.spec.ts",
+      "name": "selects role models for new sessions and preserves the existing worker model on follow-up",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "runs a real sandboxed command without Codex and denies private state/outside writes/credential environment",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "blocks network access when disabled and permits the explicitly enabled local network",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "enforces read-only workspaces in the standalone sandbox",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "hides the host credential environment file even inside an otherwise readable directory",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "allows only the active nested workspace and an assigned attachment within private state",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "stops command descendants on assignment end with the standalone sandbox",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "does not fall back to an unrestricted process when a sandbox is disabled or mismatched",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "rejects a sandbox for another platform without leaving a running job",
+      "status": "passed"
+    },
+    {
+      "file": "tests/sandbox.spec.ts",
+      "name": "constructs a minimal Linux namespace with read-only root inputs and hidden private state",
+      "status": "passed"
+    },
+    {
+      "file": "tests/settings-approval.spec.ts",
+      "name": "preserves prompt versions and refuses stale writes",
+      "status": "passed"
+    },
+    {
+      "file": "tests/settings-approval.spec.ts",
+      "name": "binds approvals to a live native request and refuses replay",
+      "status": "passed"
+    },
+    {
+      "file": "tests/settings-approval.spec.ts",
+      "name": "expires persisted requests after host restart",
+      "status": "passed"
+    },
+    {
+      "file": "tests/settings-approval.spec.ts",
+      "name": "rejects prompt overrides that drop environment or policy placeholders",
+      "status": "passed"
+    },
+    {
+      "file": "tests/settings-approval.spec.ts",
+      "name": "reports an upgraded default without discarding the team override",
+      "status": "passed"
+    },
+    {
+      "file": "tests/settings-approval.spec.ts",
+      "name": "keeps in-memory settings unchanged when the database commit fails",
+      "status": "passed"
+    },
+    {
+      "file": "tests/settings-approval.spec.ts",
+      "name": "retains transaction rollback after a failed transaction start",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "deduplicates incoming messages and sends results only to the original conversation",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "refuses unconfigured groups, mismatched bots and disabled sources without execution",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "retains unlisted sender identity for operator setup without replying or downloading",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "caches mixed attachments while keeping temporary URLs and decryption keys out of resources",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "bounds media hosts before any network request",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "decrypts bounded file responses and preserves the filename supplied by the platform",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "treats lost send acknowledgements as uncertain and does not silently retry",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "refuses expired active-send windows and oversized replies before sending",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "revokes group reads and delivery when that group is removed from the configuration",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "recovers durable input after a host restart without replaying its receipt",
+      "status": "passed"
+    },
+    {
+      "file": "tests/wecom.spec.ts",
+      "name": "uses the actual official SDK over WebSocket for authentication, receipt, routing and result delivery",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "keeps a command after its caller returns, deduplicates starts and sends one completion",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "holds a review server without a slot or completion wake after handoff",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "kills command descendants when its assignment ends",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "stops subagents on handoff and revokes their active state",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "enforces the background deadline and wakes with the retained cancellation result",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "enforces read-only commands and prevents another task from accessing jobs",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "does not let sandboxed work read the host capability or access token",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "returns the same subagent for a duplicate request even at concurrency limits",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "collects killed jobs without waking on a background timeout and retains subagents",
+      "status": "passed"
+    },
+    {
+      "file": "tests/work.spec.ts",
+      "name": "collects foreground command completion without queuing a redundant worker wake",
+      "status": "passed"
+    },
+    {
+      "file": "tests/workspace.spec.ts",
+      "name": "prepares a writable non-Git task in a separate directory and retries a failed prepare",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "intake stores a trigger once and records source filtering",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "intake records correlation for a trigger on several threads and evaluates only on the primary one",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval ignores at the gate without an assessor when nothing is admissible",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval releases the assessor's state for every eval that ends, decided or not",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval serializes evals per thread and debounces triggers that arrive meanwhile",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval accept creates a ticket with a mandate, subscribes the thread, queues the acknowledgement and starts an assignment",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval refuses to decide an eval that a later eval replaced, and decides the later one",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval records an accept with its ticket, subscriptions and acknowledgement together, or none of them",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval records unavailable when the policy version changed during assessment",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval starts every pending eval in one step, so a second pump starts none of them again",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "eval counts an Eval's deadline from its delivery, queues its Triggers again twice when it expires, then records it unavailable",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "subscription fan-out delivers a person's later message on a subscribed thread to the live ticket as context, and not to Eval",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "subscription fan-out keeps inputs undelivered until an assignment is running, and asks to launch one whose launch failed again",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "subscription fan-out does not hand a bot's message to an ended ticket, and still assesses it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "subscription fan-out resumes once however often it pumps, with the resume note ahead of the message, and drops what waited when the policy no longer holds the mandate",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "subscription fan-out takes delivery reports only from the assignment that still runs the open ticket",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "subscription fan-out unsubscribing a thread stops fan-out until a new decision subscribes it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "subscription fan-out lets an Executor drop a thread attached to its ticket, keeping the thread's other tickets, but not its own threads",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "resume and stop resumes an ended ticket on any person's message on its thread, under the same mandate and without a Decision",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "resume and stop resumes an ended ticket an earlier version left with a person's message waiting, on the next pass",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "resume and stop resumes an ended ticket at once when a person attaches a message to it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "resume and stop keeps a ticket a person stopped ended: the stop withdrew its mandate",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "resume and stop keeps a ticket ended when its mandate no longer passes the current policy",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "resume and stop stops a live ticket only on an explicit instruction and ends it by the human",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-ups takes a follow-up an older version queued out of the queue without a Decision, and keeps one sent to Eval again",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-ups decides a follow-up in a gate-only Eval beside the Eval its Thread has in progress, which goes on",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-ups leaves the Thread free for a later request that reaches no ticket",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "hand-back queues a message that reached a ticket for a fresh Eval with the gate's strength, once per ticket, and keeps the subscription",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "hand-back queues again no message the ticket did not decide: one a person sent to Eval, a bot's, or one on a Thread followed for context",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "hand-back leaves a message the main Session attached to a ticket to its worker, whose hand-back sends it to Eval",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "context threads and notes fans a Thread followed for context out to the live ticket, resumes no ended ticket from it, unless it was attached",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "context threads and notes counts a message on a Thread a ticket follows only for context as none of its follow-ups, and lifts no block with it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "context threads and notes sends a message to Eval when the ticket it reached cannot resume and only a ticket following its Thread for context is left",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "context threads and notes gives an open ticket's worker a note as an Input of its own, held like automatic Input, and refuses one for an ended ticket",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners lets the main Session take a follow-up as new work once it stopped the ticket on it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners sends a follow-up its worker never received to Eval when the ticket ends, by a report or a stop",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners sends a follow-up its worker got since its last report to Eval when the ticket ends, unless it acknowledged it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners keeps a ticket open after its pull request merged while its worker is on a person's message it took up after its last report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners gives a follow-up its ended ticket let go to that ticket again when the main Session attaches it there",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners wakes an ended ticket for a message attached to it that its worker read only for context or before its last report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners counts a question the final report answers as taken up, so it does not come back as a candidate beside its answer",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners sends to Eval a message attached after its Eval was unavailable, once its ticket ends without taking it up",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners counts an acknowledgement an earlier version queued without recording it on the message as taking the message up",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners counts a message that resumed a ticket as taken up by the report that ends it again, unlike one that came later",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners sends a follow-up its ticket let go to Eval after a stop on it was refused, but not the one a stop ended it on",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners sends the message a stop ended a ticket on to Eval once another ticket it reached ends without taking it up",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners hands the follow-ups on a thread a worker found unrelated back to Eval, with its reason",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners keeps a follow-up two tickets reached with the one that did not hand it back, and queues it once neither decides it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up owners lets an Eval an earlier version started on a follow-up decide it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "interrupted assignments starts an Assignment interrupted mid-work again with a note, and hands one that waits what waits for it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "interrupted assignments starts again a worker that reported but then got a person's message, which it was working on",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "pause lets no Eval expire while processing is paused, and moves its deadline on by the pause's length",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "policy change tells only the live tickets a change bears on how it does, and restarts in-flight evals under the new version",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "policy change does not start evals while paused",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "worker reports asks, keeps, replaces and clears the question for a person, and says which question a report replaced",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "worker reports ends the ticket on a final report: dropped drops it, ready completes it unless it follows a Source's Thread that is open",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "worker reports refuses a question with a result or an answer, and questions or answers that name no person's message of the ticket",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "worker reports refuses a report on an ended ticket",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "outcomes records how a ticket ended",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "attach sends the routing note for a message the worker has, ends an Eval that holds only that message, and refuses a ticket a person stopped or the Policy no longer holds",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "attach ends the batch Eval of a message attached to a ticket and assesses the rest again, leaving the message to that ticket",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "attach names missing things apart from refusals and fills in the values",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "direct decisions decides an explicit request no Eval holds in a direct Eval, refuses a proactive accept without matched rules, and accepts a Trigger once",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "direct decisions accepts an inferred candidate only on rules the Policy admits, whoever names them",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "direct decisions ends the Eval of a replayed Trigger that started a ticket, and returns that ticket's Decision for it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "direct decisions keeps a replayed Trigger that started a ticket out of the Eval of the Triggers queued with it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "direct decisions starts a ticket from a request accepted beside a replayed one, with its own origin and acknowledgement",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "automatic input holds back automatic Input from a worker that reported blocked or failed until a person's message arrives",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "automatic input stops waiting for a person on a person's message, a later report that is neither blocked nor failed, or a retry",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "automatic input launches a failed launch again for a person's message, but not for a Policy change",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "replies acknowledges a person's message that reached an open ticket once, and refuses others",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "replies sends an answer only after the worker reported it, a result only for a ready ticket, and attention only for its current question",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "ticket commands ends a ticket by the same rule on a close and on a ready report: once no PR it opened is open, as the latest of them ended",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "ticket commands stops following a Thread whose Subscription a person removes",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "ticket commands follows a Source's Threads, and ends once no Thread of its own is open, unless resumed work has not finished",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "ticket commands retries a ticket that reported failed with a new Assignment, and asks only a waiting worker for its status",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "failed deliveries forgets a failed delivery once a new Assignment takes over or the ticket ends",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "problems dismisses the problem an unavailable Decision shows, and only such a Decision",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "retry after a failed delivery starts a new Assignment for a ticket whose Input keeps failing to reach its worker, which takes the Input",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "Evals across Policy versions, revoked Mandates and mixed batches queues an Eval's batch again when it is decided under an older Policy, such as after an upgrade changed the version",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "Evals across Policy versions, revoked Mandates and mixed batches queues a person's message for Eval when the only ticket it reached cannot resume under the Policy now, and says it reached none",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "Evals across Policy versions, revoked Mandates and mixed batches queues a person's message that waited out a pause for Eval when the ticket it reached cannot resume once the pause lifts",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "Evals across Policy versions, revoked Mandates and mixed batches takes a new ticket's origin and acknowledgement from the admissible Trigger that gave its batch its strength",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "gaps takes a mixed batch's strength, actor and basis from its strongest admissible Trigger, the latest of equal strength",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "gaps changes nothing and delivers nothing on a late start of an Assignment a retry replaced",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "gaps records a stop that names an unknown or ended ticket as ignored",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "gaps refuses a direct decision on a Trigger the gate does not admit, and leaves the queue as it was",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "gaps refuses to retry a ticket a person stopped after its failed report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "gaps answers a question once, sends a result only for finished work, and the same result once",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "gaps keeps an Eval's deadline on a repeated delivery, refuses to queue a held Trigger again, and puts expired Triggers first",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "final review ignores an Eval an earlier version left holding only a Trigger that started a ticket, instead of recording it unavailable",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "final review clears the count of expired Evals when the gate ignores what a Thread queued",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "final review: Policy transitions tells a worker of each Policy change that bears on its ticket, also of one that repeats an earlier transition",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "final review: Threads followed for context lets a worker acknowledge or ask no one on a Thread it follows only for context",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "final review: close times records a Source's close time in the canonical form, and keeps the ticket's updatedAt moving forward",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "model-surface review resumes an ended ticket only on a person's message, not on a bot's that is attached to it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up review: turn ends lets a merge send to Eval only the messages its worker had no turn to read after its ready report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up review: turn ends keeps a ticket open at a merge while its worker works on a message it took up, also after a progress report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up review: turn ends ends a ticket whose close it deferred as the close did when its worker then drops the work",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up review: turn ends sends a message another ticket handed back to Eval when a stop on it ends the ticket that kept it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up review: turn ends gives a live ticket's worker again a message it had that a person sent to Eval and the main Session attached back",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up review: turn ends and deliveries lets a stop send to Eval a message that waited for delivery when a turn ended, and reached the worker after",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "follow-up review: delivery times lets a stop send to Eval a message that came before the worker's waiting report but reached the worker after it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "routing review records two stops of one follow-up that reached two tickets, made in the same moment, as two Decisions",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "what a worker read sends to Eval a message that woke a ticket and reached its worker only after a progress report, at a dropped report",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "what a worker read counts a message that woke a ticket as read by a later dropped report once its worker's Session took it into a step",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "what a worker read sends to Eval at a merge a message that reached the worker after its last step, which no step took before its turn ended",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "what a worker read counts a message a retry delivered after a failure and a turn end as read by a dropped report only once a step took it",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "what a worker read counts a message a step took before a restart cut its turn off as read only once the restarted worker reports",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "read claims review gives a retry's Assignment the messages the failed one had delivered but no step of its worker took",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "read claims review: retries gives a retry only what the Assignment it replaces had delivered and no step took, not what an earlier end let go of",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "read claims review: restarts gives a restart's Assignment what the replaced one had delivered and no step took, and a retry of it gets it again",
+      "status": "passed"
+    },
+    {
+      "file": "tests/upstream/core-engine.spec.ts",
+      "name": "ignores from the card marks the ignore of an inferred candidate that no assessment judged, unlike an assessed one or an explicit candidate's",
+      "status": "passed"
+    }
+  ],
+  "environment": "Linux kernel in an isolated Docker container",
+  "controllerPlatform": "darwin",
+  "imageId": "sha256:6e976cbea142ffdf77edc50ce8027660715734f125bcaaceaa6af25f0de6648e",
+  "outerContainer": {
+    "user": 1000,
+    "network": "none",
+    "capabilities": "all dropped",
+    "noNewPrivileges": true,
+    "privileged": false,
+    "hostMounts": false,
+    "securityOverrides": [
+      "seccomp=unconfined",
+      "systempaths=unconfined"
+    ]
+  },
+  "defaultContainerPolicy": {
+    "usable": false,
+    "reason": "Error: Bubblewrap startup denied by namespace/proc policy. Check the Linux host or outer container policy; see docs/LINUX.md. No unrestricted fallback was used."
+  }
+}

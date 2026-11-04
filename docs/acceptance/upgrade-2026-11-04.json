@@ -1,0 +1,29 @@
+{
+  "at": "2026-11-04T16:27:31.832Z",
+  "passed": true,
+  "baselineVersion": "0.6.0",
+  "baselineSchema": 3,
+  "steps": [
+    {
+      "action": "upgrade",
+      "schema": 4,
+      "nativeThreadRetained": true,
+      "runtimeOpened": true
+    },
+    {
+      "action": "old-program-refusal",
+      "passed": true
+    },
+    {
+      "action": "restore-pre-upgrade",
+      "schema": 3,
+      "originalConfigUsed": true,
+      "runtimeOpened": true
+    },
+    {
+      "action": "re-upgrade",
+      "schema": 4,
+      "runtimeOpened": true
+    }
+  ]
+}

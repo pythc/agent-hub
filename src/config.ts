@@ -20,6 +20,13 @@ const sourceSchema = z.object({
   pollSeconds: z.number().min(1).default(60),
   github: z.object({ command: z.string().default('/agent'), receiveAll: z.boolean().default(false), gh: z.string().default('gh'),transport:z.enum(['http','gh']).default('http'),tokenEnv:z.string().optional() }).strict().optional(),
   feishu: z.object({ cli: z.string().optional(), appIdEnv: z.string().optional(), appSecretEnv: z.string().optional(), verificationTokenEnv: z.string().optional(), chats: z.array(z.string()).min(1), mentionId: z.string().optional(), liveEvents:z.boolean().default(false),otherChats:z.enum(['ignore','mentions']).default('ignore'),directMessages:z.boolean().default(false), command:z.string().default('/agent') }).strict().optional(),
+  wecom:z.object({
+    botIdEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),secretEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+    wsUrl:z.string().url().default('wss://openws.work.weixin.qq.com').refine(s=>{const u=new URL(s);return !u.username&&!u.password&&!u.search&&!u.hash&&(u.protocol==='wss:'||u.protocol==='ws:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname))},'Use WSS or loopback WS with no URL credentials'),
+    chats:z.array(z.string().min(1).max(200)).default([]),directMessages:z.boolean().default(true),
+    otherChats:z.enum(['ignore','mentions']).default('ignore'),
+    downloadHosts:z.array(z.string().regex(/^[a-z0-9.-]+$/)).default(['weixin.qq.com','qpic.cn']),
+  }).strict().optional(),
   cwd: z.string(),
   workspace:z.object({mode:z.enum(['source','directory','git-worktree']).default('git-worktree'),prepare:z.object({command:z.string().min(1),args:z.array(z.string()).default([])}).strict().optional()}).strict().optional(),
   sandbox: z.enum(['read-only', 'workspace-write']).default('read-only'),
@@ -30,6 +37,7 @@ const sourceSchema = z.object({
   if(s.kind==='local'&&!s.allowedActors.length)ctx.addIssue({code:'custom',message:'Local source requires an operator identity'})
   if(s.kind==='github'&&!s.repository)ctx.addIssue({code:'custom',message:'GitHub source requires repository'})
   if(s.kind==='feishu'&&(!s.feishu||(!s.feishu.cli&&(!s.feishu.appIdEnv||!s.feishu.appSecretEnv))))ctx.addIssue({code:'custom',message:'Feishu source requires CLI or app credential environment names'})
+  if(s.kind==='wecom'&&!s.wecom)ctx.addIssue({code:'custom',message:'WeCom source requires smart-bot configuration'})
 })
 export const configSchema = z.object({
   stateDir: z.string().default('.superagent'),

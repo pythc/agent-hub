@@ -6,7 +6,7 @@ import {readSchema} from './resources.ts'
 
 export async function startMcp(url: string, tokenFile: string) {
   const token = readFileSync(tokenFile, 'utf8').trim()
-  const server = new McpServer({ name: 'agent-hub', version: '0.6.0' })
+  const server = new McpServer({ name: 'agent-hub', version: '0.7.0' })
   async function api(path: string, value?: unknown) {
     try {
       const response = await fetch(url + path, {

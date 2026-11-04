@@ -11,6 +11,7 @@ import { Settings } from './settings.ts'
 import {compose,promptStatus,digest} from './prompts.ts'
 import { GithubSource } from './connectors/github.ts'
 import { FeishuSource } from './connectors/feishu.ts'
+import {WecomSource} from './connectors/wecom.ts'
 import type {Model,ModelRequest,ModelResult} from './model.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {validateBackendSelection} from './backend-config.ts'
@@ -79,7 +80,7 @@ export class Runtime {
     try{this.settings = new Settings(this.store,config);this.model = options.model ?? new BackendRegistry(config,this.store)}
     catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.paused = this.store.get<boolean>('settings', 'paused') ?? false
-    for (const source of config.sources) this.sources.set(source.id, options.sources?.find(s => s.config.id === source.id) ?? (source.kind==='github'?new GithubSource(source):source.kind==='feishu'?new FeishuSource(source):new MessageSource(source)))
+    for (const source of config.sources) this.sources.set(source.id, options.sources?.find(s => s.config.id === source.id) ?? (source.kind==='github'?new GithubSource(source):source.kind==='feishu'?new FeishuSource(source):source.kind==='wecom'?new WecomSource(source):new MessageSource(source)))
     let logicalNow = this.store.get<number>('clock', 'last') ?? 0
     this.engine = new Engine({
       now: () => {
@@ -207,6 +208,7 @@ export class Runtime {
     if(!this.sources.has(trigger.source))throw Error('Unknown source')
     return this.store.atomic(()=>{
     const source=this.sources.get(trigger.source)!
+    if(trigger.human&&['wecom','feishu'].includes(source.config.kind))this.store.put('source-observed',trigger.source+':'+trigger.actor.id,{source:trigger.source,actor:trigger.actor.id,chat:String(trigger.meta.chat??trigger.meta.scope??''),at:Date.now()})
     const existing = this.store.triggers.get(trigger.id)
     if (existing && (existing.text !== trigger.text || existing.actor.id !== trigger.actor.id || JSON.stringify(existing.threads) !== JSON.stringify(trigger.threads))) throw new Error('Event id was reused with different content')
     if(source.idempotencyKey){
@@ -484,6 +486,8 @@ export class Runtime {
       paused: this.paused, active: this.controllers.size,
       tickets: this.store.tickets.list().map(t => ({ ...t, stage: ticketStage(t), run: this.store.get<Run>('run', t.id) })),
       work:this.work.list(),
+      observedSenders:this.store.list<{source:string;actor:string;chat:string;at:number}>('source-observed').filter(s=>this.sources.has(s.source)).map(s=>({...s,allowed:this.sources.get(s.source)!.config.allowedActors.includes(s.actor)})),
+      sourceCapabilities:[...this.sources.values()].map(s=>({source:s.config.id,kind:s.config.kind,enabled:s.config.enabled,memberDirectory:!!s.members})),
       merges:this.store.list('merge-attempt'),mergeGrants:this.store.list('merge-grant'),setup:this.store.get('setup','current'),liveSources:this.store.list('source-live'),
       deliveries: this.store.deliveries(), decisions: this.store.list('decision'),
     }

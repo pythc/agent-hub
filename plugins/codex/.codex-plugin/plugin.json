@@ -1,6 +1,6 @@
 {
   "name": "agent-hub",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Delegate and follow background work through a local multi-backend agent host.",
   "skills": "./skills",
   "mcpServers": "./.mcp.json",

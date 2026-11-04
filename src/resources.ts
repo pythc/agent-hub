@@ -1,11 +1,12 @@
 import {randomUUID} from 'node:crypto'
 import {readFileSync,readdirSync,realpathSync,statSync,mkdirSync,writeFileSync} from 'node:fs'
-import {resolve,relative,sep,join,basename} from 'node:path'
+import {resolve,relative,sep,join,basename,extname} from 'node:path'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {Ticket,Trigger} from './vendor/dsh-core/index.ts'
 import type {Run} from './store.ts'
 import {builtins,promptStatus,compose} from './prompts.ts'
+import {isHostPrivateFile} from './private-files.ts'
 
 export const readSchema=z.object({resource:z.string().min(1).max(2000),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(8000).default(4000),pageSize:z.number().int().min(1).max(50).default(20),cursor:z.string().optional()}).strict()
 export interface Principal {ticketId?:string;assignmentId?:string;agentId?:string}
@@ -21,8 +22,15 @@ export const resourceCatalog=[
  'github/commits/<sha>/checks','github/file/<path>','github/directory/<path>',
  'feishu/<trigger-id>/message','feishu/<trigger-id>/root','feishu/<trigger-id>/parent','feishu/<trigger-id>/thread',
  'feishu/<trigger-id>/around','feishu/<trigger-id>/image/<key>'
+ ,'wecom/<trigger-id>/message','wecom/<trigger-id>/conversation','wecom/<trigger-id>/asset/<n>'
 ]
 const inside=(root:string,path:string)=>{const r=relative(root,path);return !r||(!r.startsWith('..'+sep)&&r!=='..'&&!r.startsWith(sep))}
+function attachmentName(value:unknown){
+ const full=basename(String(value??'attachment')).replace(/[^\p{L}\p{N}._-]/gu,'_')||'attachment',extension=extname(full)
+ const suffix=/^\.[a-zA-Z0-9]{1,16}$/.test(extension)?extension:'',stem=suffix?full.slice(0,-suffix.length):full
+ let name='';for(const c of stem){if(Buffer.byteLength(name+c+suffix)>200)break;name+=c}
+ name+=suffix;return name==='.'||name==='..'?'attachment':name
+}
 /** The resource grammar is shared by native tools, MCP, HTTP and the panel. */
 export class Resources {
  constructor(private host:Runtime){}
@@ -63,7 +71,7 @@ export class Resources {
   let data=await this.load(resource,principal,pageSize)
   if(data?.kind==='file'){
    const bytes=Buffer.from(data.data,'base64');if(bytes.length>8000000)throw Error('Attachment exceeds 8 MB')
-   const id=randomUUID(),name=basename(data.name??'attachment').replace(/[^\p{L}\p{N}._-]/gu,'_').slice(0,120)||'attachment'
+   const id=randomUUID(),name=attachmentName(data.name)
    const directory=join(this.host.config.stateDir,'assets',id);mkdirSync(directory,{recursive:true,mode:0o700})
    const path=join(directory,name==='.'||name==='..'?'attachment':name);writeFileSync(path,bytes,{mode:0o600})
    data={id,name,bytes:bytes.length,path,ticketId:principal.ticketId,resource:'asset/'+id}
@@ -145,6 +153,7 @@ export class Resources {
    const t=this.ticket(p),run=store.get<Run>('run',t.id);if(!run)throw Error('Work directory is not prepared')
    if(parts.slice(1).some(x=>['.git','.superagent','node_modules'].includes(x)))throw Error('Private local directory')
    const root=realpathSync(run.cwd),path=realpathSync(resolve(root,parts.slice(1).join('/')))
+   if(isHostPrivateFile(path))throw Error('Host credentials are private')
    if(!inside(root,path)||inside(realpathSync(this.host.config.stateDir),path)&&!inside(realpathSync(this.host.config.stateDir),root))throw Error('Path is outside this task directory')
    if(head==='directory')return readdirSync(path,{withFileTypes:true}).filter(e=>!['.git','.superagent','node_modules'].includes(e.name)).map(e=>({name:e.name,directory:e.isDirectory()}))
    if(statSync(path).size>8000000)throw Error('File exceeds 8 MB resource limit')
@@ -165,6 +174,11 @@ export class Resources {
   if(head==='feishu'){
    const triggerId=parts[1]!,trigger=this.reached(p,triggerId),source=this.host.sources.get(trigger.source)
    if(source?.config.kind!=='feishu'||!source.read)throw Error('Not a Feishu trigger')
+   return source.read({resource:parts.slice(2).join('/'),trigger,pageSize})
+  }
+  if(head==='wecom'){
+   const trigger=this.reached(p,parts[1]!),source=this.host.sources.get(trigger.source)
+   if(source?.config.kind!=='wecom'||!source.read)throw Error('Not a WeCom trigger')
    return source.read({resource:parts.slice(2).join('/'),trigger,pageSize})
   }
   throw Error('Unknown resource. Read catalog for the supported grammar')

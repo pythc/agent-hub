@@ -25,6 +25,17 @@ it('paginates stable text snapshots and keeps cursors scoped to their reader',as
  expect(first.text+second.text).toBe('abcdef')
  await expect(f.h.resources.read({resource:'files/large.txt',cursor:first.cursor},{...f.owner,ticketId:'other'})).rejects.toThrow('cursor')
 })
+it('materializes long Unicode office filenames within filesystem byte limits while retaining the extension',async()=>{
+ const f=await fixture();f.h.sources.get('local')!.read=async()=>({kind:'file',name:'课题😀'.repeat(80)+'.docx',data:Buffer.from('office-file-content').toString('base64')})
+ const result=await f.h.resources.read({resource:'source/local/file'},f.owner),asset=JSON.parse(result.text)
+ expect(Buffer.byteLength(asset.name)).toBeLessThanOrEqual(200);expect(asset.name.endsWith('.docx')).toBe(true)
+ const {readFileSync}=await import('node:fs');expect(readFileSync(asset.path,'utf8')).toBe('office-file-content')
+})
+it('does not expose the host environment file through task file resources',async()=>{
+ const f=await fixture(),previous=process.env.AGENTHUB_ENV_FILE;writeFileSync(join(f.cwd,'host-credentials.env'),'must-not-read-office-credentials');process.env.AGENTHUB_ENV_FILE=join(f.cwd,'host-credentials.env')
+ try{await expect(f.h.resources.read({resource:'files/host-credentials.env'},f.owner)).rejects.toThrow('private')}
+ finally{if(previous===undefined)delete process.env.AGENTHUB_ENV_FILE;else process.env.AGENTHUB_ENV_FILE=previous}
+})
 it('refuses global records, another task, stale prompts, escaping paths and symlinks',async()=>{
  const f=await fixture();writeFileSync(join(f.root,'outside.txt'),'private');symlinkSync(join(f.root,'outside.txt'),join(f.cwd,'link'))
  for(const resource of ['tickets','settings','decision/other','ticket/other','files/../outside.txt','files/link','prompts/999'])await expect(f.h.resources.read({resource},f.owner)).rejects.toThrow()

@@ -1,8 +1,8 @@
-# AgentHub 0.6.0 · 智能助手中心
+# AgentHub 0.7.0 · 智能助手中心
 
 一个可选择 OpenAI Responses、Chat Completions、Anthropic Messages 或原生 Codex 的通用后台协作宿主。用户从普通对话提出请求，在原话题继续跟进；内部 Ticket 负责持久化，不要求用户填工单。文档、分析、非 Git 工作目录、代码 worktree 和自定义来源都受支持。
 
-沿用官方 `deepseek-ai/dsh-superagent-prototype` 的领域核心，独立实现多后端执行、来源、资源、控制台及生命周期。见 [51 项原型对照](docs/PARITY.md) 与 [客户端验收](docs/clients/ACCEPTANCE.md)。对照表分别记录实现和验收层级，不把协议测试当成所有客户端的产品实测。
+沿用官方 `deepseek-ai/dsh-superagent-prototype` 的领域核心，独立实现多后端执行、来源、资源、控制台及生命周期。见 [51 项原型对照](docs/PARITY.md)、[客户端验收](docs/clients/ACCEPTANCE.md) 与 [0.7.0 验收](docs/ACCEPTANCE_0.7.md)。对照表分别记录实现和验收层级，不把协议测试当成所有客户端的产品实测。
 
 ## 本机使用
 
@@ -31,7 +31,7 @@ npm ci
 - 普通并发之外为人类跟进保留一个槽。机器人/CI 不占用这个额外槽；路由与执行分开调度。
 - 重启后忙碌 Assignment 自动恢复，保留原执行会话、工作目录和输入，加入核对说明；旧命令不自动重放。不确定的外部发送、发布和合并仍需核对。
 
-后台命令可选择 Codex sandbox、macOS Seatbelt 或 Linux Bubblewrap，限制在工作目录和明确读取的附件；宿主状态目录禁止访问，环境变量不转发来源令牌或模型密钥。`work.sandboxDriver=disabled` 可以关闭命令，仍保留文件读取和子代理。macOS 独立沙箱已实测，Linux 仅完成参数测试；没有不受限进程的自动回退。它仍是单用户进程部署，不能据此声称完成团队或跨主机隔离。
+后台命令可选择 Codex sandbox、macOS Seatbelt 或 Linux Bubblewrap，限制在工作目录和明确读取的附件；宿主状态目录禁止访问，环境变量不转发来源令牌或模型密钥。`work.sandboxDriver=disabled` 可以关闭命令，仍保留文件读取和子代理。macOS 与 Linux 独立沙箱已运行真实进程，Linux 范围及容器策略见 [Linux 验收](docs/LINUX.md)；没有不受限进程的自动回退。它仍是单用户进程部署，不能据此声称完成团队或跨主机隔离。
 
 ## 工作目录与来源
 
@@ -44,6 +44,17 @@ GitHub 支持 Issue、讨论评论、内联审查及无正文审批、CI、关�
 `memberSync={enabled:true,scope:"群ID"}` 可从指定目录同步允许列表。控制台也提供“预览成员同步”与显式应用：空目录、过期预览及版本冲突均保留原列表。独立配置来源和凭据入口不等于本机已建立独立系统账号。
 
 自定义来源实现 `src/sources.ts` 的 Source 接口，可选身份、成员目录、只读资源和实时监听，不修改领域核心。受信连接器通过 `POST /events/<source>` 和配置的 tokenEnv 提交已验证身份的事件；不要把它直接当作未经平台签名验证的 webhook。
+
+## 办公软件入口
+
+飞书应用机器人支持原话题请求；新增企业微信智能机器人官方 SDK 长连接，支持私聊/允许的群、接收回执、附件缓存、后台结果和重启恢复。两者都沿用同一领域规则，不绑定模型。企微真实创建受当前企业权限阻止，已按用户选择保留待办；官方 SDK 隔离联测不等于真实平台验收。
+
+```sh
+./start.sh office init feishu .local/office/feishu --chat TEST_CHAT_ID
+./start.sh office init wecom .local/office/wecom
+```
+
+生成独立工作区及私有凭据文件；启动后从控制台“来源”核对收到的用户 ID，逐人允许任务准入。完整的权限、部署、群 Webhook 差异及日常使用方案见 [办公接入指南](docs/OFFICE.md)。
 
 ## 交付与条件自动合并
 
@@ -59,7 +70,7 @@ GitHub 支持 Issue、讨论评论、内联审查及无正文审批、CI、关�
 
 ## 资源、提示词和控制台
 
-原型资源族均通过同一 reader 暴露：工作、输入、Assignment、报告、执行会话历史、事件、讨论、判断、设置、提示词版本/预览/默认部分、执行后端及模型目录、GitHub 原文/审查/CI/仓库文件、飞书上下文/图片/附件，以及 jobs 和本地文件。`catalog` 列出语法。正文使用快照游标分页，列表使用 offset；图片返回实际图片内容。
+原型资源族均通过同一 reader 暴露：工作、输入、Assignment、报告、执行会话历史、事件、讨论、判断、设置、提示词版本/预览/默认部分、执行后端及模型目录、GitHub 原文/审查/CI/仓库文件、飞书上下文/图片/附件，企微锚定消息/已缓存附件，以及 jobs 和本地文件。`catalog` 列出语法。正文使用快照游标分页，列表使用 offset；图片返回实际图片内容。
 
 worker 只能读自己工作、可达事件及相关讨论；全局设置、判断、模型目录等由操作员读取。跨工作、过期 Assignment、父代理撤销、游标串用、路径穿越和符号链接逃逸都有拒绝测试。
 
@@ -102,14 +113,16 @@ Codex 输出 TOML，不自动改写已有 TOML；通过官方 MCP 配置入口�
 ./start.sh restore examples/config.json .superagent/backups/before-upgrade-UNIQUE
 ```
 
-恢复先备份当前数据库，再校验和替换；旧程序拒绝新数据库。历史版本 0.3.1 → 0.4.0，以及本轮 0.5.0 → 0.6.0 → 恢复 0.5.0 → 再升级，均用两套源码演练。0.6.0 将 schema 从 2 升到 3；必须保留升级前备份才能退回 0.5.0。旧程序拒绝读取新库，不能直接换旧源码启动。此演练验证版本和数据库回退，不会撤销工作文件修改、已发送消息、Git 推送或合并。
+恢复先备份当前数据库，再校验和替换；旧程序拒绝新数据库。历史版本 0.3.1 → 0.4.0，以及 0.5.0 → 0.6.0 → 恢复 0.5.0 → 再升级，均用两套源码演练。0.6.0 将 schema 从 2 升到 3；0.7.0 提升至 4，也已完成 0.6.0 的升级/恢复/再升级演练。必须保留相应升级前备份才能回退。旧程序拒绝读取新库，不能直接换旧源码启动。此演练验证版本和数据库回退，不会撤销工作文件修改、已发送消息、Git 推送或合并。
 
 ## 验证与范围
 
-`npm run check` 执行 TypeScript 检查及 274 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
+`npm run check` 执行 TypeScript 检查及 293 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
 
 三个 API 后端已通过隔离 HTTP 与真实 Runtime 的工具、子代理、重启后接续测试，测试使用不存在的 Codex 路径。真实商业 API 模型调用尚未验收，详见 [后端验收](docs/BACKEND_ACCEPTANCE.md)。
 
 0.5.0 在本机真实 Cursor、VS Code 和 WorkBuddy 界面验收工具调用与异步结果，并检查跨端原生会话接续；未安装客户端只记录官方文档适配和 stdio 协议结果。具体记录见 [客户端验收](docs/clients/ACCEPTANCE.md)。历史版本已完成 Codex 桌面接管/交还和原会话续办、后台 shell/subagent、图片读取、提示词工具步更新及崩溃恢复实测；原始记录保留在本机，未随源码上传。
+
+0.7.0 已在真实 Linux ARM64 内核以普通 UID 跑通全部 293 项测试及独立 Bubblewrap 沙箱，没有跳过 Linux 命令用例。当前不是所有发行版、裸机或 AMD64 的验收。办公 UI、事件搜索修复和新 SDK 验收详见 [本轮记录](docs/ACCEPTANCE_0.7.md)。
 
 条件自动合并完成隔离 HTTP 成功/故障验收，真实 GitHub 合并仍未验证。尚未完成跨机器、Windows、干净机器、专用 OS 账号及长期运行验收。工作文件和外部副作用不在数据库回退范围内。

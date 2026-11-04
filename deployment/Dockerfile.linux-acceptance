@@ -1,0 +1,13 @@
+FROM node:24-alpine
+RUN apk add --no-cache bubblewrap git python3
+WORKDIR /opt/agent-hub
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json vitest.config.ts start.sh ./
+COPY src ./src
+COPY tests ./tests
+COPY plugins ./plugins
+COPY examples/linux-container-check.ts ./examples/linux-container-check.ts
+RUN chown -R node:node /opt/agent-hub
+USER node
+CMD ["npm", "run", "check"]

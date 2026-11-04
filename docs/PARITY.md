@@ -1,4 +1,4 @@
-# 原型逐项对照与验收 — AgentHub 0.6.0
+# 原型逐项对照与验收 — AgentHub 0.7.0
 
 基线为 2026-11-04 下载的官方原型文档 51 个二级章节。47 个功能章节均有对应实现和下列验收证据，另有 4 个说明章节。**这是实现映射，不是“51/51 实机测试通过”，也不是对所有模型行为和平台环境的等价证明。**
 
@@ -34,7 +34,7 @@
 | P26 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Three questions | 实现完成 | 展示当前工作、谁需行动和实际结果，待审批及不确定投递可见。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布）; 本机历史证据（未发布） |
 | P27 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Tabs | 实现完成 | 关注、来源、讨论、判断、执行、Eval、资源、模型、提示词和设置页面；支持独立记录与作业浏览。 | 真实 Chromium | src/web.ts; 本机历史证据（未发布） |
 | P28 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Settings groups | 实现完成 | 分组设置、允许列表、执行、作业、交付/合并和提示词表单；高级字典 JSON、版本保存与回退。 | 真实 Chromium＋自动化 | src/web.ts; 本机历史证据（未发布）; tests/settings-approval.spec.ts |
-| P29 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Search | 实现完成 | 搜索工作、事件、判断与投递；浏览器发现的投递搜索遗漏已修复。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
+| P29 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Search | 实现完成 | 搜索工作、事件、判断与投递；投递搜索遗漏已修复；0.7.0 另修复事件正文被父讨论过滤的问题，并在浏览器复验。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
 | P30 | [005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md) / Principles | 实现完成 | 原生审批按问题显示、结果与证据可追溯、无横向溢出；不把受理当成功。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
 | P31 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / What runs | 实现完成 | 独立宿主 supervisor、来源轮询、Codex 进程或 API agent loop 和外置 watchdog。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布） |
 | P32 | [006-deployment.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/006-deployment.md) / Prerequisites | 实现完成 | Node 和所选后端/沙箱检查；API 密钥变量存在检查不冒充远端认证。 | 见所列测试或真实记录，不代表所有边界均已实测 | 本机历史证据（未发布）; 本机历史证据（未发布） |
@@ -50,7 +50,7 @@
 | P42 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Core classes and glue | 实现完成 | 领域核心原样复制；本宿主实现 ports。 | 见所列测试或真实记录，不代表所有边界均已实测 | docs/upstream-core-sha256.json |
 | P43 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Dependency rules | 实现完成 | 领域不依赖 Codex、HTTP、SQLite 或具体平台。 | 见所列测试或真实记录，不代表所有边界均已实测 | src/vendor/dsh-core |
 | P44 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Modules | 实现完成 | 领域、多后端执行、作业、作用域工具、资源、来源、审查、交付/合并、设置、监督与 MCP 分离。 | 见所列测试或真实记录，不代表所有边界均已实测 | src/ |
-| P45 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Tests | 实现完成 | TypeScript 检查和 274 项测试通过，其中 113 项来自原型核心；真实和隔离验收另列证据。 | 自动化＋分层验收 | 本机历史证据（未发布） |
+| P45 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Tests | 实现完成 | TypeScript 检查和 293 项测试通过，其中 113 项来自原型核心；真实和隔离验收另列证据。 | 自动化＋分层验收 | 本机历史证据（未发布） |
 | P46 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Persistence | 实现完成 | 事务化业务/队列/出箱；发送前持久意图；重启不会盲目重发 uncertain。 | 见所列测试或真实记录，不代表所有边界均已实测 | tests/runtime.spec.ts; src/store.ts |
 | P47 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Model-facing interfaces | 实现完成 | 共享分页 reader 覆盖原型资源族与图片；原生工具、scoped MCP、操作员 MCP、HTTP、控制台共用；工作与父代理能力有撤销检查。 | 自动化＋真实 Codex/来源＋SDK | tests/resources.spec.ts; 本机历史证据（未发布）; 本机历史证据（未发布）; 本机历史证据（未发布） |
 | P48 | [007-architecture.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/007-architecture.md) / Configuration reload | 实现完成 | 策略/团队提示词动态生效，工具步与后续 turn 记录版本；来源部署变更采用受控重启，保留输入与原生会话。 | 真实 Codex＋真实服务重启 | src/settings.ts; 本机历史证据（未发布）; 本机历史证据（未发布） |
@@ -59,6 +59,8 @@
 | P51 | [008-cookbook.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/008-cookbook.md) / Add a Source | 实现完成 | 新来源通过 Source 接口实现身份、线程、投递、上下文、轮询与可选去重，不改核心。 | 见所列测试或真实记录，不代表所有边界均已实测 | tests/runtime.spec.ts; src/sources.ts |
 
 0.6.0 新增三个直接 API 执行后端；各后端验收层级独立记录在 [后端验收](BACKEND_ACCEPTANCE.md)。API 能力不能从历史 Codex 实测推定。
+
+0.7.0 重新核对了原仓库当前提交，15 个核心文件未变化。逐章节的当前测试名称与实机边界见 [结构化验收索引](acceptance/parity-2026-11-04.json)，新增真实 Linux、企微 SDK、办公成员确认及搜索验收见 [0.7.0 记录](ACCEPTANCE_0.7.md)。
 
 ## 适配差异
 
@@ -74,5 +76,6 @@
 - 真实 GitHub 合并（用户选择隔离验收）。
 - 未安装客户端的产品界面；已安装客户端详见客户端验收。
 - 飞书 liveEvents 的新一轮真人触发。
-- 跨机器/Windows/长期运行/专用 OS 账户。
+- 跨机器/AMD64 裸机发行版/Windows/长期运行/专用 OS 账户；Linux ARM64 VM 的真实沙箱已验收。
+- 新增企微真实创建/收发：当前企业拒绝创建，用户选择暂缓。
 - 插件包内 MCP 独立自动激活；当前有效入口为原生 MCP 注册。

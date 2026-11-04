@@ -1,7 +1,11 @@
-import {existsSync,realpathSync} from 'node:fs'
-import {resolve,delimiter,relative,sep} from 'node:path'
+import {existsSync,realpathSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs'
+import {resolve,delimiter,relative,sep,join} from 'node:path'
+import {tmpdir} from 'node:os'
+import {execFile} from 'node:child_process'
+import {promisify} from 'node:util'
+import {hostPrivateFiles} from './private-files.ts'
 export type SandboxDriver='codex'|'seatbelt'|'bubblewrap'|'disabled'
-export interface CommandSpec {sandboxDriver?:SandboxDriver;codex:string;cwd:string;sandbox:'read-only'|'workspace-write';privateState?:string;network:boolean;gitDirectory?:string;attachments?:string[];command:string;scratch:string}
+export interface CommandSpec {sandboxDriver?:SandboxDriver;codex:string;cwd:string;sandbox:'read-only'|'workspace-write';privateState?:string;privatePaths?:string[];network:boolean;gitDirectory?:string;attachments?:string[];command:string;scratch:string}
 const canon=(p:string)=>existsSync(p)?realpathSync(p):resolve(p)
 const q=(p:string)=>JSON.stringify(canon(p))
 const nested=(parent:string,p:string)=>{const r=relative(canon(parent),canon(p));return !!r&&r!=='..'&&!r.startsWith('..'+sep)&&!r.startsWith(sep)}
@@ -12,6 +16,7 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
  if(driver==='codex'){
   const profile='superagent-managed',entries:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[s.cwd]:s.sandbox==='read-only'?'read':'write'}
   if(s.privateState)entries[s.privateState]='deny';if(s.gitDirectory)entries[s.gitDirectory]='read';for(const p of s.attachments??[])entries[p]='read'
+  for(const p of s.privatePaths??[])entries[p]='deny'
   return {command:s.codex,args:['sandbox','-P',profile,'-c','permissions.'+profile+'.extends='+JSON.stringify(s.sandbox==='read-only'?':read-only':':workspace'),'-c','permissions.'+profile+'.network.enabled='+String(s.network),'-c','permissions.'+profile+'.filesystem={'+Object.entries(entries).map(([p,a])=>JSON.stringify(p)+'='+JSON.stringify(a)).join(',')+'}','-C',s.cwd,'--',...shell]}
  }
  if(driver==='seatbelt'){
@@ -25,6 +30,7 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
    const hidden='(subpath '+q(s.privateState)+')'
    rules.push('(deny file-read* file-write* '+(exceptions.length?'(require-all '+hidden+' '+exceptions.join(' ')+')':hidden)+')')
   }
+  for(const p of s.privatePaths??[])rules.push('(deny file-read* file-write* (literal '+q(p)+'))')
   return {command:'/usr/bin/sandbox-exec',args:['-p',rules.join('\n'),...shell],profile:rules.join('\n')}
  }
  if(platform!=='linux')throw Error('Bubblewrap sandbox requires Linux')
@@ -38,7 +44,29 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
   // those mounts after masking the parent, never the database or sibling jobs.
   for(const p of [s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[])])if(existsSync(p)&&nested(s.privateState,p))for(const target of new Set([resolve(p),canon(p)]))args.push(p===s.cwd&&s.sandbox==='workspace-write'||p===s.scratch?'--bind':'--ro-bind',canon(p),target)
  }
+ // Apply last so a workspace/attachment mount cannot reveal host credentials.
+ // bwrap refuses a symlink mount target; masking the resolved target also
+ // protects reads through every symlink alias without changing the host link.
+ for(const p of new Set((s.privatePaths??[]).filter(existsSync).map(canon)))args.push('--ro-bind','/dev/null',p)
  args.push('--chdir',canon(s.cwd),'--',...shell)
  const command=(process.env.PATH??'').split(delimiter).map(p=>resolve(p,'bwrap')).find(existsSync)??'bwrap'
  return {command,args}
+}
+/** Check actual namespace/process startup, rather than just finding bwrap on PATH. */
+export async function probeSandbox(driver:SandboxDriver,codex:string){
+ if(driver==='disabled')return {driver,commandsEnabled:false,verified:false}
+ const root=mkdtempSync(join(tmpdir(),'agenthub-sandbox-probe-')),cwd=join(root,'files'),scratch=join(root,'tmp')
+ mkdirSync(cwd);mkdirSync(scratch)
+ try{
+  const launch=sandboxCommand({sandboxDriver:driver,codex,cwd,scratch,privatePaths:hostPrivateFiles(),sandbox:'read-only',network:false,command:process.platform==='win32'?'echo agenthub-sandbox-probe':'printf agenthub-sandbox-probe'})
+  const env=Object.fromEntries(['PATH','USER','LOGNAME','LANG','LC_ALL','SYSTEMROOT','SystemRoot'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]!]))
+  Object.assign(env,{HOME:scratch,TMPDIR:scratch,TMP:scratch,TEMP:scratch})
+  const result=await promisify(execFile)(launch.command,launch.args,{cwd,env,timeout:10000,maxBuffer:64000,encoding:'utf8'})
+  if(result.stdout.trim()!=='agenthub-sandbox-probe')throw Error('Unexpected sandbox probe output')
+  return {driver,commandsEnabled:true,verified:true,platform:process.platform}
+ }catch(error:any){
+  const stderr=String(error.stderr??'')
+  if(driver==='bubblewrap'&&/namespace|mount proc|Operation not permitted/.test(stderr))throw Error('Bubblewrap startup denied by namespace/proc policy. Check the Linux host or outer container policy; see docs/LINUX.md. No unrestricted fallback was used.')
+  throw Error('Sandbox process probe failed ('+driver+'): '+String(error.code??error.message).slice(0,160))
+ }finally{rmSync(root,{recursive:true,force:true})}
 }

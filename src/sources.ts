@@ -24,7 +24,7 @@ export interface Source {
   poll?(context: SourceContext): Promise<void>
   validThread?(thread:string):boolean
   members?(scope?:string):Promise<{id:string;name?:string;bot?:boolean}[]>
-  identity?():Promise<{id:string;type:string}>
+  identity?():Promise<{id:string;type:string;verified?:boolean}>
   start?(context:SourceContext):void
   close?():Promise<void>
   context?(thread: string): Promise<unknown>

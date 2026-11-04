@@ -1,0 +1,46 @@
+{
+  "at": "2026-11-04T15:57:24.237Z",
+  "version": "0.7.0",
+  "codex": {
+    "realBackend": true,
+    "model": "gpt-6.1-terra",
+    "threadRetained": true,
+    "newTurn": true,
+    "resultCorrect": true,
+    "phase": "idle",
+    "newDesktopTakeoverTested": false,
+    "scopedReadObserved": true,
+    "newResultDelivered": true
+  },
+  "clientProfiles": {
+    "count": 14,
+    "allProtocolPassed": true,
+    "newProductUisTested": false
+  },
+  "officeUi": {
+    "syntheticDataOnly": true,
+    "senderConfirmationPassed": true,
+    "onlySelectedSenderAllowed": true,
+    "settingsRevision": 3,
+    "unsupportedDirectoryActionHidden": true,
+    "search": {
+      "task": true,
+      "eventBody": true,
+      "decisionReason": true,
+      "uncertainDelivery": true,
+      "emptyResult": true
+    },
+    "eventBodySearchFixed": true
+  },
+  "feishu": {
+    "botIdentityVerified": true,
+    "liveConsumerReady": true,
+    "newHumanMessagesObserved": 0,
+    "newRoundTripAccepted": false
+  },
+  "wecomPlatform": {
+    "created": false,
+    "realSendReceiveTested": false,
+    "reason": "Current enterprise UI denies bot creation; user explicitly deferred real acceptance."
+  }
+}

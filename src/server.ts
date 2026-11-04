@@ -42,7 +42,7 @@ export async function serve(runtime: Runtime) {
       res.end(dashboard)
       return
     }
-    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: true, version: '0.6.0' }); return }
+    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: true, version: '0.7.0' }); return }
     if(req.method==='POST'&&path==='/worker'){
       const owner=runtime.workerTools.authenticate(req.headers.authorization)
       const input=z.object({name:z.string(),args:z.unknown()}).strict().parse(await body(req))

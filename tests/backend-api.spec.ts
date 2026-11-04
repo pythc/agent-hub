@@ -163,7 +163,7 @@ it.each(kinds)('%s runs the actual Runtime routing/file/result/follow-up path wi
  expect(host.store.tickets.get(ticket.id)!.assignments.at(-1)!.state).toBe('ended')
  await expect(host.takeover(ticket.id)).rejects.toThrow('no native desktop takeover');expect(host.store.get<any>('run',ticket.id).phase).not.toBe('human')
 })
-it.skipIf(process.platform!=='darwin').each(kinds)('%s executes a real managed shell through Seatbelt with no Codex binary',async kind=>{
+it.skipIf(!['darwin','linux'].includes(process.platform)).each(kinds)('%s executes a real managed shell through the platform sandbox with no Codex binary',async kind=>{
  const root=mkdtempSync(join(tmpdir(),'api-shell-'));roots.push(root);const cwd=join(root,'files');mkdirSync(cwd);writeFileSync(join(cwd,'input.txt'),'shell-api-marker')
  const f=await server(b=>{
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
@@ -172,7 +172,7 @@ it.skipIf(process.platform!=='darwin').each(kinds)('%s executes a real managed s
   if(receipts.includes('shell-api-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Command verified',reply:'shell-api-marker',question:null,handbacks:[]}))
   return output(kind,'',[{id:'shell',name:'superagent_shell',args:{command:'printf shell-api-marker > result.txt; cat result.txt',requestId:'one',yieldMs:1000}}])
  })
- const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:'seatbelt',network:false},sources:[{id:'local',kind:'local',cwd,sandbox:'workspace-write',allowedActors:['operator']}]})
+ const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:process.platform==='linux'?'bubblewrap':'seatbelt',network:false},sources:[{id:'local',kind:'local',cwd,sandbox:'workspace-write',allowedActors:['operator']}]})
  const host=new Runtime(config);hosts.push(host);host.receive('local','operator',{id:'one',thread:'shell',addressed:true,text:'Write and read result.txt with a sandboxed command'})
  for(let i=0;i<200&&!host.store.deliveries().some(d=>d.kind==='reply'&&d.status==='sent');i++){await host.tick();await host.flush();await new Promise(r=>setTimeout(r,10))}
  expect(host.work.list()).toEqual([expect.objectContaining({kind:'shell',state:'completed',exitCode:0})])

@@ -5,12 +5,13 @@ import type {Runtime} from './runtime.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {existsSync,accessSync,constants} from 'node:fs'
 import {resolve,delimiter} from 'node:path'
+import {probeSandbox} from './sandbox.ts'
 const exec=promisify(execFile)
 export class Setup {
  constructor(private host:Runtime){}
  async check(){
   const checks:any[]=[]
-  const check=async(id:string,fn:()=>Promise<unknown>,repair:string)=>{try{checks.push({id,status:'ok',result:await fn()})}catch(error){checks.push({id,status:'required',error:String(error).slice(0,300),repair})}}
+  const check=async(id:string,fn:()=>Promise<unknown>,repair:string)=>{try{const result=await fn();checks.push({id,status:(result as any)?.verified===false?'pending':'ok',result})}catch(error){checks.push({id,status:'required',error:String(error).slice(0,300),repair})}}
   await check('node',async()=>{const [major,minor]=process.versions.node.split('.').map(Number);if(major!<22||major===22&&minor!<19)throw Error('Node >=22.19 required');return process.versions.node},'Use Node 22.19 or newer')
   const registry=this.host.model instanceof BackendRegistry?this.host.model:undefined
   const ids=registry?[...new Set(['router','worker','subagent'].map(role=>registry.selected(role as 'router')))]:['codex']
@@ -27,7 +28,7 @@ export class Setup {
    if(driver==='seatbelt'&&process.platform!=='darwin'||driver==='bubblewrap'&&process.platform!=='linux')throw Error('Sandbox is unavailable on this platform')
    const command=driver==='seatbelt'?'/usr/bin/sandbox-exec':driver==='bubblewrap'?'bwrap':this.host.config.codex
    const path=command.includes('/')?command:(process.env.PATH??'').split(delimiter).map(p=>resolve(p,command)).find(existsSync)
-   if(!path)throw Error('Configured sandbox executable is missing');accessSync(path,constants.X_OK);return {driver,commandsEnabled:true}
+   if(!path)throw Error('Configured sandbox executable is missing');accessSync(path,constants.X_OK);return probeSandbox(driver,this.host.config.codex)
   },'Install the selected sandbox, or explicitly disable shell commands. No unsandboxed fallback is used.')
   for(const source of this.host.sources.values()){
    if(!source.config.enabled)continue
@@ -35,7 +36,7 @@ export class Setup {
    if(!source.config.allowedActors.length)checks.push({id:'admission:'+source.config.id,status:'required',repair:'Add allowed actors or configure a deliberate admission policy'})
    if(source.config.feishu&&(source.config.feishu.otherChats==='mentions'||source.config.feishu.directMessages)&&!source.config.feishu.liveEvents)checks.push({id:'discovery:'+source.config.id,status:'required',repair:'Enable Feishu liveEvents for mentions from other chats'})
   }
-  const result={at:Date.now(),status:checks.some(c=>c.status==='required')?'setup-required':'ok',checks}
+  const result={at:Date.now(),status:checks.some(c=>c.status==='required')?'setup-required':checks.some(c=>c.status==='pending')?'connection-pending':'ok',checks}
   this.host.store.put('setup','current',result);return result
  }
  async previewMembers(sourceId:string,scope?:string){

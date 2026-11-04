@@ -1,0 +1,19 @@
+[Unit]
+Description=AgentHub background host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=agenthub
+WorkingDirectory=/opt/agent-hub
+Environment=AGENTHUB_ENV_FILE=/etc/agent-hub/credentials.env
+ExecStart=/opt/agent-hub/start.sh supervise /etc/agent-hub/config.json
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=30
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -32,7 +32,7 @@ export class Settings {
       validateBackendSelection(config)
       for(const [key,override] of Object.entries(config.prompts.overrides))if(override.text===builtins[key as keyof typeof builtins])delete config.prompts.overrides[key]
       if(new Set(config.sources.map(s=>s.id)).size!==config.sources.length)throw Error('Duplicate source id')
-      const deployment=(s:Config['sources'][number])=>({id:s.id,kind:s.kind,cwd:s.cwd,workspace:s.workspace,sandbox:s.sandbox,repository:s.repository,feishu:s.feishu,github:s.github,replyUrl:s.replyUrl,tokenEnv:s.tokenEnv})
+      const deployment=(s:Config['sources'][number])=>({id:s.id,kind:s.kind,cwd:s.cwd,workspace:s.workspace,sandbox:s.sandbox,repository:s.repository,feishu:s.feishu,wecom:s.wecom,github:s.github,replyUrl:s.replyUrl,tokenEnv:s.tokenEnv})
       if(update.sources && JSON.stringify(update.sources.map(deployment))!==JSON.stringify(this.config.sources.map(deployment)))throw Error('Source deployment changes require a controlled restart')
       const next={revision:expected+1,at:new Date().toISOString(),config}
       this.store.put('settings-history',String(previous.revision),previous)

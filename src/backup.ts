@@ -14,14 +14,14 @@ export async function backupState(config:Config,destination:string){
  let schema:number
  try{schema=Number(db.prepare('PRAGMA user_version').get()!.user_version);await backup(db,target)}finally{db.close()}
  chmodSync(target,0o600)
- const manifest={format:1,application:'0.6.0',schema,at:new Date().toISOString(),sha256:hash(target)}
+ const manifest={format:1,application:'0.7.0',schema,at:new Date().toISOString(),sha256:hash(target)}
  writeFileSync(join(directory,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{mode:0o600})
  writeFileSync(join(directory,'config.json'),JSON.stringify(config,null,2)+'\n',{mode:0o600})
  return {directory,...manifest}
 }
 export function verifyBackup(directory:string){
  const manifest=JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8'))
- if(manifest.format!==1||![1,2,3].includes(manifest.schema))throw Error('Unsupported backup format or schema')
+ if(manifest.format!==1||![1,2,3,4].includes(manifest.schema))throw Error('Unsupported backup format or schema')
  const path=join(directory,'state.sqlite')
  if(hash(path)!==manifest.sha256)throw Error('Backup checksum mismatch')
  const db=new DatabaseSync(path,{readOnly:true})

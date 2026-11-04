@@ -8,10 +8,19 @@ import { startMcp } from './mcp.ts'
 import {startWorkerMcp} from './worker-mcp.ts'
 import {backupState,verifyBackup,restoreState} from './backup.ts'
 import {BackendRegistry} from './backends/registry.ts'
+import {initOffice} from './office.ts'
 
 const [command, ...args] = process.argv.slice(2)
 async function main() {
-  if(command==='backends'){
+  if(process.env.AGENTHUB_ENV_FILE)try{process.loadEnvFile(process.env.AGENTHUB_ENV_FILE)}catch{throw Error('Cannot load AGENTHUB_ENV_FILE; check its path and access permissions')}
+  if(command==='office'){
+    const [action,platform,...options]=args
+    const directory=options[0]&&!options[0].startsWith('--')?options[0]:undefined,rest=directory?options.slice(1):options
+    if(action!=='init'||!['feishu','wecom'].includes(platform??''))throw Error('Use office init <feishu|wecom> [directory] [--chat ID] [--actor ID]')
+    const option=(key:string)=>{const i=rest.indexOf('--'+key);if(i<0)return undefined;const value=rest[i+1];if(!value||value.startsWith('--'))throw Error('Missing value for --'+key);return value}
+    console.log(JSON.stringify(initOffice(platform as 'feishu'|'wecom',directory??'.local/office/'+platform,option('chat'),option('actor')),null,2));return
+  }
+  else if(command==='backends'){
     if(args[0]!=='list')throw Error('Use backends list [config.json]')
     if(!args[1]){console.log(JSON.stringify({supported:['codex','openai-responses','openai-chat','anthropic']}));return}
     const config=loadConfig(args[1]),registry=new BackendRegistry(config,{get:()=>undefined,put:()=>{}})

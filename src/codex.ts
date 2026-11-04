@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { Config } from './config.ts'
+import {hostPrivateFiles} from './private-files.ts'
 
 import type {Model,ModelRequest,ModelResult,ToolContent} from './model.ts'
 export type {Model,ModelRequest,ModelResult,NativeControl,NativeRequest,ToolSpec,ToolContent} from './model.ts'
@@ -14,7 +15,7 @@ export class CodexModel implements Model {
     const client=new AppServer(this.config.codex,this.extraArgs,cwd)
     const timer=setTimeout(()=>client.fail(Error('Expose deadline exceeded')),20000)
     try{
-      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.6.0'}})
+      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.7.0'}})
       client.notify('initialized')
       await client.call('thread/unarchive',{threadId})
     }finally{clearTimeout(timer);await client.close()}
@@ -22,14 +23,14 @@ export class CodexModel implements Model {
   async history(threadId:string,cwd:string):Promise<any>{
     const client=new AppServer(this.config.codex,this.extraArgs,cwd)
     const timer=setTimeout(()=>client.fail(Error('History deadline exceeded')),20000)
-    try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.6.0'}});client.notify('initialized');return (await client.call('thread/read',{threadId,includeTurns:true})).thread}
+    try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.7.0'}});client.notify('initialized');return (await client.call('thread/read',{threadId,includeTurns:true})).thread}
     finally{clearTimeout(timer);await client.close()}
   }
   async catalog(provider?:string):Promise<any>{
     const client=new AppServer(this.config.codex,this.extraArgs,process.cwd())
     const timer=setTimeout(()=>client.fail(Error('Model catalog deadline exceeded')),20000)
     try{
-      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.6.0'}});client.notify('initialized')
+      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.7.0'}});client.notify('initialized')
       const current=(await client.call('config/read',{includeLayers:false})).config.model_provider??'openai'
       if(provider&&!['codex',current].includes(provider))throw Error('Only the configured Codex provider catalog is available: '+current)
       return {...await client.call('model/list',{}),provider:current}
@@ -45,7 +46,7 @@ export class CodexModel implements Model {
     const timer = setTimeout(() => client.fail(new Error('Turn deadline exceeded; inspect workspace before retrying')), this.config.turnTimeoutMs)
     try {
       if (request.signal?.aborted) throw new Error('Cancelled')
-      await client.call('initialize', { clientInfo: { name: 'agent-hub', version: '0.6.0' },capabilities:{experimentalApi:true} })
+      await client.call('initialize', { clientInfo: { name: 'agent-hub', version: '0.7.0' },capabilities:{experimentalApi:true} })
       client.notify('initialized')
       let isolated:Record<string,unknown>|undefined
       if(request.managed){
@@ -54,6 +55,7 @@ export class CodexModel implements Model {
         if(request.workerMcp)mcp['superagent-worker']={...request.workerMcp,enabled:true,default_tools_approval_mode:'approve'} as any
         const filesystem:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[request.cwd]:request.sandbox==='workspace-write'?'write':'read'}
         if(request.privateState)filesystem[request.privateState]='deny'
+        for(const path of hostPrivateFiles())filesystem[path]='deny'
         isolated={mcp_servers:mcp,plugins:Object.fromEntries(Object.keys(effective.plugins??{}).map(name=>[name,{enabled:false}])),features:{apps:false,shell_tool:false,unified_exec:false,multi_agent:false,browser_use:false,computer_use:false},permissions:{'superagent-managed':{extends:request.sandbox==='workspace-write'?':workspace':':read-only',filesystem,network:{enabled:false}}}}
       }
       const params = {
