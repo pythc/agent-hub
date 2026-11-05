@@ -1,11 +1,15 @@
 import type {Runtime} from './runtime.ts'
-import {ticketStage,type Ticket,type Trigger} from './vendor/dsh-core/index.ts'
+import {ticketStage,canRetry,type Ticket,type Trigger} from './vendor/dsh-core/index.ts'
 import type {Approval} from './approvals.ts'
+import {workerProfiles} from './worker-pool.ts'
+import type {Run} from './store.ts'
 
 const text=(value:unknown,limit=1800)=>typeof value==='string'?value.slice(0,limit):''
 /** Operator-only projections. No configuration, credentials or native protocol history are copied into the work list. */
 export function operatorWorkspace(host:Runtime,offset=0,limit=25){
  const status=host.status(),tickets=host.store.tickets.list(),deliveries=host.store.deliveries(),approvals=host.store.list<Approval>('approval').filter(a=>a.status==='pending'&&a.expiresAt>Date.now())
+ const runs=host.store.list<Run>('run'),model=(id:string)=>{const d=host.config.backends[id];return d&&d.kind!=='codex'?d.model:host.config.model},router=host.config.execution.roles.router??host.config.execution.backend
+ const architecture={router:{backend:router,model:host.config.models.router??model(router)},workers:workerProfiles(host.config).map(w=>({...w,model:w.model??model(w.backend),active:runs.filter(r=>r.workerId===w.id&&['starting','running','background'].includes(r.phase)).map(r=>({ticketId:r.ticketId,title:tickets.find(t=>t.id===r.ticketId)?.title??'',model:r.model,backend:r.backendId,reserve:r.interactiveReserve??false}))})),interactiveReserve:1}
  const project=(ticket:Ticket)=>{
   const trigger=host.store.triggers.get(ticket.origin.triggerId),source=host.config.sources.find(s=>s.id===trigger?.source),client=host.store.get<{client:string}>('entry-client-event',ticket.origin.triggerId)?.client
   const run=host.store.get<any>('run',ticket.id),stage=ticketStage(ticket),last=ticket.assignments.at(-1),report=last?.report
@@ -18,7 +22,7 @@ export function operatorWorkspace(host:Runtime,offset=0,limit=25){
  const all=tickets.map(project).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)),attention=all.filter(t=>t.state==='attention')
  const represented=new Set(tickets.flatMap(t=>t.origin.triggerIds)),evaluating=new Set(host.store.threads.list().flatMap(t=>t.evaluating?.triggerIds??[]))
  const understanding=host.store.list<Trigger>('trigger').filter(t=>evaluating.has(t.id)&&!represented.has(t.id)).map(t=>({id:t.id,title:text(t.text,140),state:'understanding',entryId:host.store.get<{client:string}>('entry-client-event',t.id)?.client??host.config.sources.find(s=>s.id===t.source)?.kind??'generic',updatedAt:t.at}))
- return {at:Date.now(),paused:status.paused,active:status.active,total:all.length,offset,limit,more:offset+limit<all.length,tasks:all.slice(offset,offset+limit),attention:attention.slice(0,50),attentionTotal:attention.length,understanding:understanding.slice(0,25),counts:{running:all.filter(t=>t.state==='running').length,replied:all.filter(t=>t.state==='replied').length,attention:attention.length},sources:host.store.list('source-health'),liveSources:host.store.list('source-live')}
+ return {at:Date.now(),architecture,paused:status.paused,active:status.active,total:all.length,offset,limit,more:offset+limit<all.length,tasks:all.slice(offset,offset+limit),attention:attention.slice(0,50),attentionTotal:attention.length,understanding:understanding.slice(0,25),counts:{running:all.filter(t=>t.state==='running').length,replied:all.filter(t=>t.state==='replied').length,attention:attention.length},sources:host.store.list('source-health'),liveSources:host.store.list('source-live')}
 }
 export function operatorTask(host:Runtime,id:string){
  const ticket=host.store.tickets.get(id);if(!ticket)return undefined
@@ -28,5 +32,5 @@ export function operatorTask(host:Runtime,id:string){
  let sourceUrl:string|undefined
  // Never turn a source-supplied arbitrary URL or protocol into a privileged action link.
  if(source?.kind==='github'&&typeof rawUrl==='string')try{const url=new URL(rawUrl);if(url.origin==='https://github.com'&&url.pathname.startsWith('/'+source.repository+'/')&&!url.username&&!url.password)sourceUrl=url.href}catch{}
- return {...summary,message:text(trigger?.text,8000),result:text(run?.result,12000),resultTruncated:typeof run?.result==='string'&&run.result.length>12000,resultResource:'ticket/'+id+'/result',...(sourceUrl?{sourceUrl}:{}),approvals:host.store.list<Approval>('approval').filter(a=>a.ticketId===id&&a.status==='pending'&&a.expiresAt>Date.now()).map(a=>({id:a.id,method:a.native.method,expiresAt:a.expiresAt,request:a.native.params}))}
+ return {...summary,workerId:run?.workerId,model:run?.model,canStop:!ticket.ended,canRetry:!ticket.ended&&(canRetry(ticket)||run?.phase==='uncertain'),message:text(trigger?.text,8000),result:text(run?.result,12000),resultTruncated:typeof run?.result==='string'&&run.result.length>12000,resultResource:'ticket/'+id+'/result',...(sourceUrl?{sourceUrl}:{}),approvals:host.store.list<Approval>('approval').filter(a=>a.ticketId===id&&a.status==='pending'&&a.expiresAt>Date.now()).map(a=>({id:a.id,method:a.native.method,expiresAt:a.expiresAt,request:a.native.params}))}
 }

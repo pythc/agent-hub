@@ -1,4 +1,6 @@
 const entryModel = {
+  creating: false,
+  name: '',
   mode: '',
   existingId: '',
   provider: 'openai',
@@ -14,6 +16,7 @@ const entryModel = {
 }
 function entryModelEdit(key, value, redraw = false) {
   entryModel[key] = value
+  if (key === 'provider') entryModel.protocol = providerDefaults[value]?.protocol || 'openai-responses'
   entryModel.open = true
   entryModel.touched = true
   entryModel.plan = null
@@ -60,12 +63,12 @@ function entryModelResult() {
       'p',
       'alert',
       L(
-        'AI connection saved. Continue configuring your selected software.',
-        'AI 连接已保存，可以继续配置所选软件。'
+        'Model service saved.',
+        '模型服务已保存。'
       )
     )
     note.setAttribute('role', 'status')
-    return add(result, note)
+    return add(result, note, action(L('Configure Router / Workers', '配置 Router / Workers'), () => opNavigate('execution'), 'btn'))
   }
   result.append(el('h3', '', L('AI connection check', 'AI 连接检查')))
   const list = el('ul', 'entry-check-list')
@@ -87,7 +90,7 @@ function entryModelResult() {
     )
   }
   result.append(list)
-  if (entryModelCanApply())
+  if (entryModelCanApply() && entryModel.creating)
     result.append(
       el(
         'p',
@@ -98,14 +101,14 @@ function entryModelResult() {
               '保存到此隔离预览，实际 AI 请求仍不可用。'
             )
           : L(
-              'This reloads the host and uses the selected service for new tasks across all roles. Existing entries and conversations are retained.',
-              '保存后将重新加载宿主，新任务的各个角色使用所选服务。已有入口和会话会保留。'
+              'Assign this service to Router or Workers in Execution.',
+              '保存后可在执行页分配给 Router 或 Worker。'
             )
       ),
       action(
         entryState.data.preview
           ? L('Save preview AI connection', '保存预览 AI 连接')
-          : L('Save AI connection', '保存 AI 连接'),
+          : L('Create service', '创建模型服务'),
         applyEntryModel,
         'btn primary'
       )
@@ -131,26 +134,14 @@ function entryModelSettings() {
     ['codex', L('Use my Codex sign-in', '使用已有 Codex 登录')],
     ['api', L('Connect an API service', '连接 API 服务')]
   ]
-  if (connections.length)
+  if (connections.length && !entryModel.creating)
     modes.unshift(['existing', L('Use a saved connection', '使用已保存的连接')])
+  if (entryModel.creating) form.append(entryModelField('name', L('Service name', '服务名称'), '', null, 'text', true))
   form.append(
-    el(
-      'p',
-      '',
-      backend.configured
-        ? L('Current connection: ', '当前连接：') + (backend.label || 'Codex')
-        : L(
-            'Add a working AI connection so the assistant can carry out requests.',
-            '请补充可用的 AI 连接，让助手能够执行请求。'
-          )
-    ),
     entryModelField(
       'mode',
       L('AI service', 'AI 服务'),
-      L(
-        'Existing connections can be reused across your software.',
-        '同一个连接可供已接入的软件共用。'
-      ),
+      '',
       modes
     )
   )
@@ -198,12 +189,15 @@ function entryModelSettings() {
           null,
           'url',
           true
-        ),
+        )
+      )
+    if (entryModel.provider !== 'anthropic')
+      form.append(
         entryModelField(
           'protocol',
           L('API format', 'API 格式'),
           L('Match your provider’s connection format.', '选择服务商支持的连接格式。'),
-          Object.entries(guideApiFormats)
+          Object.entries(guideApiFormats).filter(([id]) => entryModel.provider === 'custom' || id !== 'anthropic')
         )
       )
     form.append(
@@ -289,7 +283,7 @@ function entryModelConnection() {
   if (!valid) throw new ApiError(400, { code: 'model_url_invalid' })
   return {
     kind: 'api',
-    protocol: preset?.protocol || entryModel.protocol,
+    protocol: entryModel.provider === 'anthropic' ? 'anthropic' : entryModel.protocol,
     baseUrl,
     model: entryModel.model.trim(),
     ...(entryModel.credential.trim() ? { apiKey: entryModel.credential.trim() } : {})
@@ -304,7 +298,9 @@ async function checkEntryModel() {
     const connection = entryModelConnection()
     const plan = await api('/entry-setup/model/plan', {
       revision: entryState.data.revision,
-      connection
+      connection,
+      select: false,
+      ...(entryModel.creating && entryModel.name.trim() ? { name: entryModel.name.trim() } : {})
     })
     if (!plan.id) throw Error('Invalid AI connection plan')
     entryModel.plan = plan
@@ -328,8 +324,9 @@ async function applyEntryModel() {
     entryModel.saved = true
     entryState.plan = null
     await readEntries()
+    entryModel.creating = false
     entryModel.mode = 'existing'
-    entryModel.existingId = entryState.data.backend.id
+    entryModel.existingId = receipt.connection.id
     await loadGuideContext()
     announce(L('AI connection saved.', 'AI 连接已保存。'))
   })

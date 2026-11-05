@@ -48,6 +48,26 @@ AgentHub 的客户端入口、任务来源和执行后端独立。MCP 客户端�
 ## 模型、参数和会话
 
 - 后端 `model` 是 API 新会话默认值；`models.router/worker/subagent` 可以覆盖相应角色的新会话模型。顶层 `model` 和 `effort` 保留给 Codex。混用供应商时不要把某供应商模型名作为其他角色的全局覆盖。
+
+独立 Worker 池可通过配置页的 **执行 / Execution** 设置，或使用以下可选字段：
+
+```json
+{
+  "execution": {
+    "backend": "codex",
+    "roles": {"router": "chat"},
+    "workers": [
+      {"id": "worker-1", "backend": "responses", "model": "worker-model-a"},
+      {"id": "worker-2", "backend": "anthropic", "model": "worker-model-b"}
+    ]
+  },
+  "models": {"router": "router-model"}
+}
+```
+
+`backend` 引用 `backends` 中已有的服务（或内置 `codex`），`workers` 必须为 1–10 项且 ID 唯一。每项的 `model` 可省略，此时使用该服务默认模型。显式 Worker 池的长度决定并发数；没有此字段的旧配置继续使用原来的 `concurrency` 与 Worker 角色/模型。调度轮换使用可用 Worker，已有会话续办始终保留原后端与模型。服务定义可加 `label`（1–100 字符）用于界面名称。
+
+参见 [配置台与 Worker 验收](CONTROL_CENTER_2026-11-05.md)，其中包含缩容、后台槽位、真实 Codex 接入与回滚边界。
 - `execution` 可在设置页按版本保存。已有工作固定原后端、原模型、原目录；新设置用于新会话。更改默认后端不能迁移已有工作。
 - 后端定义属于启动配置，修改后受控重启。删除仍有会话的后端，或改变其协议/地址，会拒绝继续该会话，避免静默把历史发送给另一服务。修改模型默认值不改变原会话模型。尚无自动迁移命令。
 - 已保存的动态设置优先于启动文件中的同名字段。现有实例要更改 `execution` 或 `work`，应通过版本化设置保存；全新模板使用独立状态目录避免继承旧设置。

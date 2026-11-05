@@ -8,68 +8,8 @@ function catalog() {
     }))
   )
 }
-function renderExecution() {
-  const options = catalog().map((b) => [b.id, b.id]),
-    inherit = [['', L('Use default backend', '使用默认后端')], ...options]
-  const sections = [
-    group(
-      L('Execution defaults', '默认执行设置'),
-      null,
-      choose('execution.backend', L('Default backend', '默认后端'), options),
-      inputField('model', L('Default Codex model', '默认 Codex 模型'), {
-        placeholder: L('CLI default', 'CLI 默认值')
-      }),
-      choose('effort', L('Reasoning effort', '推理强度'), [
-        ['low', L('Low', '低')],
-        ['medium', L('Medium', '中')],
-        ['high', L('High', '高')],
-        ['xhigh', L('Extra high', '极高')]
-      ]),
-      num('concurrency', L('Concurrent tasks', '并行任务数'), 1, 8)
-    )
-  ]
-  sections.push(
-    group(
-      L('Role assignments', '角色分配'),
-      L(
-        'Existing conversations keep their original backend. Empty model fields use runtime defaults.',
-        '现有对话保留原来的后端。模型留空时使用运行时默认值。'
-      ),
-      ...roles.flatMap((r) => [
-        choose('execution.roles.' + r, roleName(r) + ' · ' + L('Backend', '后端'), inherit, {
-          optional: true
-        }),
-        inputField('models.' + r, roleName(r) + ' · ' + L('Model', '模型'), {
-          optional: true,
-          placeholder: L('Inherit', '继承')
-        })
-      ])
-    )
-  )
-  sections.push(
-    group(
-      L('Backend catalog', '后端目录'),
-      L(
-        'Configured endpoints. Change definitions in the startup configuration and restart the host.',
-        '以下为已配置的端点。如需修改，请编辑启动配置并重启宿主。'
-      ),
-      ...catalog().map((b) =>
-        detail(
-          b.id + ' · ' + b.kind,
-          rows(
-            datum(L('Endpoint', '端点'), b.endpoint ?? L('Native CLI', '原生 CLI'), true),
-            datum(L('Model', '模型'), b.model ?? L('CLI default', 'CLI 默认值')),
-            datum(
-              L('Remote verification', '远端验证'),
-              b.remoteVerified === true ? L('Verified', '已验证') : L('Not verified', '未验证')
-            )
-          )
-        )
-      )
-    )
-  )
-  return sections
-}
+function renderExecution() { return controlExecution() }
+
 const enabled = (v) => (v ? L('Enabled', '已启用') : L('Disabled', '已停用'))
 function renderSources() {
   const sources = S.draft.sources || [],
@@ -259,6 +199,7 @@ function renderDelivery() {
   ]
 }
 function renderPrompts() {
+  if (!S.promptParts) return controlPrompts()
   const field = (p, n) => inputField('prompts.' + p, n, { type: 'area' })
   const output = el('div', 'stack')
   output.id = 'preview-output'

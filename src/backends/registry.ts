@@ -28,9 +28,9 @@ export class BackendRegistry implements Model {
   return model
  }
  describe(threadId?:string,role:'router'|'worker'|'subagent'='worker'):BackendDescription{const id=threadId?this.forThread(threadId):this.selected(role);return {...this.model(id).describe!(),id}}
- configured(){return [...new Set([...Object.keys(this.config.backends),this.selected('router'),this.selected('worker'),this.selected('subagent')])].map(id=>({...this.model(id).describe!(),id}))}
+ configured(){return [...new Set([...Object.keys(this.config.backends),this.selected('router'),this.selected('worker'),this.selected('subagent'),...(this.config.execution.workers??[]).map(w=>w.backend)])].map(id=>({...this.model(id).describe!(),id,...(this.definition(id).label?{label:this.definition(id).label}:{})}))}
  async run(r:ModelRequest):Promise<ModelResult>{
-  const id=r.threadId?this.forThread(r.threadId):this.selected(r.role??(r.ephemeral?'router':'worker'))
+  const id=r.threadId?this.forThread(r.threadId):r.backendId??this.selected(r.role??(r.ephemeral?'router':'worker'))
   r.onBackend?.(id)
   return this.model(id).run({...r,onThread:threadId=>{this.store.put('backend-binding',threadId,this.binding(id));r.onThread?.(threadId)}})
  }

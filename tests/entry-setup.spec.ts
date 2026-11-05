@@ -103,6 +103,9 @@ it('distinguishes saved, received, permission required, execution and actual ada
  expect(f.host.runtime.store.tickets.list()).toHaveLength(0);send('after-allow')
  let result:any;for(let n=0;n<150;n++){result=(await f.request('/entry-setup/verification/'+v.id)).body;if(result.verified)break;await new Promise(r=>setTimeout(r,20))}
  expect(result.verified).toBe(true);expect(result.stages.every((s:any)=>s.status==='ok')).toBe(true)
+ const second=(await f.request('/entry-setup/plan',{revision:2,entryId:'wecom',name:'Another team',credentials:{botId:'synthetic-other-bot',secret:'synthetic-other-secret'}})).body;expect((await f.request('/entry-setup/apply',{id:second.id})).status).toBe(200);keys.push(...Object.keys(JSON.parse(readFileSync(managedFiles(f.config.stateDir).secrets,'utf8'))))
+ await f.request('/entry-setup/verification',{entryId:'wecom',sourceId:second.sourceId});const instances=(await f.request('/entry-setup')).body.entries.find((e:any)=>e.id==='wecom').sources
+ expect(instances.find((s:any)=>s.id===plan.body.sourceId).verification.verified).toBe(true);expect(instances.find((s:any)=>s.id===second.sourceId)).toMatchObject({label:'Another team',verification:{verified:false}})
 })
 it.each(['cursor','generic'])('verifies a %s MCP bridge through a natural-language request without source identifiers',async entryId=>{
  const f=await fixture(),v=(await f.request('/entry-setup/verification',{entryId})).body,client=new Client({name:'synthetic-'+entryId+'-protocol-client',version:'1'})
@@ -144,4 +147,18 @@ it.each(['openai-responses','openai-chat','anthropic'] as const)('adds a %s AI c
  keys.push(...Object.keys(JSON.parse(readFileSync(managedFiles(f.config.stateDir).secrets,'utf8'))))
  const backup=join(f.root,'model-backup');await backupState(f.host.runtime.config,backup);expect(verifyBackup(backup).managed.secrets).toBeTruthy()
  await f.host.closeRuntime();const restarted=new Runtime(configSchema.parse(f.config),{model});try{expect(restarted.config.execution.backend).toBe(applied.body.connection.id);expect(restarted.config.sources.map(s=>s.id)).toEqual(['local'])}finally{await restarted.close()}
+})
+it('creates named model services without replacing the router, worker pool or existing sources',async()=>{
+ const f=await fixture(),execution={backend:'fixture',roles:{router:'fixture',worker:'fixture'},workers:[{id:'worker-1',backend:'fixture',model:'worker-one'},{id:'worker-2',backend:'fixture',model:'worker-two'}]}
+ f.runtime.updateSettings(0,{execution,models:{router:'router-only'}})
+ for(const [index,protocol]of ['openai-responses','openai-chat','anthropic'].entries()){
+  const before=structuredClone(f.host.runtime.config),plan=await f.request('/entry-setup/model/plan',{revision:f.host.runtime.settings.current().revision,name:'Service '+index,select:false,connection:{kind:'api',protocol,baseUrl:'http://127.0.0.1:9/v1',model:'service-default',apiKey:'synthetic-service-credential'}})
+  expect(plan.status).toBe(200);expect(plan.body.connection.label).toBe('Service '+index)
+  expect((await f.request('/entry-setup/model/apply',{id:plan.body.id})).status).toBe(200)
+  expect(f.host.runtime.config.execution).toEqual(before.execution);expect(f.host.runtime.config.models).toEqual(before.models);expect(f.host.runtime.config.sources).toEqual(before.sources)
+  expect(f.host.runtime.config.backends[plan.body.connection.id]!.label).toBe('Service '+index)
+ }
+ keys.push(...Object.keys(JSON.parse(readFileSync(managedFiles(f.config.stateDir).secrets,'utf8'))))
+ const named=await f.request('/entry-setup/model/plan',{revision:f.host.runtime.settings.current().revision,name:'Native service',select:false,connection:{kind:'codex'}})
+ await f.request('/entry-setup/model/apply',{id:named.body.id});expect(f.host.runtime.config.backends[named.body.connection.id]).toMatchObject({kind:'codex',label:'Native service'});expect(f.host.runtime.config.execution.workers).toHaveLength(2)
 })

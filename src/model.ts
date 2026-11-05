@@ -4,7 +4,7 @@ export interface ToolSpec {type:'function';name:string;description:string;inputS
 export interface ToolContent {type:'inputText'|'inputImage';text?:string;imageUrl?:string}
 export interface ModelRequest {
   cwd: string; instructions: string; input: string; schema: Record<string, unknown>
-  role?: 'router'|'worker'|'subagent'; onBackend?:(id:string)=>void
+  role?: 'router'|'worker'|'subagent'; backendId?:string; onBackend?:(id:string)=>void
   model?:string;onModel?:(model:string)=>void
   title?: string; threadId?: string; ephemeral?: boolean; sandbox?: 'read-only' | 'workspace-write'
   signal?: AbortSignal

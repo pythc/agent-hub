@@ -10,9 +10,9 @@ const parameters=z.record(z.unknown()).default({}).superRefine((p,ctx)=>{
  if(Object.keys(p).some(k=>reserved.includes(k)))ctx.addIssue({code:'custom',message:'Provider parameters cannot replace managed model, history, tools or output configuration'})
 })
 export const backendDefinition=z.discriminatedUnion('kind',[
- z.object({kind:z.literal('codex'),command:z.string().min(1).optional()}).strict(),
+ z.object({kind:z.literal('codex'),label:z.string().trim().min(1).max(100).optional(),command:z.string().min(1).optional()}).strict(),
  z.object({
-  kind:z.enum(['openai-responses','openai-chat','anthropic']),baseUrl:apiBase,model:z.string().min(1),apiKeyEnv:envName.optional(),
+  kind:z.enum(['openai-responses','openai-chat','anthropic']),label:z.string().trim().min(1).max(100).optional(),baseUrl:apiBase,model:z.string().min(1),apiKeyEnv:envName.optional(),
   images:z.boolean().default(false),maxSteps:z.number().int().min(1).max(256).default(64),
   maxToolCalls:z.number().int().min(1).max(10000).default(256),
   maxContextBytes:z.number().int().min(4096).max(64000000).default(16000000),
@@ -25,8 +25,11 @@ export const backendDefinition=z.discriminatedUnion('kind',[
 export type BackendDefinition=z.infer<typeof backendDefinition>
 export type ApiDefinition=Exclude<BackendDefinition,{kind:'codex'}>
 export const backendsSchema=z.record(name,backendDefinition).default({})
-export const executionSchema=z.object({backend:name.default('codex'),roles:z.object({router:name.optional(),worker:name.optional(),subagent:name.optional()}).strict().default({})}).strict().default({})
+export const workerProfileSchema=z.object({id:name,label:z.string().trim().min(1).max(100).optional(),backend:name,model:z.string().trim().min(1).max(300).optional()}).strict()
+export type WorkerProfile=z.infer<typeof workerProfileSchema>
+export const executionSchema=z.object({backend:name.default('codex'),roles:z.object({router:name.optional(),worker:name.optional(),subagent:name.optional()}).strict().default({}),workers:z.array(workerProfileSchema).min(1).max(10).optional()}).strict().default({})
 export function validateBackendSelection(c:{execution:z.infer<typeof executionSchema>;backends:Record<string,BackendDefinition>}){
  if(c.backends.codex&&c.backends.codex.kind!=='codex')throw Error('The backend ID codex is reserved for native Codex conversations')
- for(const id of [c.execution.backend,...Object.values(c.execution.roles)])if(id&&id!=='codex'&&!c.backends[id])throw Error('Unknown execution backend: '+id)
+ for(const id of [c.execution.backend,...Object.values(c.execution.roles),...(c.execution.workers??[]).map(w=>w.backend)])if(id&&id!=='codex'&&!c.backends[id])throw Error('Unknown execution backend: '+id)
+ if(c.execution.workers&&new Set(c.execution.workers.map(w=>w.id)).size!==c.execution.workers.length)throw Error('Duplicate worker id')
 }

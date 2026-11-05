@@ -10,6 +10,7 @@ export interface Run {
   phase: 'idle' | 'starting' | 'running' | 'background' | 'interrupted' | 'uncertain' | 'human' | 'delivering' | 'merging'
   turnId?: string; prepared?:boolean; waitingForWriter?:boolean; error?: string; result?: string
   toolsVersion?:number;toolsDigest?:string;model?:string;backendId?:string;backendKind?:string
+  workerId?:string;interactiveReserve?:boolean
 }
 
 /** All engine mutations and the work they schedule share one SQLite transaction. */

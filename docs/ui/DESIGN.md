@@ -21,7 +21,7 @@ typography:
     fontSize: "15px"
     lineHeight: 1.5
   page-title:
-    fontSize: "2.4rem"
+    fontSize: "22px"
     fontWeight: 650
     lineHeight: 1.13
     letterSpacing: "-0.038em"
@@ -79,7 +79,7 @@ components:
 
 ## Overview
 
-AgentHub opens with a choice between using an existing assistant and deploying or managing one. A usage invitation presents the enabled software and instructions. Management pairs with the host through a one-time link, then opens the daily overview of attention items and connections.
+AgentHub opens with a choice between using an existing assistant and deploying or managing one. A usage invitation presents the enabled software and instructions. Management pairs with the host through a one-time link or a private connection file, then opens Tasks. Separate pages handle software instances, model services, Router/Worker execution and role prompts.
 
 Setup starts with an actual work entry. Team conversations, coding clients and repository integrations share the host's existing AI connection. Preflight, applying settings and verifying a reply in the original software are separate stages. Browser chat remains an optional diagnostic. Existing full settings remain accessible.
 
@@ -91,7 +91,7 @@ Use ink for headings, body for supporting labels and muted for explanations. The
 
 ## Typography
 
-The system stack supports English and Simplified Chinese. The page title sits above a single explanatory paragraph. Use monospace for host identifiers, JSON and prompt output. Runtime values in key–value rows use tabular numerals. Long values and error paths wrap within the available width.
+The system stack supports English and Simplified Chinese. Page titles stand alone. Do not place a repeated subtitle or generic introductory paragraph beneath them. Use monospace for host identifiers, JSON and prompt output. Runtime values in key–value rows use tabular numerals. Long values and error paths wrap within the available width.
 
 ## Layout
 

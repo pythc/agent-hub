@@ -145,8 +145,8 @@ function render(focusTitle = false) {
   )
   const rail = add(el('aside', 'rail'), brand, nav, foot)
   const language = languagePicker()
-  const home = add(el('a', 'text-action'), el('span', '', L('Console', '操作台')), icon('out'))
-  home.href = '/'
+  const home = add(el('a', 'text-action'), el('span', '', L('Tasks', '任务')), icon('out'))
+  home.href = '/configure'
   const head = add(
     el('header', 'topbar'),
     add(
@@ -178,7 +178,7 @@ function render(focusTitle = false) {
     S.health?.preview === true
   const heading = add(
     el('div', 'heading'),
-    add(el('div'), title, el('p', '', L(section[3], section[4]))),
+    add(el('div'), title),
     preview ? badge(L('Preview workspace', '预览工作区'), 'preview') : null
   )
   const editor = el('fieldset', 'editor')
@@ -392,10 +392,19 @@ async function connectHost(credential = S.typed, cookieSession = false) {
   await run('connect', async () => {
     S.token = credential.trim()
     S.typed = ''
+    if (S.token && !cookieSession) {
+      const link = new URL((await api('/operator-link', {})).url)
+      if (link.origin !== location.origin || link.pathname !== '/configure')
+        throw Error('Invalid local operator session link')
+      const code = new URLSearchParams(link.hash.slice(1)).get('pair')
+      if (!code) throw Error('Missing local operator pairing code')
+      await api('/pair', { code }, true)
+      S.token = ''
+    }
     const [snap] = await Promise.all([snapshot(), runtimeStatus(), loadGuideContext(), health()])
     adopt(snap)
     S.authed = true
-    if (S.surface === 'entries') await readEntries()
+    await readEntries()
     if (!S.latest) announce(L('Connected to the host.', '已连接到宿主。'))
   })
 }
@@ -667,7 +676,7 @@ async function previewPrompt() {
   })
 }
 window.addEventListener('beforeunload', (e) => {
-  if (dirty() || guideHasDraft() || entryHasDraft()) {
+  if (dirty() || guideHasDraft() || entryHasDraft() || controlHasDraft()) {
     e.preventDefault()
     e.returnValue = ''
   }

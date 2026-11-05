@@ -1,0 +1,31 @@
+{
+  "at": "2026-11-05T10:19:41.573Z",
+  "passed": true,
+  "channel": "Native Codex desktop chat through installed MCP bridge",
+  "stages": [
+    {
+      "id": "received",
+      "status": "ok"
+    },
+    {
+      "id": "authorized",
+      "status": "ok"
+    },
+    {
+      "id": "executed",
+      "status": "ok"
+    },
+    {
+      "id": "replied",
+      "status": "ok"
+    }
+  ],
+  "reply": "Connection verified.",
+  "worker": "worker-1",
+  "backend": "codex",
+  "model": "gpt-6.1-terra",
+  "previousSessions": 9,
+  "previousSessionsRetained": true,
+  "externalApiModelsTested": false,
+  "realWeComTested": false
+}

@@ -48,7 +48,7 @@ export const configSchema = z.object({
   model: z.string().optional(),
   models:z.object({router:z.string().optional(),worker:z.string().optional(),subagent:z.string().optional()}).strict().default({}),
   effort: z.enum(['low', 'medium', 'high', 'xhigh']).default('high'),
-  concurrency: z.number().int().min(1).max(8).default(2),
+  concurrency: z.number().int().min(1).max(10).default(2),
   turnTimeoutMs: z.number().int().min(1000).default(600_000),
   work:z.object({sandboxDriver:z.enum(['codex','seatbelt','bubblewrap','disabled']).default('codex'),backgroundTimeoutMs:z.number().int().min(100).default(1800000),maxAgents:z.number().int().min(1).max(32).default(8),maxDepth:z.number().int().min(1).max(8).default(3),maxOutputBytes:z.number().int().min(1024).max(16000000).default(1000000),autoRecover:z.boolean().default(true),network:z.boolean().default(true)}).strict().default({}),
   delivery:z.object({workerPublish:z.boolean().default(false),authorization:z.enum(['per-head','policy']).default('per-head'),maxDraftLines:z.number().int().min(1).default(100000),commitName:z.string().min(1).default('Super-agent'),commitEmail:z.string().email().default('superagent@localhost.invalid'),automatedReviewers:z.array(z.string()).default([]),maxReviewRounds:z.number().int().min(1).max(10).default(3),autoMerge:z.boolean().default(false),mergeGh:z.string().optional(),requiredReviewers:z.array(z.string()).default([]),maxChangedLines:z.number().int().min(1).default(200),requireChecks:z.boolean().default(true),method:z.enum(['squash','merge','rebase']).default('squash')}).strict().default({}),

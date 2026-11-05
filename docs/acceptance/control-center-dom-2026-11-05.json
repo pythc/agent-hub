@@ -1,0 +1,17 @@
+{
+  "at": "2026-11-05T10:27:37.546Z",
+  "passed": true,
+  "kind": "Isolated DOM and host API integration; not real-browser visual acceptance",
+  "checks": [
+    "No heading subtitles or footer boilerplate",
+    "Created two independently named services through real check/save APIs",
+    "Adding services preserved execution defaults",
+    "Saved a Router and ten individually configured Workers",
+    "Reduced pool to two Workers through the actual settings API",
+    "Saved role instructions and previewed the actual composed prompt",
+    "Preserved and safely rebased an execution draft after creating another service",
+    "Created and listed a named office connection while retaining explicit member admission"
+  ],
+  "realOfficeCalls": false,
+  "realCommercialModels": false
+}

@@ -19,7 +19,7 @@ An existing deployment still starts with `./start.sh serve CONFIG.json`. Keep us
 
 **Use an existing assistant.** Read the instructions the deployment owner shares in the team conversation. Find the named bot or connected client and give it work there. Office users do not install Node, configure a model, receive the host's operator token or open the management website. The optional shared guide has read-only access to the selected entry instructions.
 
-**Deploy or manage an assistant.** Open the management link. The daily overview prioritizes work needing a person, then configured software. Add one entry at a time; several entries can share the same AI service. A role selector does not grant authority: management APIs require an operator session/token, and guide invitations cannot call them.
+**Deploy or manage an assistant.** Open the management link. Tasks shows decisions waiting for a person, running work and recent results. Software connections, Model services, Execution and Prompts are separate configuration pages. Add one entry at a time; several entries can share the same AI service. A role selector does not grant authority: management APIs require an operator session/token, and guide invitations cannot call them.
 
 MCP connections are currently personal operator connections. They are not scoped employee accounts on a shared multi-tenant host. Office requests instead use the platform sender identity and the configured admission policy.
 
@@ -40,11 +40,23 @@ Platform app creation, permission review and client first-use trust remain real 
 
 ## Reuse or add an AI connection
 
-The selected entry reuses the host's current service. If it is missing, the entry page exposes Codex sign-in, an existing configured connection or an API service form. OpenAI and Anthropic presets cover common endpoints; a custom service retains OpenAI Responses, Chat Completions and Anthropic Messages.
+Open **Model services → New service**. Give the connection a name, choose the existing Codex login or an API provider, and check/save it. OpenAI exposes both Responses and Chat Completions; custom endpoints also support Anthropic Messages. Multiple services coexist. Adding one does not change Router or Worker assignments, existing software entries or existing conversations.
 
-Check the service, then explicitly save. The check never uses work tools. An API check makes a small real request to the chosen endpoint. A native Codex check tests the installed CLI and sign-in; the in-entry task still verifies actual execution. A provider error does not echo the API key.
+An API check makes a small real request without work tools or workspace files. A native Codex check tests the installed CLI and sign-in; the in-entry task still verifies actual execution. Managed API keys are saved privately only after application. Provider errors do not echo the key.
 
-Saving the service updates defaults for future router/worker/subagent work and clears their model overrides. Existing persistent conversations stay bound to their original backend. The flow reuses the operator workspace, preserves deployed office entries and returns to entry setup; it does not make web chat the destination.
+## Router and Workers
+
+**Execution** shows connected software → Router → queue → Workers. Choose the Router service/model independently. Set the Worker count from **1 to 10**, then choose each Worker's service/model. A blank model uses that service's default. Save applies to new conversations. Follow-ups stay with the original conversation's backend and model; configuration changes do not migrate history.
+
+Workers reserve slots while managed background jobs are active. Excess new tasks queue. The prototype's additional lane remains available for one human follow-up to an existing conversation; it is not an eleventh configurable Worker. Reducing the pool lets active work finish and limits subsequent dispatch. New assignments use a rotating selection rather than model-based specialization.
+
+Existing deployments without an explicit pool derive Workers from their previous concurrency and Worker role/model settings. The advanced JSON shape is documented in [backends](BACKENDS.md).
+
+## Software connections and prompts
+
+**Software connections → New connection** adds a named office/repository instance even if that platform is already connected. Feishu can reuse the host bot or connect another bot. Existing instances keep their scopes and allowed senders; each office instance has its own verification observation. A personal MCP client entry is the actual installed bridge profile, not an extra artificial software instance.
+
+**Prompts** separates shared requirements, Router instructions, Worker instructions and reply format. The editor contains operator additions, not the full system template. Leave it empty for built-ins; **Preview actual instructions** shows the composed text. Required runtime instructions remain in force. Advanced prompt parts retain system-template and team-skill editing.
 
 ## Verify and grant access
 
@@ -79,15 +91,15 @@ Generate another link for an existing deployment:
 ./start.sh open HOST_URL TOKEN_FILE
 ```
 
-The private connection-file picker and manual token entry remain fallbacks. Permanent tokens and provider keys are not placed in URLs or browser storage. A shared usage guide may retain its sanitized instructions in the tab's session storage; it has no management capability.
+The private connection-file picker and manual token entry establish the same browser session, so page reload does not require reimporting the file. Permanent tokens and provider keys are not placed in URLs or browser storage. A shared usage guide may retain its sanitized instructions in the tab's session storage; it has no management capability.
 
 Advanced settings retain execution, sources, policy, background work, delivery, prompts, revisions and JSON. Settings saves check revisions. Entry/model deployment pauses at an idle boundary, persists private managed files with a reversible journal, and keeps the HTTP address. Busy work or stale drafts prevent application. A failed rebuild restores the previous deployment; interrupted changes recover against their database commit marker.
 
-Backups include SQLite, effective configuration and managed API/bot credentials. Keep backups private. Work files, cached attachments, external credentials, native client profiles and already sent messages are outside database rollback. Client installs return private backups; restoration refuses to overwrite later user edits. Schema stays at 5 in version 0.10.0. See [acceptance and limitations](ACCEPTANCE_0.10.md).
+Backups include SQLite, effective configuration and managed API/bot credentials. Keep backups private. Work files, cached attachments, external credentials, native client profiles and already sent messages are outside database rollback. Client installs return private backups; restoration refuses to overwrite later user edits. Schema stays at 5. A previous build cannot parse explicit Worker-pool settings; rolling back requires the verified pre-change backup and matching source. See [configuration acceptance and rollback](CONTROL_CENTER_2026-11-05.md) and [earlier entry acceptance](ACCEPTANCE_0.10.md).
 
 ## 中文上手
 
-部署者安装依赖后运行 `./start.sh setup`，打开终端给出的管理链接。先选**在哪里使用**，复用已有机器人、客户端配置和 AI 服务；缺少模型时就在入口页补齐。飞书选群名，客户端点安装，企微按管理员创建条件填写 Bot ID/Secret。配置保存后，到对应软件发送测试，并核对收到、准入、执行和原入口回复四步。
+部署者安装依赖后运行 `./start.sh setup`，打开终端给出的管理链接。在**软件接入**新建并命名入口；在**模型服务**新建连接，再到**执行**分别选择 Router 与各 Worker 的服务和模型（1–10 个 Worker）。飞书选群名，客户端点安装，企微按管理员创建条件填写 Bot ID/Secret。配置保存后，到对应软件发送测试，并核对收到、准入、执行和原入口回复四步。
 
 日常使用者只需要管理员发来的使用说明：在原来的群聊、私聊或客户端交代任务，在原处补充和接收成果。不要给普通使用者分发管理令牌。网页聊天是可选诊断，管理页优先展示需要人处理的事和入口状态。
 

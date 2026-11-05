@@ -67,7 +67,7 @@ const entryText = (value) =>
     ? (lang === 'en' ? value.en : value.zh || value['zh-CN']) || value.en || ''
     : String(value ?? '')
 const selectedEntry = () => entryState.data?.entries?.find((e) => e.id === entryState.selected)
-const entryHasDraft = () => entryState.touched || entryModel.touched
+const entryHasDraft = () => entryState.touched || entryModel.touched || controlHasDraft()
 function entrySafeDetail(value) {
   let text = String(value ?? '')
   for (const secret of [
@@ -359,6 +359,7 @@ function entryPlanInput() {
   return {
     revision: entryState.data.revision,
     entryId: entryState.selected,
+    ...(d.name?.trim() ? { name: d.name.trim() } : {}),
     ...(d.scopes ? { scopeIds: d.scopes } : {}),
     ...(d.actors?.trim()
       ? {

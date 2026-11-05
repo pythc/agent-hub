@@ -16,7 +16,7 @@ export const onboardingPlanSchema=z.object({revision:z.number().int().min(0),con
  z.object({kind:z.literal('existing'),id:z.string().min(1).max(64)}).strict(),
  z.object({kind:z.literal('codex')}).strict(),
  z.object({kind:z.literal('api'),protocol:z.enum(['openai-responses','openai-chat','anthropic']),baseUrl:z.string().url(),model:z.string().trim().min(1).max(300),apiKey:z.string().trim().min(1).max(16000).regex(/^[^\x00-\x1f\x7f]+$/).optional()}).strict(),
-]),workspace:z.string().min(1).max(4000).optional(),channel:z.enum(['browser','feishu','wecom']).default('browser')}).strict()
+]),name:z.string().trim().min(1).max(100).optional(),workspace:z.string().min(1).max(4000).optional(),channel:z.enum(['browser','feishu','wecom']).default('browser')}).strict()
 type Check={id:string;status:'ok'|'required'|'pending';code:string;detail?:string}
 interface Plan {id:string;revision:number;expiresAt:number;connection:{id:string;kind:string;label:string;model?:string};workspace:string;sourceId:string;channel:string;next:Config;keyName?:string;key?:string;credentials?:Record<string,string>;entry?:boolean;backend?:BackendDefinition;lastCheck?:{ok:boolean;checks:Check[];remoteVerified:boolean;preview:boolean}}
 export class OnboardingError extends Error {constructor(readonly code:string,message:string,readonly status=400){super(message)}}
@@ -30,7 +30,7 @@ export function setupWorkspace(config:Config,input?:string){
  if(existsSync(workspace))try{accessSync(workspace,constants.R_OK|constants.X_OK)}catch{throw new OnboardingError('workspace_invalid','This folder cannot be read. Choose another folder.')}
  return workspace
 }
-const connectionLabel=(definition:BackendDefinition)=>definition.kind==='codex'?'Codex':new URL(definition.baseUrl).hostname+' · '+definition.model
+const connectionLabel=(definition:BackendDefinition)=>definition.label??(definition.kind==='codex'?'Codex':new URL(definition.baseUrl).hostname+' · '+definition.model)
 
 /** A minimal first-run flow; machine details remain behind the advanced console. */
 export class Onboarding {
@@ -40,9 +40,16 @@ export class Onboarding {
  private current(id:string){const plan=this.plans.get(id);if(!plan||plan.expiresAt<Date.now()){this.plans.delete(id);throw new OnboardingError('plan_expired','This setup draft expired. Review the choices again.')}if(this.host().settings.current().revision!==plan.revision)throw new OnboardingError('settings_conflict','Settings changed in another session. Review the latest settings.',409);return plan}
  private view(plan:Plan){return {id:plan.id,revision:plan.revision,expiresAt:plan.expiresAt,connection:plan.connection,workspace:plan.workspace,sourceId:plan.sourceId,channel:plan.channel,restartRequired:true,preview:this.preview}}
  connectionPlan(value:unknown){
-  const input=onboardingPlanSchema.pick({revision:true,connection:true}).strict().parse(value),view=this.plan(input),plan=this.plans.get(view.id)!,existing=plan.next.sources.find(s=>s.kind==='local'&&s.id!==plan.sourceId)
+  const input=onboardingPlanSchema.pick({revision:true,connection:true,name:true}).extend({select:z.boolean().default(true)}).strict().parse(value),view=this.plan({revision:input.revision,connection:input.connection,name:input.name}),plan=this.plans.get(view.id)!,existing=plan.next.sources.find(s=>s.kind==='local'&&s.id!==plan.sourceId)
   if(!existing){this.plans.delete(view.id);throw new OnboardingError('local_entry_missing','A local operator workspace is required for model setup.')}
   plan.next.sources=plan.next.sources.filter(s=>s.id!==plan.sourceId);plan.sourceId=existing.id;plan.workspace=existing.cwd;plan.entry=true
+  if(!input.select){
+   plan.next.execution=structuredClone(this.host().config.execution);plan.next.models=structuredClone(this.host().config.models)
+   if(input.connection.kind==='codex'){
+    const id='service-'+plan.id.slice(0,12),backend:BackendDefinition={kind:'codex',...(input.name?{label:input.name}:{})}
+    plan.next.backends[id]=backend;plan.backend=backend;plan.connection={id,kind:'codex',label:input.name??'Codex'}
+   }
+  }
   return this.view(plan)
  }
  /** Entry setup adds a source while retaining the selected execution backend and all existing conversations. */
@@ -65,7 +72,7 @@ export class Onboarding {
   let backendId:string,backend:BackendDefinition|undefined,keyName:string|undefined,key:string|undefined
   if(input.connection.kind==='api'){
    backendId='assistant-'+id.slice(0,12);key=input.connection.apiKey;keyName=key?'AGENTHUB_SETUP_'+id.replaceAll('-','').toUpperCase():undefined
-   backend=backendDefinition.parse({kind:input.connection.protocol,baseUrl:input.connection.baseUrl,model:input.connection.model,...(keyName?{apiKeyEnv:keyName}:{})});next.backends[backendId]=backend
+   backend=backendDefinition.parse({kind:input.connection.protocol,...(input.name?{label:input.name}:{}),baseUrl:input.connection.baseUrl,model:input.connection.model,...(keyName?{apiKeyEnv:keyName}:{})});next.backends[backendId]=backend
   }else{
    backendId=input.connection.kind==='codex'?'codex':input.connection.id
    if(backendId!=='codex'&&!next.backends[backendId])throw new OnboardingError('connection_missing','Choose an available connection.')

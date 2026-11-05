@@ -26,6 +26,8 @@ import {Reviews} from './review.ts'
 import {Merger} from './merge.ts'
 import type {GithubApi} from './connectors/github.ts'
 import {loadManagedConfig} from './managed-config.ts'
+import {workerProfiles} from './worker-pool.ts'
+import type {WorkerProfile} from './backend-config.ts'
 
 
 
@@ -181,7 +183,7 @@ export class Runtime {
       const instructions=compose(this.config,'worker',{cwd:owner.cwd,mandate:ticket.mandate.scope,subagent:true},ticket.mandate.policyVersion)+'\nYou are a managed subagent, not the parent orchestrator. The parent mandate is an upper bound, not a checklist to repeat. Perform only the delegated subtask in the input. Read files directly with superagent_read; do not launch another subagent unless that subtask actually needs delegation. Use superagent_shell for commands, never native shell or native subagents. Do not publish or contact people. Return waiting while owned jobs still run; return ready only with the final subtask result.'
       const revision=this.settings.current().revision,key='agent:'+item.id
       let result
-      try{result=await this.runModel({role:'subagent',cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??this.config.models.worker,threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,tools:this.availableWorkerSpecs(),onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}})}
+      try{result=await this.runModel({role:'subagent',backendId:this.config.execution.roles.subagent??this.store.get<Run>('run',item.ticketId)?.backendId,cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??this.store.get<Run>('run',item.ticketId)?.model??this.config.models.worker,threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,tools:this.availableWorkerSpecs(),onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}})}
       finally{this.controls.delete(key);this.controlRevisions.delete(key)}
       const output=report.parse(JSON.parse(result.text));threadId=result.threadId
       this.store.put('transcript',result.turnId,{ticketId:item.ticketId,agentId:item.id,threadId,turnId:result.turnId,text:result.text,at:Date.now()})
@@ -248,6 +250,15 @@ export class Runtime {
   start(): void {
     this.timer = setInterval(() => { void this.tick().catch(error => this.store.audit({ type: 'host.error', message: String(error) })) }, 150)
   }
+  private dispatchWorker(ticketId:string,reserve:boolean):{profile:WorkerProfile;reserve:boolean}|undefined {
+    const pool=workerProfiles(this.config),busy=new Set(this.store.list<Run>('run').filter(r=>r.ticketId!==ticketId&&(['starting','running'].includes(r.phase)||r.phase==='background'&&this.work.active(r.ticketId,r.assignmentId).length>0)).map(r=>r.workerId).filter(Boolean))
+    const cursor=this.store.get<number>('worker-pool','cursor')??0,rotated=pool.map((_,i)=>pool[(cursor+i)%pool.length]!)
+    const previous=this.store.get<Run>('run',ticketId)?.workerId
+    const profile=(previous&&!busy.has(previous)?pool.find(w=>w.id===previous):undefined)??rotated.find(w=>!busy.has(w.id))
+    if(profile){this.store.put('worker-pool','cursor',(pool.findIndex(w=>w.id===profile.id)+1)%pool.length);return {profile,reserve:false}}
+    if(reserve)return {profile:pool.find(w=>w.id===previous)??rotated[0]!,reserve:true}
+    return undefined
+  }
   async tick(): Promise<void> {
     if (this.ticking || this.closing) return
     this.ticking = true
@@ -273,13 +284,16 @@ export class Runtime {
           continue
         }
         const routing=job.kind==='assess'||job.kind==='followup'
+        const followupSlot=interactive(job)&&(!this.config.execution.workers||!!(payload.ticketId&&this.store.get<Run>('run',payload.ticketId)?.threadId))
         const workers=[...this.runningJobs.keys()].filter(id=>!id.startsWith('assess:')&&!id.startsWith('followup:')).length
         const reserved=this.store.list<Run>('run').filter(r=>r.phase==='background'&&r.ticketId!==payload.ticketId&&!this.controllers.has(r.ticketId)&&this.work.active(r.ticketId,r.assignmentId).length).length
-        if(routing?[...this.runningJobs.keys()].filter(id=>id.startsWith('assess:')||id.startsWith('followup:')).length>=4:workers+reserved>=this.config.concurrency+(interactive(job)?1:0))continue
+        if(routing?[...this.runningJobs.keys()].filter(id=>id.startsWith('assess:')||id.startsWith('followup:')).length>=4:workers+reserved>=workerProfiles(this.config).length+(followupSlot?1:0))continue
         if (job.kind === 'execute' && this.controllers.has(payload.ticketId)) continue
         if (this.paused || (payload.ticketId && ['human','delivering','merging'].includes(this.store.get<Run>('run', payload.ticketId)?.phase??''))) continue
+        const dispatch=job.kind==='execute'?this.dispatchWorker(payload.ticketId,followupSlot):undefined
+        if(job.kind==='execute'&&!dispatch)continue
         this.store.jobState(job.id, 'running')
-        const task = this.perform(job).catch(error => {
+        const task = this.perform(job,dispatch).catch(error => {
           this.store.jobState(job.id, 'failed', String(error))
           this.store.audit({ type: 'job.failed', id: job.id, message: String(error) })
           if (payload.ticketId) {
@@ -293,7 +307,7 @@ export class Runtime {
       if(!this.paused)await this.reviews.tick()
     } finally { this.ticking = false;tickFinished() }
   }
-  private async perform(job: Job): Promise<void> {
+  private async perform(job: Job,dispatch?:{profile:WorkerProfile;reserve:boolean}): Promise<void> {
     if (job.kind === 'assess') await this.assess(job.payload as Candidate)
     else if(job.kind==='followup')await this.routeFollowup((job.payload as any).triggerId)
     else {
@@ -309,7 +323,7 @@ export class Runtime {
         this.engine.assignmentStarted(ticketId, assignmentId)
         this.store.enqueue('execute:' + assignmentId + ':initial', 'execute', { ticketId, assignmentId })
       }
-      else if (job.kind === 'execute') await this.execute(ticket, assignmentId)
+      else if (job.kind === 'execute') await this.execute(ticket, assignmentId,dispatch)
     }
     this.store.jobState(job.id, 'done')
   }
@@ -381,7 +395,7 @@ export class Runtime {
     if(decision.action==='stop'&&decision.targetTicketId&&ids.includes(decision.targetTicketId))this.engine.decide(triggerId,{kind:'stop',ticketId:decision.targetTicketId,reason:decision.reason})
     }finally{this.controllers.delete(key)}
   }
-  private async execute(ticket: Ticket, assignmentId: string): Promise<void> {
+  private async execute(ticket: Ticket, assignmentId: string,dispatch?:{profile:WorkerProfile;reserve:boolean}): Promise<void> {
     const source = this.sources.get(ticket.mandate.actor.source)!.config
     const saved = this.store.get<Run>('run', ticket.id)
     if (saved?.phase === 'human' || saved?.phase === 'uncertain') {
@@ -392,7 +406,7 @@ export class Runtime {
     if (!inputs.length && saved?.assignmentId === assignmentId) return
     const controller = new AbortController()
     this.controllers.set(ticket.id, controller)
-    const run: Run = { ...saved, ticketId: ticket.id, assignmentId, cwd: saved?.cwd ?? source.cwd, phase: 'starting' }
+    const run: Run = { ...saved, ticketId: ticket.id, assignmentId, cwd: saved?.cwd ?? source.cwd, phase: 'starting',...(dispatch?{workerId:dispatch.profile.id,interactiveReserve:dispatch.reserve}:{}) }
     this.store.put('run', ticket.id, run)
     const persist = () => {
       if (this.store.get<Run>('run', ticket.id)?.phase === 'human') run.phase = 'human'
@@ -412,8 +426,8 @@ export class Runtime {
       const specs=this.availableWorkerSpecs(),toolsDigest=digest(JSON.stringify(specs)),legacy=!!saved?.threadId&&saved.toolsDigest!==toolsDigest&&(!this.model.describe||this.model.describe(saved.threadId).kind==='codex')
       this.work.turnStarted(ticket.id,assignmentId)
       const result = await this.runModel({
-        role:'worker',onBackend:id=>{run.backendId=id;run.backendKind=this.model instanceof BackendRegistry?this.model.definition(id).kind:'custom';persist()},
-        model:saved?.threadId?undefined:this.config.models.worker,
+        role:'worker',backendId:dispatch?.profile.backend,onBackend:id=>{run.backendId=id;run.backendKind=this.model instanceof BackendRegistry?this.model.definition(id).kind:'custom';persist()},
+        model:saved?.threadId?undefined:dispatch?.profile.model??(this.config.execution.workers?undefined:this.config.models.worker),
         title: ticket.title, cwd: run.cwd, sandbox: source.sandbox, threadId: saved?.threadId, schema: reportSchema,archiveOnComplete:true,
         instructions,
         managed:true,privateState:this.config.stateDir,...(legacy?{workerMcp:this.workerMcp(owner)}:{tools:specs}),onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),

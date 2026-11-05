@@ -144,6 +144,7 @@ function entrySourcePicker(entry) {
 }
 function entryOfficeForm(entry) {
   const form = el('form', 'entry-form')
+  form.append(entryInput('name', L('Connection name', '接入名称'), '', 'text'))
   if (entry.id === 'feishu') {
     const choices = entryState.probe?.choices || []
     if (!choices.length)
@@ -575,6 +576,7 @@ function entryDetail() {
         )
       )
     )
+  if (entry.id === 'feishu' && entryState.creating) content.push(selector('entry-bot-mode', L('Bot', '机器人'), [['existing', L('Use the host bot', '使用宿主已有机器人')], ['custom', L('Connect another bot', '接入另一个机器人')]], entryState.draft.botMode || 'existing', value => { Object.assign(entryState.draft, {botMode:value, appId:'', appSecret:'', scopes:[]}); entryState.touched = true; entryState.probe = null; entryState.plan = null; render() }))
   content.push(
     entrySection(
       L('Check what is already available', '检查已有条件'),
@@ -598,7 +600,7 @@ function entryDetail() {
   )
   if (
     entry.id === 'feishu' &&
-    entryState.probe?.checks?.some((c) => c.code === 'feishu_bot_setup_required')
+    (entryState.draft.botMode === 'custom' || entryState.probe?.checks?.some((c) => c.code === 'feishu_bot_setup_required'))
   ) {
     content.push(
       entrySection(
@@ -625,10 +627,10 @@ function entryDetail() {
       )
     )
   }
-  content.push(entryModelSettings())
+  if (!entryState.data.backend.configured) content.push(action(L('Configure execution models', '配置执行模型'), () => opNavigate('execution'), 'btn'))
   if (isClient) content.push(entryClientSetup(entry))
   else {
-    if (sources.length)
+    if (sources.length && !entryState.creating)
       content.push(
         entrySection(
           L('Existing connections', '已有连接'),

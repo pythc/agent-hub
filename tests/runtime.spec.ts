@@ -285,8 +285,8 @@ it('retrieves a cross-discussion task only from its exact reference, including e
  expect(runtime.store.threads.get('local:other')?.subscriptions).toContain(id)
 })
 
-it('holds a background slot and reserves the extra slot for a human follow-up',async()=>{
- const config=configuration();config.concurrency=1
+it.each([false,true])('holds a background slot and reserves the extra slot for a human follow-up (explicit pool: %s)',async(explicit)=>{
+ const config=configuration();config.concurrency=1;if(explicit)config.execution.workers=[{id:'worker-1',backend:'codex'}]
  const fixture=new FixtureModel(),starts:string[]=[],holds=new Map<string,()=>void>()
  const model:Model={async run(r){
   if(r.ephemeral)return fixture.run(r)

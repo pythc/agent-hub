@@ -13,6 +13,7 @@ const client = [
   'entry-model.js',
   'entry-configure.js',
   'operator-workspace.js',
+  'control-center.js',
   'application.js'
 ]
   .map(asset)

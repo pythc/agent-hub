@@ -1,0 +1,16 @@
+{
+  "at": "2026-11-05T10:09:27.563Z",
+  "passed": true,
+  "baselineCommit": "911cff112b4384239f8d0424a0fa539bdfad2dbb",
+  "schema": 5,
+  "steps": [
+    "Archived baseline opened",
+    "New runtime retained native session",
+    "Saved ten independent workers",
+    "Old runtime rejected new strict execution configuration",
+    "Restored verified pre-change backup",
+    "Baseline runtime reopened with native session intact",
+    "New runtime reopened after restore"
+  ],
+  "rollbackBoundary": "Database schema remains 5; old code cannot parse explicit worker-pool settings. Restore the pre-change backup when rolling back."
+}

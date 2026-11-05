@@ -75,7 +75,7 @@ function entryHeading(title, description, trailing) {
   heading.tabIndex = -1
   return add(
     el('div', 'entry-heading'),
-    add(el('div'), heading, description ? el('p', '', description) : null),
+    add(el('div'), heading),
     trailing
   )
 }

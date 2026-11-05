@@ -1,0 +1,41 @@
+{
+  "at": "2026-11-05T10:26:29.773933+00:00",
+  "browser": "Codex in-app browser",
+  "configurationFlowsPassed": true,
+  "realHost": {
+    "url": "http://127.0.0.1:4335/configure",
+    "checks": [
+      "Chinese task page without subtitle or footer",
+      "Saved separate Router and two Worker configurations using native Codex",
+      "Existing six verified entry types retained"
+    ]
+  },
+  "isolatedHost": {
+    "url": "http://127.0.0.1:4344/configure",
+    "checks": [
+      "English new model service form; OpenAI Responses and Chat Completions options visible",
+      "Created a named service through loopback HTTP check and actual managed save",
+      "Saved ten independent Worker profiles with different services/models",
+      "Reload retained login and the tenth Worker model",
+      "Reduced pool to two and saved",
+      "Saved Worker instructions and previewed the composed prompt",
+      "Created a named synthetic WeCom entry and displayed awaiting verification"
+    ]
+  },
+  "externalApiProvidersContacted": false,
+  "realWeComContacted": false,
+  "responsive": {
+    "observedWidths": [
+      729,
+      1440
+    ],
+    "executionAt729": "visually inspected",
+    "connectionListAt1440": "visually inspected",
+    "connectionListAt729AfterFix": "not rerun; browser automation timed out",
+    "mobile390": "not run"
+  },
+  "completeVisualAcceptance": false,
+  "remaining": [
+    "Final narrow-screen retest after the connection-list overflow fix; browser automation repeatedly timed out."
+  ]
+}
