@@ -19,6 +19,18 @@ async function fixture(root=mkdtempSync(join(tmpdir(),'agenthub-config-')),previ
  const post=(revision:number,patch:unknown)=>fetch(host.url+'/settings',{method:'POST',headers,body:JSON.stringify({revision,patch})})
  return {root,runtime,host,headers,close,post}
 }
+it('serves public preview probes without operator authentication and retains private API authorization',async()=>{
+ const f=await fixture()
+ for(const path of ['/', '/configure', '/configure/', '/configure?preview=1', '/health']){
+  const get=await fetch(f.host.url+path),head=await fetch(f.host.url+path,{method:'HEAD'})
+  expect(get.status).toBe(200);expect(head.status).toBe(200)
+  expect(head.headers.get('content-type')).toBe(get.headers.get('content-type'))
+  expect(head.headers.get('content-security-policy')).toBe(get.headers.get('content-security-policy'))
+  expect(await head.text()).toBe('');expect(await get.text()).not.toBe('')
+ }
+ for(const path of ['/configuration','/entry-workspace','/settings'])expect((await fetch(f.host.url+path,{method:'HEAD'})).status).toBe(401)
+ expect(f.runtime.store.tickets.list()).toHaveLength(0)
+})
 it('returns an authenticated configuration inventory without testing providers or exposing environment secrets',async()=>{
  const previous=process.env.AGENTHUB_CONFIGURATION_TEST_KEY;process.env.AGENTHUB_CONFIGURATION_TEST_KEY='synthetic-do-not-expose-provider-key'
  try{

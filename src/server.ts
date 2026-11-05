@@ -67,12 +67,12 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     let requestOrigin=''
     try{const authority=new URL('http://'+req.headers.host);if(!['127.0.0.1','localhost','[::1]'].includes(authority.hostname)||authority.port!==new URL(endpoint).port||authority.username||authority.password||authority.pathname!=='/'||authority.search||authority.hash)throw Error();requestOrigin=authority.origin}catch{send(res,403,{error:'Use this host’s local origin',code:'host_origin_required'});return}
     if(req.method==='POST'&&req.headers.origin&&req.headers.origin!==requestOrigin){send(res,403,{error:'Use this page’s own origin',code:'same_origin_required'});return}
-    if (req.method === 'GET' && ['/', '/configure', '/configure/'].includes(path)) {
+    if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/'].includes(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
-      res.end(path==='/'?dashboard:configurationPage)
+      res.end(req.method==='HEAD'?undefined:path==='/'?dashboard:configurationPage)
       return
     }
-    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: !unavailable, version: '0.10.0',...(changing?{restarting:true}:{}) }); return }
+    if ((req.method === 'GET' || req.method === 'HEAD') && path === '/health') { send(res, 200, { ok: !unavailable, version: '0.10.0',...(changing?{restarting:true}:{}) }); return }
     if(req.method==='GET'&&path==='/connect-info'){send(res,200,{connectionFile,preview:options.configurationPreview===true});return}
     if(req.method==='GET'&&path==='/session'){send(res,200,{operator:authorized(req)||sessions.authorized(req)});return}
     if(req.method==='POST'&&path==='/pair'){

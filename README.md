@@ -146,7 +146,7 @@ CLI 配置生成器为 Codex 输出 TOML；新版配置页调用官方 `codex mc
 
 ## 验证与范围
 
-`npm run check` 执行 TypeScript 检查及 346 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
+`npm run check` 执行 TypeScript 检查及 347 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
 
 三个 API 后端已通过隔离 HTTP 与真实 Runtime 的工具、子代理、重启后接续测试，测试使用不存在的 Codex 路径。真实商业 API 模型调用尚未验收，详见 [后端验收](docs/BACKEND_ACCEPTANCE.md)。
 
