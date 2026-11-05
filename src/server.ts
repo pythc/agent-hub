@@ -20,6 +20,7 @@ import {OperatorSessions} from './operator-session.ts'
 import {EntrySetup,entryIds} from './entry-setup.ts'
 import {clientIds} from './clients.ts'
 import {clientStatus} from './client-status.ts'
+import {operatorWorkspace,operatorTask} from './operator-workspace.ts'
 
 export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config)=>Runtime;clientHome?:string;clientName?:string}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
@@ -107,6 +108,13 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(endpoint),expiresIn:600});return}
     if(req.method==='POST'&&path==='/logout'){sessions.logout(req,res);send(res,200,{operator:false});return}
     if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
+    if(req.method==='GET'&&path==='/entry-workspace'){
+      const query=new URL(req.url!,'http://localhost').searchParams,input=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25)}).parse(Object.fromEntries(query))
+      send(res,200,operatorWorkspace(runtime,input.offset,input.limit));return
+    }
+    if(req.method==='GET'&&path.startsWith('/entry-workspace/task/')){
+      const task=operatorTask(runtime,decodeURIComponent(path.slice('/entry-workspace/task/'.length)));send(res,task?200:404,task??{code:'task_missing',error:'This work is no longer available.'});return
+    }
     if(req.method==='POST'&&path==='/entry-setup/probe'){const input=z.object({entryId:z.enum(entryIds),credentials:z.object({appId:z.string().trim().min(1).max(16000).optional(),appSecret:z.string().trim().min(1).max(16000).optional()}).strict().optional()}).strict().parse(await body(req));send(res,200,await entries.probe(input.entryId,input.credentials));return}
     if(req.method==='POST'&&path==='/entry-setup/plan'){send(res,200,entries.plan(await body(req)));return}
     if(req.method==='POST'&&path==='/entry-setup/model/plan'){send(res,200,onboarding.connectionPlan(await body(req)));return}

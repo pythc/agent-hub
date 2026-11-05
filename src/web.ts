@@ -94,4 +94,6 @@ function renderSettings(){
 el('connect').onclick=()=>guard(async()=>{token=el('token').value;await refresh()});el('refresh').onclick=()=>guard(refresh);el('search').oninput=()=>{if(state)render()};
 el('send').onclick=()=>guard(async()=>{await api('/send',{source:el('source').value,event:{id:crypto.randomUUID(),thread:el('thread').value,text:el('message').value,addressed:true}});el('message').value='';await refresh()});
 for(const action of ['pause','resume'])el(action).onclick=()=>guard(async()=>{await api('/action',{action});await refresh()});
+const requestedTicket=new URLSearchParams(location.search).get('ticket');if(requestedTicket&&requestedTicket.length<=200)el('search').value=requestedTicket;
+void guard(async()=>{if((await api('/session')).operator){el('token').hidden=true;el('connect').hidden=true;await refresh()}});
 </script></html>`

@@ -524,13 +524,11 @@ function entryVerificationContents() {
     add(
       el('div', 'actions'),
       refresh,
-      done
-        ? null
-        : action(
-            L('Start a new verification', '重新开始验证'),
-            startEntryVerification,
-            'text-action'
-          )
+      action(
+        done ? L('Verify again', '重新验证') : L('Start a new verification', '重新开始验证'),
+        startEntryVerification,
+        'text-action'
+      )
     )
   )
   if (!entryState.polls && !done)

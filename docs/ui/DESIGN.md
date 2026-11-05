@@ -132,3 +132,7 @@ Buttons and navigation have 7px corners, inputs 6px and panels 12px. The native 
 - Keep the operator’s edits available across section and language changes.
 - Never use a health dot or color change as the only status message.
 - Never present history restoration or conflict resolution as a completed save.
+
+## Operator revision integration
+
+The supplied operator revision now provides the management shell, attention/work composition, searchable catalogue and task drawer. It uses scoped tokens (`ink #202721`, `accent #286349`, 14px base, 224px desktop rail); advanced forms retain their original tokens. See [integration details](OPERATOR_INTEGRATION.md) and [acceptance](../UI_INTEGRATION_2026-11-05.md). No illustrative preview records are used as live data.

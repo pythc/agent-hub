@@ -537,6 +537,10 @@ function entryCatalogue() {
   return result
 }
 function renderEntrySurface() {
+  if (entryState.role === 'operator' && S.authed && entryState.data) {
+    renderOperatorWorkspace()
+    return
+  }
   document.documentElement.lang = lang
   document.title = L('Connections & attention', '入口与待处理') + ' · AgentHub'
   const skip = el('a', 'skip', L('Skip to content', '跳至主要内容'))

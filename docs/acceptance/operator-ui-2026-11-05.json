@@ -1,0 +1,88 @@
+{
+  "at": "2026-11-05T09:06:21.034Z",
+  "scope": "Integrate the supplied operator frontend with the existing host; no new platform adapters or commercial model claims.",
+  "version": "0.10.0",
+  "regression": {
+    "typecheck": true,
+    "macOS": {
+      "passed": 337,
+      "failed": 0
+    },
+    "linux": {
+      "passed": 337,
+      "failed": 0,
+      "skipped": 0,
+      "environment": "ARM64 Linux in isolated Docker/Bubblewrap",
+      "report": "linux-operator-ui-2026-11-05.json"
+    },
+    "upstreamCore": {
+      "files": 15,
+      "unchangedSHA256": true
+    }
+  },
+  "realCodexRetest": {
+    "startedFromNewFrontend": true,
+    "usedNativeChat": true,
+    "agentRequest": true,
+    "agentStatus": true,
+    "verified": true,
+    "stages": [
+      {
+        "id": "received",
+        "status": "ok"
+      },
+      {
+        "id": "authorized",
+        "status": "ok"
+      },
+      {
+        "id": "executed",
+        "status": "ok"
+      },
+      {
+        "id": "replied",
+        "status": "ok"
+      }
+    ],
+    "actualReply": "Connection verified.",
+    "filesModified": false
+  },
+  "retainedVerifiedEntries": [
+    "feishu",
+    "codex",
+    "cursor",
+    "vscode",
+    "workbuddy",
+    "github"
+  ],
+  "browser": {
+    "verified": [
+      "Actual host records in workspace and six entry statuses",
+      "Real task source context, question and reply in drawer",
+      "Desktop 1440px connection flow and 390px mobile layouts",
+      "English and Simplified Chinese",
+      "Search empty results and in-page search state retention",
+      "Model URL validation and retained input",
+      "Isolated model check/save and readable saved connection label",
+      "Mobile Escape/scrim dismissal and restored menu focus",
+      "Advanced settings entry"
+    ],
+    "pending": [
+      "Final task-console navigation confirmation",
+      "Final screenshot capture and viewport reset after browser automation connection timeout"
+    ],
+    "connectionFailure": "Automation continued timing out after session reset and the user foregrounded the chat. Final console navigation, screenshot capture and viewport reset remain unconfirmed."
+  },
+  "limitations": [
+    "Real WeCom enterprise bot creation remains blocked by enterprise permissions",
+    "Real commercial API calls not validated",
+    "Uninstalled-client product UIs not newly tested",
+    "No new multi-tenant permissions or schema migration"
+  ],
+  "privateData": "Raw native messages, group names/IDs, pairing links, credentials, private backups and client screenshots are not included.",
+  "finalHost": {
+    "servesCurrentFrontend": true,
+    "healthy": true,
+    "previewOpenRequest": "queued"
+  }
+}

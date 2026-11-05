@@ -1,6 +1,6 @@
 # Linux 沙箱与部署验收
 
-当前 0.10.0 已于 2026-11-05 完成复验：Docker Desktop Linux VM、ARM64、内核 `6.12.76-linuxkit`、Node `24.21.0`、Bubblewrap `0.12.0`，测试以 UID 1000 运行。**333 项测试通过，0 失败、0 跳过**，其中 22 项必须实际执行的沙箱/后台作业用例通过。原始逐测试结果见 [机器可读报告](acceptance/linux-entry-setup-2026-11-05.json)。这不是裸机、AMD64 或所有发行版的验收。
+当前 0.10.0 已于 2026-11-05 完成复验：Docker Desktop Linux VM、ARM64、内核 `6.12.76-linuxkit`、Node `24.21.0`、Bubblewrap `0.12.0`，测试以 UID 1000 运行。**337 项测试通过，0 失败、0 跳过**，其中 22 项必须实际执行的沙箱/后台作业用例通过。原始逐测试结果见 [机器可读报告](acceptance/linux-operator-ui-2026-11-05.json)。这不是裸机、AMD64 或所有发行版的验收。
 
 0.7.0 首次验收的 293 项结果仍保存在 [历史报告](acceptance/linux-2026-11-04.json)。0.8.0 的 297 项结果见 [历史配置台报告](acceptance/linux-2026-11-05.json)。0.9.0 的 312 项结果见 [历史首次配置报告](acceptance/linux-onboarding-2026-11-05.json)。0.10.0 加入实际入口配置、操作员配对、来源和模型独立保存、客户端安装与真实回执判定回归。
 

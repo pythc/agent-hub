@@ -146,7 +146,7 @@ CLI 配置生成器为 Codex 输出 TOML；新版配置页调用官方 `codex mc
 
 ## 验证与范围
 
-`npm run check` 执行 TypeScript 检查及 333 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
+`npm run check` 执行 TypeScript 检查及 337 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
 
 三个 API 后端已通过隔离 HTTP 与真实 Runtime 的工具、子代理、重启后接续测试，测试使用不存在的 Codex 路径。真实商业 API 模型调用尚未验收，详见 [后端验收](docs/BACKEND_ACCEPTANCE.md)。
 
@@ -157,3 +157,5 @@ CLI 配置生成器为 Codex 输出 TOML；新版配置页调用官方 `codex mc
 条件自动合并完成隔离 HTTP 成功/故障验收，真实 GitHub 合并仍未验证。尚未完成跨机器、Windows、干净机器、专用 OS 账号及长期运行验收。工作文件和外部副作用不在数据库回退范围内。
 
 0.10.0 的接入页、首次模型配置、真实客户端和原会话回复验收见 [完整记录](docs/ACCEPTANCE_0.10.md)。数据库仍为 schema 5，已演练 0.9.0 → 0.10.0 → 恢复 → 再升级；它不会撤销已经发送到平台的消息。
+
+新版操作员前端已接入真实宿主：固定导航、待处理事项、任务记录、可搜索软件目录、模型服务和原会话详情。接入与浏览器验收见 [前端整合记录](docs/UI_INTEGRATION_2026-11-05.md)。

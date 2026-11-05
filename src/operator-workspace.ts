@@ -1,0 +1,32 @@
+import type {Runtime} from './runtime.ts'
+import {ticketStage,type Ticket,type Trigger} from './vendor/dsh-core/index.ts'
+import type {Approval} from './approvals.ts'
+
+const text=(value:unknown,limit=1800)=>typeof value==='string'?value.slice(0,limit):''
+/** Operator-only projections. No configuration, credentials or native protocol history are copied into the work list. */
+export function operatorWorkspace(host:Runtime,offset=0,limit=25){
+ const status=host.status(),tickets=host.store.tickets.list(),deliveries=host.store.deliveries(),approvals=host.store.list<Approval>('approval').filter(a=>a.status==='pending'&&a.expiresAt>Date.now())
+ const project=(ticket:Ticket)=>{
+  const trigger=host.store.triggers.get(ticket.origin.triggerId),source=host.config.sources.find(s=>s.id===trigger?.source),client=host.store.get<{client:string}>('entry-client-event',ticket.origin.triggerId)?.client
+  const run=host.store.get<any>('run',ticket.id),stage=ticketStage(ticket),last=ticket.assignments.at(-1),report=last?.report
+  const sent=deliveries.some(d=>d.ticketId===ticket.id&&d.kind==='reply'&&d.status==='sent'),uncertain=deliveries.some(d=>d.ticketId===ticket.id&&d.status==='uncertain'),read=!!host.store.get('entry-client-receipt',ticket.id)
+  const pending=approvals.filter(a=>a.ticketId===ticket.id)
+  const state=uncertain||pending.length||ticket.attention||stage.stage==='person'?'attention':run?.phase==='running'||run?.phase==='background'?'running':report?.state==='ready'?(sent&&(!client||read)?'replied':'ready'):ticket.ended?'closed':'queued'
+  const label=host.store.get<any>('entry-label',trigger?.source??'')
+  return {id:ticket.id,title:text(ticket.title,200),state,createdAt:ticket.createdAt,updatedAt:ticket.updatedAt,entryId:client??source?.kind??'generic',context:text(label?.location??source?.repository??'',180),summary:text(ticket.attention?.question??report?.summary,400),question:text(ticket.attention?.question),replySent:sent,replyRead:read,deliveryUncertain:uncertain,approvalIds:pending.map(a=>a.id)}
+ }
+ const all=tickets.map(project).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)),attention=all.filter(t=>t.state==='attention')
+ const represented=new Set(tickets.flatMap(t=>t.origin.triggerIds)),evaluating=new Set(host.store.threads.list().flatMap(t=>t.evaluating?.triggerIds??[]))
+ const understanding=host.store.list<Trigger>('trigger').filter(t=>evaluating.has(t.id)&&!represented.has(t.id)).map(t=>({id:t.id,title:text(t.text,140),state:'understanding',entryId:host.store.get<{client:string}>('entry-client-event',t.id)?.client??host.config.sources.find(s=>s.id===t.source)?.kind??'generic',updatedAt:t.at}))
+ return {at:Date.now(),paused:status.paused,active:status.active,total:all.length,offset,limit,more:offset+limit<all.length,tasks:all.slice(offset,offset+limit),attention:attention.slice(0,50),attentionTotal:attention.length,understanding:understanding.slice(0,25),counts:{running:all.filter(t=>t.state==='running').length,replied:all.filter(t=>t.state==='replied').length,attention:attention.length},sources:host.store.list('source-health'),liveSources:host.store.list('source-live')}
+}
+export function operatorTask(host:Runtime,id:string){
+ const ticket=host.store.tickets.get(id);if(!ticket)return undefined
+ const trigger=host.store.triggers.get(ticket.origin.triggerId),source=host.config.sources.find(s=>s.id===trigger?.source),run=host.store.get<any>('run',id)
+ const summary=operatorWorkspace(host,0,host.store.tickets.list().length).tasks.find(t=>t.id===id)!
+ const rawUrl=trigger?.meta?.url
+ let sourceUrl:string|undefined
+ // Never turn a source-supplied arbitrary URL or protocol into a privileged action link.
+ if(source?.kind==='github'&&typeof rawUrl==='string')try{const url=new URL(rawUrl);if(url.origin==='https://github.com'&&url.pathname.startsWith('/'+source.repository+'/')&&!url.username&&!url.password)sourceUrl=url.href}catch{}
+ return {...summary,message:text(trigger?.text,8000),result:text(run?.result,12000),resultTruncated:typeof run?.result==='string'&&run.result.length>12000,resultResource:'ticket/'+id+'/result',...(sourceUrl?{sourceUrl}:{}),approvals:host.store.list<Approval>('approval').filter(a=>a.ticketId===id&&a.status==='pending'&&a.expiresAt>Date.now()).map(a=>({id:a.id,method:a.native.method,expiresAt:a.expiresAt,request:a.native.params}))}
+}

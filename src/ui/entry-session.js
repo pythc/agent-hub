@@ -48,6 +48,7 @@ window.addEventListener('hashchange', () => {
   if (consumeEntryFragment()) void startEntrySession()
 })
 const entryNames = () => ({
+  local: L('Local assistant', '本机助手'),
   feishu: L('Feishu', '飞书'),
   wecom: L('WeCom', '企业微信'),
   codex: 'Codex',
@@ -261,7 +262,7 @@ async function loadEntryGuide() {
   entryState.publicGuide = data
 }
 async function readEntries() {
-  const data = await api('/entry-setup')
+  const [data] = await Promise.all([api('/entry-setup'), readOperatorWork()])
   if (!Array.isArray(data.entries) || !Number.isInteger(data.revision))
     throw Error('Invalid entry setup response')
   entryState.data = data
