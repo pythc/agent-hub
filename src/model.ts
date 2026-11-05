@@ -1,8 +1,10 @@
+import type {ExecutionContext} from './execution-activity.ts'
 export interface NativeControl { steer(text:string):Promise<void>; interrupt():Promise<void>;refresh?(instructions:string):Promise<void> }
 export interface NativeRequest { id:string; method:string; params:any }
 export interface ToolSpec {type:'function';name:string;description:string;inputSchema:Record<string,unknown>}
 export interface ToolContent {type:'inputText'|'inputImage';text?:string;imageUrl?:string}
 export interface ModelRequest {
+  activity?:ExecutionContext
   cwd: string; instructions: string; input: string; schema: Record<string, unknown>
   role?: 'router'|'worker'|'subagent'; backendId?:string; onBackend?:(id:string)=>void
   model?:string;onModel?:(model:string)=>void

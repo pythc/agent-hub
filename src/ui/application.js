@@ -83,6 +83,7 @@ function languagePicker() {
   return language
 }
 function render(focusTitle = false) {
+  executionUnmount()
   const focused = document.activeElement,
     focusId = focused?.id,
     start = focused?.selectionStart,

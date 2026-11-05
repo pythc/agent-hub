@@ -31,23 +31,6 @@ function controlActions(kind){
  const cancel=opButton(L('Reload saved settings','重新载入已保存设置'),()=>{if(controlDraft(kind).dirty&&!confirm(L('Discard these unsaved changes?','放弃这些未保存的修改？')))return;void run('refresh',async()=>{if(dirty())throw Error(L('Save or discard the advanced-settings draft first.','请先保存或放弃高级设置中的草稿。'));const latest=await snapshot();controlState[kind]=null;controlState.preview=null;adopt(latest);await readEntries()})},'text-button')
  return add(el('div','control-actions'),save,cancel)
 }
-function controlExecution(){
- if(!S.base)return [accessPanel()]
- const draft=controlDraft('execution'),services=controlConnections(),options=services.map(s=>[s.id,s.label]),active=operator.work?.architecture?.workers||[]
- const form=el('fieldset','execution-config');form.disabled=!!S.busy||!!entryState.busy
- const inputs=add(el('div','execution-inputs'),el('span','pipeline-node',L('Connected software','软件入口')),icon('arrow'))
- const router=add(el('section','router-config'),el('h2','','Router'),controlField('router-backend',L('Service','模型服务'),draft.router,v=>{draft.router=v;draft.routerModel='';controlEdit('execution');render()},options),controlField('router-model',L('Model','模型'),draft.routerModel,v=>{draft.routerModel=v;controlEdit('execution')},null,services.find(s=>s.id===draft.router)?.model||L('Service default','服务默认模型')))
- const count=controlField('worker-count',L('Workers','Worker 数量'),String(draft.workers.length),v=>{const n=Number(v);if(n<1||n>10)return;const next=draft.workers.slice(0,n);while(next.length<n){let id=next.length+1;while(next.some(w=>w.id==='worker-'+id))id++;next.push({id:'worker-'+id,backend:draft.workers[0]?.backend??draft.router})}draft.workers=next;controlEdit('execution');render()},Array.from({length:10},(_,i)=>[String(i+1),String(i+1)]))
- const pool=add(el('section','worker-pool-config'),add(el('div','pool-heading'),el('h2','','Workers'),count)),list=el('div','worker-config-list')
- draft.workers.forEach((worker,index)=>{
-  const live=active.find(w=>w.id===worker.id),row=add(el('section','worker-config'),add(el('div','worker-config-title'),el('h3','','Worker '+(index+1)),el('span','worker-live',live?.active?.length?L('Running','执行中')+' · '+live.active.length:L('Idle','空闲'))),controlField('worker-'+index+'-backend',L('Service','模型服务'),worker.backend,v=>{worker.backend=v;delete worker.model;controlEdit('execution');render()},options),controlField('worker-'+index+'-model',L('Model','模型'),worker.model,v=>{worker.model=v;controlEdit('execution')},null,services.find(s=>s.id===worker.backend)?.model||L('Service default','服务默认模型')))
-  if(live?.active?.length)row.append(el('p','worker-task',live.active.map(t=>t.title).join(' · ')))
-  list.append(row)
- })
- pool.append(list);form.append(add(el('div','execution-pipeline'),inputs,router,add(el('div','dispatch-link'),icon('arrow'),el('span','',L('Queue','任务队列'))),pool),el('p','control-hint',L('Changes apply to new conversations. Follow-ups keep their original model.','修改用于新会话；已有会话续办时保留原模型。')),controlActions('execution'))
- if(!services.length)form.prepend(opButton(L('New model service','新建模型服务'),()=>opNavigate('models'),'button','plus'))
- return [form]
-}
 function controlPrompts(){
  if(!S.base)return [accessPanel()]
  const draft=controlDraft('prompts'),tabs=[['shared',L('Shared','共同要求')],['router','Router'],['worker','Worker'],['delivery',L('Reply format','回复格式')]],tab=controlState.promptTab

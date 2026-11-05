@@ -1,0 +1,24 @@
+{
+  "retrievedAt": "2026-11-05T13:37:01.817821+00:00",
+  "origin": "User-owned Tool Access Map study, chat: 复刻 X 链接中的 UI 动效",
+  "visualReference": "https://www.affectui.com/components/tool-access-map",
+  "officialAffectUiProSourceIncluded": false,
+  "files": [
+    {
+      "file": "flow-motion.mjs",
+      "sha256": "bb1f42c225832af85befc448c94838568db3d60bf54f3190d18ea6bdc09d6d22"
+    },
+    {
+      "file": "flow-motion.css",
+      "sha256": "fa633bb7511056bd9fb1bb37055a343b8b42b283bed5b25508eb54de6ed5fcd6"
+    }
+  ],
+  "adaptations": [
+    "IIFE for the existing inline vanilla application",
+    "Shared bus path resolver",
+    "Scroll-triggered layout for sticky tools",
+    "Cancellation rejection handling; stable logical edge IDs",
+    "Separate, explicitly labeled SVG animation preview without host effects",
+    "No fixtures or simulated task execution in the application"
+  ]
+}

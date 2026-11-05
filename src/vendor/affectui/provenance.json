@@ -1,0 +1,21 @@
+{
+  "retrievedAt": "2026-11-05T12:14:45.104399+00:00",
+  "sources": [
+    {
+      "component": "button",
+      "source": "https://www.affectui.com/r/button.json",
+      "licenseReference": "https://www.affectui.com/components/button",
+      "license": "MIT",
+      "sha256": "544eddd98cb2b3cf5625ba3e234464fc098b9b2408e1877d2d218c015805347c",
+      "adaptation": "Original self-contained CSS; native DOM adapter in src/ui/affect-ui.js. React motion/drag mechanics not included."
+    },
+    {
+      "component": "segmented-control",
+      "source": "https://www.affectui.com/r/segmented-control.json",
+      "licenseReference": "https://www.affectui.com/components/segmented-control",
+      "license": "MIT",
+      "sha256": "8a6d4962fad7685b3b54f1a1827226f56b162dc1599e971df5f532ce42d62826",
+      "adaptation": "Original self-contained CSS; native DOM adapter in src/ui/affect-ui.js. React motion/drag mechanics not included."
+    }
+  ]
+}

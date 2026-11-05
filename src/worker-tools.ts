@@ -24,6 +24,10 @@ export const workerSpecs:ToolSpec[]=workerDefinitions.map(d=>({type:'function',n
 export class WorkerTools {
  constructor(private host:Runtime){}
  async call(owner:WorkOwner,name:string,value:unknown):Promise<{contentItems:ToolContent[];success:boolean}>{
+  const run=this.host.store.get<any>('run',owner.ticketId),ticket=this.host.store.tickets.get(owner.ticketId)
+  return this.host.activity.tool(name,{ticketId:owner.ticketId,workerId:run?.workerId,agentId:owner.agentId,sourceId:ticket?.mandate.actor.source,triggerId:ticket?.origin.triggerId},()=>this.invoke(owner,name,value))
+ }
+ private async invoke(owner:WorkOwner,name:string,value:unknown):Promise<{contentItems:ToolContent[];success:boolean}>{
   if(!this.host.validWork(owner))throw Error('Assignment capability has ended')
   const definition=workerDefinitions.find(d=>d.name===name);if(!definition)throw Error('Unknown worker tool')
   const args=definition.validator.parse(value) as any

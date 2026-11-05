@@ -28,6 +28,7 @@ import type {GithubApi} from './connectors/github.ts'
 import {loadManagedConfig} from './managed-config.ts'
 import {workerProfiles} from './worker-pool.ts'
 import type {WorkerProfile} from './backend-config.ts'
+import {ExecutionActivity} from './execution-activity.ts'
 
 
 
@@ -44,6 +45,7 @@ export class Runtime {
   readonly merger:Merger
   readonly setup:Setup
   readonly reviews:Reviews
+  readonly activity:ExecutionActivity
   endpoint?:string
   private readonly controls=new Map<string,NativeControl>()
   private readonly controlRevisions=new Map<string,number>()
@@ -79,6 +81,7 @@ export class Runtime {
     }
     try { loadManagedConfig(config);validateBackendSelection(config);this.store = new Store(join(config.stateDir, 'state.sqlite')) }
     catch (error) { unlinkSync(this.lock); throw error }
+    this.activity = new ExecutionActivity(this.store)
     this.approvals = new Approvals(this.store)
     try{this.settings = new Settings(this.store,config);this.model = options.model ?? new BackendRegistry(config,this.store)}
     catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
@@ -134,10 +137,16 @@ export class Runtime {
     if (ticket.undelivered.length) this.store.enqueue('execute:' + assignment.id + ':' + bodyDigest(ticket.undelivered), 'execute', { ticketId: ticket.id, assignmentId: assignment.id })
   }
   private async runModel(request:ModelRequest):Promise<ModelResult>{
+    const role=request.role??(request.ephemeral?'router':'worker'),context=request.activity??{}
+    const activity=this.activity.begin(role,role,context)
+    const onBackend=request.onBackend,onModel=request.onModel,onTool=request.onTool
+    request={...request,onBackend:id=>{this.activity.update(activity,{backend:id});onBackend?.(id)},onModel:model=>{this.activity.update(activity,{model});onModel?.(model)},...(role==='router'&&onTool?{onTool:(name,args,callId)=>this.activity.tool(name,context,()=>onTool(name,args,callId),activity)}:{})}
+    this.activity.update(activity,{backend:request.backendId,model:request.model})
+    try{
     let threadId=request.threadId
     const originalInput=request.input
     for(let attempt=0;;attempt++){
-      try{return await this.model.run({...request,model:threadId?undefined:request.model??(request.ephemeral?this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;request.onThread?.(id)}})}
+      try{const result=await this.model.run({...request,model:threadId?undefined:request.model??(request.ephemeral?this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;request.onThread?.(id)}});this.activity.finish(activity,'completed');return result}
       catch(error){
         if(request.signal?.aborted||attempt>=3||!/HTTP (408|429|5\d\d)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|connection reset|stream disconnected|temporar(?:y|ily)|error sending request/i.test(String(error)))throw error
         this.store.audit({type:'model.retry',threadId,attempt:attempt+1,error:String(error).slice(0,300)})
@@ -145,6 +154,7 @@ export class Runtime {
         await new Promise(resolve=>setTimeout(resolve,Math.min(10000,1000*2**attempt)))
       }
     }
+    }catch(error){this.activity.finish(activity,request.signal?.aborted?'interrupted':'failed');throw error}
   }
   validWork(owner:WorkOwner):boolean {
     const ticket=this.store.tickets.get(owner.ticketId),assignment=ticket&&latestAssignment(ticket)
@@ -183,7 +193,7 @@ export class Runtime {
       const instructions=compose(this.config,'worker',{cwd:owner.cwd,mandate:ticket.mandate.scope,subagent:true},ticket.mandate.policyVersion)+'\nYou are a managed subagent, not the parent orchestrator. The parent mandate is an upper bound, not a checklist to repeat. Perform only the delegated subtask in the input. Read files directly with superagent_read; do not launch another subagent unless that subtask actually needs delegation. Use superagent_shell for commands, never native shell or native subagents. Do not publish or contact people. Return waiting while owned jobs still run; return ready only with the final subtask result.'
       const revision=this.settings.current().revision,key='agent:'+item.id
       let result
-      try{result=await this.runModel({role:'subagent',backendId:this.config.execution.roles.subagent??this.store.get<Run>('run',item.ticketId)?.backendId,cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??this.store.get<Run>('run',item.ticketId)?.model??this.config.models.worker,threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,tools:this.availableWorkerSpecs(),onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}})}
+      try{result=await this.runModel({activity:{ticketId:item.ticketId,agentId:item.id,workerId:this.store.get<Run>('run',item.ticketId)?.workerId,sourceId:ticket.mandate.actor.source,triggerId:ticket.origin.triggerId},role:'subagent',backendId:this.config.execution.roles.subagent??this.store.get<Run>('run',item.ticketId)?.backendId,cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??this.store.get<Run>('run',item.ticketId)?.model??this.config.models.worker,threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,tools:this.availableWorkerSpecs(),onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}})}
       finally{this.controls.delete(key);this.controlRevisions.delete(key)}
       const output=report.parse(JSON.parse(result.text));threadId=result.threadId
       this.store.put('transcript',result.turnId,{ticketId:item.ticketId,agentId:item.id,threadId,turnId:result.turnId,text:result.text,at:Date.now()})
@@ -349,6 +359,7 @@ export class Runtime {
     this.controllers.set('assess:' + candidate.evalId, controller)
     try {
       const result = await this.runModel({
+        activity:{sourceId:source.id,triggerId:candidate.triggers[0]?.id},
         signal: controller.signal, cwd: source.cwd, ephemeral: true, sandbox: 'read-only', schema: assessmentSchema,
         managed:true,privateState:this.config.stateDir,tools:workerSpecs.filter(t=>t.name==='superagent_read'),onTool:async(name,args)=>{if(name!=='superagent_read')throw Error('Router has read-only tools');const result=await this.resources.read(args);return result?.kind==='image'?{success:true,contentItems:[{type:'inputImage',imageUrl:'data:'+result.mimeType+';base64,'+result.data}]}:{success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}},
         instructions: compose(this.config,'router',{source:source.id,cwd:source.cwd},candidate.policyVersion),
@@ -388,7 +399,7 @@ export class Runtime {
     const controller=new AbortController(),key='followup:'+triggerId
     this.controllers.set(key,controller)
     try{
-    const result=await this.runModel({signal:controller.signal,cwd:source.config.cwd,managed:true,privateState:this.config.stateDir,ephemeral:true,sandbox:'read-only',schema:assessmentSchema,
+    const result=await this.runModel({activity:{sourceId:source.config.id,triggerId},signal:controller.signal,cwd:source.config.cwd,managed:true,privateState:this.config.stateDir,ephemeral:true,sandbox:'read-only',schema:assessmentSchema,
       instructions:'Classify this worker-owned follow-up only for an explicit human request to stop selected work. Do not execute work or use tools. Return action stop with an exact targetTicketId from the list only when the person clearly requests it. Otherwise return ignore, targetTicketId null, rules [] and ruleAssessments []. The worker handles all other follow-ups. '+this.config.prompts.router,
       input:JSON.stringify({trigger,tickets:tickets.map(t=>({id:t.id,title:t.title,scope:t.mandate.scope}))})})
     const decision=assessment.parse(JSON.parse(result.text))
@@ -426,6 +437,7 @@ export class Runtime {
       const specs=this.availableWorkerSpecs(),toolsDigest=digest(JSON.stringify(specs)),legacy=!!saved?.threadId&&saved.toolsDigest!==toolsDigest&&(!this.model.describe||this.model.describe(saved.threadId).kind==='codex')
       this.work.turnStarted(ticket.id,assignmentId)
       const result = await this.runModel({
+        activity:{ticketId:ticket.id,workerId:run.workerId,sourceId:source.id,triggerId:ticket.origin.triggerId},
         role:'worker',backendId:dispatch?.profile.backend,onBackend:id=>{run.backendId=id;run.backendKind=this.model instanceof BackendRegistry?this.model.definition(id).kind:'custom';persist()},
         model:saved?.threadId?undefined:dispatch?.profile.model??(this.config.execution.workers?undefined:this.config.models.worker),
         title: ticket.title, cwd: run.cwd, sandbox: source.sandbox, threadId: saved?.threadId, schema: reportSchema,archiveOnComplete:true,

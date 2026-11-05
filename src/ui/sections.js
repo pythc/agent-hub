@@ -8,7 +8,7 @@ function catalog() {
     }))
   )
 }
-function renderExecution() { return controlExecution() }
+function renderExecution() { return controlExecution(false) }
 
 const enabled = (v) => (v ? L('Enabled', '已启用') : L('Disabled', '已停用'))
 function renderSources() {

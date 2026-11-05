@@ -142,7 +142,7 @@ function renderOperatorWorkspace(){
   if(entryState.error){const error=add(el('div','alert error'),el('p','',L(...entryState.error.text)),entryState.error.detail?detail(L('Details','详情'),raw(entryState.error.detail)):null,opButton(L('Refresh','刷新'),refreshEntries,'button'));error.id='entry-error';error.tabIndex=-1;error.setAttribute('role','alert');main.append(error)}
   if(operator.error)main.append(add(el('div','alert warning'),el('p','',L('Work status could not be loaded. Existing values may be outdated.','任务状态未能读取，已有数据可能已过时。')),opButton(L('Refresh','刷新'),refreshEntries,'button')))
   const content=el('fieldset','operator-body');content.disabled=!!entryState.busy||!!S.busy
-  const page=entryState.page;content.append(...(page==='catalog'?opCatalogue():page==='detail'?opConnection():page==='activity'?opActivity():page==='attention'?opOverview(true):page==='models'?opModels():page==='execution'?[opHeading(L('Execution','执行')), ...controlExecution()]:page==='prompts'?[opHeading(L('Prompts','提示词')), ...controlPrompts()]:page==='usage'?opUsage():opOverview()).filter(Boolean))
+  const page=entryState.page;content.append(...(page==='catalog'?opCatalogue():page==='detail'?opConnection():page==='activity'?opActivity():page==='attention'?opOverview(true):page==='models'?opModels():page==='execution'?controlExecution():page==='prompts'?[opHeading(L('Prompts','提示词')), ...controlPrompts()]:page==='usage'?opUsage():opOverview()).filter(Boolean))
   main.append(content);if(S.notice||S.busy)main.prepend(noticeView());if(entryState.busy)main.append(el('p','entry-progress',L('Working…','正在处理…')))
   const body=add(el('div','main-shell'),top,main)
   const scrim=opButton(L('Close navigation background','关闭导航背景'),()=>setOperatorMenu(false),'nav-scrim')

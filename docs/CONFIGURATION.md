@@ -104,3 +104,7 @@ Backups include SQLite, effective configuration and managed API/bot credentials.
 日常使用者只需要管理员发来的使用说明：在原来的群聊、私聊或客户端交代任务，在原处补充和接收成果。不要给普通使用者分发管理令牌。网页聊天是可选诊断，管理页优先展示需要人处理的事和入口状态。
 
 平台审批、首次信任和成员授权无法靠界面省略；页面会指出具体缺项。真实企微目前因企业创建权限限制未完成，不能把隔离测试当作真实开通。
+
+## Execution and recorded calls
+
+Execution opens on **Calls**: select a Router/Worker tab to put it at the center of the call map. Click a tool or count for recorded status, duration and actual model. **Preview animation** shows a labeled visual overlay without executing work; outside preview, flow follows recorded running operations. Switch to **Configuration** for independent Router/Worker settings, 1–10 Workers, new connections/services and instructions. See [the execution UI and acceptance record](EXECUTION_UI_2026-11-05.md) for prompt scope, retained drafts and validation boundaries.

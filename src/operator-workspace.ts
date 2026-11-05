@@ -3,13 +3,19 @@ import {ticketStage,canRetry,type Ticket,type Trigger} from './vendor/dsh-core/i
 import type {Approval} from './approvals.ts'
 import {workerProfiles} from './worker-pool.ts'
 import type {Run} from './store.ts'
+import {workerSpecs} from './worker-tools.ts'
 
 const text=(value:unknown,limit=1800)=>typeof value==='string'?value.slice(0,limit):''
 /** Operator-only projections. No configuration, credentials or native protocol history are copied into the work list. */
 export function operatorWorkspace(host:Runtime,offset=0,limit=25){
  const status=host.status(),tickets=host.store.tickets.list(),deliveries=host.store.deliveries(),approvals=host.store.list<Approval>('approval').filter(a=>a.status==='pending'&&a.expiresAt>Date.now())
  const runs=host.store.list<Run>('run'),model=(id:string)=>{const d=host.config.backends[id];return d&&d.kind!=='codex'?d.model:host.config.model},router=host.config.execution.roles.router??host.config.execution.backend
- const architecture={router:{backend:router,model:host.config.models.router??model(router)},workers:workerProfiles(host.config).map(w=>({...w,model:w.model??model(w.backend),active:runs.filter(r=>r.workerId===w.id&&['starting','running','background'].includes(r.phase)).map(r=>({ticketId:r.ticketId,title:tickets.find(t=>t.id===r.ticketId)?.title??'',model:r.model,backend:r.backendId,reserve:r.interactiveReserve??false}))})),interactiveReserve:1}
+ const activity=host.activity.list().reverse().sort((a,b)=>b.startedAt-a.startedAt).map(call=>{
+  const source=host.config.sources.find(s=>s.id===call.sourceId),client=call.triggerId&&host.store.get<{client:string}>('entry-client-event',call.triggerId)?.client
+  const parent=call.parentId?host.store.get<import('./execution-activity.ts').ExecutionCall>('execution-call',call.parentId):undefined,backendId=call.backend??parent?.backend,backend=backendId?host.config.backends[backendId]:undefined
+  return {id:call.id,parentId:call.parentId,kind:call.kind,name:call.name,workerId:call.workerId,subagent:!!call.agentId,ticketId:call.ticketId,entryId:client||source?.kind||'generic',backend:backend?.label??backendId,model:call.model??parent?.model,state:call.state,startedAt:call.startedAt,endedAt:call.endedAt}
+ })
+ const architecture={router:{backend:router,model:host.config.models.router??model(router)},workers:workerProfiles(host.config).map(w=>({...w,model:w.model??model(w.backend),active:runs.filter(r=>r.workerId===w.id&&['starting','running','background'].includes(r.phase)).map(r=>({ticketId:r.ticketId,title:tickets.find(t=>t.id===r.ticketId)?.title??'',model:r.model,backend:r.backendId,reserve:r.interactiveReserve??false}))})),interactiveReserve:1,activity,tools:workerSpecs.filter(s=>host.config.work.sandboxDriver!=='disabled'||s.name!=='superagent_shell').map(s=>s.name)}
  const project=(ticket:Ticket)=>{
   const trigger=host.store.triggers.get(ticket.origin.triggerId),source=host.config.sources.find(s=>s.id===trigger?.source),client=host.store.get<{client:string}>('entry-client-event',ticket.origin.triggerId)?.client
   const run=host.store.get<any>('run',ticket.id),stage=ticketStage(ticket),last=ticket.assignments.at(-1),report=last?.report
