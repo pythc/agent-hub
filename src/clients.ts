@@ -23,13 +23,14 @@ export const clientInfo:Record<ClientId,{docs:string;file:string;root:string;pro
  kiro:{docs:'https://kiro.dev/docs/mcp/configuration/',file:'.kiro/settings/mcp.json',root:'mcpServers',project:'.kiro/settings/mcp.json'},
  codex:{docs:'https://learn.chatgpt.com/docs/extend/mcp?surface=cli',file:'.codex/config.toml',root:'mcp_servers'},
 }
-export interface ClientOptions {client:ClientId;url?:string;tokenFile?:string;root?:string;node?:string;name?:string;workspace?:string;home?:string}
+export interface ClientOptions {client:ClientId;url?:string;tokenFile?:string;root?:string;node?:string;name?:string;workspace?:string;home?:string;tagged?:boolean}
 export function clientConfig(o:ClientOptions){
  if(!clientIds.includes(o.client))throw Error('Unknown client')
  const root=resolve(o.root??fileURLToPath(new URL('..',import.meta.url))),url=new URL(o.url??'http://127.0.0.1:4319')
  if(url.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(url.hostname)||url.pathname!=='/'||url.search||url.hash||url.username||url.password)throw Error('Use a loopback host origin')
  const name=o.name??'agent-hub';if(!/^[a-z][a-z0-9_-]{0,63}$/.test(name))throw Error('Invalid server name')
  const server={command:o.node??process.execPath,args:['--import',join(root,'node_modules/tsx/dist/loader.mjs'),join(root,'src/cli.ts'),'mcp',url.origin,resolve(o.tokenFile??join(root,'.superagent/access-token'))]}
+ if(o.tagged)server.args.push('--client',o.client)
  const info=clientInfo[o.client]
  const definition=o.client==='opencode'?{type:'local',command:[server.command,...server.args],enabled:true}:['vscode','claude-code','copilot','workbuddy'].includes(o.client)?{type:'stdio',...server}:server
  const config={[info.root]:{[name]:definition}}

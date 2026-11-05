@@ -92,6 +92,11 @@ function render(focusTitle = false) {
     restorePageFocus(focusTitle, focusId, start, end)
     return
   }
+  if (S.surface === 'entries') {
+    renderEntrySurface()
+    restorePageFocus(focusTitle, focusId, start, end)
+    return
+  }
   const section = sections.find((s) => s[0] === S.page) || sections[0],
     name = L(section[1], section[2])
   document.documentElement.lang = lang
@@ -152,7 +157,7 @@ function render(focusTitle = false) {
     ),
     add(
       el('div', 'tools'),
-      action(L('Setup guide', '设置向导'), () => switchSurface('guide'), 'text-action'),
+      action(L('Connections & attention', '入口与待处理'), () => entryNavigate('home'), 'text-action'),
       add(el('label', 'inline'), icon('lang'), language),
       home
     )
@@ -262,9 +267,9 @@ async function api(path, body, publicRead = false) {
     headers,
     cache: 'no-store',
     redirect: 'error',
-    credentials: 'omit',
+    credentials: 'same-origin',
     signal: AbortSignal.timeout(
-      ['/setup-check', '/onboarding/check', '/onboarding/apply'].includes(path) ? 120000 : 30000
+      ['/setup-check', '/onboarding/check', '/onboarding/apply', '/entry-setup/probe', '/entry-setup/apply', '/entry-setup/install', '/entry-setup/model/check', '/entry-setup/model/apply'].includes(path) ? 120000 : 30000
     )
   })
   const payload = await res.json().catch(() => null)
@@ -382,14 +387,15 @@ async function run(label, fn) {
     if (S.latest || (label === 'save' && S.notice?.level === 'error')) revealRecovery()
   }
 }
-async function connectHost(credential = S.typed) {
-  if (!credential.trim()) return
+async function connectHost(credential = S.typed, cookieSession = false) {
+  if (!credential.trim() && !cookieSession) return
   await run('connect', async () => {
     S.token = credential.trim()
     S.typed = ''
     const [snap] = await Promise.all([snapshot(), runtimeStatus(), loadGuideContext(), health()])
     adopt(snap)
     S.authed = true
+    if (S.surface === 'entries') await readEntries()
     if (!S.latest) announce(L('Connected to the host.', '已连接到宿主。'))
   })
 }
@@ -661,10 +667,11 @@ async function previewPrompt() {
   })
 }
 window.addEventListener('beforeunload', (e) => {
-  if (dirty() || guideHasDraft()) {
+  if (dirty() || guideHasDraft() || entryHasDraft()) {
     e.preventDefault()
     e.returnValue = ''
   }
 })
 render()
-Promise.all([health(), loadConnectInfo()]).then(() => render())
+health().then(() => render())
+void startEntrySession()

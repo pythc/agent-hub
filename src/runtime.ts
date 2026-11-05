@@ -313,6 +313,16 @@ export class Runtime {
     }
     this.store.jobState(job.id, 'done')
   }
+  private connectionCheck(triggers:Trigger[]){
+    const checks=this.store.list<{sourceId:string;code:string;createdAt:number;language?:string}>('entry-verification')
+    for(const trigger of triggers){
+      if(!trigger.human||!trigger.addressed)continue
+      const source=this.sources.get(trigger.source)?.config,command=source?.feishu?.command??source?.github?.command??''
+      const check=checks.find(c=>c.sourceId===trigger.source&&Date.parse(trigger.at)>=c.createdAt&&Date.now()-c.createdAt<86400000&&[c.code,(command+' '+c.code).trim()].includes(trigger.text.trim()))
+      if(check)return {code:check.code,purpose:'entry-connectivity',instruction:'The operator generated this reserved connectivity check. Its code is a correlation marker, not a ticket ID. Confirm this request by replying exactly '+(check.language==='en'?'Connection verified.':'接入验收成功。')+' Do not read unrelated work, call tools or modify files. Normal authorization still applies.'}
+    }
+    return undefined
+  }
   private async assess(candidate: Candidate): Promise<void> {
     const current = this.engine.candidate(candidate.triggers[0]!.id)
     if (current?.evalId !== candidate.evalId) return
@@ -328,7 +338,7 @@ export class Runtime {
         signal: controller.signal, cwd: source.cwd, ephemeral: true, sandbox: 'read-only', schema: assessmentSchema,
         managed:true,privateState:this.config.stateDir,tools:workerSpecs.filter(t=>t.name==='superagent_read'),onTool:async(name,args)=>{if(name!=='superagent_read')throw Error('Router has read-only tools');const result=await this.resources.read(args);return result?.kind==='image'?{success:true,contentItems:[{type:'inputImage',imageUrl:'data:'+result.mimeType+';base64,'+result.data}]}:{success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}},
         instructions: compose(this.config,'router',{source:source.id,cwd:source.cwd},candidate.policyVersion),
-        input: JSON.stringify({ strength: candidate.strength, rules: this.config.rules, triggers: candidate.triggers, existing: candidates.map(t => ({ id: t.id, title: t.title, scope: t.mandate.scope })) }),
+        input: JSON.stringify({ strength: candidate.strength, rules: this.config.rules, triggers: candidate.triggers, connectionCheck:this.connectionCheck(candidate.triggers), existing: candidates.map(t => ({ id: t.id, title: t.title, scope: t.mandate.scope })) }),
       })
       const decision = assessment.parse(JSON.parse(result.text))
       const triggerId = candidate.triggers[0]!.id
@@ -407,7 +417,7 @@ export class Runtime {
         title: ticket.title, cwd: run.cwd, sandbox: source.sandbox, threadId: saved?.threadId, schema: reportSchema,archiveOnComplete:true,
         instructions,
         managed:true,privateState:this.config.stateDir,...(legacy?{workerMcp:this.workerMcp(owner)}:{tools:specs}),onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),
-        input: JSON.stringify({ sourceContext, mandate: ticket.mandate, relatedThreads:ticket.follows, ...(!saved ? { origin: ticket.origin.triggerIds.map(id => this.store.triggers.get(id)) } : {}), inputs: inputs.map(i => i.kind === 'trigger' ? { ...i, event: this.store.triggers.get(i.triggerId) } : i) }),
+        input: JSON.stringify({ sourceContext, mandate: ticket.mandate, connectionCheck:this.connectionCheck(ticket.origin.triggerIds.map(id=>this.store.triggers.get(id)).filter((t):t is Trigger=>!!t)), relatedThreads:ticket.follows, ...(!saved ? { origin: ticket.origin.triggerIds.map(id => this.store.triggers.get(id)) } : {}), inputs: inputs.map(i => i.kind === 'trigger' ? { ...i, event: this.store.triggers.get(i.triggerId) } : i) }),
         signal: controller.signal,
         onHumanRequest:request=>this.approvals.request(ticket.id,request),
         onActive:control=>{this.controls.set(ticket.id,control);this.controlRevisions.set(ticket.id,promptRevision)},
@@ -437,7 +447,7 @@ export class Runtime {
         const answered = [...inputs].reverse().find(i => i.kind === 'trigger' && i.human && !i.context)
         const answerId = answered?.kind === 'trigger' && !output.question&&!background ? answered.triggerId : undefined
         this.engine.report(ticket.id, { state:background?'progress':pending&&!handoff?'waiting':output.state, summary: background?'Managed background work is running. '+output.summary:output.summary, question: pending&&!handoff ? null : output.question, ...(!pending && answerId ? { answers: answerId } : {}) })
-        if (!pending && output.question) this.engine.reply({ purpose: 'attention', ticketId: ticket.id, text: output.question })
+        if (!pending && output.question) this.engine.reply({ purpose: 'attention', ticketId: ticket.id, question:output.question, text: output.question })
         else if (output.reply && !pending && output.state === 'ready') this.engine.reply({ purpose: answerId ? 'answer' : 'result', ticketId: ticket.id, ...(answerId ? { triggerId: answerId } : {}), text: output.reply })
         run.phase = background?'background':'idle'; run.threadId = result.threadId; run.result = output.reply; persist()
         const updated = this.store.tickets.get(ticket.id)!

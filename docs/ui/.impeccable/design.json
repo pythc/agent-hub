@@ -84,7 +84,7 @@
     }
   ],
   "narrative": {
-    "overview": "AgentHub opens with a four-step task guide at /configure. First-time users choose an AI service, a place to give requests and a dedicated work folder, then check and apply their choices. The saved browser inbox accepts natural-language tasks, pairs each request with its reply and offers an optional connection test. Advanced settings remain one action away, including a direct /configure#advanced bookmark. Both views retain their own draft while the tab stays open.",
+    "overview": "AgentHub distinguishes ordinary users from operators. Users open shared entry instructions. Operators pair once and manage real attention items and software connections. Setup ends with observed request and reply evidence in the selected software. Browser chat is optional diagnostics.",
     "dos": [
       "Show whether a value comes from the saved host revision or the editable draft.",
       "Keep the operator’s edits available across section and language changes."

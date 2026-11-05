@@ -2,7 +2,11 @@
 
 AgentHub 是独立后台宿主，客户端通过 stdio MCP 桥访问它。关闭客户端不会关闭宿主。执行任务的后端可选择原生 Codex、OpenAI 两种协议或 Anthropic Messages；客户端自己的聊天模型负责调用操作员工具，二者独立。见 [后端配置](../BACKENDS.md)。
 
-先安装 Node 22.19+、配置执行后端（默认需要登录 Codex CLI），在源码根目录运行 `npm ci`，然后 `./start.sh serve examples/config.json`。宿主 URL 默认是 `http://127.0.0.1:4319`，令牌文件默认 `.superagent/access-token`。多个实例必须使用不同端口与状态目录。
+先安装 Node 22.19+，在源码根目录运行 `npm ci`，再运行 `./start.sh setup`。打开终端输出的一次性管理链接，选择“部署或管理助手”，选 Codex、Cursor、VS Code 或 WorkBuddy。页面检查现有配置、保存命名 MCP 条目，再指引你回到对应软件完成真实请求与回复验收；缺少执行模型时在同页配置。
+
+这是宿主电脑上个人使用的操作员连接，不能把管理令牌分给普通员工。团队成员优先通过部署者授权的飞书、企微或 GitHub 入口使用。复制出的使用说明不含令牌；localhost 指引链接只适合同机或安全隧道。
+
+已有部署可继续 `./start.sh serve examples/config.json`。该示例默认 URL 为 `http://127.0.0.1:4319`，令牌文件为 `.superagent/access-token`；个人 setup 自动分配并保存端口。多个实例必须使用不同端口与状态目录。
 
 ## 生成、安装和回退
 
@@ -47,17 +51,19 @@ AgentHub 是独立后台宿主，客户端通过 stdio MCP 桥访问它。关闭
 
 VS Code 原生 `servers` 与 Copilot 通用 `mcpServers` 是不同格式，不能直接混用。Cline 的默认路径针对 CLI；扩展中从 MCP Servers → Configure → Configure MCP Servers 打开实际文件，再用 `--file`。Roo 优先使用已文档化的项目配置；全局路径受 VS Code 产品、profile 和远端环境影响，同样从 UI 获取。
 
-Codex 安装器只生成 TOML，拒绝自动改写现有 TOML。使用官方 MCP 设置入口合并条目，保留原有工具审批。移动源码或换 Node 路径后必须重新生成。
+CLI 的通用配置生成器为 Codex 输出 TOML 模板；新版配置页的安装按钮调用官方 `codex mcp list/add`，保存私有备份并核对安装结果，不自行重写 TOML。同名冲突拒绝覆盖，原有工具审批保留。移动源码或换 Node 路径后必须重新生成。
 
 ## 界面接入步骤
 
-Cursor：Customize → MCPs，应看到 `agent-hub` 和 20 tools enabled。打开独立测试目录，在聊天中实际调用 `agent_status`、`agent_read(resource="catalog")`，再发出 `agent_send` 并等后台结果。
+Cursor：Customize → MCPs，应看到 `agent-hub` 和 21 tools enabled。打开独立测试目录，在聊天中实际调用 `agent_status`、`agent_read(resource="catalog")`，再发出 `agent_request(text=...)`，按返回的 discussion/requestId 查询后台结果。
 
-VS Code：只信任自己的测试目录。命令面板运行 MCP: List Servers，选择 agent-hub → Start Server；输出应显示运行和工具发现。聊天的写工具确认独立于服务启动，按实际请求批准。当前 VS Code 也支持 Copilot 格式；本机实测使用 `.vscode/mcp.json` 的原生格式。
+VS Code：只信任自己的测试目录。命令面板运行 MCP: List Servers，选择 agent-hub → Start Server；输出应显示运行和工具发现。聊天的写工具确认独立于服务启动，按实际请求批准。本轮实测使用原生 `servers` 格式；不要将通用 `mcpServers` 根字段直接复制进原生文件。
 
 WorkBuddy：专家·技能·连接器 → 连接器 → 自定义连接器，搜索 agent-hub。首次连接必须在管理器中点击“信任”；仅写 JSON 或重启不会代替信任。确认启用和工具可见，再回到新建的合成工作区聊天调用。客户端可能缓存工具列表；修改配置后重新启动或新开会话。
 
-未安装的客户端完成配置适配不等于产品实测。安装后先检查 MCP 状态，再在界面发送真实请求、等后台结束、读回结果。完整验收范围见 [验收记录](ACCEPTANCE.md)。
+未安装的客户端完成配置适配不等于产品实测。安装后先检查 MCP 状态，再在界面发送真实请求、等后台结束、读回结果。本轮 Codex、Cursor、VS Code、WorkBuddy 实机均取回并显示了真实后台回复；完整路径、首次失败和修复见 [0.10 验收记录](../ACCEPTANCE_0.10.md)。
+
+`agent_request` 自动选择本机操作员来源并生成请求标识。`agent_status(discussion=..., requestId=...)` 返回有限的工作摘要及回复，避免长历史占满客户端上下文。完整结果、历史和附件通过 `agent_read` 的资源接口读取；生成配置和 MCP 连通本身不等于真实任务验收。
 
 ## 常见故障
 

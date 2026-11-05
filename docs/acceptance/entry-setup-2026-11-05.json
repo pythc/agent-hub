@@ -1,0 +1,320 @@
+{
+  "at": "2026-11-05T07:49:58.271Z",
+  "version": "0.10.0",
+  "sourceBase": "a4dd2de9c9f611ea2d65d22388122a6c963558d7",
+  "scope": "Entry-first setup and real original-client request/execution/reply acceptance; not a complete reacceptance of every prototype behavior.",
+  "regression": {
+    "macOS": {
+      "typecheck": true,
+      "passed": 333,
+      "failed": 0
+    },
+    "linux": {
+      "report": "linux-entry-setup-2026-11-05.json",
+      "typecheck": true,
+      "passed": 333,
+      "failed": 0
+    },
+    "upstream": {
+      "files": 15,
+      "sha256Unchanged": true,
+      "originalTests": 113
+    }
+  },
+  "realEntries": [
+    {
+      "entry": "feishu",
+      "verified": true,
+      "stages": [
+        {
+          "id": "received",
+          "status": "ok"
+        },
+        {
+          "id": "authorized",
+          "status": "ok"
+        },
+        {
+          "id": "executed",
+          "status": "ok"
+        },
+        {
+          "id": "replied",
+          "status": "ok"
+        }
+      ],
+      "realHumanOrNativeClient": true,
+      "realModelBackend": "Codex",
+      "replyReadBack": true,
+      "firstAttempt": "clarification and attention reply failure",
+      "recovery": "Reviewed complete native turn for scoped read/idempotent ACK; clarified test marker and controlled retry on same native thread; read actual topic reply."
+    },
+    {
+      "entry": "codex",
+      "verified": true,
+      "stages": [
+        {
+          "id": "received",
+          "status": "ok"
+        },
+        {
+          "id": "authorized",
+          "status": "ok"
+        },
+        {
+          "id": "executed",
+          "status": "ok"
+        },
+        {
+          "id": "replied",
+          "status": "ok"
+        }
+      ],
+      "realHumanOrNativeClient": true,
+      "realModelBackend": "Codex",
+      "replyReadBack": true,
+      "copiedPhraseRetest": {
+        "language": "en",
+        "nativeChat": true,
+        "agentRequest": true,
+        "agentStatus": true,
+        "actualReply": "Connection verified.",
+        "stages": [
+          {
+            "id": "received",
+            "status": "ok"
+          },
+          {
+            "id": "authorized",
+            "status": "ok"
+          },
+          {
+            "id": "executed",
+            "status": "ok"
+          },
+          {
+            "id": "replied",
+            "status": "ok"
+          }
+        ],
+        "serverConfirmed": true
+      }
+    },
+    {
+      "entry": "cursor",
+      "verified": true,
+      "stages": [
+        {
+          "id": "received",
+          "status": "ok"
+        },
+        {
+          "id": "authorized",
+          "status": "ok"
+        },
+        {
+          "id": "executed",
+          "status": "ok"
+        },
+        {
+          "id": "replied",
+          "status": "ok"
+        }
+      ],
+      "realHumanOrNativeClient": true,
+      "realModelBackend": "Codex",
+      "replyReadBack": true
+    },
+    {
+      "entry": "vscode",
+      "verified": true,
+      "stages": [
+        {
+          "id": "received",
+          "status": "ok"
+        },
+        {
+          "id": "authorized",
+          "status": "ok"
+        },
+        {
+          "id": "executed",
+          "status": "ok"
+        },
+        {
+          "id": "replied",
+          "status": "ok"
+        }
+      ],
+      "realHumanOrNativeClient": true,
+      "realModelBackend": "Codex",
+      "replyReadBack": true,
+      "firstAttempt": "Full status truncated in native client; reply not visible",
+      "recovery": "Compact status; actual read again and visible result in same chat."
+    },
+    {
+      "entry": "workbuddy",
+      "verified": true,
+      "stages": [
+        {
+          "id": "received",
+          "status": "ok"
+        },
+        {
+          "id": "authorized",
+          "status": "ok"
+        },
+        {
+          "id": "executed",
+          "status": "ok"
+        },
+        {
+          "id": "replied",
+          "status": "ok"
+        }
+      ],
+      "realHumanOrNativeClient": true,
+      "realModelBackend": "Codex",
+      "replyReadBack": true
+    },
+    {
+      "entry": "github",
+      "verified": true,
+      "stages": [
+        {
+          "id": "received",
+          "status": "ok"
+        },
+        {
+          "id": "authorized",
+          "status": "ok"
+        },
+        {
+          "id": "executed",
+          "status": "ok"
+        },
+        {
+          "id": "replied",
+          "status": "ok"
+        }
+      ],
+      "realHumanOrNativeClient": true,
+      "realModelBackend": "Codex",
+      "replyReadBack": true,
+      "issue": "https://github.com/pythc/110lab-website/issues/37",
+      "cleanup": "Issue closed with evidence comments retained; no code, PR or merge changes."
+    }
+  ],
+  "protocolOnly": {
+    "clientProfiles": 14,
+    "tools": 21,
+    "notEquivalentToProductUIAcceptance": true,
+    "profiles": [
+      {
+        "client": "generic",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "cursor",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "vscode",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "copilot",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "workbuddy",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "claude-code",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "claude-desktop",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "gemini",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "qwen",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "opencode",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "cline",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "roo",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "kiro",
+        "tools": 21,
+        "protocolPassed": true
+      },
+      {
+        "client": "codex",
+        "tools": 21,
+        "protocolPassed": true
+      }
+    ]
+  },
+  "upgrade": {
+    "report": "upgrade-entry-setup-2026-11-05.json",
+    "baseline": "0.9.0",
+    "target": "0.10.0",
+    "sameSchema": 5,
+    "restoreDoesNotReverseExternalSideEffects": true
+  },
+  "ui": {
+    "defaultLanguage": "en",
+    "languages": [
+      "en",
+      "zh-CN"
+    ],
+    "roles": [
+      "ordinary-user",
+      "operator"
+    ],
+    "responsiveFixtureWidths": [
+      1440,
+      390,
+      320
+    ],
+    "newUserStudy": false
+  },
+  "pending": [
+    "Real WeCom enterprise bot blocked by enterprise creation permission",
+    "Real commercial OpenAI Responses, Chat Completions and Anthropic Messages model calls",
+    "Uninstalled-client product UI",
+    "Zero-configuration cross-machine installer",
+    "Multi-tenant operator MCP access",
+    "Windows",
+    "Dedicated OS user production deployment",
+    "Long-running reliability"
+  ],
+  "privateEvidence": "Raw platform messages, client screenshots, native thread readbacks and credentials remain local and are not published."
+}

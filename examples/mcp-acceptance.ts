@@ -7,7 +7,7 @@ mkdirSync(resolve('.local'),{recursive:true})
 const client=new Client({name:'protocol-acceptance',version:'0.5.0'}),transport=new StdioClientTransport({command:process.execPath,args:['--import',resolve('node_modules/tsx/dist/loader.mjs'),resolve('src/cli.ts'),'mcp','http://127.0.0.1:4325',resolve('.local/panel-v4/state/access-token')],stderr:'pipe'})
 try{
  await client.connect(transport);const listed=await client.listTools()
- if(listed.tools.length!==20)throw Error('Expected 20 operator tools')
+ if(listed.tools.length!==21)throw Error('Expected 21 operator tools')
  const catalog:any=await client.callTool({name:'agent_read',arguments:{resource:'catalog'}})
  if(catalog.isError||!JSON.stringify(catalog).includes('prompt-preview/<id>'))throw Error('Catalog missing')
  const status:any=await client.callTool({name:'agent_status',arguments:{}}),state=JSON.parse(status.content[0].text),ticket=state.tickets[0]

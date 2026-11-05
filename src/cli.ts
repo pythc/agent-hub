@@ -9,6 +9,7 @@ import {startWorkerMcp} from './worker-mcp.ts'
 import {backupState,verifyBackup,restoreState} from './backup.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {initOffice} from './office.ts'
+import {preparePersonalSetup,rememberPersonalPort} from './personal-setup.ts'
 
 const [command, ...args] = process.argv.slice(2)
 async function main() {
@@ -46,12 +47,20 @@ async function main() {
   else if(command==='verify-backup'){if(!args[0])throw Error('Backup directory required');console.log(JSON.stringify(verifyBackup(args[0]),null,2))}
   else if(command==='supervise'){if(!args[0])throw Error('Config file required');await supervise(args[0])}
   else if(command==='watch'){if(!args[0]||!args[1])throw Error('Host URL and token file required');await watch(args[0],args[1],args.includes('--once'))}
-  else if (command === 'serve') {
-    if (!args[0]) throw new Error('Usage: serve <config.json>')
-    const host = new Runtime(loadConfig(args[0]))
+  else if (command === 'serve'||command==='setup') {
+    if (command==='serve'&&!args[0]) throw new Error('Usage: serve <config.json>')
+    const personal=command==='setup'?preparePersonalSetup(args[0]):undefined
+    if(personal&&!personal.created&&personal.config.port){
+      try{
+        const token=readFileSync(personal.config.stateDir+'/access-token','utf8').trim(),response=await fetch('http://127.0.0.1:'+personal.config.port+'/operator-link',{method:'POST',headers:{authorization:'Bearer '+token},signal:AbortSignal.timeout(2000)})
+        if(response.ok){console.log(JSON.stringify({...await response.json() as object,reused:true}));return}
+      }catch{}
+    }
+    const host = new Runtime(personal?.config??loadConfig(args[0]!))
     try {
       const result = await serve(host)
-      process.stdout.write(JSON.stringify({ url: result.url+'/configure', tokenFile: result.tokenPath,connectionFile:result.connectionFile }) + '\n')
+      if(personal)rememberPersonalPort(personal.file,Number(new URL(result.url).port))
+      process.stdout.write(JSON.stringify({ url: result.operatorUrl, tokenFile: result.tokenPath,connectionFile:result.connectionFile,expiresIn:600 }) + '\n')
       let stopping = false
       const shutdown = async () => {
         if (stopping) return
@@ -66,7 +75,14 @@ async function main() {
     if (!args[0] || !args[1]) throw new Error('Usage: mcp <http://127.0.0.1:port> <token-file>')
     const endpoint = new URL(args[0])
     if (!['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname) || endpoint.protocol !== 'http:') throw new Error('This release accepts a loopback host only')
-    await startMcp(endpoint.origin, args[1])
+    const i=args.indexOf('--client'),client=i>=0?args[i+1]:'generic'
+    if(!clientIds.includes(client as ClientId))throw Error('Unknown client')
+    await startMcp(endpoint.origin, args[1],client)
+  } else if(command==='open'){
+    const [url,tokenFile]=args;if(!url||!tokenFile)throw Error('Use open <loopback-url> <token-file>')
+    const endpoint=new URL(url);if(endpoint.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname))throw Error('Use a loopback host origin')
+    const response=await fetch(endpoint.origin+'/operator-link',{method:'POST',headers:{authorization:'Bearer '+readFileSync(tokenFile,'utf8').trim()}})
+    if(!response.ok)throw Error('Cannot create an operator link');console.log(JSON.stringify(await response.json()))
   } else if (command === 'request' || command === 'status' || command === 'action') {
     const [url, tokenFile, ...rest] = args
     if (!url || !tokenFile) throw new Error('Usage: ' + command + ' <host-url> <token-file> [arguments]')
@@ -82,6 +98,6 @@ async function main() {
     })
     console.log(JSON.stringify(await response.json(), null, 2))
     if (!response.ok) process.exitCode = 1
-  } else console.log('Commands: serve <config>, mcp <url> <token-file>, request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
+  } else console.log('Commands: setup [private-directory], serve <config>, open <url> <token-file>, mcp <url> <token-file>, request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
 }
 main().catch(error => { console.error(String(error)); process.exitCode = 1 })

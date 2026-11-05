@@ -79,9 +79,11 @@ components:
 
 ## Overview
 
-AgentHub opens with a four-step task guide at /configure. First-time users choose an AI service, a place to give requests and a dedicated work folder, then check their choices and try a first request. Advanced settings remain one action away, including a direct /configure#advanced bookmark. Both views retain their own draft while the tab stays open.
+AgentHub opens with a choice between using an existing assistant and deploying or managing one. A usage invitation presents the enabled software and instructions. Management pairs with the host through a one-time link, then opens the daily overview of attention items and connections.
 
-The previous entrance asked for a host token before explaining the task, gave eight internal sections equal weight and showed runtime health without saying whether a first request could run. It also offered backend selection before a new user had a connection to select. The guide defers authorization until needed, separates preparing choices from applying them, and gives provider setup a direct path.
+Setup starts with an actual work entry. Team conversations, coding clients and repository integrations share the host's existing AI connection. Preflight, applying settings and verifying a reply in the original software are separate stages. Browser chat remains an optional diagnostic. Existing full settings remain accessible.
+
+The earlier four-step AI-to-browser flow made the browser conversation the destination and hid the product's actual entry points. This revision brings those entry points and the operator/user distinction to the main navigation. Exact endpoint semantics and constraints are recorded in ENTRY_SETUP_DESIGN.md.
 
 ## Colors
 
@@ -93,7 +95,7 @@ The system stack supports English and Simplified Chinese. The page title sits ab
 
 ## Layout
 
-- The guide uses a single reading column up to 800px wide. Four ordered steps show the route to a first task. The current step asks one question and uses native radio groups, labeled inputs and a primary continuation action. On a narrow display the step names sit below their markers.
+- Entry management uses a single reading column up to 1056px wide. A two-action role screen leads to shared usage instructions or an operator overview. Connection choices are grouped text rows. Detail screens show host context, preflight, missing settings and verification. Narrow displays stack status badges and form actions.
 - Advanced settings use the existing sidebar layout described below.
 
 - On desktop, a sticky 232px rail contains grouped navigation and host status. A 64px top bar carries the language selector and console link. Main content is capped at 1140px. The overview pairs a larger task panel with a narrower runtime summary.
@@ -111,9 +113,12 @@ Buttons and navigation have 7px corners, inputs 6px and panels 12px. The native 
 
 ## Components
 
-- **First use.** Collect choices before asking for operator access. Pair by selecting the private connection file for this origin. Opening the token fallback is optional. Pairing does not check a provider, and checking does not apply the setup.
-- **First task and later requests.** On success the stepper gives way to a task inbox. Keep a labeled natural-language composer, examples that fill the draft and a separate optional no-file test. A sent request and its eventual reply stay together. Each new request gets an independent discussion. A transport retry reuses the original event. Restore recent requests from the saved source when the user reconnects.
-- **Preview.** The guide explains on entry that live AI checks and delivery are disabled. Its final inbox has a disabled composer. A saved preview receipt never appears as a verified live assistant.
+- **First use.** Show the two roles before management controls. A one-time link establishes the operator session. File and token pairing remain under a disclosure fallback. A usage invitation exposes instructions only.
+- **Daily overview.** Show real attention items, then available connections. A failed read cannot produce an empty-success state. Add connection is the main action on an empty deployment.
+- **Entry setup.** Reuse detected host settings. Select Feishu groups from probe results. WeCom permission and credentials are explicit prerequisites. Client installation identifies the host computer and offers separate instructions for another device.
+- **Verification.** Show received, authorized, executed and replied stages from host evidence. A pending stage remains pending. The operator sends the displayed phrase in the target software. Only verified host evidence changes the conclusion.
+- **Preview.** Explain unavailable installation and external verification. A saved configuration or generated test phrase does not imply a verified entry.
+- **Browser diagnostics.** The former browser composer remains available under diagnostics with its existing truthful request states and reply matching.
 
 - **Navigation and language.** A skip link targets main content. The active rail control exposes `aria-current="page"`. Section changes move focus to the page heading. English is the initial language. Selecting 简体中文 updates the document language, page title, labels and formatted dates, and retains the draft. The language preference can persist across tabs and reloads.
 - **Fields and feedback.** Associate each control with a visible label. Hints use `aria-describedby`. Invalid inputs expose `aria-invalid` and link to the error message. Keep invalid input available for correction. Keyboard focus uses a 2px accent outline with a 3px offset. Error notices use an alert role. Ordinary updates use status announcements.

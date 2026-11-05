@@ -9,8 +9,13 @@ export function larkRequest(binary:string):FeishuRequest {
     signal?.throwIfAborted()
     const url=new URL(path,'https://local.invalid/')
     const params=url.searchParams
+    const botIdentity=method==='GET'&&url.pathname==='/bot/v3/info'
     let args:string[],downloadDirectory:string|undefined
-    if(method==='GET'&&url.pathname==='/im/v1/messages'){
+    if(botIdentity){
+      // Some CLI versions discard bot/v3/info's top-level bot field in the generic API envelope.
+      // The verified identity command preserves it and checks the bot rather than a cached user login.
+      args=['auth','status','--json','--verify']
+    }else if(method==='GET'&&url.pathname==='/im/v1/messages'){
       args=params.get('container_id_type')==='thread'?['im','+threads-messages-list','--thread',params.get('container_id')!,'--order',params.get('sort_type')==='ByCreateTimeDesc'?'desc':'asc','--page-size',params.get('page_size')??'50','--no-reactions']:['im','+chat-messages-list','--chat-id',params.get('container_id')!,'--order',params.get('sort_type')==='ByCreateTimeDesc'?'desc':'asc','--page-size',params.get('page_size')??'50','--no-reactions']
       if(params.has('start_time'))args.push('--start',new Date(Number(params.get('start_time'))*1000).toISOString())
       if(params.has('end_time'))args.push('--end',new Date(Number(params.get('end_time'))*1000).toISOString())
@@ -30,7 +35,7 @@ export function larkRequest(binary:string):FeishuRequest {
     }else if(method==='GET'&&(/^\/im\/v1\/chats\/oc_[A-Za-z0-9_-]+\/members$/.test(url.pathname)||url.pathname==='/bot/v3/info')){
       args=['api','GET','/open-apis'+url.pathname,'--params',JSON.stringify(Object.fromEntries(params))]
     }else throw Error('Unsupported typed Lark request')
-    args.push('--as','bot','--json')
+    if(!botIdentity)args.push('--as','bot','--json')
     try{
     const result=await new Promise<any>((resolve,reject)=>{
       const child=spawn(binary,args,{cwd:downloadDirectory,signal,stdio:['ignore','pipe','pipe'],shell:false})
@@ -39,7 +44,7 @@ export function larkRequest(binary:string):FeishuRequest {
       child.stdout.on('data',chunk=>{output+=chunk;if(output.length>4_000_000)child.kill('SIGTERM')})
       child.stderr.resume()
       child.once('error',error=>{clearTimeout(timer);reject(error)})
-      child.once('close',code=>{clearTimeout(timer);if(code!==0){reject(Error('Lark CLI failed ('+code+')'));return}try{const result=JSON.parse(output);if(!result.ok)throw Error(result.error?.message??'Lark request failed');resolve(result.data)}catch(error){reject(error)}})
+      child.once('close',code=>{clearTimeout(timer);if(code!==0){reject(Error('Lark CLI failed ('+code+')'));return}try{const result=JSON.parse(output);if(botIdentity){const bot=result.identities?.bot;if(!bot?.verified||!bot.available||!bot.openId)throw Error('Bot identity is not verified');resolve({bot:{open_id:bot.openId,app_name:bot.appName}});return}if(!result.ok)throw Error(result.error?.message??'Lark request failed');resolve(result.data)}catch(error){reject(error)}})
     })
     if(downloadDirectory){
       const path=realpathSync(resolve(downloadDirectory,result.saved_path??'resource'))

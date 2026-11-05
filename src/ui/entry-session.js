@@ -1,0 +1,484 @@
+// Public use instructions and operator setup have distinct sessions.
+const entryState = {
+  role: '',
+  page: 'home',
+  selected: '',
+  source: '',
+  publicGuide: null,
+  sharedGuide: null,
+  data: null,
+  loading: false,
+  busy: '',
+  error: null,
+  probe: null,
+  plan: null,
+  applied: null,
+  verification: null,
+  creating: false,
+  invite: '',
+  share: null,
+  clientConfig: null,
+  draft: {},
+  touched: false,
+  timer: 0,
+  polls: 0
+}
+try {
+  entryState.role = localStorage.getItem('agenthub.entry.role') || ''
+} catch {}
+let entryPairCode = ''
+function consumeEntryFragment() {
+  const fragment = new URLSearchParams(location.hash.slice(1))
+  const code = fragment.get('pair'),
+    invite = fragment.get('invite')
+  if (!code && !invite) return false
+  history.replaceState(null, '', location.pathname + location.search)
+  entryPairCode = code || ''
+  entryState.invite = invite || ''
+  entryState.sharedGuide = null
+  entryState.role = code ? 'operator' : 'user'
+  try {
+    localStorage.setItem('agenthub.entry.role', entryState.role)
+  } catch {}
+  S.surface = 'entries'
+  return true
+}
+consumeEntryFragment()
+window.addEventListener('hashchange', () => {
+  if (consumeEntryFragment()) void startEntrySession()
+})
+const entryNames = () => ({
+  feishu: L('Feishu', '飞书'),
+  wecom: L('WeCom', '企业微信'),
+  codex: 'Codex',
+  cursor: 'Cursor',
+  vscode: 'VS Code',
+  workbuddy: 'WorkBuddy',
+  github: 'GitHub',
+  generic: L('Other MCP clients', '通用 MCP 客户端')
+})
+const entryName = (entry) =>
+  entryNames()[typeof entry === 'string' ? entry : entry?.id] ||
+  entry?.label ||
+  L('Connection', '入口')
+const entryText = (value) =>
+  typeof value === 'object' && value
+    ? (lang === 'en' ? value.en : value.zh || value['zh-CN']) || value.en || ''
+    : String(value ?? '')
+const selectedEntry = () => entryState.data?.entries?.find((e) => e.id === entryState.selected)
+const entryHasDraft = () => entryState.touched || entryModel.touched
+function entrySafeDetail(value) {
+  let text = String(value ?? '')
+  for (const secret of [
+    S.token,
+    S.typed,
+    entryState.draft.appSecret,
+    entryState.draft.secret,
+    entryModel.credential
+  ])
+    if (secret) text = text.split(secret).join('[…]')
+  return text.slice(0, 1200)
+}
+function entryNavigate(page, id = '') {
+  if (entryState.busy || S.busy) return
+  clearTimeout(entryState.timer)
+  if (id && id !== entryState.selected) {
+    if (
+      entryState.touched &&
+      !confirm(
+        L('Discard the unsaved changes for this connection?', '放弃当前入口尚未保存的修改？')
+      )
+    )
+      return
+    entryState.selected = id
+    entryState.source = ''
+    entryState.creating = false
+    entryState.probe = null
+    entryState.plan = null
+    entryState.applied = null
+    entryState.verification = null
+    entryState.clientConfig = null
+    entryState.draft = {}
+    entryState.touched = false
+  }
+  if (location.hash === '#advanced')
+    history.replaceState(null, '', location.pathname + location.search)
+  entryState.page = page
+  entryState.error = null
+  S.surface = 'entries'
+  render(true)
+}
+function chooseEntryRole(role) {
+  if (entryState.busy || S.busy) return
+  clearTimeout(entryState.timer)
+  entryState.role = role
+  entryState.page = 'home'
+  entryState.error = null
+  entryState.share = null
+  S.surface = 'entries'
+  try {
+    localStorage.setItem('agenthub.entry.role', role)
+  } catch {}
+  render(true)
+  if (role === 'operator') {
+    void loadConnectInfo()
+    if (S.authed) void refreshEntries()
+    else if (entryState.operator) void connectHost('', true)
+  }
+  if (role === 'user' && !entryState.publicGuide) void entryRun('load', loadEntryGuide)
+}
+function entryError(error) {
+  if (error.status === 401) {
+    S.authed = false
+    S.token = ''
+  }
+  const code = error.payload?.code || ''
+  const messages = {
+    model_url_invalid: [
+      'Enter an HTTPS base URL or local HTTP address without credentials or query parameters.',
+      '请输入 HTTPS 基础地址或本机 HTTP 地址，不要包含凭据或查询参数。'
+    ],
+    advanced_draft: [
+      'Save or discard your advanced-settings draft before changing the AI connection.',
+      '请先在高级设置中保存或放弃草稿，再修改 AI 连接。'
+    ],
+    connection_missing: [
+      'This saved AI connection is no longer available. Refresh and select another.',
+      '已保存的 AI 连接已不可用，请刷新并重新选择。'
+    ],
+    credentials_incomplete: [
+      'Enter both the App ID and App Secret to check this bot.',
+      '请同时填写 App ID 与 App Secret，再检查此机器人。'
+    ],
+    probe_required: [
+      'Check the connection again to refresh its available choices.',
+      '请重新检查连接，刷新可选项。'
+    ],
+    chat_unavailable: [
+      'Choose a chat returned by the latest bot check.',
+      '请选择最近一次机器人检查返回的群聊。'
+    ],
+    source_missing: [
+      'Set up and enable this entry before starting verification.',
+      '请先配置并启用此入口，再开始验证。'
+    ],
+    sender_not_observed: [
+      'Send a request from the target software first, then refresh verification.',
+      '请先从目标软件发送请求，再刷新验证进度。'
+    ],
+    plan_expired: [
+      'This setup review expired. Check your choices again.',
+      '这次配置预览已过期，请重新检查选择。'
+    ],
+    configuration_busy: [
+      'Another change is being applied. Wait briefly, then retry.',
+      '其他配置正在应用，请稍后重试。'
+    ],
+    pair_expired: [
+      'This management link has expired or was already used. Open a new link from the host.',
+      '此管理链接已过期或已使用，请打开宿主提供的新链接。'
+    ],
+    client_conflict: [
+      'This client already has an AgentHub connection. Review its configuration before replacing it.',
+      '此客户端已有 AgentHub 连接，请先核对现有配置。'
+    ],
+    runtime_busy: [
+      'Work is still running. Wait for it to finish, then apply again.',
+      '当前有任务正在运行。请等任务结束后再应用。'
+    ],
+    settings_conflict: [
+      'Settings changed in another session. Your inputs are kept. Refresh and check them again.',
+      '设置已在其他会话中更新。输入已保留，请刷新后重新检查。'
+    ],
+    invite_invalid: [
+      'This invitation is invalid or expired. Ask the administrator for a new link.',
+      '邀请无效或已过期，请向管理员获取新的链接。'
+    ],
+    preview_restricted: [
+      'This preview cannot install clients or send requests to external services.',
+      '此预览无法安装客户端或向外部服务发送请求。'
+    ]
+  }
+  const text =
+    messages[code] ||
+    (error.status === 401
+      ? [
+          'Operator access is needed. Open a fresh management link from the host.',
+          '需要管理权限，请打开宿主提供的新管理链接。'
+        ]
+      : error.status === 404
+        ? [
+            'This host does not provide the entry setup API. Update the host and try again.',
+            '此宿主尚未提供入口配置接口，请更新宿主后重试。'
+          ]
+        : [
+            'The action could not finish. Review the details and try again.',
+            '操作未完成，请查看详情后重试。'
+          ])
+  entryState.error = { text, detail: entrySafeDetail(error.message), code }
+  if (error.status === 409 || ['plan_expired', 'plan_missing'].includes(code)) {
+    entryState.plan = null
+    entryModel.plan = null
+    entryModel.check = null
+  }
+}
+async function entryRun(label, operation, focus = false) {
+  if (entryState.busy) return
+  entryState.busy = label
+  entryState.error = null
+  render()
+  try {
+    await operation()
+  } catch (error) {
+    entryError(error)
+  } finally {
+    entryState.busy = ''
+    render(focus)
+    const next = document.getElementById(
+      label.startsWith('model-')
+        ? 'entry-model-result'
+        : label === 'plan'
+          ? 'entry-plan-review'
+          : ['apply', 'verify', 'install'].includes(label)
+            ? 'entry-verification'
+            : ''
+    )
+    if (next) {
+      next.tabIndex = -1
+      next.focus({ preventScroll: true })
+      next.scrollIntoView({ block: 'nearest' })
+    }
+    const alert = document.getElementById('entry-error')
+    if (alert) {
+      alert.focus({ preventScroll: true })
+      alert.scrollIntoView({ block: 'nearest' })
+    }
+  }
+}
+async function loadEntryGuide() {
+  const data = await api('/entry-guide', undefined, true)
+  if (!Array.isArray(data.entries)) throw Error('Invalid entry guide response')
+  entryState.publicGuide = data
+}
+async function readEntries() {
+  const data = await api('/entry-setup')
+  if (!Array.isArray(data.entries) || !Number.isInteger(data.revision))
+    throw Error('Invalid entry setup response')
+  entryState.data = data
+  if (S.base && data.revision !== S.base.revision) adopt(await snapshot())
+}
+async function refreshEntries() {
+  await entryRun('refresh', async () => {
+    await readEntries()
+  })
+}
+async function acceptEntryInvite() {
+  await entryRun(
+    'invite',
+    async () => {
+      const data = await api('/entry-guide', { invite: entryState.invite }, true)
+      if (!Array.isArray(data.entries) || data.operator !== false)
+        throw Error('Invalid usage invitation')
+      entryState.sharedGuide = data
+      try {
+        sessionStorage.setItem('agenthub.entry.guide', JSON.stringify(data))
+      } catch {}
+      entryState.invite = ''
+    },
+    true
+  )
+}
+async function startEntrySession() {
+  if (entryState.loading) return
+  entryState.loading = true
+  if (!entryState.sharedGuide && !entryState.invite && entryState.role === 'user') {
+    try {
+      const cached = JSON.parse(sessionStorage.getItem('agenthub.entry.guide') || 'null')
+      if (cached?.operator === false && Array.isArray(cached.entries))
+        entryState.sharedGuide = cached
+    } catch {}
+  }
+  render()
+  try {
+    if (entryPairCode) {
+      const code = entryPairCode
+      entryPairCode = ''
+      await api('/pair', { code }, true)
+    }
+    const session = await api('/session', undefined, true)
+    entryState.operator = session.operator === true
+    if (entryState.operator && entryState.role !== 'user') {
+      await loadConnectInfo()
+      await connectHost('', true)
+      if (!entryState.role) entryState.role = 'operator'
+    }
+    await loadEntryGuide()
+    if (entryState.invite) await acceptEntryInvite()
+  } catch (error) {
+    entryError(error)
+  } finally {
+    entryState.loading = false
+    render()
+  }
+}
+function entryEdit(key, value) {
+  entryState.draft[key] = value
+  entryState.touched = true
+  entryState.plan = null
+  entryState.applied = null
+  document.getElementById('entry-plan-review')?.remove()
+}
+async function probeEntry() {
+  await entryRun('probe', async () => {
+    const d = entryState.draft
+    if (
+      entryState.selected === 'feishu' &&
+      (d.appId || d.appSecret) &&
+      !(d.appId?.trim() && d.appSecret?.trim())
+    )
+      throw new ApiError(400, { code: 'credentials_incomplete' })
+    const credentials =
+      entryState.selected === 'feishu' && d.appId?.trim() && d.appSecret?.trim()
+        ? { appId: d.appId.trim(), appSecret: d.appSecret.trim() }
+        : undefined
+    entryState.probe = await api('/entry-setup/probe', {
+      entryId: entryState.selected,
+      ...(credentials ? { credentials } : {})
+    })
+    await readEntries()
+  })
+}
+function entryPlanInput() {
+  const d = entryState.draft
+  const credentials = Object.fromEntries(
+    ['appId', 'appSecret', 'botId', 'secret']
+      .filter((key) => d[key]?.trim())
+      .map((key) => [key, d[key].trim()])
+  )
+  return {
+    revision: entryState.data.revision,
+    entryId: entryState.selected,
+    ...(d.scopes ? { scopeIds: d.scopes } : {}),
+    ...(d.actors?.trim()
+      ? {
+          actors: d.actors
+            .split(/[,\n]/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+        }
+      : {}),
+    ...(Object.keys(credentials).length ? { credentials } : {}),
+    ...(d.repository?.trim() ? { repository: d.repository.trim() } : {}),
+    ...(d.workspace?.trim() ? { workspace: d.workspace.trim() } : {})
+  }
+}
+async function planEntry() {
+  await entryRun('plan', async () => {
+    entryState.plan = await api('/entry-setup/plan', entryPlanInput())
+    if (!entryState.plan.id) throw Error('Invalid connection plan')
+  })
+}
+async function applyEntry() {
+  if (!entryState.plan) return
+  await entryRun('apply', async () => {
+    entryState.applied = await api('/entry-setup/apply', {
+      id: entryState.plan.id
+    })
+    entryState.source = entryState.applied.sourceId || ''
+    entryState.creating = false
+    entryState.touched = false
+    entryState.plan = null
+    entryState.draft = {}
+    await readEntries()
+    announce(
+      L(
+        'Connection settings saved. Verify a request in the selected software.',
+        '入口设置已保存。请在所选软件中验证一条请求。'
+      )
+    )
+  })
+}
+async function installEntry() {
+  await entryRun('install', async () => {
+    const result = await api('/entry-setup/install', {
+      entryId: entryState.selected
+    })
+    entryState.applied = result
+    await readEntries()
+  })
+}
+async function loadEntryConfig() {
+  await entryRun('config', async () => {
+    entryState.clientConfig = await api(
+      '/entry-setup/client-config?entryId=' + encodeURIComponent(entryState.selected)
+    )
+  })
+}
+async function startEntryVerification() {
+  await entryRun('verify', async () => {
+    const result = await api('/entry-setup/verification', {
+      entryId: entryState.selected,
+      language: lang === 'en' ? 'en' : 'zh',
+      ...(entryState.source ? { sourceId: entryState.source } : {})
+    })
+    if (!result.id || !Array.isArray(result.stages)) throw Error('Invalid verification response')
+    entryState.verification = result
+    entryState.polls = 60
+  })
+  scheduleEntryVerification()
+}
+function scheduleEntryVerification() {
+  clearTimeout(entryState.timer)
+  const v = entryState.verification
+  if (
+    !v ||
+    entryState.page !== 'detail' ||
+    S.surface !== 'entries' ||
+    v.stages?.every((s) => s.status === 'ok') ||
+    entryState.polls <= 0 ||
+    document.hidden
+  )
+    return
+  entryState.timer = setTimeout(() => refreshEntryVerification(false), 2500)
+}
+async function refreshEntryVerification(manual = true) {
+  const id = entryState.verification?.id
+  if (!id) return
+  const read = async () => {
+    const result = await api('/entry-setup/verification/' + encodeURIComponent(id))
+    if (entryState.verification?.id !== id) return
+    const changed = !same(entryState.verification, result)
+    entryState.verification = result
+    entryState.polls--
+    return changed
+  }
+  if (manual) {
+    entryState.polls = 60
+    await entryRun('verify', read)
+  } else {
+    try {
+      const changed = await read()
+      const region = document.getElementById('entry-verification')
+      if (region && !entryState.busy && (changed || entryState.polls === 0)) {
+        const focused = region.contains(document.activeElement) ? document.activeElement.id : ''
+        region.replaceChildren(...entryVerificationContents())
+        if (focused) document.getElementById(focused)?.focus({ preventScroll: true })
+      }
+    } catch (error) {
+      entryError(error)
+      render()
+      return
+    }
+  }
+  scheduleEntryVerification()
+}
+async function shareEntries(ids) {
+  await entryRun('share', async () => {
+    const result = await api('/entry-setup/share', { entryIds: ids })
+    if (!result.url) throw Error('Missing usage link')
+    entryState.share = result
+  })
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && S.surface === 'entries') scheduleEntryVerification()
+})

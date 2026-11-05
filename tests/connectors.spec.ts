@@ -66,6 +66,14 @@ it('normalizes typed CLI paths and converts real CLI message output',async()=>{
  const result=await request('GET','im/v1/messages?container_id=oc_test&start_time=1&end_time=2')
  expect(result.items[0].message_id).toBe('m1')
 })
+it('reads a remotely verified bot identity even when the raw API envelope omits top-level bot fields',async()=>{
+ const {larkRequest}=await import('../src/connectors/lark-cli.ts'),{writeFileSync}=await import('node:fs')
+ const root=mkdtempSync(join(tmpdir(),'lark-identity-'));roots.push(root);const binary=join(root,'fixture-cli')
+ writeFileSync(binary,'#!'+process.execPath+'\nif(JSON.stringify(process.argv.slice(2))!==JSON.stringify(["auth","status","--json","--verify"]))process.exit(1);console.log(JSON.stringify({identities:{bot:{verified:true,available:true,openId:"ou_bot",appName:"Bot"}}}))\n',{mode:0o700})
+ expect(await larkRequest(binary)('GET','bot/v3/info')).toMatchObject({bot:{open_id:'ou_bot',app_name:'Bot'}})
+ writeFileSync(binary,'#!'+process.execPath+'\nconsole.log(JSON.stringify({identities:{bot:{available:true,openId:"ou_unverified"}}}))\n',{mode:0o700})
+ await expect(larkRequest(binary)('GET','bot/v3/info')).rejects.toThrow('not verified')
+})
 
 it('finds a GitHub delivery marker on later pages before attempting a replay',async()=>{
  const config=configSchema.parse({sources:[{id:'github',kind:'github',allowedActors:['alice'],cwd:'.',repository:'owner/repo'}]}).sources[0]!

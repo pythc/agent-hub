@@ -15,7 +15,7 @@ export class CodexModel implements Model {
     const client=new AppServer(this.config.codex,this.extraArgs,cwd)
     const timer=setTimeout(()=>client.fail(Error('Expose deadline exceeded')),20000)
     try{
-      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.9.0'}})
+      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.10.0'}})
       client.notify('initialized')
       await client.call('thread/unarchive',{threadId})
     }finally{clearTimeout(timer);await client.close()}
@@ -23,14 +23,14 @@ export class CodexModel implements Model {
   async history(threadId:string,cwd:string):Promise<any>{
     const client=new AppServer(this.config.codex,this.extraArgs,cwd)
     const timer=setTimeout(()=>client.fail(Error('History deadline exceeded')),20000)
-    try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.9.0'}});client.notify('initialized');return (await client.call('thread/read',{threadId,includeTurns:true})).thread}
+    try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.10.0'}});client.notify('initialized');return (await client.call('thread/read',{threadId,includeTurns:true})).thread}
     finally{clearTimeout(timer);await client.close()}
   }
   async catalog(provider?:string):Promise<any>{
     const client=new AppServer(this.config.codex,this.extraArgs,process.cwd())
     const timer=setTimeout(()=>client.fail(Error('Model catalog deadline exceeded')),20000)
     try{
-      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.9.0'}});client.notify('initialized')
+      await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.10.0'}});client.notify('initialized')
       const current=(await client.call('config/read',{includeLayers:false})).config.model_provider??'openai'
       if(provider&&!['codex',current].includes(provider))throw Error('Only the configured Codex provider catalog is available: '+current)
       return {...await client.call('model/list',{}),provider:current}
@@ -46,7 +46,7 @@ export class CodexModel implements Model {
     const timer = setTimeout(() => client.fail(new Error('Turn deadline exceeded; inspect workspace before retrying')), this.config.turnTimeoutMs)
     try {
       if (request.signal?.aborted) throw new Error('Cancelled')
-      await client.call('initialize', { clientInfo: { name: 'agent-hub', version: '0.9.0' },capabilities:{experimentalApi:true} })
+      await client.call('initialize', { clientInfo: { name: 'agent-hub', version: '0.10.0' },capabilities:{experimentalApi:true} })
       client.notify('initialized')
       let isolated:Record<string,unknown>|undefined
       if(request.managed){

@@ -43,6 +43,35 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 describe('source-independent host', () => {
+  it('recognizes only the exact operator-generated short connectivity phrase, keeping original text and authorization',async()=>{
+    const model=new FixtureModel(),runtime=host(model),createdAt=Date.now()-1000
+    runtime.store.put('entry-verification','check',{sourceId:'local',code:'AGH-SYNTHETIC',createdAt})
+    runtime.receive('local','alice',{id:'short',thread:'check',text:'AGH-SYNTHETIC',addressed:true})
+    await settle(runtime,()=>runtime.store.deliveries().some(d=>d.kind==='reply'&&d.status==='sent'))
+    expect(JSON.parse(model.requests[0]!.input).connectionCheck).toMatchObject({code:'AGH-SYNTHETIC',purpose:'entry-connectivity'})
+    expect(JSON.parse(model.requests[1]!.input).connectionCheck).toMatchObject({code:'AGH-SYNTHETIC'})
+    expect(runtime.store.triggers.get('local:short')?.text).toBe('AGH-SYNTHETIC')
+    runtime.receive('local','guest',{id:'guest',thread:'other',text:'AGH-SYNTHETIC',addressed:true})
+    await settle(runtime,()=>runtime.store.decisions.byThread('local:other').length>0);expect(runtime.store.decisions.byThread('local:other')[0]?.kind).toBe('ignore')
+    runtime.receive('local','alice',{id:'ordinary',thread:'normal',text:'Explain the report mentioning AGH-SYNTHETIC',addressed:true})
+    await settle(runtime,()=>runtime.store.tickets.list().length===2)
+    expect(JSON.parse(model.requests.filter(r=>r.ephemeral).at(-1)!.input).connectionCheck).toBeUndefined()
+  })
+  it('accepts scoped trigger resource references for acknowledgement without granting access to unrelated requests',async()=>{
+    const fixture=new FixtureModel();let ack:any
+    const model:Model={async run(request){if(request.ephemeral)return fixture.run(request);request.onThread?.('ack-thread');request.onTurn?.('ack-turn');ack=await request.onTool!('superagent_ack',{triggerId:'trigger/local:ack',text:'Acknowledged'},'ack-call');await expect(request.onTool!('superagent_ack',{triggerId:'trigger/local:foreign',text:'Forbidden'},'foreign-call')).rejects.toThrow();return {threadId:'ack-thread',turnId:'ack-turn',text:JSON.stringify({state:'ready',summary:'done',reply:'done',question:null,handbacks:[]})}}},runtime=host(model)
+    const source=runtime.sources.get('local')!;runtime.store.put('trigger','local:foreign',source.trigger({id:'foreign',thread:'elsewhere',text:'Other work',addressed:true},'alice'))
+    runtime.receive('local','alice',{id:'ack',thread:'acknowledge',text:'Acknowledge this',addressed:true})
+    await settle(runtime,()=>runtime.store.deliveries().some(d=>d.kind==='reply'&&d.status==='sent'));expect(ack.success).toBe(true);expect(runtime.store.deliveries().filter(d=>d.kind==='acknowledgement')).toHaveLength(1)
+  })
+  it('delivers the current clarification question once instead of quarantining a valid blocked report',async()=>{
+    const fixture=new FixtureModel(),model:Model={async run(request){if(request.ephemeral)return fixture.run(request);request.onThread?.('question-thread');request.onTurn?.('question-turn');return {threadId:'question-thread',turnId:'question-turn',text:JSON.stringify({state:'blocked',summary:'Need the input document',reply:'',question:'Which document should I compare?',handbacks:[]})}}},runtime=host(model)
+    runtime.receive('local','alice',{id:'question',thread:'docs',text:'Compare the document',addressed:true})
+    await settle(runtime,()=>runtime.store.deliveries().some(d=>d.kind==='reply'&&d.status==='sent'))
+    const ticket=runtime.store.tickets.list()[0]!,run=runtime.store.get<any>('run',ticket.id)
+    expect(run.phase).toBe('idle');expect(run.error).toBeUndefined();expect(ticket.attention?.question).toBe('Which document should I compare?')
+    expect(runtime.store.deliveries().filter(d=>d.kind==='reply').map(d=>d.text)).toEqual(['Which document should I compare?'])
+  })
   it('handles an answer and follow-up without Git, preserving the native thread', async () => {
     const model = new FixtureModel()
     const runtime = host(model)

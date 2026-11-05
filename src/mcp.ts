@@ -3,15 +3,18 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import {readSchema} from './resources.ts'
+import {randomUUID} from 'node:crypto'
 
-export async function startMcp(url: string, tokenFile: string) {
+export async function startMcp(url: string, tokenFile: string,client='generic') {
   const token = readFileSync(tokenFile, 'utf8').trim()
-  const server = new McpServer({ name: 'agent-hub', version: '0.9.0' })
+  const bridgeId=randomUUID()
+  const server = new McpServer({ name: 'agent-hub', version: '0.10.0' },{instructions:'AgentHub carries out work asynchronously in a persistent background session. Use agent_request for ordinary requests; no source or request identifiers are needed. Reuse its returned discussion for follow-ups in the same conversation. Query agent_status for progress and the actual reply; accepted is not completed. Preserve requestId on retries. Operator settings and control tools affect the local host.'})
   async function api(path: string, value?: unknown) {
     try {
+      const clientName=server.server.getClientVersion()?.name??'',reported=client==='generic'?(/cursor/i.test(clientName)?'cursor':/visual studio|vscode/i.test(clientName)?'vscode':/workbuddy|codebuddy/i.test(clientName)?'workbuddy':/codex/i.test(clientName)?'codex':'generic'):client
       const response = await fetch(url + path, {
         method: value ? 'POST' : 'GET',
-        headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+        headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json','x-agenthub-client':reported,'x-agenthub-bridge':bridgeId },
         ...(value ? { body: JSON.stringify(value) } : {}),
         signal: AbortSignal.timeout(30_000),
       })
@@ -19,11 +22,12 @@ export async function startMcp(url: string, tokenFile: string) {
       return { isError: !response.ok, content:data?.kind==='image'?[{type:'image' as const,mimeType:data.mimeType,data:data.data}]:[{ type: 'text' as const, text: JSON.stringify(data) }] }
     } catch { return { isError: true, content: [{ type: 'text' as const, text: 'Cannot reach the agent host. Start the configured serve process.' }] } }
   }
+  server.registerTool('agent_request',{description:'Give the background assistant an ordinary request. The host selects the local operator entry and creates identifiers. For follow-ups reuse the returned discussion. Completion is asynchronous: use agent_status to retrieve the actual reply.',inputSchema:{text:z.string().min(1),discussion:z.string().optional(),requestId:z.string().optional()}},async args=>api('/request',args))
   server.registerTool('agent_send', {
     description: 'Send a request or follow-up to the background agent. Reuse a discussion reference only when it belongs to this conversation. Work is asynchronous. Preserve requestId on transport retries.',
     inputSchema: { source: z.string(), discussion: z.string(), requestId: z.string(), text: z.string() },
   }, async args => api('/send', { source: args.source, event: { id: args.requestId, thread: args.discussion, text: args.text, addressed: true } }))
-  server.registerTool('agent_status', {annotations:{readOnlyHint:true}, description: 'Read progress, questions and delivered results. Reports native thread identity separately from host state.', inputSchema: {} }, async () => api('/status'))
+  server.registerTool('agent_status', {annotations:{readOnlyHint:true}, description: 'Read concise progress, questions and actual replies. Prefer the discussion/requestId returned by agent_request to track that request. Use agent_read for complete task history.', inputSchema: {discussion:z.string().optional(),requestId:z.string().optional()} }, async args => api('/status'+(Object.keys(args).length?'?'+new URLSearchParams(args as Record<string,string>).toString():'')))
   for (const [name, action] of [['agent_stop', 'stop'], ['agent_takeover', 'takeover'], ['agent_retry', 'retry'], ['agent_return', 'return']] as const) {
     server.registerTool(name, { description: action === 'retry' ? 'Retry after the operator has inspected the native history and workspace for uncertain effects.' : action + ' selected work. Requires a work id returned by this host.', inputSchema: { id: z.string() } }, async args => api('/action', { action, id: args.id }))
   }

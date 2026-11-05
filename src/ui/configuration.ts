@@ -8,6 +8,10 @@ const client = [
   'getting-started.js',
   'setup-session.js',
   'first-request.js',
+  'entry-session.js',
+  'entry-views.js',
+  'entry-model.js',
+  'entry-configure.js',
   'application.js'
 ]
   .map(asset)

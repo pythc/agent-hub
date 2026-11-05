@@ -43,7 +43,7 @@ export async function backupState(config:Config,destination:string){
  try{effective=checkManaged(snapshot,managed,config)}finally{snapshot.close()}
  const hashes:Record<string,string>={}
  for(const name of ['connections','secrets'] as const)if(managed[name]!==undefined){atomicPrivateFile(join(directory,'setup',name==='connections'?'connections.json':'credentials.json'),managed[name]!);hashes[name]=digest(managed[name]!)}
- const manifest={format:1,application:'0.9.0',schema,at:new Date().toISOString(),sha256:hash(target),...(Object.keys(hashes).length?{managed:hashes}:{})}
+ const manifest={format:1,application:'0.10.0',schema,at:new Date().toISOString(),sha256:hash(target),...(Object.keys(hashes).length?{managed:hashes}:{})}
  writeFileSync(join(directory,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{mode:0o600})
  writeFileSync(join(directory,'config.json'),JSON.stringify(effective??config,null,2)+'\n',{mode:0o600})
  return {directory,...manifest}

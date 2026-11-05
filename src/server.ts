@@ -16,12 +16,17 @@ import {SettingsError} from './settings.ts'
 import {configurationPage} from './ui/configuration.ts'
 import {Onboarding,OnboardingError} from './onboarding.ts'
 import {atomicPrivateFile} from './managed-config.ts'
+import {OperatorSessions} from './operator-session.ts'
+import {EntrySetup,entryIds} from './entry-setup.ts'
+import {clientIds} from './clients.ts'
+import {clientStatus} from './client-status.ts'
 
-export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config)=>Runtime}={}) {
+export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config)=>Runtime;clientHome?:string;clientName?:string}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
   const connectionFile=join(runtime.config.stateDir,'connection.json')
   let changing=false,unavailable=false,runtimeClosed=false,endpoint='',stopping=false,closingRuntime:Promise<void>|undefined
   const onboarding=new Onboarding(()=>runtime,options.configurationPreview===true)
+  const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
   async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=runtime.close()}await closingRuntime}
   async function rebuild(config:Config){
     await stopRuntime()
@@ -57,16 +62,30 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     const path = new URL(req.url!, 'http://localhost').pathname
     res.setHeader('cache-control', 'no-store')
     res.setHeader('x-content-type-options', 'nosniff')
+    res.setHeader('referrer-policy','no-referrer')
+    let requestOrigin=''
+    try{const authority=new URL('http://'+req.headers.host);if(!['127.0.0.1','localhost','[::1]'].includes(authority.hostname)||authority.port!==new URL(endpoint).port||authority.username||authority.password||authority.pathname!=='/'||authority.search||authority.hash)throw Error();requestOrigin=authority.origin}catch{send(res,403,{error:'Use this host’s local origin',code:'host_origin_required'});return}
+    if(req.method==='POST'&&req.headers.origin&&req.headers.origin!==requestOrigin){send(res,403,{error:'Use this page’s own origin',code:'same_origin_required'});return}
     if (req.method === 'GET' && ['/', '/configure', '/configure/'].includes(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
       res.end(path==='/'?dashboard:configurationPage)
       return
     }
-    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: !unavailable, version: '0.9.0',...(changing?{restarting:true}:{}) }); return }
+    if (req.method === 'GET' && path === '/health') { send(res, 200, { ok: !unavailable, version: '0.10.0',...(changing?{restarting:true}:{}) }); return }
     if(req.method==='GET'&&path==='/connect-info'){send(res,200,{connectionFile,preview:options.configurationPreview===true});return}
+    if(req.method==='GET'&&path==='/session'){send(res,200,{operator:authorized(req)||sessions.authorized(req)});return}
+    if(req.method==='POST'&&path==='/pair'){
+      if(req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
+      const input=z.object({code:z.string().min(32).max(100)}).strict().parse(await body(req))
+      const paired=sessions.pair(input.code,res);send(res,paired?200:401,{operator:paired,...(!paired?{code:'pair_expired'}:{})});return
+    }
+    if(req.method==='GET'&&path==='/entry-guide'){send(res,200,entries.publicGuide());return}
+    if(req.method==='POST'&&path==='/entry-guide'){const input=z.object({invite:z.string().min(20).max(100)}).strict().parse(await body(req));send(res,200,await entries.invitation(input.invite));return}
     if(changing||unavailable){send(res,503,{error:'The host is applying configuration. Please try again shortly.',code:unavailable?'setup_recovery_required':'configuration_restarting'});return}
-    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply'].includes(path)){
-      if(!authorized(req)){send(res,401,{error:'Access token required',code:'token_required'});return}
+    const operator=authorized(req)||sessions.authorized(req)
+    if(req.method==='POST'&&!authorized(req)&&sessions.authorized(req)&&req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
+    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply','/entry-setup/probe','/entry-setup/plan','/entry-setup/apply','/entry-setup/model/plan','/entry-setup/model/check','/entry-setup/model/apply','/entry-setup/verification','/operator-link'].includes(path)){
+      if(!operator){send(res,401,{error:'Access token required',code:'token_required'});return}
       send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
     }
     if(req.method==='POST'&&path==='/worker'){
@@ -84,7 +103,24 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res, 202, runtime.receive(id, input.actor, input.event, input.human))
       return
     }
-    if (!authorized(req)) { send(res, 401, { error: 'Access token required',code:'token_required' }); return }
+    if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(endpoint),expiresIn:600});return}
+    if(req.method==='POST'&&path==='/logout'){sessions.logout(req,res);send(res,200,{operator:false});return}
+    if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
+    if(req.method==='POST'&&path==='/entry-setup/probe'){const input=z.object({entryId:z.enum(entryIds),credentials:z.object({appId:z.string().trim().min(1).max(16000).optional(),appSecret:z.string().trim().min(1).max(16000).optional()}).strict().optional()}).strict().parse(await body(req));send(res,200,await entries.probe(input.entryId,input.credentials));return}
+    if(req.method==='POST'&&path==='/entry-setup/plan'){send(res,200,entries.plan(await body(req)));return}
+    if(req.method==='POST'&&path==='/entry-setup/model/plan'){send(res,200,onboarding.connectionPlan(await body(req)));return}
+    if(req.method==='POST'&&path==='/entry-setup/model/check'){const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));send(res,200,await onboarding.check(input.id));return}
+    if(req.method==='POST'&&(path==='/entry-setup/apply'||path==='/entry-setup/model/apply')){
+      const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));changing=true
+      try{send(res,200,await entries.apply(input.id,rebuild))}finally{changing=false}return
+    }
+    if(req.method==='POST'&&path==='/entry-setup/install'){const input=z.object({entryId:z.enum(entryIds)}).strict().parse(await body(req));send(res,200,await entries.install(input.entryId));return}
+    if(req.method==='GET'&&path==='/entry-setup/client-config'){const id=new URL(req.url!,'http://localhost').searchParams.get('entryId');send(res,200,entries.clientConfig(z.enum(entryIds).parse(id)));return}
+    if(req.method==='POST'&&path==='/entry-setup/verification'){const input=z.object({entryId:z.enum(entryIds),sourceId:z.string().optional(),language:z.enum(['en','zh']).default('en')}).strict().parse(await body(req));send(res,200,entries.beginVerification(input.entryId,input.sourceId,input.language));return}
+    if(req.method==='GET'&&path.startsWith('/entry-setup/verification/')){send(res,200,entries.verification(path.slice('/entry-setup/verification/'.length)));return}
+    if(req.method==='POST'&&path==='/entry-setup/allow'){const input=z.object({revision:z.number().int(),sourceId:z.string(),actor:z.string()}).strict().parse(await body(req));send(res,200,entries.allow(input.revision,input.sourceId,input.actor));return}
+    if(req.method==='POST'&&path==='/entry-setup/share'){const input=z.object({entryIds:z.array(z.enum(entryIds)).min(1).max(20)}).strict().parse(await body(req));send(res,200,await entries.share(input.entryIds));return}
     if(req.method==='GET'&&path==='/onboarding'){send(res,200,onboarding.info());return}
     if(req.method==='POST'&&path==='/onboarding/plan'){send(res,200,onboarding.plan(await body(req)));return}
     if(req.method==='POST'&&path==='/onboarding/check'){const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));send(res,200,await onboarding.check(input.id));return}
@@ -170,12 +206,30 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(!source?.context)throw Error('Source does not provide context reading')
       send(res,200,await source.context(input.thread));return
     }
-    if (req.method === 'GET' && path === '/status') { send(res, 200, runtime.status()); return }
+    if (req.method === 'GET' && path === '/status') {
+      const status=runtime.status(),client=String(req.headers['x-agenthub-client']??''),bridge=String(req.headers['x-agenthub-bridge']??''),query=new URL(req.url!,'http://localhost').searchParams
+      const filter=z.object({discussion:z.string().min(1).max(300).optional(),requestId:z.string().min(1).max(200).optional()}).strict().parse(Object.fromEntries(['discussion','requestId'].filter(k=>query.has(k)).map(k=>[k,query.get(k)])))
+      const compact=clientIds.includes(client as any)||!!filter.discussion||!!filter.requestId,view=compact?clientStatus(status,filter):status
+      if(clientIds.includes(client as any)&&bridge.length<=100)for(const ticket of view.tickets){
+        const request=runtime.store.get<any>('entry-client-event',ticket.origin.triggerId)
+        if(request?.client===client&&request.bridge===bridge&&ticket.run?.phase==='idle'&&ticket.run.result&&!(ticket.run as any).replyTruncated&&ticket.run.result.length<=4000&&status.deliveries.some(d=>d.ticketId===ticket.id&&d.kind==='reply'&&d.status==='sent'))runtime.store.put('entry-client-receipt',ticket.id,{client,bridge,legacyBridge:!bridge,at:Date.now()})
+      }
+      send(res,200,view);return
+    }
+    if(req.method==='POST'&&path==='/request'){
+      const input=z.object({text:z.string().min(1).max(100000),discussion:z.string().min(1).max(300).optional(),requestId:z.string().min(1).max(200).optional()}).strict().parse(await body(req))
+      const source=runtime.config.sources.find(s=>s.kind==='local'&&s.enabled);if(!source)throw new OnboardingError('local_entry_missing','Add a local operator source before connecting a client.')
+      const discussion=input.discussion??randomUUID(),requestId=input.requestId??randomUUID(),result=runtime.receive(source.id,source.allowedActors[0]!,{id:requestId,thread:discussion,text:input.text,addressed:true}) as any
+      const client=String(req.headers['x-agenthub-client']??''),bridge=String(req.headers['x-agenthub-bridge']??'').slice(0,100);if(clientIds.includes(client as any))runtime.store.put('entry-client-event',result.triggerId,{client,bridge,at:Date.now()})
+      send(res,202,{...result,discussion,requestId,next:{tool:'agent_status',arguments:{discussion,requestId}}});return
+    }
     if (req.method === 'POST' && path === '/send') {
       const input = z.object({ source: z.string(), event: incomingSchema }).strict().parse(await body(req))
       const source = runtime.sources.get(input.source)
       if (!source || source.config.kind !== 'local') throw new Error('Use the authenticated connector for external events')
-      send(res, 202, runtime.receive(input.source, source.config.allowedActors[0]!, input.event))
+      const result=runtime.receive(input.source, source.config.allowedActors[0]!, input.event) as any,client=String(req.headers['x-agenthub-client']??'')
+      if(clientIds.includes(client as any))runtime.store.put('entry-client-event',result.triggerId,{client,bridge:String(req.headers['x-agenthub-bridge']??'').slice(0,100),at:Date.now()})
+      send(res, 202, result)
       return
     }
     if (req.method === 'POST' && path === '/action') {
@@ -201,9 +255,10 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const address = server.address() as { port: number }
   runtime.endpoint='http://127.0.0.1:'+address.port
   endpoint=runtime.endpoint
+  sessions.bindOrigin(endpoint)
   try{atomicPrivateFile(connectionFile,JSON.stringify({application:'agent-hub',version:1,url:endpoint,accessToken:token},null,2)+'\n')}catch(error){await new Promise<void>(r=>server.close(()=>r()));throw error}
   runtime.start()
-  return {server,url:endpoint,tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await stopRuntime()}}
+  return {server,url:endpoint,operatorUrl:sessions.link(endpoint),tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await stopRuntime()}}
 }
 function send(response: ServerResponse, status: number, value: unknown) {
   if (!response.headersSent) response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })

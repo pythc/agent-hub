@@ -59,8 +59,9 @@ function selectGuide(key, value, redraw = true) {
   }
 }
 function switchSurface(surface) {
-  if (guide.busy || S.busy) return
+  if (guide.busy || S.busy || entryState.busy) return
   S.surface = surface
+  if (surface === 'advanced') void loadConnectInfo()
   // A direct advanced-settings bookmark bypasses onboarding on future visits.
   const url = new URL(location.href)
   if (surface === 'advanced') url.hash = 'advanced'
@@ -93,7 +94,7 @@ function guideHeader() {
   return add(
     el('header', 'guide-header'),
     guideBrand(),
-    add(el('div', 'tools'), add(el('label', 'inline'), icon('lang'), languagePicker()), advanced)
+    add(el('div', 'tools'), action(L('Connections & attention', '入口与待处理'), () => entryNavigate('home'), 'text-action'), add(el('label', 'inline'), icon('lang'), languagePicker()), advanced)
   )
 }
 function stepList() {
