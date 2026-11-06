@@ -42,15 +42,15 @@ function updateBar() {
       : count > 1
         ? L(count + ' configuration groups changed', count + ' 个配置组已修改')
         : L('Unsaved changes', '有未保存的更改')
-  const discard = action(L('Discard', '放弃更改'), discardDraft),
-    saveButton = action(
+  const discard = opButton(L('Discard', '放弃更改'), discardDraft, 'button'),
+    saveButton = opButton(
       S.latest
         ? L('Review conflict', '核对冲突')
         : S.busy === 'save'
           ? L('Saving…', '保存中…')
           : count > 1 ? L('Save all changes', '保存全部更改') : L('Save changes', '保存更改'),
       S.latest ? revealRecovery : () => save(),
-      'btn primary',
+      'button primary',
       'check'
     )
   discard.disabled = !!S.busy || !!entryState.busy
