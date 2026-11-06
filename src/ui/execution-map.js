@@ -1,6 +1,6 @@
 // The original Tool Access Map composition, driven by recorded host calls.
 function executionModeTabs(){
- const tabs=affectSegmented({id:'execution-mode-tab',label:L('Execution view','执行视图'),value:executionView.mode,options:[{value:'calls',label:L('Calls','调用'),controls:'execution-mode-panel'},{value:'configuration',label:L('Configuration','配置')+(controlState.execution?.dirty?' •':''),controls:'execution-mode-panel'}],onChange:value=>{executionView.mode=value;render()}})
+ const tabs=affectSegmented({id:'execution-mode-tab',label:L('Execution view','执行视图'),value:executionView.mode,options:[{value:'calls',label:L('Calls','调用'),controls:'execution-mode-panel'},{value:'configuration',label:L('Configuration','配置')+(changed().some(key=>['execution','models','concurrency'].includes(key))?' •':''),controls:'execution-mode-panel'}],onChange:value=>opNavigate('execution','',{view:value})})
  tabs.classList.add('execution-mode-tabs');return tabs
 }
 function executionActors(){
@@ -40,7 +40,7 @@ function executionMapBody(){
  if(actor.kind==='router'){
   const entries=entryState.data?.entries?.filter(entry=>entry.category==='client'?entry.client?.installed||entry.status==='verified':entry.sources?.some(source=>source.enabled))||[]
   for(const entry of entries)left.append(executionMapNode({key:'app-'+entry.id,kind:'app',id:entry.id,name:entryName(entry)}))
-  if(!entries.length)left.append(affectButton(L('New connection','新建接入'),()=>{opNavigate('catalog');operator.addingConnection=true;render(true)},{glyph:'plus'}))
+  if(!entries.length)left.append(affectButton(L('New connection','新建接入'),()=>opNavigate('catalogue'),{glyph:'plus'}))
   left.append(executionMapNode({key:'tool-superagent_read',kind:'tool',id:'superagent_read',name:L(...executionToolLabels.superagent_read)}))
   for(const worker of actors.filter(a=>a.kind==='worker'))right.append(executionMapNode({key:'worker-'+worker.id,kind:'worker',id:worker.id,name:worker.name,model:worker.model,action:()=>executionPickActor(worker,true)}))
   const queue=el('div','execution-map-queue tam-node',L('Queue','队列'));queue.dataset.mapKey='queue';map.append(queue)
@@ -51,7 +51,7 @@ function executionMapBody(){
  }
  const center=el('section','execution-map-center tam-node');center.dataset.mapKey='center'
  const title=el('h2','',actor.name),state=el('span','execution-map-center-state'),model=el('p','execution-map-model'),task=el('p','execution-map-task'),stats=el('button','execution-map-history');stats.type='button';stats.id='execution-map-center-history';stats.onclick=()=>executionOpenCalls(actor.kind,actor.id,stats.id)
- const configure=affectButton(L('Configure','配置'),()=>{executionView.mode='configuration';render()},{variant:'ghost'});configure.classList.add('execution-map-configure')
+ const configure=affectButton(L('Configure','配置'),()=>opNavigate('execution','',{view:'configuration'}),{variant:'ghost'});configure.classList.add('execution-map-configure')
  center.append(add(el('div','execution-map-center-content'),add(el('div','execution-map-center-heading'),icon(actor.kind==='router'?'activity':'cpu'),title,state),model,task,stats,add(el('div','execution-map-center-actions'),configure,executionEditInstructions(actor.kind))))
  map.style.setProperty('--map-rows',String(Math.max(left.children.length,right.children.length)));map.style.minHeight=Math.max(390,Math.max(left.children.length,right.children.length)*82+24)+'px';map.append(left,center,right);return map
 }

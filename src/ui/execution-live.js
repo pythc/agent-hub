@@ -22,7 +22,7 @@ function executionTools(){
 }
 function executionSelectTools(navigate=false){
  const root=executionView.root;if(!root?.isConnected)return
- const tools=root.querySelector('.execution-tools'),selected=executionView.selected,label=selected.kind==='router'?'Router':'Worker '+(controlDraft('execution').workers.findIndex(w=>w.id===selected.id)+1)
+ const tools=root.querySelector('.execution-tools'),selected=executionView.selected,label=selected.kind==='router'?'Router':'Worker '+(executionDraft().workers.findIndex(w=>w.id===selected.id)+1)
  const names=selected.kind==='router'?['superagent_read']:(operator.work?.architecture?.tools||[])
  const owner=el('button','execution-tools-owner',label);owner.type='button';owner.setAttribute('aria-label',L('Back to '+label,'返回 '+label));owner.onclick=()=>{const node=[...root.querySelectorAll('[data-select-kind]')].find(n=>n.dataset.selectKind===selected.kind&&(selected.kind==='router'||n.dataset.selectKey===selected.id));node?.focus({preventScroll:true});node?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'})}
  tools.replaceChildren(add(el('div','execution-tools-heading'),el('h2','',L('Tools','工具')),owner))
@@ -143,7 +143,7 @@ let executionPolling=false
 setInterval(async()=>{
  if(executionPolling||document.hidden||!executionView.root?.isConnected||!S.authed||S.busy||entryState.busy||operator.drawer)return
  executionPolling=true;const root=executionView.root
- try{const snapshot=await api('/entry-workspace?offset='+operator.offset);if(root!==executionView.root||!root.isConnected)return;operator.work=snapshot;executionView.stale=false;executionPaint()}
+ try{const snapshot=await api(operatorWorkPath());if(root!==executionView.root||!root.isConnected)return;operator.work=snapshot;executionView.stale=false;executionPaint()}
  catch(error){if(root!==executionView.root||!root.isConnected)return;if(error.status===401){entryError(error);render()}else{executionView.stale=true;executionPaint()}}
  finally{executionPolling=false}
 },1000)

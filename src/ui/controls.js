@@ -42,67 +42,6 @@ function icon(name) {
   svg.append(path)
   return svg
 }
-const sections = [
-  [
-    'overview',
-    'Overview',
-    '概览',
-    'Inspect the host, access and current runtime settings.',
-    '查看宿主、访问状态和当前运行配置。'
-  ],
-  [
-    'execution',
-    'Execution',
-    '执行',
-    'Choose the backend and model used for new work.',
-    '选择新任务使用的后端与模型。'
-  ],
-  [
-    'sources',
-    'Sources',
-    '来源',
-    'Manage who can send work and how each source admits it.',
-    '配置可发送任务的人员，以及各来源的准入规则。'
-  ],
-  [
-    'policy',
-    'Policy',
-    '策略',
-    'Decide when the router may infer a task from a message.',
-    '设置路由器何时可以从消息中推断任务。'
-  ],
-  [
-    'work',
-    'Background work',
-    '后台任务',
-    'Set resource limits and isolation for background tasks.',
-    '设置后台任务的资源边界与隔离方式。'
-  ],
-  [
-    'delivery',
-    'Delivery',
-    '交付',
-    'Control publishing, review and automatic merge.',
-    '配置发布、审核和自动合并的条件。'
-  ],
-  [
-    'prompts',
-    'Prompts',
-    '提示词',
-    'Edit team instructions and inspect the composed prompt.',
-    '编辑团队指令，预览组合后的提示词。'
-  ],
-  [
-    'advanced',
-    'Advanced & history',
-    '高级与历史',
-    'Edit configuration as JSON and restore a saved revision.',
-    '以 JSON 编辑配置，或将历史版本载入草稿。'
-  ]
-]
-const roles = ['router', 'worker', 'subagent']
-const roleName = (r) =>
-  ({ router: L('Router', '路由器'), worker: L('Worker', '执行器'), subagent: L('Subagent', '子代理') })[r]
 const editable = [
   'execution',
   'models',
@@ -127,8 +66,7 @@ const sourceKeys = [
   'memberSync'
 ]
 let S = {
-  surface: location.hash === '#advanced' ? 'advanced' : 'entries',
-  page: 'overview',
+  surface: 'entries',
   health: null,
   healthDone: false,
   token: '',
@@ -148,9 +86,7 @@ let S = {
   advancedKey: 'execution',
   previewRole: 'router',
   preview: null,
-  promptIndex: null,
-  promptError: false,
-  restoreId: null
+  promptIndex: null
 }
 const app = document.getElementById('app')
 const clone = (v) => (v === undefined ? undefined : structuredClone(v))
@@ -307,6 +243,12 @@ function validateShape(key, value) {
     }
     if (typeof candidate !== typeof template) throw Error()
   }
+  if (key === 'execution' && value.workers !== undefined &&
+    (!Array.isArray(value.workers) || value.workers.length < 1 || value.workers.length > 10 ||
+      value.workers.some(worker => !worker || typeof worker.id !== 'string' ||
+        typeof worker.backend !== 'string' || (worker.model !== undefined && typeof worker.model !== 'string'))))
+    throw Error()
+  if (key === 'models' && Object.values(value).some(model => typeof model !== 'string')) throw Error()
   if (key === 'sources') {
     for (const source of value) {
       const original = S.base.config.sources.find((s) => s.id === source.id)
@@ -342,8 +284,10 @@ function inputField(path, title, spec = {}) {
     label.append(hint)
     form.setAttribute('aria-describedby', hint.id)
   }
+  form.disabled = !!spec.disabled
   let value = get(S.draft, path)
   if (spec.sourceProjection) value = projectSources(value)
+  if (spec.scale && value != null) value /= spec.scale
   const buffer = S.buffers.get(path)
   if (type === 'select') {
     for (const option of spec.options) {
@@ -391,7 +335,15 @@ function inputField(path, title, spec = {}) {
     else if (type === 'num') {
       if (!next.trim() || !form.validity.valid || !Number.isFinite(form.valueAsNumber))
         problem = ['Enter a number within the indicated limits.', '请输入范围内的有效数字。']
-      else next = form.valueAsNumber
+      else {
+        next = form.valueAsNumber * (spec.scale || 1)
+        if (spec.scaledInteger) {
+          const rounded = Math.round(next)
+          if (Math.abs(next - rounded) > 1e-6)
+            problem = ['Enter a value that converts to a whole number.', '请输入可换算为整数的值。']
+          else next = rounded
+        }
+      }
     } else if (type === 'json') {
       try {
         next = JSON.parse(next)
@@ -414,7 +366,7 @@ function inputField(path, title, spec = {}) {
     else set(S.draft, path, next)
     if (path.startsWith('prompts')) {
       S.preview = null
-      document.getElementById('preview-output')?.replaceChildren()
+      document.getElementById('control-prompt-preview')?.remove()
     }
     if (S.notice?.level === 'success') {
       S.notice = null
@@ -435,6 +387,9 @@ const num = (p, name, min, max) =>
     max,
     help: max === undefined ? L('Minimum ', '最小值 ') + min : min + ' – ' + max
   })
+const scaledNumber = (path, label, scale, min, max, integer = true) =>
+  inputField(path, label, { type: 'num', scale, scaledInteger: integer,
+    min: min / scale, max: max === undefined ? undefined : max / scale, step: 'any' })
 const choose = (p, name, options, more = {}) => inputField(p, name, { type: 'select', options, ...more })
 const toggle = (p, name, help) => inputField(p, name, { type: 'bool', help })
 const jsonField = (p, title, extra = {}) => inputField(p, title, { type: 'json', ...extra })

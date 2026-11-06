@@ -1,5 +1,3 @@
-const controlState={execution:null,prompts:null,promptTab:'shared',preview:null}
-const controlHasDraft=()=>!!(controlState.execution?.dirty||controlState.prompts?.dirty)
 function controlConnections(){return Object.entries({codex:{kind:'codex'},...(S.base?.config.backends||{})}).map(([id,b])=>({id,kind:b.kind,model:b.kind==='codex'?S.base?.config.model:b.model,label:b.label||(b.kind==='codex'?'Codex':new URL(b.baseUrl).hostname+' · '+b.model)}))}
 function controlField(id,label,value,onChange,options=null,placeholder=''){
  const input=el(options?'select':'input');input.id=id
@@ -9,71 +7,269 @@ function controlField(id,label,value,onChange,options=null,placeholder=''){
  const title=el('label','',label);title.htmlFor=id
  return add(el('div','control-field'),title,input)
 }
-function controlDraft(kind){
- const config=S.base.config,current=kind==='execution'?{execution:config.execution,models:config.models}:config.prompts
- let draft=controlState[kind]
- if(draft&&!draft.dirty&&!same(draft.base,current)){controlState[kind]=null;return controlDraft(kind)}
- if(!draft){draft=kind==='execution'?{revision:S.base.revision,base:clone(current),router:config.execution.roles.router??config.execution.backend,routerModel:config.models.router||'',workers:clone(config.execution.workers||Array.from({length:config.concurrency},(_,i)=>({id:'worker-'+(i+1),backend:config.execution.roles.worker??config.execution.backend,...(config.models.worker?{model:config.models.worker}:{})})))}:{revision:S.base.revision,base:clone(current),values:clone(current)};draft.dirty=false;controlState[kind]=draft}
- if(same(draft.base,current))draft.revision=S.base.revision
- return draft
-}
-function controlEdit(kind){const draft=controlDraft(kind);draft.dirty=true;const save=document.getElementById('control-save-'+kind);if(save)save.disabled=false}
-async function controlSave(kind){
- await run('save',async()=>{
-  if(dirty())throw Error(L('Save or discard the advanced-settings draft first.','请先保存或放弃高级设置中的草稿。'))
-  const draft=controlDraft(kind),config=S.base.config
-  const patch=kind==='execution'?{execution:{...config.execution,roles:{...config.execution.roles,router:draft.router},workers:draft.workers.map(w=>({id:w.id,backend:w.backend,...(w.label?{label:w.label}:{}),...(w.model?.trim()?{model:w.model.trim()}:{})}))},models:{...config.models,...(draft.routerModel.trim()?{router:draft.routerModel.trim()}:{router:undefined})},concurrency:draft.workers.length}:{prompts:draft.values}
-  await api('/settings',{revision:draft.revision,patch});controlState[kind]=null;controlState.preview=null;adopt(await snapshot());await readEntries();announce(L('Saved.','已保存。'))
- })
-}
-function controlActions(kind){
- const save=opButton(L('Save','保存'),()=>controlSave(kind),'button primary');save.id='control-save-'+kind;save.disabled=!controlDraft(kind).dirty
- const cancel=opButton(L('Reload saved settings','重新载入已保存设置'),()=>{if(controlDraft(kind).dirty&&!confirm(L('Discard these unsaved changes?','放弃这些未保存的修改？')))return;void run('refresh',async()=>{if(dirty())throw Error(L('Save or discard the advanced-settings draft first.','请先保存或放弃高级设置中的草稿。'));const latest=await snapshot();controlState[kind]=null;controlState.preview=null;adopt(latest);await readEntries()})},'text-button')
- return add(el('div','control-actions'),save,cancel)
-}
-function controlPrompts(){
- if(!S.base)return [accessPanel()]
- const draft=controlDraft('prompts'),tabs=[['shared',L('Shared','共同要求')],['router','Router'],['worker','Worker'],['delivery',L('Reply format','回复格式')]],tab=controlState.promptTab
- const labels={shared:L('Applies to Router and every Worker','作用于 Router 和所有 Worker'),router:L('When to accept work and how to define its scope','何时接任务，如何确定处理范围'),worker:L('How work is carried out and checked','如何执行任务和验证结果'),delivery:L('How replies are formatted','结果如何组织和回复')}
- const nav=el('div','prompt-tabs');nav.setAttribute('role','group');nav.setAttribute('aria-label',L('Instruction target','提示词用途'))
- for(const [key,label]of tabs){const b=opButton(label,()=>{controlState.promptTab=key;controlState.preview=null;render()},'tab');b.setAttribute('aria-pressed',String(tab===key));nav.append(b)}
- const input=el('textarea','prompt-editor');input.id='control-prompt-editor';input.value=draft.values[tab]||'';input.placeholder=L('Leave empty to use built-in instructions.','留空使用系统默认指令。');input.oninput=()=>{draft.values[tab]=input.value;controlEdit('prompts');controlState.preview=null;document.getElementById('control-prompt-preview')?.remove()}
- const label=el('label','prompt-purpose',labels[tab]);label.htmlFor=input.id
- const preview=opButton(L('Preview actual instructions','预览实际指令'),()=>run('preview',async()=>{controlState.preview=await api('/prompt-preview',{role:tab==='router'?'router':'worker',prompts:draft.values})}),'button')
- const editor=add(el('section','prompt-config'),nav,label,input,el('p','control-hint',L('These requirements supplement the system instructions.','此处填写补充要求，系统指令仍保留。')),add(el('div','control-actions'),controlActions('prompts'),preview))
- if(controlState.preview){const output=detail(L('Actual instructions','实际发送的指令'),raw(controlState.preview.text));output.id='control-prompt-preview';output.open=true;editor.append(output)}
- const more=detail(L('Advanced prompt parts','高级提示词片段'),add(el('div'),el('p','control-hint',L('System templates and team skills. Changes preserve required placeholders.','系统模板和团队技能，修改时需保留必要变量。')),opButton(L('Open prompt parts','编辑片段'),()=>{switchSurface('advanced');S.page='prompts';S.promptParts=true;render()},'button')))
- return [editor,more]
-}
-function controlNewConnection(id){
- opNavigate('detail',id);entryState.creating=true;entryState.source='';entryState.draft={botMode:'existing'};entryState.probe=null;entryState.verification=null;render(true)
-}
-function controlConnectionsPage(){
- const result=[opHeading(L('Software connections','软件接入'),null,opButton(L('New connection','新建接入'),()=>{operator.addingConnection=true;operator.search='';render()},'button primary','plus'))],table=el('div','connection-instance-list')
- let count=0
- for(const entry of entryState.data.entries){
-  const sources=entry.category==='client'?(entry.status!=='not-configured'?[null]:[]):entry.sources||[]
-  for(const source of sources){count++;const label=source?.label||entryName(entry),scopes=source?.scopes?.map(s=>typeof s==='object'?s.label:'').filter(Boolean).join(', ')||entry.usage?.location||'',state=source?(source.enabled===false?L('Disabled','已停用'):source.verification?.verified?L('Verified','已验证'):L('Awaiting verification','待验证')):entryStateLabel(entry.status)
-   const open=opButton(L('Configure','配置'),()=>{opNavigate('detail',entry.id);entryState.source=source?.id||'';entryState.creating=false;entryState.verification=null;render(true)},'button')
-   table.append(add(el('div','connection-instance'),opMark(entry.id),add(el('div'),el('strong','',label),el('span','connection-detail',scopes)),el('span','connection-platform',entryName(entry)),el('span','connection-state',state),open))
+let promptTarget = 'shared'
+function executionDraft() {
+  const config = S.draft
+  const route = config.execution || S.base.config.execution
+  const backend = route.backend ?? S.base.config.execution.backend
+  return {
+    router: route.roles?.router ?? backend,
+    routerModel: config.models?.router || '',
+    workers: clone(route.workers?.length ? route.workers : Array.from(
+      { length: Math.min(10, Math.max(1, config.concurrency || 1)) },
+      (_, index) => ({
+        id: 'worker-' + (index + 1),
+        backend: route.roles?.worker ?? backend,
+        ...(config.models?.worker ? { model: config.models.worker } : {})
+      })
+    ))
   }
- }
- if(!count)table.append(opEmpty(L('No connections.','尚未添加接入。')))
- result.push(table);return result
 }
-function controlNewModel(){
- if(entryModel.touched&&!confirm(L('Discard the unsaved service draft?','放弃未保存的模型服务草稿？')))return
- Object.assign(entryModel,{creating:true,name:'',mode:'api',existingId:'',provider:'openai',endpoint:'',protocol:'openai-responses',model:'',credential:'',open:true,touched:false,plan:null,check:null,saved:false});render(true)
+function editExecution(draft) {
+  const config = S.draft
+  const execution = config.execution || S.base.config.execution
+  const roles = { ...execution.roles }
+  if (draft.router !== (roles.router ?? execution.backend)) roles.router = draft.router
+  const workers = draft.workers.map(({ model, ...worker }) => ({
+    ...worker, ...(model?.trim() ? { model: model.trim() } : {})
+  }))
+  const models = { ...config.models }
+  if (draft.routerModel.trim()) models.router = draft.routerModel.trim()
+  else delete models.router
+  for (const [key, next] of Object.entries({
+    execution: { ...execution, roles, workers }, models, concurrency: workers.length
+  })) {
+    if (same(config[key], next)) continue
+    clearRelated(key)
+    config[key] = next
+  }
+  updateBar()
 }
-function controlModels(){
- const result=[opHeading(L('Model services','模型服务'),null,opButton(L('New service','新建模型服务'),controlNewModel,'button primary','plus'))],list=el('div','model-service-list')
- for(const service of controlConnections()){
-  const row=add(el('div','model-service-row'),add(el('div'),el('strong','',service.label),el('span','model-service-kind',service.kind)),el('span','',service.model||L('Codex default','Codex 默认模型')),opButton(L('Check','检查连接'),()=>{Object.assign(entryModel,{creating:false,name:'',mode:'existing',existingId:service.id,open:true,plan:null,check:null,saved:false,touched:false});render();void checkEntryModel()},'button'))
-  list.append(row)
- }
- result.push(list)
- if(entryModel.creating||entryModel.check||entryModel.saved){const settings=entryModel.creating?entryModelSettings():entryModelResult();if(entryModel.creating)settings.open=true;settings.classList.add('operator-model-form');result.push(add(el('section','new-model-service'),add(el('div','section-heading'),entryModel.creating?el('h2','',L('New service','新建模型服务')):null,opButton(L('Close','关闭'),()=>{if(entryModel.touched&&!confirm(L('Discard unsaved changes?','放弃未保存的修改？')))return;entryModel.creating=false;entryModel.credential='';entryModel.touched=false;entryModel.check=null;entryModel.saved=false;render()},'text-button')),settings))}
- return result
+function editPrompt(target, text) {
+  clearRelated('prompts.' + target)
+  set(S.draft, 'prompts.' + target, text)
+  S.preview = null
+  document.getElementById('control-prompt-preview')?.remove()
+  updateBar()
+}
+function promptTemplate(part) {
+  const current = S.draft.prompts?.overrides?.[part.id]
+  const input = el('textarea')
+  input.value = current?.text ?? part.default
+  const label = add(el('label', 'template-editor'), el('span', 'field-label', L('Template text', '模板内容')), input)
+  const update = text => {
+    clearRelated('prompts.overrides')
+    const overrides = { ...S.draft.prompts?.overrides }
+    if (text === part.default) delete overrides[part.id]
+    else overrides[part.id] = { text, base: part.base }
+    set(S.draft, 'prompts.overrides', overrides)
+    S.preview = null
+    document.getElementById('control-prompt-preview')?.remove()
+    updateBar()
+  }
+  input.oninput = () => update(input.value)
+  return detail(part.id, add(el('div', 'stack'), label,
+    current && current.base !== part.base
+      ? el('p', 'hint', L('The built-in template changed. Compare it before saving.', '内置模板已更新，请对照后再保存。'))
+      : null,
+    detail(L('Built-in value', '查看内置值'), raw(part.default)),
+    opButton(L('Use built-in template', '使用内置模板'), () => {
+      input.value = part.default
+      update(input.value)
+    }, 'button')
+  ))
+}
+function controlPrompts() {
+  const templates = entryState.promptView === 'templates'
+  const nav = workspaceTabs(L('Prompt views', '提示词视图'), [
+    [L('Role instructions', '角色指令'), !templates, () => opNavigate('prompts', '', { view: 'roles' })],
+    [L('Team and templates', '团队与模板'), templates, () => opNavigate('prompts', '', { view: 'templates' })]
+  ])
+  const result = [opHeading(L('Prompts', '提示词'), null), nav]
+  const preview = add(el('div', 'settings-stack'),
+    selector('preview-role', L('Instruction role', '合成指令角色'), [['router', 'Router'], ['worker', 'Worker']], S.previewRole, role => {
+      S.previewRole = role
+      S.preview = null
+      render()
+    }),
+    opButton(L('Preview actual instructions', '查看生效指令'), previewPrompt, 'button'))
+  if (S.preview) {
+    const output = detail(S.preview.fromDraft
+      ? L('Draft instructions (based on r', '草稿合成指令（基于 r') + S.preview.baseRevision + ')'
+      : L('Saved instructions (r', '已保存的合成指令（r') + S.preview.revision + ')', raw(S.preview.text))
+    output.id = 'control-prompt-preview'
+    output.open = true
+    preview.append(output)
+  }
+  if (templates) {
+    result.push(add(el('div', 'workspace-settings settings-with-aside'),
+      add(el('div', 'settings-stack'),
+        group(L('Team instructions', '团队指令'), null,
+          inputField('prompts.team.communication', L('Communication', '沟通'), { type: 'area' }),
+          inputField('prompts.team.scope', L('Scope', '范围'), { type: 'area' }),
+          inputField('prompts.team.delivery', L('Delivery expectations', '交付要求'), { type: 'area' })),
+        group(L('Built-in templates', '内置模板'), null,
+          ...(S.promptIndex?.parts || []).map(promptTemplate),
+          S.promptIndex ? null : opButton(L('Load templates', '读取模板'), loadPrompts, 'button')),
+        detail(L('Team skills', '团队技能'), jsonField('prompts.skills', L('Skills (JSON)', '技能（JSON）'), { objectType: 'object' }))),
+      panel(L('Effective instructions', '生效指令'), preview)))
+    return result
+  }
+  const roles = [['shared', L('Shared', '共享')], ['router', 'Router'], ['worker', 'Worker'], ['delivery', L('Reply format', '回复格式')]]
+  const label = ({
+    shared: L('Applies to Router and every Worker', '作用于 Router 和所有 Worker'),
+    router: L('When to accept work and how to define its scope', '何时接任务，如何确定处理范围'),
+    worker: L('How work is carried out and checked', '如何执行任务和验证结果'),
+    delivery: L('How replies are formatted', '结果如何组织和回复')
+  })[promptTarget]
+  const roleTabs = affectSegmented({
+    id: 'prompt-role', label: L('Instruction target', '指令用途'), value: promptTarget,
+    options: roles.map(([value, label]) => ({ value, label, controls: 'prompt-role-panel' })),
+    onChange: value => {
+      promptTarget = value
+      if (value === 'router' || value === 'worker') S.previewRole = value
+      S.preview = null
+      render()
+    }
+  })
+  roleTabs.classList.add('workspace-role-tabs')
+  const input = el('textarea', 'prompt-editor')
+  input.id = 'control-prompt-editor'
+  input.value = S.draft.prompts?.[promptTarget] || ''
+  input.placeholder = L('Leave empty to use built-in instructions.', '留空使用系统默认指令。')
+  input.oninput = () => editPrompt(promptTarget, input.value)
+  const field = el('label', 'prompt-purpose', label)
+  field.htmlFor = input.id
+  const editor = add(el('section', 'prompt-config'), field, input)
+  editor.id = 'prompt-role-panel'
+  editor.setAttribute('role', 'tabpanel')
+  editor.setAttribute('aria-labelledby', 'prompt-role-' + promptTarget)
+  result.push(roleTabs, add(el('div', 'settings-with-aside'), editor, panel(L('Effective instructions', '生效指令'), preview)))
+  return result
+}
+function controlNewConnection(id) {
+  opNavigate('detail', id, { creating: true, source: '' })
+}
+function controlConnectionsPage() {
+  const configured = entryState.data.entries.filter(entry => entry.status !== 'not-configured')
+  const result = [opHeading(L('Software connections', '软件接入'), null,
+    configured.length ? opButton(L('Prepare usage instructions', '生成使用说明'),
+      () => shareEntries(configured.map(entry => entry.id)), 'button') : null,
+    opButton(L('New connection', '新建接入'), () => opNavigate('catalogue'), 'button primary', 'plus'))]
+  const connections = []
+  for (const entry of entryState.data.entries) {
+    const sources = entry.category === 'client' ? (entry.status !== 'not-configured' ? [null] : []) : entry.sources || []
+    for (const source of sources) {
+      const name = source?.label || entryName(entry)
+      const scopes = connectionScope(entry, source)
+      const state = source
+        ? source.enabled === false ? 'disabled' : source.verification?.verified ? 'verified' : 'configured'
+        : entry.status
+      const label = state === 'disabled' ? L('Disabled', '已停用') :
+        state === 'configured' ? L('Awaiting verification', '待验证') : entryStateLabel(state)
+      const cells = [
+        add(el('div', 'table-title'), opMark(entry.id), add(el('div'), el('strong', '', name), el('small', 'hint', entryName(entry)))),
+        el('span', '', scopes || '—'),
+        el('span', 'pill ' + (state === 'verified' ? 'green' : state === 'disabled' ? 'neutral' : 'amber'), label),
+        opButton(L('Manage', '管理'), () => opNavigate('detail', entry.id, { source: source?.id || '' }), 'button')
+      ]
+      connections.push({ title: name + ' ' + entryName(entry) + ' ' + scopes, state, cells })
+    }
+  }
+  const mapped = new Set(entryState.data.entries.flatMap(entry => (entry.sources || []).map(source => source.id)))
+  for (const source of S.base.config.sources.filter(source => !mapped.has(source.id))) {
+    const name = source.kind === 'local' ? L('Local assistant', '本机助手') : source.id
+    const state = source.enabled ? 'configured' : 'disabled'
+    connections.push({ title: name, state, cells: [
+      add(el('div', 'table-title'), opMark(source.kind), el('strong', '', name)),
+      el('span', '', source.listenScopes?.length ? L(source.listenScopes.length + ' scopes', source.listenScopes.length + ' 个监听范围') : '—'),
+      el('span', 'pill neutral', source.enabled ? L('Configured', '已配置') : L('Disabled', '已停用')),
+      opButton(L('Manage', '管理'), () => opNavigate('detail', 'source', { source: source.id }), 'button')
+    ] })
+  }
+  if (!connections.length) return [...result, opEmpty(L('No connections. Use New connection to add one.', '尚无接入。点击「新建接入」开始。'))]
+  const search = el('input')
+  search.type = 'search'
+  search.id = 'connection-search'
+  search.placeholder = L('Search software or connection', '搜索软件或接入')
+  search.setAttribute('aria-label', search.placeholder)
+  const states = el('select')
+  states.setAttribute('aria-label', L('Connection status', '接入状态'))
+  for (const [key, text] of [['', L('All states', '全部状态')], ['verified', L('Verified', '已验证')],
+    ['configured', L('Awaiting verification', '待验证')], ['attention', L('Needs attention', '需处理')],
+    ['disabled', L('Disabled', '已停用')]]) states.add(new Option(text, key))
+  states.selectedIndex = 0
+  const list = el('div')
+  const draw = () => {
+    const matches = connections.filter(item => (states.selectedIndex <= 0 || item.state === states.value) &&
+      item.title.toLowerCase().includes(search.value.trim().toLowerCase()))
+    list.replaceChildren(matches.length ? workspaceTable([
+      L('Connection', '接入名称'), L('Listening scope', '监听范围'), L('Status', '状态'), L('Action', '操作')
+    ], matches.map(item => item.cells)) : opEmpty(L('No matching connections.', '没有符合条件的接入。')))
+  }
+  search.oninput = states.onchange = draw
+  draw()
+  return [...result, add(el('div', 'workspace-search'), search, states), list,
+    entryState.share ? entryShareResult() : null]
+}
+function connectionScope(entry, source) {
+  if (!source) return entry.usage?.location || L('Host client', '宿主客户端')
+  const scopes = source.scopes || []
+  const labels = scopes.map(scope => typeof scope === 'object' ? scope.label :
+    entry.id === 'github' ? scope : '').filter(Boolean)
+  if (labels.length) return labels.join(', ')
+  if (scopes.length) return L(scopes.length + ' configured scopes', scopes.length + ' 个监听范围')
+  return entry.usage?.location || ''
+}
+function resetNewModel() {
+  Object.assign(entryModel, {
+    creating: true, name: '', mode: 'api', existingId: '', provider: 'openai',
+    endpoint: '', protocol: 'openai-responses', model: '', credential: '', open: true,
+    touched: false, plan: null, check: null, saved: false
+  })
+}
+function controlNewModel() {
+  opNavigate('model-new')
+}
+function controlModels() {
+  if (entryState.page === 'model-new') {
+    const settings = entryModelSettings()
+    settings.open = true
+    settings.classList.add('operator-model-form')
+    return [
+      opButton(L('Model services', '模型服务'), () => opNavigate('models'), 'back-link', 'arrow'),
+      opHeading(L('New model service', '新建模型服务'), null),
+      settings
+    ]
+  }
+  const architecture = operator.work?.architecture
+  const services = controlConnections()
+  const rows = services.map(service => {
+    const check = opButton(L('Check connection', '检查连接'), () => {
+      if (entryModel.touched && !confirm(L('Discard the unsaved service draft?', '放弃未保存的模型服务草稿？'))) return
+      Object.assign(entryModel, {
+        creating: false, name: '', mode: 'existing', existingId: service.id, open: true,
+        plan: null, check: null, saved: false, touched: false, credential: ''
+      })
+      void checkEntryModel()
+    }, 'button')
+    const roles = []
+    if (architecture?.router?.backend === service.id) roles.push('Router')
+    for (const [index, worker] of (architecture?.workers || []).entries())
+      if (worker.backend === service.id) roles.push('Worker ' + (index + 1))
+    if (S.base.config.execution.roles.subagent === service.id) roles.push(L('Subagent', '子代理'))
+    const protocol = ({codex: 'Codex CLI', 'openai-responses': 'OpenAI Responses',
+      'openai-chat': 'OpenAI Chat Completions', anthropic: 'Anthropic Messages'})[service.kind] || service.kind
+    return [el('strong', '', service.label), el('span', '', protocol),
+      el('span', '', service.model || L('Service default', '服务默认模型')),
+      el('span', '', roles.join(', ') || L('Unassigned', '未分配')), check]
+  })
+  const result = [opHeading(L('Model services', '模型服务'), null,
+    opButton(L('New model service', '新建模型服务'), controlNewModel, 'button primary', 'plus')),
+    workspaceTable([L('Service', '服务名称'), L('Protocol', '协议'), L('Default model', '默认模型'),
+      L('Used by', '使用角色'), L('Action', '操作')], rows)]
+  if (entryModel.check || entryModel.saved) result.push(entryModelResult())
+  return result
 }
 
 async function controlTaskAction(action,id){

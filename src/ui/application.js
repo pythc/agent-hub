@@ -31,7 +31,7 @@ function updateBar() {
   const bar = document.getElementById('savebar')
   if (!bar) return
   const count = changed().length,
-    show = S.authed && dirty(),
+    show = S.authed && (dirty() || S.latest),
     was = bar.hidden
   bar.hidden = !show
   if (!show) return
@@ -39,20 +39,22 @@ function updateBar() {
     ? L('Check field · ', '请修正字段 · ') + S.errors.keys().next().value
     : S.latest
       ? L('Revision conflict', '版本冲突')
-      : L('Unsaved changes', '有未保存的更改')
+      : count > 1
+        ? L(count + ' configuration groups changed', count + ' 个配置组已修改')
+        : L('Unsaved changes', '有未保存的更改')
   const discard = action(L('Discard', '放弃更改'), discardDraft),
     saveButton = action(
       S.latest
         ? L('Review conflict', '核对冲突')
         : S.busy === 'save'
           ? L('Saving…', '保存中…')
-          : L('Save changes', '保存更改'),
-      S.latest ? revealRecovery : save,
+          : count > 1 ? L('Save all changes', '保存全部更改') : L('Save changes', '保存更改'),
+      S.latest ? revealRecovery : () => save(),
       'btn primary',
       'check'
     )
-  discard.disabled = !!S.busy
-  saveButton.disabled = !!S.busy || (!S.latest && (!count || S.errors.size > 0))
+  discard.disabled = !!S.busy || !!entryState.busy
+  saveButton.disabled = !!S.busy || !!entryState.busy || (!S.latest && (!count || S.errors.size > 0))
   bar.replaceChildren(
     add(
       el('div', 'bar-inner'),
@@ -93,142 +95,7 @@ function render(focusTitle = false) {
     restorePageFocus(focusTitle, focusId, start, end)
     return
   }
-  if (S.surface === 'entries') {
-    renderEntrySurface()
-    restorePageFocus(focusTitle, focusId, start, end)
-    return
-  }
-  const section = sections.find((s) => s[0] === S.page) || sections[0],
-    name = L(section[1], section[2])
-  document.documentElement.lang = lang
-  document.title = name + ' · AgentHub'
-  const skip = el('a', 'skip', L('Skip to content', '跳至主要内容'))
-  skip.href = '#main'
-  const brand = add(
-    el('div', 'brand'),
-    add(el('span', 'brand-mark'), icon('brand')),
-    el('span', '', 'AgentHub')
-  )
-  const nav = el('nav')
-  nav.setAttribute('aria-label', L('Configuration sections', '配置分区'))
-  for (const s of sections) {
-    if (['overview', 'execution', 'advanced'].includes(s[0]))
-      nav.append(
-        el(
-          'p',
-          'nav-label',
-          s[0] === 'overview'
-            ? L('Workspace', '工作区')
-            : s[0] === 'execution'
-              ? L('Configuration', '配置')
-              : L('Maintenance', '维护')
-        )
-      )
-    const b = action('', () => go(s[0]), 'nav-item')
-    b.id = 'nav-' + s[0]
-    b.replaceChildren(icon(s[0]), el('span', '', L(s[1], s[2])))
-    if (s[0] === S.page) b.setAttribute('aria-current', 'page')
-    nav.append(b)
-  }
-  const foot = add(
-    el('div', 'rail-bottom'),
-    led(S.health?.ok, S.healthDone),
-    el(
-      'span',
-      '',
-      !S.healthDone
-        ? L('Checking host…', '检查宿主中…')
-        : S.health?.ok
-          ? L('Host reachable', '宿主可达')
-          : L('Host unavailable', '宿主不可达')
-    ),
-    S.health?.version ? el('span', 'mono', 'v' + S.health.version) : null
-  )
-  const rail = add(el('aside', 'rail'), brand, nav, foot)
-  const language = languagePicker()
-  const home = add(el('a', 'text-action'), el('span', '', L('Tasks', '任务')), icon('out'))
-  home.href = '/configure'
-  const head = add(
-    el('header', 'topbar'),
-    add(
-      el('div', 'crumb'),
-      el('span', '', 'AgentHub'),
-      icon('forward'),
-      el('strong', '', L('Advanced settings', '高级设置'))
-    ),
-    add(
-      el('div', 'tools'),
-      action(L('Connections & attention', '入口与待处理'), () => entryNavigate('home'), 'text-action'),
-      add(el('label', 'inline'), icon('lang'), language),
-      home
-    )
-  )
-  const mobile = el('select')
-  mobile.id = 'section-nav'
-  mobile.setAttribute('aria-label', L('Configuration sections', '配置分区'))
-  for (const s of sections) mobile.add(new Option(L(s[1], s[2]), s[0]))
-  mobile.value = S.page
-  mobile.onchange = () => go(mobile.value)
-  const title = el('h1', '', name)
-  title.id = 'page-title'
-  title.tabIndex = -1
-  const preview =
-    S.snap?.metadata?.preview === true ||
-    S.snap?.preview === true ||
-    S.health?.metadata?.preview === true ||
-    S.health?.preview === true
-  const heading = add(
-    el('div', 'heading'),
-    add(el('div'), title),
-    preview ? badge(L('Preview workspace', '预览工作区'), 'preview') : null
-  )
-  const editor = el('fieldset', 'editor')
-  editor.disabled = !!S.busy || !!(S.latest && !S.errors.size && S.authed)
-  const sectionFns = {
-    overview,
-    execution: renderExecution,
-    sources: renderSources,
-    policy: renderPolicy,
-    work: renderWork,
-    delivery: renderDelivery,
-    prompts: renderPrompts,
-    advanced: renderAdvanced
-  }
-  if (!S.authed && S.page !== 'overview') editor.append(accessPanel())
-  else editor.append(...sectionFns[S.page]())
-  const content = add(
-    el('div', 'page-body'),
-    noticeView(),
-    S.authed && S.latest ? conflictPanel() : null,
-    S.statusError && S.authed
-      ? el(
-          'div',
-          'alert warning',
-          L(
-            'Runtime status could not be loaded. Refresh status in Overview to retry.',
-            '运行状态读取失败，请到概览刷新状态。'
-          )
-        )
-      : null,
-    editor
-  )
-  const main = add(el('main'), heading, content)
-  main.id = 'main'
-  main.tabIndex = -1
-  const bar = el('div', 'savebar')
-  bar.id = 'savebar'
-  bar.hidden = document.getElementById('savebar')?.hidden ?? true
-  const body = add(
-    el('div', 'workspace'),
-    head,
-    add(el('div', 'section-nav'), icon(S.page), mobile),
-    main,
-    bar
-  )
-  const layout = add(el('div'), rail, body)
-  layout.id = 'layout'
-  app.replaceChildren(skip, layout)
-  updateBar()
+  renderEntrySurface()
   restorePageFocus(focusTitle, focusId, start, end)
 }
 function restorePageFocus(focusTitle, focusId, start, end) {
@@ -245,11 +112,6 @@ function restorePageFocus(focusTitle, focusId, start, end) {
         } catch {}
     }
   }
-}
-function go(k) {
-  if (S.page === k) return
-  S.page = k
-  render(true)
 }
 class ApiError extends Error {
   constructor(status, payload) {
@@ -308,8 +170,18 @@ async function runtimeStatus() {
     S.statusError = true
   }
 }
-function adopt(snap) {
+function adopt(snap, rebaseOwnChange = false) {
   if (S.base && dirty() && snap.current.revision !== S.base.revision) {
+    const groups = new Set([...changed(), ...[...S.errors.keys()].map(path => path.split('.')[0])])
+    if (rebaseOwnChange && [...groups].every(key => same(S.base.config[key], snap.current.config[key]))) {
+      const edits = Object.fromEntries([...groups].map(key => [key, S.draft[key]]))
+      S.snap = snap
+      S.base = snap.current
+      S.draft = { ...clone(S.base.config), ...edits }
+      S.latest = null
+      S.preview = null
+      return
+    }
     S.latest = snap
     return
   }
@@ -429,39 +301,54 @@ function resetDraft(base) {
   S.preview = null
 }
 function discardDraft() {
-  if (!confirm(L('Discard all unsaved changes?', '放弃所有未保存的更改？'))) return
-  if (S.latest) S.snap = S.latest
-  resetDraft(S.snap.current)
-  setNotice('success', 'Draft discarded.', '已放弃草稿。')
-  render()
+  confirmWorkspaceAction(
+    L('Discard configuration draft?', '放弃配置草稿？'),
+    L('All unsaved configuration changes will be discarded.', '所有未保存的配置更改都会被放弃。'),
+    L('Discard changes', '放弃更改'), () => {
+      if (S.latest) S.snap = S.latest
+      resetDraft(S.snap.current)
+      setNotice('success', 'Draft discarded.', '已放弃草稿。')
+      render()
+    }
+  )
 }
-function disconnect() {
-  if (dirty() && !confirm(L('Disconnect and discard this draft?', '断开连接并放弃当前草稿？'))) return
-  Object.assign(S, {
-    authed: false,
-    token: '',
-    typed: '',
-    base: null,
-    draft: null,
-    snap: null,
-    latest: null,
-    status: null,
-    statusError: false,
-    preview: null,
-    promptIndex: null,
-    promptError: false,
-    notice: null,
-    page: 'overview'
+async function disconnect() {
+  if ((dirty() || entryHasDraft()) && !confirm(L('Disconnect and discard this draft?', '断开连接并放弃当前草稿？'))) return
+  await run('connect', async () => {
+    await api('/logout', {})
+    Object.assign(S, {
+      authed: false,
+      token: '',
+      typed: '',
+      base: null,
+      draft: null,
+      snap: null,
+      latest: null,
+      status: null,
+      statusError: false,
+      preview: null,
+      promptIndex: null,
+      notice: null
+    })
+    entryState.operator = false
+    entryState.data = null
+    entryState.draft = {}
+    entryState.touched = false
+    entryState.plan = null
+    entryModel.credential = ''
+    entryModel.touched = false
+    entryModel.plan = null
+    S.buffers.clear()
+    S.errors.clear()
+    resetGuideSession()
   })
-  S.buffers.clear()
-  S.errors.clear()
-  resetGuideSession()
-  render(true)
 }
-async function save() {
-  if (!S.authed || S.errors.size || S.latest) return
+async function save(only) {
+  if (!S.authed || S.errors.size || S.latest || entryState.busy) return
+  let saved = false
   await run('save', async () => {
-    const patch = Object.fromEntries(changed().map((k) => [k, S.draft[k]]))
+    const groups = changed()
+    const patch = Object.fromEntries(groups.filter(key => !only || only.includes(key)).map(key => [key, S.draft[key]]))
     if (!Object.keys(patch).length) return
     let version
     try {
@@ -483,15 +370,31 @@ async function save() {
       throw e
     }
     if (!Number.isInteger(version.revision) || !version.config) throw Error('Invalid save receipt')
-    const history = [...S.snap.history.filter((v) => v.revision !== version.revision), version]
+    const previous = S.base
+    const history = [...S.snap.history.filter(v => v.revision !== version.revision && v.revision !== previous.revision), previous, version]
+    const remaining = groups.filter(key => !Object.hasOwn(patch, key))
+    const edits = Object.fromEntries(remaining.map(key => [key, S.draft[key]]))
+    const buffers = [...S.buffers].filter(([path]) => remaining.includes(path.split('.')[0]))
     S.snap = { ...S.snap, current: version, history }
     resetDraft(version)
+    Object.assign(S.draft, edits)
+    for (const [path, buffer] of buffers) S.buffers.set(path, buffer)
+    saved = true
     setNotice(
       'success',
       'Saved revision ' + version.revision + '.',
       '已保存版本 ' + version.revision + '。'
     )
+    try {
+      adopt(await snapshot())
+      await readEntries()
+    } catch (error) {
+      if (error.status === 401) entryError(error)
+      setNotice('warning', 'Revision ' + version.revision + ' saved. Refresh to update workspace status.',
+        '版本 ' + version.revision + ' 已保存。请刷新工作台状态。')
+    }
   })
+  return saved
 }
 function plain(x) {
   return x !== null && typeof x === 'object' && !Array.isArray(x)
@@ -613,39 +516,34 @@ function conflictPanel() {
   )
   return box
 }
-function restore(version) {
-  if (
-    !confirm(
-      L(
-        'Load editable settings from revision ' +
-          version.revision +
-          ' into the draft? This replaces current edits.',
-        '将版本 ' + version.revision + ' 的可编辑设置载入草稿？当前草稿会被替换。'
-      )
-    )
-  )
-    return
+function restoredConfig(version) {
   const restored = clone(S.base.config)
-  for (const k of keys()) {
-    if (k === 'sources')
-      restored.sources = withSourceValues(
-        restored.sources,
-        projectSources(version.config.sources || []),
-        false
-      )
-    else if (Object.hasOwn(version.config, k)) restored[k] = clone(version.config[k])
-    else if (k === 'model' && Object.hasOwn(restored, k)) restored.model = ''
+  for (const key of keys()) {
+    if (key === 'sources') {
+      restored.sources = withSourceValues(restored.sources, projectSources(version.config.sources || []), false)
+    } else if (Object.hasOwn(version.config, key)) restored[key] = clone(version.config[key])
+    else if (key === 'model' && Object.hasOwn(restored, key)) restored.model = ''
   }
-  S.draft = restored
-  S.buffers.clear()
-  S.errors.clear()
-  S.preview = null
-  setNotice(
-    'success',
-    'Revision ' + version.revision + ' loaded into the draft.',
-    '版本 ' + version.revision + ' 已载入草稿。'
+  return restored
+}
+function restore(version) {
+  if (S.latest || S.busy || entryState.busy) return
+  confirmWorkspaceAction(
+    L('Load revision r' + version.revision + '?', '载入版本 r' + version.revision + '？'),
+    L('This replaces the configuration draft. Review the restored values and save to create a new version.',
+      '这会替换当前配置草稿。核对恢复后的值，再保存为一个新版本。'),
+    L('Load revision', '载入版本'),
+    () => {
+      S.draft = restoredConfig(version)
+      S.buffers.clear()
+      S.errors.clear()
+      S.preview = null
+      setNotice('success',
+        'Revision ' + version.revision + ' loaded into the draft.',
+        '版本 ' + version.revision + ' 已载入草稿。')
+      render()
+    }
   )
-  render()
 }
 async function runSetup() {
   await run('setup', async () => {
@@ -656,13 +554,7 @@ async function runSetup() {
 }
 async function loadPrompts() {
   await run('prompts', async () => {
-    try {
-      S.promptIndex = await api('/prompts')
-      S.promptError = false
-    } catch (e) {
-      S.promptError = true
-      throw e
-    }
+    S.promptIndex = await api('/prompts')
   })
 }
 async function previewPrompt() {
@@ -672,16 +564,21 @@ async function previewPrompt() {
     return
   }
   await run('preview', async () => {
-    S.preview = await api('/prompt-preview', { role: S.previewRole, prompts: S.draft.prompts })
-    setNotice('success', 'Prompt preview generated from this draft.', '已基于当前草稿生成提示词预览。')
+    const fromDraft = changed().includes('prompts')
+    const result = await api('/prompt-preview', {
+      role: S.previewRole, ...(fromDraft ? { prompts: S.draft.prompts } : {})
+    })
+    S.preview = { ...result, fromDraft, baseRevision: S.base.revision }
+    setNotice('success', 'Effective instructions composed.', '已生成合成指令。')
   })
 }
 window.addEventListener('beforeunload', (e) => {
-  if (dirty() || guideHasDraft() || entryHasDraft() || controlHasDraft()) {
+  if (dirty() || guideHasDraft() || entryHasDraft()) {
     e.preventDefault()
     e.returnValue = ''
   }
 })
+if (!entryPairCode && !entryState.invite && location.hash) applyWorkspaceLocation()
 render()
 health().then(() => render())
 void startEntrySession()

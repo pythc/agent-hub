@@ -291,7 +291,6 @@ function entryModelConnection() {
 }
 async function checkEntryModel() {
   await entryRun('model-check', async () => {
-    if (dirty()) throw new ApiError(409, { code: 'advanced_draft' })
     entryModel.plan = null
     entryModel.check = null
     entryModel.saved = false
@@ -313,7 +312,6 @@ async function checkEntryModel() {
 async function applyEntryModel() {
   if (!entryModelCanApply()) return
   await entryRun('model-apply', async () => {
-    if (dirty()) throw new ApiError(409, { code: 'advanced_draft' })
     const receipt = await api('/entry-setup/model/apply', { id: entryModel.plan.id })
     if (receipt.applied !== true || !Number.isInteger(receipt.revision))
       throw Error('Invalid AI connection receipt')
@@ -323,8 +321,10 @@ async function applyEntryModel() {
     entryModel.check = null
     entryModel.saved = true
     entryState.plan = null
-    await readEntries()
+    await readEntries(true)
     entryModel.creating = false
+    entryState.page = 'models'
+    updateWorkspaceLocation(true)
     entryModel.mode = 'existing'
     entryModel.existingId = receipt.connection.id
     await loadGuideContext()

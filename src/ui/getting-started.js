@@ -60,13 +60,16 @@ function selectGuide(key, value, redraw = true) {
 }
 function switchSurface(surface) {
   if (guide.busy || S.busy || entryState.busy) return
-  S.surface = surface
-  if (surface === 'advanced') void loadConnectInfo()
-  // A direct advanced-settings bookmark bypasses onboarding on future visits.
-  const url = new URL(location.href)
-  if (surface === 'advanced') url.hash = 'advanced'
-  else if (url.hash === '#advanced') url.hash = ''
-  history.replaceState(null, '', url)
+  if (surface === 'advanced') {
+    entryNavigate('advanced')
+    return
+  }
+  if (surface === 'entries') {
+    S.surface = 'entries'
+    render(true)
+    return
+  }
+  S.surface = 'guide'
   render(true)
 }
 function guideStep(n) {

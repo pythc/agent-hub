@@ -7,7 +7,7 @@ import {workerSpecs} from './worker-tools.ts'
 
 const text=(value:unknown,limit=1800)=>typeof value==='string'?value.slice(0,limit):''
 /** Operator-only projections. No configuration, credentials or native protocol history are copied into the work list. */
-export function operatorWorkspace(host:Runtime,offset=0,limit=25){
+export function operatorWorkspace(host:Runtime,offset=0,limit=25,filter:{state?:string;search?:string}={}){
  const status=host.status(),tickets=host.store.tickets.list(),deliveries=host.store.deliveries(),approvals=host.store.list<Approval>('approval').filter(a=>a.status==='pending'&&a.expiresAt>Date.now())
  const runs=host.store.list<Run>('run'),model=(id:string)=>{const d=host.config.backends[id];return d&&d.kind!=='codex'?d.model:host.config.model},router=host.config.execution.roles.router??host.config.execution.backend
  const activity=host.activity.list().reverse().sort((a,b)=>b.startedAt-a.startedAt).map(call=>{
@@ -28,7 +28,12 @@ export function operatorWorkspace(host:Runtime,offset=0,limit=25){
  const all=tickets.map(project).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)),attention=all.filter(t=>t.state==='attention')
  const represented=new Set(tickets.flatMap(t=>t.origin.triggerIds)),evaluating=new Set(host.store.threads.list().flatMap(t=>t.evaluating?.triggerIds??[]))
  const understanding=host.store.list<Trigger>('trigger').filter(t=>evaluating.has(t.id)&&!represented.has(t.id)).map(t=>({id:t.id,title:text(t.text,140),state:'understanding',entryId:host.store.get<{client:string}>('entry-client-event',t.id)?.client??host.config.sources.find(s=>s.id===t.source)?.kind??'generic',updatedAt:t.at}))
- return {at:Date.now(),architecture,paused:status.paused,active:status.active,total:all.length,offset,limit,more:offset+limit<all.length,tasks:all.slice(offset,offset+limit),attention:attention.slice(0,50),attentionTotal:attention.length,understanding:understanding.slice(0,25),counts:{running:all.filter(t=>t.state==='running').length,replied:all.filter(t=>t.state==='replied').length,attention:attention.length},sources:host.store.list('source-health'),liveSources:host.store.list('source-live')}
+ const activeTasks=all.filter(task=>['running','queued','ready'].includes(task.state))
+ const query=filter.search?.trim().toLowerCase()
+ const filtered=all.filter(task=>(!filter.state||task.state===filter.state)&&
+  (!query||[task.title,task.context,task.entryId,task.summary].some(value=>value.toLowerCase().includes(query))))
+ return {at:Date.now(),architecture,paused:status.paused,active:status.active,total:filtered.length,offset,limit,more:offset+limit<filtered.length,
+  tasks:filtered.slice(offset,offset+limit),activeTasks:activeTasks.slice(0,100),activeTotal:activeTasks.length,attention:attention.slice(0,50),attentionTotal:attention.length,understanding:understanding.slice(0,25),counts:{running:all.filter(t=>t.state==='running').length,replied:all.filter(t=>t.state==='replied').length,attention:attention.length},sources:host.store.list('source-health'),liveSources:host.store.list('source-live')}
 }
 export function operatorTask(host:Runtime,id:string){
  const ticket=host.store.tickets.get(id);if(!ticket)return undefined

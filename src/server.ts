@@ -85,7 +85,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(changing||unavailable){send(res,503,{error:'The host is applying configuration. Please try again shortly.',code:unavailable?'setup_recovery_required':'configuration_restarting'});return}
     const operator=authorized(req)||sessions.authorized(req)
     if(req.method==='POST'&&!authorized(req)&&sessions.authorized(req)&&req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
-    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply','/entry-setup/probe','/entry-setup/plan','/entry-setup/apply','/entry-setup/model/plan','/entry-setup/model/check','/entry-setup/model/apply','/entry-setup/verification','/operator-link'].includes(path)){
+    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply','/entry-setup/probe','/entry-setup/plan','/entry-setup/apply','/entry-setup/model/plan','/entry-setup/model/check','/entry-setup/model/apply','/entry-setup/verification','/operator-link','/logout'].includes(path)){
       if(!operator){send(res,401,{error:'Access token required',code:'token_required'});return}
       send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
     }
@@ -109,8 +109,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/logout'){sessions.logout(req,res);send(res,200,{operator:false});return}
     if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
     if(req.method==='GET'&&path==='/entry-workspace'){
-      const query=new URL(req.url!,'http://localhost').searchParams,input=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25)}).parse(Object.fromEntries(query))
-      send(res,200,operatorWorkspace(runtime,input.offset,input.limit));return
+      const query=new URL(req.url!,'http://localhost').searchParams,input=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25),
+        state:z.enum(['attention','running','replied','ready','closed','queued']).optional(),search:z.string().max(200).optional()}).parse(Object.fromEntries(query))
+      send(res,200,operatorWorkspace(runtime,input.offset,input.limit,{state:input.state,search:input.search}));return
     }
     if(req.method==='GET'&&path.startsWith('/entry-workspace/task/')){
       const task=operatorTask(runtime,decodeURIComponent(path.slice('/entry-workspace/task/'.length)));send(res,task?200:404,task??{code:'task_missing',error:'This work is no longer available.'});return

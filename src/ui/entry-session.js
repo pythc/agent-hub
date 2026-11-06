@@ -2,6 +2,8 @@
 const entryState = {
   role: '',
   page: 'home',
+  advancedPage: 'host',
+  promptView: 'roles',
   selected: '',
   source: '',
   publicGuide: null,
@@ -46,6 +48,7 @@ function consumeEntryFragment() {
 consumeEntryFragment()
 window.addEventListener('hashchange', () => {
   if (consumeEntryFragment()) void startEntrySession()
+  else applyWorkspaceLocation()
 })
 const entryNames = () => ({
   local: L('Local assistant', '本机助手'),
@@ -67,7 +70,7 @@ const entryText = (value) =>
     ? (lang === 'en' ? value.en : value.zh || value['zh-CN']) || value.en || ''
     : String(value ?? '')
 const selectedEntry = () => entryState.data?.entries?.find((e) => e.id === entryState.selected)
-const entryHasDraft = () => entryState.touched || entryModel.touched || controlHasDraft()
+const entryHasDraft = () => entryState.touched || entryModel.touched
 function entrySafeDetail(value) {
   let text = String(value ?? '')
   for (const secret of [
@@ -80,40 +83,93 @@ function entrySafeDetail(value) {
     if (secret) text = text.split(secret).join('[…]')
   return text.slice(0, 1200)
 }
-function entryNavigate(page, id = '') {
-  if (entryState.busy || S.busy) return
-  clearTimeout(entryState.timer)
-  if (id && id !== entryState.selected) {
-    if (
-      entryState.touched &&
-      !confirm(
-        L('Discard the unsaved changes for this connection?', '放弃当前入口尚未保存的修改？')
-      )
-    )
-      return
-    entryState.selected = id
-    entryState.source = ''
-    entryState.creating = false
-    entryState.probe = null
-    entryState.plan = null
-    entryState.applied = null
-    entryState.verification = null
-    entryState.clientConfig = null
-    entryState.draft = {}
-    entryState.touched = false
+const workspacePages = {
+  tasks: 'home', 'tasks/history': 'activity', attention: 'attention', connections: 'catalog',
+  'connections/new': 'catalogue', models: 'models', 'models/new': 'model-new',
+  execution: 'execution', prompts: 'prompts', usage: 'usage'
+}
+const advancedPages = ['host', 'intake', 'runtime', 'delivery', 'json', 'revisions']
+function workspaceHash() {
+  const { page, selected, source, creating, advancedPage, promptView } = entryState
+  if (page === 'advanced') return 'advanced/' + advancedPage
+  if (page === 'execution' && executionView.mode === 'configuration') return 'execution/configuration'
+  if (page === 'prompts' && promptView === 'templates') return 'prompts/templates'
+  if (page === 'detail') {
+    const prefix = creating ? 'connections/new/' : 'connections/'
+    return prefix + encodeURIComponent(selected) + (source ? '/' + encodeURIComponent(source) : '')
   }
-  if (location.hash === '#advanced')
-    history.replaceState(null, '', location.pathname + location.search)
+  return Object.keys(workspacePages).find(key => workspacePages[key] === page) || 'tasks'
+}
+function updateWorkspaceLocation(replace = false) {
+  const url = new URL(location.href)
+  url.hash = workspaceHash()
+  if (url.href !== location.href) history[replace ? 'replaceState' : 'pushState'](null, '', url)
+}
+function applyWorkspaceLocation() {
+  const hash = location.hash.slice(1)
+  const page = Object.hasOwn(workspacePages, hash) ? workspacePages[hash] : null
+  let matched
+  if (page) return entryNavigate(page, '', { fromLocation: true, view: page === 'execution' ? 'calls' : 'roles' })
+  if (hash === 'execution/configuration')
+    return entryNavigate('execution', '', { fromLocation: true, view: 'configuration' })
+  if (hash === 'prompts/templates')
+    return entryNavigate('prompts', '', { fromLocation: true, view: 'templates' })
+  if (hash === 'advanced' || (hash.startsWith('advanced/') && advancedPages.includes(hash.slice(9))))
+    return entryNavigate('advanced', '', { fromLocation: true, view: hash.slice(9) || 'host' })
+  if ((matched = /^connections\/(new\/)?([a-z][a-z0-9_-]*)(?:\/([a-z][a-z0-9_-]*))?$/.exec(hash)))
+    return entryNavigate('detail', matched[2], { fromLocation: true, creating: !!matched[1], source: matched[3] || '' })
+  if (!hash && S.authed && entryState.role === 'operator') return entryNavigate('home', '', { fromLocation: true })
+}
+function entryNavigate(page, id = '', options = {}) {
+  if (entryState.busy || S.busy) {
+    if (options.fromLocation) updateWorkspaceLocation(true)
+    return false
+  }
+  const source = options.source ?? (id === entryState.selected ? entryState.source : '')
+  const creating = options.creating === true
+  const changeConnection = id && (id !== entryState.selected || source !== entryState.source || creating !== entryState.creating)
+  if (changeConnection && entryState.touched && !confirm(
+    L('Discard the unsaved changes for this connection?', '放弃当前入口尚未保存的修改？')
+  )) {
+    if (options.fromLocation) updateWorkspaceLocation(true)
+    return false
+  }
+  clearTimeout(entryState.timer)
+  if (changeConnection) {
+    Object.assign(entryState, {
+      selected: id, source, creating, probe: null, plan: null, applied: null,
+      verification: null, clientConfig: null, draft: creating ? { botMode: 'existing' } : {}, touched: false
+    })
+  }
+  if (page === 'advanced') entryState.advancedPage = options.view || 'host'
+  if (page === 'execution' && options.view) executionView.mode = options.view
+  if (page === 'prompts' && options.view) entryState.promptView = options.view
+  if (page === 'model-new' && !entryModel.creating) resetNewModel()
+  const enteringHistory = page === 'activity' && entryState.page !== 'activity'
+  if (enteringHistory) operator.offset = 0
   entryState.page = page
   entryState.error = null
+  if (S.notice?.level === 'success') S.notice = null
+  entryState.role = 'operator'
   S.surface = 'entries'
+  operator.drawer = null
+  if (page !== 'execution') {
+    executionView.inspect = null
+    executionView.instructions = null
+  }
+  if (!options.fromLocation) updateWorkspaceLocation()
   render(true)
+  if (page === 'advanced' && !S.authed) void loadConnectInfo()
+  if (enteringHistory && S.authed)
+    void entryRun('work-page', readOperatorWork)
+  return true
 }
 function chooseEntryRole(role) {
   if (entryState.busy || S.busy) return
   clearTimeout(entryState.timer)
   entryState.role = role
   entryState.page = 'home'
+  if (role === 'user') history.replaceState(null, '', location.pathname + location.search)
   entryState.error = null
   entryState.share = null
   S.surface = 'entries'
@@ -140,8 +196,8 @@ function entryError(error) {
       '请输入 HTTPS 基础地址或本机 HTTP 地址，不要包含凭据或查询参数。'
     ],
     advanced_draft: [
-      'Save or discard your advanced-settings draft before changing the AI connection.',
-      '请先在高级设置中保存或放弃草稿，再修改 AI 连接。'
+      'Save or discard configuration changes before applying setup.',
+      '请先保存或放弃配置更改，再应用首次设置。'
     ],
     connection_missing: [
       'This saved AI connection is no longer available. Refresh and select another.',
@@ -224,7 +280,7 @@ function entryError(error) {
   }
 }
 async function entryRun(label, operation, focus = false) {
-  if (entryState.busy) return
+  if (entryState.busy || S.busy) return
   entryState.busy = label
   entryState.error = null
   render()
@@ -261,12 +317,12 @@ async function loadEntryGuide() {
   if (!Array.isArray(data.entries)) throw Error('Invalid entry guide response')
   entryState.publicGuide = data
 }
-async function readEntries() {
+async function readEntries(rebaseOwnChange = false) {
   const [data] = await Promise.all([api('/entry-setup'), readOperatorWork()])
   if (!Array.isArray(data.entries) || !Number.isInteger(data.revision))
     throw Error('Invalid entry setup response')
   entryState.data = data
-  if (S.base && data.revision !== S.base.revision) adopt(await snapshot())
+  if (S.base && data.revision !== S.base.revision) adopt(await snapshot(), rebaseOwnChange)
 }
 async function refreshEntries() {
   await entryRun('refresh', async () => {
@@ -391,7 +447,8 @@ async function applyEntry() {
     entryState.touched = false
     entryState.plan = null
     entryState.draft = {}
-    await readEntries()
+    await readEntries(true)
+    updateWorkspaceLocation(true)
     announce(
       L(
         'Connection settings saved. Verify a request in the selected software.',

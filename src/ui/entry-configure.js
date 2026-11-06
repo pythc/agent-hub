@@ -126,7 +126,7 @@ function entrySourcePicker(entry) {
       })
       .join(' · ')
     select.add(
-      new Option(scope || entryName(entry) + ' · ' + (sources.indexOf(source) + 1), source.id)
+      new Option(source.label || scope || entryName(entry) + ' ' + (sources.indexOf(source) + 1), source.id)
     )
   }
   if (!sources.some((s) => s.id === entryState.source))
@@ -134,6 +134,7 @@ function entrySourcePicker(entry) {
   select.value = entryState.source
   select.onchange = () => {
     entryState.source = select.value
+    updateWorkspaceLocation(true)
     entryState.verification = null
     clearTimeout(entryState.timer)
     render()
@@ -652,11 +653,7 @@ function entryDetail() {
       content.push(
         action(
           L('Add another connection', '再添加一个连接'),
-          () => {
-            entryState.creating = true
-            entryState.source = ''
-            render()
-          },
+          () => controlNewConnection(entry.id),
           'text-action'
         )
       )

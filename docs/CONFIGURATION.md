@@ -93,7 +93,11 @@ Generate another link for an existing deployment:
 
 The private connection-file picker and manual token entry establish the same browser session, so page reload does not require reimporting the file. Permanent tokens and provider keys are not placed in URLs or browser storage. A shared usage guide may retain its sanitized instructions in the tab's session storage; it has no management capability.
 
-Advanced settings retain execution, sources, policy, background work, delivery, prompts, revisions and JSON. Settings saves check revisions. Entry/model deployment pauses at an idle boundary, persists private managed files with a reversible journal, and keeps the HTTP address. Busy work or stale drafts prevent application. A failed rebuild restores the previous deployment; interrupted changes recover against their database commit marker.
+**Advanced settings** uses the same workspace navigation. It contains Host status, Intake rules, Runtime and isolation, Publishing and merging, and Configuration maintenance. The former `/configure#advanced` bookmark opens Host status. Source access is edited inside its software connection. Roles and templates are managed under Prompts.
+
+Settings pages share a draft and check its base revision before saving. Configuration maintenance separates JSON from Revisions. Compare an older revision with the current one, then load it into the draft. Saving creates a new revision. Review a newer host version before rebasing a conflicting draft.
+
+Entry and model deployment pauses at an idle boundary, persists private managed files with a reversible journal, and keeps the HTTP address. A failed rebuild restores the previous deployment. Interrupted changes recover against their database commit marker.
 
 Backups include SQLite, effective configuration and managed API/bot credentials. Keep backups private. Work files, cached attachments, external credentials, native client profiles and already sent messages are outside database rollback. Client installs return private backups; restoration refuses to overwrite later user edits. Schema stays at 5. A previous build cannot parse explicit Worker-pool settings; rolling back requires the verified pre-change backup and matching source. See [configuration acceptance and rollback](CONTROL_CENTER_2026-11-05.md) and [earlier entry acceptance](ACCEPTANCE_0.10.md).
 

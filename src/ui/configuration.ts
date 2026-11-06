@@ -27,7 +27,7 @@ const client = [
 export const configurationPage: string = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light"><title>Configuration · AgentHub</title>
-<link rel="icon" href="data:,"><style>${asset('configuration.css')}\n${asset('operator-workspace.css')}\n${asset('affect-ui.css')}\n${asset('flow-motion.css')}\n${asset('execution-page.css')}</style></head>
+<link rel="icon" href="data:,"><style>${asset('configuration.css')}\n${asset('operator-workspace.css')}\n${asset('workspace-settings.css')}\n${asset('affect-ui.css')}\n${asset('flow-motion.css')}\n${asset('execution-page.css')}</style></head>
 <body><div id="app"></div><div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
 <noscript>Enable JavaScript to configure AgentHub. 请启用 JavaScript 以配置 AgentHub。</noscript>
 <script>(() => { 'use strict';\nconst executionAssets=${JSON.stringify(Object.fromEntries(['feishu','wecom'].map(id=>[id,'data:image/x-icon;base64,'+readFileSync(new URL('assets/'+id+'.ico',import.meta.url)).toString('base64')])))};\n${client}\n})();</script></body></html>`
