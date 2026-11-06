@@ -1,5 +1,7 @@
 # Execution design QA — 2026-11-05
 
+This report records the November 5 build. The November 6 update removed the animation preview control, simulated flow and preview label from the product.
+
 Source visual truth: `docs/ui/reference/execution-fanout.png`, the annotated `docs/ui/reference/execution-feedback.png`, and `docs/ui/reference/tool-access-map-study.jpg` from the explicitly requested motion chat. The latest feedback rejected the earlier static-looking layout. Calls now follows the center/perimeter study; Configuration retains the editable fan-out layout with independent rounded Worker rectangles. The existing top and left chrome are preserved.
 
 Implementation screenshots: `docs/ui/acceptance/execution-2026-11-05/real-call-map.jpg` (actual compact Calls), `call-map-wide.jpg` (illustrative desktop Calls), `call-map-native-detail.jpg` (real Codex-backend call metadata), `desktop.jpg` / `real-host.jpg` (Configuration), and the earlier narrow/native configuration checks. `real-motion-preview.gif` records actual browser frames in the user's 729 px preview pane; `motion-preview.gif` records the illustrative wide map.

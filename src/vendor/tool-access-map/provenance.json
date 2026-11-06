@@ -18,7 +18,6 @@
     "Shared bus path resolver",
     "Scroll-triggered layout for sticky tools",
     "Cancellation rejection handling; stable logical edge IDs",
-    "Separate, explicitly labeled SVG animation preview without host effects",
     "No fixtures or simulated task execution in the application"
   ]
 }

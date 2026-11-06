@@ -8,9 +8,6 @@ The original visual reference is [affectUI Tool Access Map](https://www.affectui
 
 The adapter retains the 700 ms connection reveal, 1700 ms running flow,
 350 ms content reveal and interruptible 320/180 ms dialog animation.
-Normal flow follows host-recorded running operations. The explicit, separately
-labeled animation preview uses its own SVG layer without changing records or
-executing work. Media preferences, cancellation, route cleanup and sticky-node
-scrolling are handled locally. There is no automatic demo loop, fake result,
-automatic tool execution or replay API.
+Flow follows host-recorded running operations. Media preferences, cancellation,
+route cleanup and sticky-node scrolling are handled locally.
 Source hashes and the small adapter changes are in `provenance.json`.

@@ -91,7 +91,11 @@ function executionPath(raw){
  let path='M '+points[0].join(' ');for(let i=1;i<points.length-1;i++){const a=points[i-1],b=points[i],c=points[i+1],before=Math.hypot(b[0]-a[0],b[1]-a[1]),after=Math.hypot(c[0]-b[0],c[1]-b[1]),r=Math.min(9,before/2,after/2);path+=' L '+[b[0]+(a[0]-b[0])*r/before,b[1]+(a[1]-b[1])*r/before].join(' ')+' Q '+b.join(' ')+' '+[b[0]+(c[0]-b[0])*r/after,b[1]+(c[1]-b[1])*r/after].join(' ')}
  return path+' L '+points.at(-1).join(' ')
 }
-function executionUnmount(){executionView.motion?.destroy();executionView.previewMotion?.destroy();executionView.motion=null;executionView.previewMotion=null;executionView.root=null}
+function executionUnmount(){
+ executionView.motion?.destroy()
+ executionView.motion=null
+ executionView.root=null
+}
 function executionMount(root){
  if(!root.isConnected)return
  executionUnmount();executionView.root=root

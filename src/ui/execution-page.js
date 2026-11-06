@@ -1,5 +1,5 @@
 // Execution content only. The existing application header and sidebar own navigation.
-const executionView={root:null,motion:null,previewMotion:null,mode:'calls',preview:false,instructions:null,instructionFocus:'',selected:null,inspect:null,callId:null,dialogVersion:0,stale:false}
+const executionView={root:null,motion:null,mode:'calls',instructions:null,instructionFocus:'',selected:null,inspect:null,callId:null,dialogVersion:0,stale:false}
 function executionSetCount(count){
  if(!Number.isInteger(count)||count<1||count>10)return
  const draft=controlDraft('execution'),next=draft.workers.slice(0,count)

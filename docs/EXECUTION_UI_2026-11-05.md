@@ -2,10 +2,12 @@
 
 Execution opens on **Calls**, using the user-owned Tool Access Map composition: a selected Router/Worker at the center, related software/Workers/tools around it, and rounded animated connections. **Configuration** retains the editable software → Router → Queue → independent Worker cards. The existing header and sidebar remain unchanged. English is the default; the existing Chinese preference is retained.
 
+The November 6 update removed the animation preview control and its simulated flow from the product. The November 5 acceptance table and captures below document the earlier build.
+
 ## Using the page
 
 - In **Calls**, switch the Router/Worker tabs or click a related Worker to change the center. The tab indicator slides, content reveals and connections draw using the study's motion. Click a tool or call count to inspect status, duration and actual service/model; details can open the existing task view.
-- **Preview animation** runs a separately labeled visual overlay without executing tasks, tools or model calls. It leaves actual records/counts untouched. **Stop preview** removes that overlay. Normal running flow uses only recorded operations. Calls uses the saved runtime Workers, even if Configuration has an unsaved count change.
+- Calls uses the saved runtime Workers, even if Configuration has an unsaved count change.
 - In **Configuration**, **New connection** opens the software catalogue; **New service** opens the model service form. Both use the existing host check/save APIs. Select the Router service/model independently, set **Count** to 1–10 and choose each Worker's service/model. **Save changes** applies settings to new conversations; **Discard** restores the saved execution settings.
 - Configuration headings select their tool map. On narrower layouts that map scrolls into view; its owner button returns to the configuration card. A dot on the Configuration tab indicates an unsaved execution draft.
 - **Edit instructions** opens Router/Workers tabs. Worker instructions are shared by all Workers; the label explicitly states that scope. Saving instructions preserves an unsaved execution configuration.
@@ -21,7 +23,7 @@ There is no replay action in this view. Inputs, outputs and detailed job results
 
 Only the latest 200 terminal records and currently running calls are retained. Running records are recovered as interrupted after restart. The existing database schema remains version 5; no task/history migration or replay is performed. Historical work from before the recorder was added is not reconstructed. Existing backups include the additional records, and older code ignores the additional record kind.
 
-The browser polls once per second only while the execution view is mounted. Updates preserve form DOM and drafts. Disconnection retains the last known state and stops running flow with an unknown state; a 401 uses the existing reconnect flow. In-flight responses for an unmounted view are ignored. Reduced motion disables flow and entry movement. Animation, observer and scroll listeners are cleaned up when the view changes. Compact containers above 400 px retain the three-column graph and SVG motion; smaller containers use a card grid, with preview pulses instead of crossing wires.
+The browser polls once per second only while the execution view is mounted. Updates preserve form DOM and drafts. Disconnection retains the last known state and stops running flow with an unknown state; a 401 uses the existing reconnect flow. In-flight responses for an unmounted view are ignored. Reduced motion disables flow and entry movement. Animation, observer and scroll listeners are cleaned up when the view changes. Compact containers above 400 px retain the three-column graph and SVG motion. Smaller containers use a card grid with text and styling to indicate call status.
 
 ## Acceptance
 

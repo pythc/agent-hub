@@ -107,4 +107,4 @@ Backups include SQLite, effective configuration and managed API/bot credentials.
 
 ## Execution and recorded calls
 
-Execution opens on **Calls**: select a Router/Worker tab to put it at the center of the call map. Click a tool or count for recorded status, duration and actual model. **Preview animation** shows a labeled visual overlay without executing work; outside preview, flow follows recorded running operations. Switch to **Configuration** for independent Router/Worker settings, 1–10 Workers, new connections/services and instructions. See [the execution UI and acceptance record](EXECUTION_UI_2026-11-05.md) for prompt scope, retained drafts and validation boundaries.
+Execution opens on **Calls**. Select a Router or Worker to put it at the center of the call map. Connections flow during recorded running calls. Click a tool or count for recorded status, duration and actual model. Switch to **Configuration** for independent Router/Worker settings, 1–10 Workers, new connections/services and instructions. See [the execution UI and acceptance record](EXECUTION_UI_2026-11-05.md) for prompt scope, retained drafts and validation boundaries.
