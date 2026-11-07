@@ -14,8 +14,8 @@ Roppo is under active development. Fixes target the current `main` branch; there
 
 The default deployment is a single-user host bound to loopback. A local web account does not make it a multi-tenant service. Model providers, CLI authentication, external websites, and any remote access layer have their own trust boundaries. See [operations](docs/OPERATIONS.md) and the [browser guide](docs/BROWSER.md) for persistence and isolation limits.
 
-## Known dependency advisory
+## Dependency maintenance
 
-The current Zod 3 dependency is covered by [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5), concerning memory exhaustion while validating oversized constrained collections. The advisory's patched version is Zod 4.6.6. Migrating the schema layer needs compatibility and regression work; this advisory is not resolved in the current dependency set.
+Zod is pinned to 4.6.7, which includes the fix for [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (patched in 4.6.6). Oversized collections with schema bounds are rejected before their elements are validated. Regression tests cover configuration, incoming attachments, browser grants, entry actors, and approval answers, alongside preserved configuration defaults and sparse settings updates. See the [upgrade notes](docs/ZOD_UPGRADE.md).
 
-The host limits HTTP JSON request bodies to 256 KB, but that is not a substitute for a patched dependency or a proof that every ingestion path is unaffected. Do not treat the current personal deployment as a public multi-tenant service. Recheck `npm audit` against the exact revision you deploy.
+The fix does not add bounds to unconstrained collections or replace ingestion limits. The host's 256 KB HTTP JSON body limit remains in place. Recheck `npm audit` against the exact revision you deploy; a clean advisory report is not proof that every input path is safe.
