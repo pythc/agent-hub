@@ -305,3 +305,12 @@ Closing the last view restores the launcher. Hiding the whole panel is separate,
 The reference's tab contour and address field use 9px upper corners and a 20px field radius; close affordances use 5px. These compact control shapes intentionally supplement existing surface radii. All surfaces keep the existing black/white tokens and reduced-motion behavior.
 
 Evidence: resource-tabs acceptance (local historical notes).
+
+
+## Model connections and decision settings — 2026-11-08
+
+The model page uses a single 1120px content measure. Saved connections appear as separated service rows: identity, protocol, model, assigned roles and actions. Decision setup is one bordered region, with configuration on the left and a draft probe on the right; below 800px the probe follows the configuration vertically. The section heading uses 24px and service names 16px. Existing white/dark tokens and the global shell remain unchanged.
+
+Connection selection comes before behavior. Native radio inputs provide three keyboard-accessible choices, and advanced limits, instructions and JSON stay collapsed until requested. A saved-mode label refers to the persisted configuration, while the existing save bar owns draft changes. Probe samples are editable examples, not accuracy claims. Results display only returned labels, latency and token usage; missing usage displays an em dash. Editing the request invalidates prior results. Pending motion occurs only during an actual request and stops under reduced motion.
+
+Visual evidence and browser checks use the isolated decision acceptance host with a synthetic provider. They exercise the real settings and probe HTTP routes, not a paid provider or production message flow.

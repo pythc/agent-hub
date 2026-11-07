@@ -272,17 +272,19 @@ function controlModels() {
       connectionStudio.editing = service.id; render()
     }, 'button'))
     const type = ({api: L('API service', 'API 服务'), cli: L('CLI backend', 'CLI 后端'), subscription: L('Subscription', '订阅账号')})[service.connectionType]
-    return [add(el('div'), el('strong', '', service.label), el('small', 'team-help', type)), el('span', '', protocol),
-      el('span', '', service.model || L('Service default', '服务默认模型')),
-      el('span', '', roles.join(', ') || L('Unassigned', '未分配')), actions]
+    const mark = add(el('span', 'model-service-mark'), icon(service.connectionType === 'cli' ? 'terminal' : 'cpu'))
+    return add(el('li', 'model-service-row'),
+      add(el('div', 'model-service-identity'), mark, add(el('div'), el('h3', '', service.label), el('span', 'model-service-meta', type + ' · ' + protocol))),
+      add(el('div', 'model-service-assignment'), el('span', 'model-service-model', service.model || L('Service default', '服务默认模型')),
+        add(el('div', 'model-service-roles'), ...roles.map(role => el('span', '', role)), roles.length ? null : el('span', '', L('Unassigned', '未分配')))), actions)
   })
-  const result = [opHeading(L('Model connections', '模型连接'), null,
+  const page = el('div', 'models-page')
+  page.append(opHeading(L('Model connections', '模型连接'), null,
     opButton(L('New model connection', '新建模型连接'), controlNewModel, 'button primary', 'plus')),
-    workspaceTable([L('Service', '服务名称'), L('Protocol', '协议'), L('Default model', '默认模型'),
-      L('Used by', '使用角色'), L('Action', '操作')], rows)]
-  if (S.snap?.editableKeys?.includes('decision')) result.push(decisionSettings())
-  if (entryModel.check || entryModel.saved) result.push(entryModelResult())
-  return result
+    add(el('ul', 'model-service-list'), ...rows))
+  if (entryModel.check || entryModel.saved) page.append(entryModelResult())
+  if (S.snap?.editableKeys?.includes('decision')) page.append(decisionSettings())
+  return [page]
 }
 
 async function controlTaskAction(action,id){
