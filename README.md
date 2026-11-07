@@ -87,7 +87,7 @@ npx agent-browser install
 
 Create a browser profile in the conversation, sign in to websites, then choose which Workers may reuse that login state. Each assignment gets a separate writable browser session. **Take over** pauses Worker control until you hand it back.
 
-Saved passwords belong to Roppo's local encrypted vault; Roppo does not import your everyday Chrome password manager. Sessions using the same website account can still affect the same server-side data. See [browser behavior and limits](docs/BROWSER.md) (中文).
+Saved passwords belong to Roppo's local encrypted vault; Roppo does not import your everyday Chrome password manager. Sessions using the same website account can still affect the same server-side data. See [browser behavior and limits](docs/BROWSER.en.md).
 
 ## How it works
 
@@ -125,7 +125,7 @@ Roppo is under active development and is **personal-first** today: one local acc
 | [Operations and backup](docs/OPERATIONS.md) | [Task semantics and parity](docs/PARITY.md) (中文) |
 | [Local accounts](docs/PERSONAL_ACCOUNT.md) (中文) | [Source and tool adapters](docs/INTEGRATIONS.md) (中文) |
 | [Conversations](docs/CHAT.md) (中文) | [MCP clients](docs/clients/README.md) (中文) |
-| [Embedded browser](docs/BROWSER.md) (中文) | [Office integrations](docs/OFFICE.md) (中文) |
+| [Embedded browser](docs/BROWSER.en.md) | [Office integrations](docs/OFFICE.md) (中文) |
 
 ## Build and contribute
 
