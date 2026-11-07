@@ -76,4 +76,3 @@ finally{
  for(const t of h.store.tickets.list())if(!t.ended)await h.stop(t.id)
  await h.close()
 }
-
