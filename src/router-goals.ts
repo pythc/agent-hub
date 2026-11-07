@@ -28,6 +28,14 @@ export class RouterGoals {
  }
  private belongs(g:RouterGoal,c:ScopeContext){return g.scopeId===c.route.scopeId&&g.entryId===c.route.entryId&&g.discussion===c.route.discussion&&g.actor===c.actor}
  private sourcesValid(g:RouterGoal){return [...(g.contextIds??[]),...this.host.replanning.contexts(g.id)].every(id=>this.host.continuity.validContext(id))}
+ private retryVerification(round:VerificationRound){
+  const store=this.host.store,id=round.id+':'+round.attempts
+  store.atomic(()=>{
+   store.put('goal-verification-attempt',id,{id,roundId:round.id,goalId:round.goalId,scopeId:round.scopeId,entryId:round.entryId,attempt:round.attempts,state:round.state,error:round.error,checks:round.checks,threadId:round.threadId,finishedAt:round.finishedAt,snapshotHash:stableDigest(round.snapshot)})
+   store.put('goal-verification',round.id,{...round,state:'pending',error:undefined})
+   store.jobState('goal-verify:'+round.id,'pending')
+  })
+ }
  private rawList(c:ScopeContext){this.host.scopes.assertCurrent(c);return this.host.store.list<RouterGoal>('router-goal').filter(g=>this.belongs(g,c)&&g.objective&&!this.host.memory.cleanup.blocked('router-goal',g.id,g))}
  list(c:ScopeContext){return this.rawList(c).map(g=>this.sourcesValid(g)?g:{...g,state:terminal.has(g.state)?g.state:'held' as const,title:'Goal needs source review',objective:'Prior derived goal content is unavailable',criteria:[],nodes:undefined,contract:undefined,plan:[],checks:undefined,nextAction:'Resume with a current explicitly authorized objective, criteria and plan',reason:'Goal sources changed or were revoked',nextAt:undefined})}
  snapshot(){return this.host.store.list<RouterGoal>('router-goal').flatMap(g=>{
@@ -184,9 +192,11 @@ export class RouterGoals {
        else this.repair(g,n,round)
       }else if(round.state==='errored'){
        const failure=classifyVerificationFailure(round.error??'Verifier failed',this.now(),n.recoveries)
-       if(['transient','quota','protocol'].includes(failure.kind)&&n.recoveries<(failure.kind==='protocol'?2:5)){
+       if(['transient','quota','protocol'].includes(failure.kind)&&(failure.kind==='protocol'?round.attempts<=2:n.recoveries<5)){
         n.failure??=failure;n.retryAt??=failure.retryAt
-        if((n.retryAt??0)<=this.now()){this.host.store.put('goal-verification',round.id,{...round,state:'pending'});this.host.store.jobState('goal-verify:'+round.id,'pending');n.recoveries++;n.retryAt=undefined;n.failure=undefined}
+        if((n.retryAt??0)<=this.now()){this.retryVerification(round);n.recoveries++;n.retryAt=undefined;n.failure=undefined}
+       }else if(failure.kind==='protocol'&&round.checks.some(ch=>ch.verdict==='insufficient')){
+        this.host.store.put('goal-verification',round.id,{...round,state:'insufficient'});n.failure=undefined;n.retryAt=undefined
        }else{n.state='held';n.reason='Verification could not be completed: '+round.error}
       }else if(round.state==='stale'){n.state='held';n.reason='Acceptance input changed; reconcile and resume with current requirements'}
       continue
@@ -244,10 +254,12 @@ export class RouterGoals {
       else{target.state='held';target.reason='Overall goal acceptance did not pass within the repair allowance';target.failure={kind:'quality',reason:target.reason};target.roundId=round.id;this.save(g);if(!this.host.replanning.consider(g)){g.state='held';g.reason=target.reason;this.save(g);this.notice(g,g.reason)}}
      }else if(round.state==='errored'){
       const failure=classifyVerificationFailure(round.error??'Verifier failed',this.now(),g.recoveryAttempts??0)
-      if(['transient','quota','protocol'].includes(failure.kind)&&(g.recoveryAttempts??0)<(failure.kind==='protocol'?2:5)){
+      if(['transient','quota','protocol'].includes(failure.kind)&&(failure.kind==='protocol'?round.attempts<=2:(g.recoveryAttempts??0)<5)){
        g.recovery??=failure
-       if((g.recovery.retryAt??0)<=this.now()){this.host.store.put('goal-verification',round.id,{...round,state:'pending',error:undefined});this.host.store.jobState('goal-verify:'+round.id,'pending');g.recoveryAttempts=(g.recoveryAttempts??0)+1;g.recovery=undefined}
+       if((g.recovery.retryAt??0)<=this.now()){this.retryVerification(round);g.recoveryAttempts=(g.recoveryAttempts??0)+1;g.recovery=undefined}
        this.save(g)
+      }else if(failure.kind==='protocol'&&round.checks.some(ch=>ch.verdict==='insufficient')){
+       this.host.store.put('goal-verification',round.id,{...round,state:'insufficient'});g.recovery=undefined;this.save(g)
       }else{g.state='held';g.reason='Overall verification requires recovery: '+round.error;this.save(g);this.notice(g,g.reason)}
      }else if(round.state==='stale'){g.state='held';g.reason='Overall verification requires recovery: stale evidence';this.save(g);this.notice(g,g.reason)}
     }else if(g.nodes!.some(n=>n.state==='held')&&!g.nodes!.some(n=>['running','verifying'].includes(n.state)||n.state==='pending'&&n.dependsOn.every(id=>g.nodes!.find(d=>d.id===id)?.state==='passed'))){
@@ -260,7 +272,7 @@ export class RouterGoals {
  command(value:unknown,c:ScopeContext,manifest?:ContextManifest):any{
   this.host.scopes.assertCurrent(c);const x=goalCommandSchema.parse(value)
   if(x.action==='list')return {items:this.list(c)}
-  if(x.action==='inspect'){const goal=this.list(c).find(g=>g.id===x.id);if(!goal||!this.sourcesValid(goal))throw Error('Goal unavailable');return {goal,replanning:this.host.replanning.list(goal),rounds:this.host.store.list<VerificationRound>('goal-verification').filter(r=>r.goalId===goal.id).map(({snapshot,...round})=>({...round,evidence:snapshot.evidence.map(({content,...e})=>e)}))}}
+  if(x.action==='inspect'){const goal=this.list(c).find(g=>g.id===x.id);if(!goal||!this.sourcesValid(goal))throw Error('Goal unavailable');return {goal,replanning:this.host.replanning.list(goal),attempts:this.host.store.list<{goalId:string}>('goal-verification-attempt').filter(a=>a.goalId===goal.id),rounds:this.host.store.list<VerificationRound>('goal-verification').filter(r=>r.goalId===goal.id).map(({snapshot,...round})=>({...round,evidence:snapshot.evidence.map(({content,...e})=>e)}))}}
   if(x.action!=='start'&&(x.objective!==undefined||x.criteria!==undefined)&&this.rawList(c).find(g=>g.id===x.id)?.contract)throw Error('Original goal objective and acceptance criteria are immutable; use a new explicitly authorized goal')
   if(x.nodes&&x.action!=='start')throw Error('Direct graph replacement is not allowed; failure-driven plans require independent review')
   if(!x.operationId||x.expectedRevision===undefined)throw Error('Goal mutation requires operationId and expectedRevision')

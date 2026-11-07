@@ -176,3 +176,30 @@ it('resumes an interrupted independent review after orderly host shutdown withou
  expect(f.calls.filter(r=>JSON.parse(r.input).kind==='goal_replanning')).toHaveLength(1)
  expect(f.plans()).toHaveLength(1);expect(f.h.store.list('goal-plan-dispatch')).toHaveLength(1)
 })
+
+it('supplies the current Worker tools to both planner and independent reviewer',async()=>{
+ const f=fixture();f.h.config.execution.workers![0]!.tools=['superagent_shell'];f.start()
+ await until(f,()=>f.goal().state==='completed')
+ const turns=f.calls.filter(r=>['goal_replanning','goal_plan_review'].includes(JSON.parse(r.input).kind))
+ expect(turns).toHaveLength(2)
+ for(const turn of turns){const input=JSON.parse(turn.input);expect(input.workerCapabilities.find((w:any)=>w.id==='one')).toMatchObject({tools:['superagent_shell'],sandboxDriver:'disabled'});expect(turn.instructions).toContain('private host execution ledgers')}
+ expect(f.plans()[0]!.snapshot.workerCapabilities?.find(w=>w.id==='one')?.tools).toEqual(['superagent_shell'])
+})
+
+it('rejects a plan if Worker capabilities change while it is being prepared',async()=>{
+ let f!:ReturnType<typeof fixture>,changed=false
+ f=fixture({onPlan:async(_r,input)=>{if(input.kind==='goal_replanning'&&!changed){changed=true;f.h.config.execution.workers![0]!.tools=['superagent_shell']}}});f.start()
+ await until(f,()=>f.plans()[0]?.state==='stale')
+ expect(changed).toBe(true);expect(f.goal().planRevision).toBe(0);expect(f.h.store.list('goal-release')).toHaveLength(0)
+})
+
+it('resumes a queued legacy plan whose snapshot predates Worker capability records',async()=>{
+ const {stableDigest}=await import('../src/sources.ts'),f=fixture();f.start()
+ await until(f,()=>f.h.store.list<any>('goal-verification').some(r=>r.state==='failed'))
+ await f.h.goals.advance();const round=f.plans()[0]!;expect(round.state).toBe('pending')
+ const {workerCapabilities,...legacySnapshot}=round.snapshot
+ expect(workerCapabilities).toBeTruthy();f.h.store.put('goal-replan',round.id,{...round,snapshot:legacySnapshot,snapshotHash:stableDigest(legacySnapshot)})
+ await f.restart();await until(f,()=>f.goal().state==='completed')
+ expect(f.plans()[0]?.state).toBe('applied');expect(f.goal().taskIds).toHaveLength(4)
+ expect(f.calls.filter(r=>['goal_replanning','goal_plan_review'].includes(JSON.parse(r.input).kind)).every(r=>JSON.parse(r.input).workerCapabilities.length===2)).toBe(true)
+})

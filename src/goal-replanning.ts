@@ -9,6 +9,10 @@ import {evidenceAccess,type GoalEvidence} from './goal-evidence.ts'
 import {allowNewTaskInputs} from './task-context.ts'
 import {workerProfiles} from './worker-pool.ts'
 import type {ContextManifest} from './router-memory.ts'
+import {BackendRegistry} from './backends/registry.ts'
+import {agentOptionsSchema} from './backend-config.ts'
+import {mergeOptions} from './agent-options.ts'
+import {workerSpecs} from './worker-tools.ts'
 
 export interface GoalContract {objective:string;criteria:GoalCriterion[];triggerId:string;triggerHash:string;mandate:Mandate;workerIds:string[];backendIds:string[]}
 export class ReplanningInterrupted extends Error {}
@@ -18,7 +22,8 @@ const addition=z.object({id,title:z.string().min(1).max(300),instruction,workerI
 export const replanProposalSchema=z.object({reason:z.string().min(1).max(4000),evidenceIds:z.array(id).min(1).max(200),changes:z.array(change).min(1).max(100),additions:z.array(addition).max(20)}).strict()
 type Proposal=z.infer<typeof replanProposalSchema>
 const reviewSchema=z.object({approved:z.boolean(),explanation:z.string().min(1).max(4000),evidenceIds:z.array(id).min(1).max(200)}).strict()
-interface ReplanSnapshot {contract:GoalContract;goalRevision:number;planRevision:number;nodes:GoalNode[];failureNodeIds:string[];evidence:GoalEvidence[]}
+interface WorkerCapability {id:string;backend:string;tools:string[];sandboxDriver:string;network:boolean;sourceSandbox:string}
+interface ReplanSnapshot {contract:GoalContract;goalRevision:number;planRevision:number;nodes:GoalNode[];failureNodeIds:string[];evidence:GoalEvidence[];workerCapabilities?:WorkerCapability[]}
 export interface ReplanRound {id:string;goalId:string;scopeId:string;entryId:string;triggerId:string;state:'pending'|'planning'|'reviewing'|'approved'|'applied'|'rejected'|'errored'|'stale';snapshot:ReplanSnapshot;snapshotHash:string;proposal?:Proposal;review?:z.infer<typeof reviewSchema>;error?:string;plannerThread?:string;reviewerThread?:string;contextIds?:string[];at:number;appliedAt?:number}
 const activeStates=new Set(['pending','planning','reviewing','approved'])
 const strings={type:'array',items:{type:'string'}}
@@ -43,15 +48,22 @@ export class GoalReplanning {
   if(stableDigest(this.host.routerIngress.authority(c.triggerId))!==stableDigest(c.mandate))throw Error('Original goal authorization changed')
   return c
  }
- private snapshot(g:RouterGoal):ReplanSnapshot {
+ private snapshot(g:RouterGoal,includeCapabilities=true):ReplanSnapshot {
   const contract=this.contract(g)
   if(!g.managed||!g.nodes?.length||!['active','waiting'].includes(g.state))throw Error('Goal cannot autonomously replan in its current state')
   if(g.taskIds.some(id=>this.host.store.tickets.get(id)?.ended))throw Error('Stopped or ended tasks cannot be revived by replanning')
-  return {contract,goalRevision:g.revision,planRevision:g.planRevision??0,nodes:g.nodes,failureNodeIds:g.nodes.filter(n=>n.state==='held').map(n=>n.id),evidence:this.host.verification.failureEvidence(g)}
+  const trigger=this.host.store.triggers.get(contract.triggerId)!,source=this.host.sources.get(trigger.source)!.config,scope=this.host.scopes.scope(g.scopeId)
+  const workerCapabilities=includeCapabilities?workerProfiles(this.host.config).filter(w=>contract.workerIds.includes(w.id)&&scope.workerIds.includes(w.id)&&contract.backendIds.includes(w.backend)&&scope.backendIds.includes(w.backend)).map(w=>{
+   const defaults=this.host.model instanceof BackendRegistry?this.host.model.definition(w.backend).defaults:undefined
+   const profile=agentOptionsSchema.parse(Object.fromEntries(Object.entries(w).filter(([key])=>key in agentOptionsSchema.shape)))
+   const options=agentOptionsSchema.parse(mergeOptions(defaults,profile))
+   return {id:w.id,backend:w.backend,tools:workerSpecs.filter(t=>!options.tools||options.tools.includes(t.name)).map(t=>t.name).sort(),sandboxDriver:this.host.config.work.sandboxDriver,network:this.host.config.work.network,sourceSandbox:source.sandbox}
+  }).sort((a,b)=>a.id.localeCompare(b.id)):undefined
+  return {contract,goalRevision:g.revision,planRevision:g.planRevision??0,nodes:g.nodes,failureNodeIds:g.nodes.filter(n=>n.state==='held').map(n=>n.id),evidence:this.host.verification.failureEvidence(g),...(workerCapabilities?{workerCapabilities}:{})}
  }
  private current(r:ReplanRound){
   const g=this.host.goals.get(r.goalId)
-  if(!g||g.replanId!==r.id||stableDigest(this.snapshot(g))!==r.snapshotHash)throw Error('Replanning input, goal state or authority changed')
+  if(!g||g.replanId!==r.id||stableDigest(this.snapshot(g,r.snapshot.workerCapabilities!==undefined))!==r.snapshotHash)throw Error('Replanning input, goal state, Worker capabilities or authority changed')
   return g
  }
  consider(g:RouterGoal):boolean {
@@ -112,8 +124,12 @@ export class GoalReplanning {
    let g=this.current(r)
    const run=async(mode:'plan'|'review')=>{
     const access=evidenceAccess(r!.snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{this.current(r!)})
-    const result=await this.host.runGoalPlanner(g,r!,mode,{input:JSON.stringify({kind:mode==='plan'?'goal_replanning':'goal_plan_review',contract:r!.snapshot.contract,originalRequest:this.host.store.triggers.get(r!.snapshot.contract.triggerId)!.text,planRevision:r!.snapshot.planRevision,replanningPolicy:{samePlanRepairsPerNode:g.maxRepairs??2,successfulReplansUsed:g.replans??0,maxSuccessfulReplans:g.maxReplans??0,stoppedTasksAllowed:false},nodes:r!.snapshot.nodes,failedNodeIds:r!.snapshot.failureNodeIds,evidence:r!.snapshot.evidence.map(({content,...meta})=>meta),...(mode==='review'?{proposal:r!.proposal}:{})}),schema:mode==='plan'?proposalOutput:reviewOutput,tools:access.tools,onTool:access.onTool})
+    // Old persisted rounds did not carry this field. Preserve their original
+    // snapshot hash while checking a fresh capability view around each call.
+    const capabilities=r!.snapshot.workerCapabilities??this.snapshot(g).workerCapabilities!
+    const result=await this.host.runGoalPlanner(g,r!,mode,{input:JSON.stringify({kind:mode==='plan'?'goal_replanning':'goal_plan_review',contract:r!.snapshot.contract,originalRequest:this.host.store.triggers.get(r!.snapshot.contract.triggerId)!.text,planRevision:r!.snapshot.planRevision,replanningPolicy:{samePlanRepairsPerNode:g.maxRepairs??2,successfulReplansUsed:g.replans??0,maxSuccessfulReplans:g.maxReplans??0,stoppedTasksAllowed:false},workerCapabilities:capabilities,nodes:r!.snapshot.nodes,failedNodeIds:r!.snapshot.failureNodeIds,evidence:r!.snapshot.evidence.map(({content,...meta})=>meta),...(mode==='review'?{proposal:r!.proposal}:{})}),schema:mode==='plan'?proposalOutput:reviewOutput,tools:access.tools,onTool:access.onTool})
     this.current(r!)
+    if(!r!.snapshot.workerCapabilities&&stableDigest(this.snapshot(g).workerCapabilities)!==stableDigest(capabilities))throw Error('Worker capabilities changed during legacy plan review')
     save({contextIds:[...new Set([...(r!.contextIds??[]),result.contextId])]})
     return {result,read:access.read}
    }

@@ -16,6 +16,16 @@ Upstream https://github.com/deepseek-ai/dsh-superagent-prototype
 
 The upstream domain baseline was rechecked against commit
 8c32a9dc5d72c033816c6a8110b37f40cf94fba4 on 2026-11-04; all 15 files match.
+
+## WeKnora adaptations
+
+Selected search, text-splitting, memory and Wiki primitives were adapted from
+[Tencent/WeKnora](https://github.com/Tencent/WeKnora), commit
+`e3fb2335bf3f8cadd32142380c60b2677a27bf99`. The original MIT notice is in
+[`src/vendor/weknora/LICENSE`](src/vendor/weknora/LICENSE); the source paths and
+hashes are recorded in [`upstream.json`](src/vendor/weknora/upstream.json).
+The retained Go files are reference snapshots and are not a bundled service.
+
 ## Dependencies and UI components
 
 The WeCom adapter imports @wecom/aibot-node-sdk 1.0.7 from the WecomTeam

@@ -226,3 +226,45 @@ it('rejects skipped or partial evidence pages without publishing or repeating th
  });f.start({criteria:[{id:'sum',description:'Read the full file',files:['result.txt']}]});await until(f,()=>f.goal().state==='held')
  expect(f.h.store.list('goal-release')).toHaveLength(0);expect([...f.attempts.values()]).toEqual([1]);expect(f.rounds()[0]?.attempts).toBe(3)
 })
+
+it('retries a truncated overall evidence review without repeating work or changing acceptance',async()=>{
+ let tries=0
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{
+  for(const e of input.evidence){let offset:number|null=0;do{const result:any=await r.onTool!('goal_evidence',{id:e.id,offset},e.id+':'+offset);offset=JSON.parse(result.contentItems[0].text).nextOffset}while(offset!==null)}
+  const truncated=++tries===1
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:truncated?'insufficient':'passed',explanation:truncated?'Combined evidence output was truncated':'Inspected complete evidence',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+ })
+ const original=f.start();await until(f,()=>f.goal().state==='completed')
+ expect(tries).toBe(2);expect([...f.attempts.values()]).toEqual([1]);expect(f.h.store.list('goal-repair')).toHaveLength(0)
+ expect(f.goal().contract).toEqual(original.contract);expect(f.rounds().find(r=>!r.nodeId)?.attempts).toBe(2)
+ expect(f.h.store.list<any>('goal-verification-attempt').some(a=>a.state==='errored'&&a.checks.some((c:any)=>c.verdict==='insufficient'))).toBe(true)
+ expect(f.h.goals.command({action:'inspect',id:f.goal().id},f.context()).attempts).toHaveLength(1)
+})
+
+it('retains insufficient verification after bounded retries instead of releasing or looping',async()=>{
+ let tries=0
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{
+  tries++;for(const e of input.evidence)await r.onTool!('goal_evidence',{id:e.id},e.id)
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'insufficient',explanation:'The evidence output was truncated',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+ })
+ f.start({maxRepairs:0,criteria:[{id:'sum',description:'Review the result',files:['result.json']}]})
+ await until(f,()=>f.goal().state==='held')
+ expect(tries).toBe(3);expect(f.rounds()[0]).toMatchObject({state:'insufficient',attempts:3})
+ expect(f.h.store.list('goal-verification-attempt')).toHaveLength(2);expect(f.h.store.list('goal-release')).toHaveLength(0)
+ expect([...f.attempts.values()]).toEqual([1])
+})
+
+it('resumes an interrupted read-only verification after restart without spending another attempt',async()=>{
+ let tries=0,interrupted=false
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{
+  tries++
+  if(tries===2){interrupted=true;await new Promise<void>((_resolve,reject)=>r.signal!.addEventListener('abort',()=>reject(Error('Host stopped')),{once:true}))}
+  for(const e of input.evidence){let offset:number|null=0;do{const result:any=await r.onTool!('goal_evidence',{id:e.id,offset},e.id+':'+offset);offset=JSON.parse(result.contentItems[0].text).nextOffset}while(offset!==null)}
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:tries===1?'insufficient':'passed',explanation:tries===1?'Combined evidence output was truncated':'Inspected every page',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+ })
+ f.start();await until(f,()=>interrupted)
+ expect(f.h.store.list('goal-verification-attempt')).toHaveLength(1)
+ await f.restart();await until(f,()=>f.goal().state==='completed')
+ expect(tries).toBe(3);expect(f.rounds().find(r=>!r.nodeId)?.attempts).toBe(2)
+ expect(f.h.store.list('goal-verification-attempt')).toHaveLength(1);expect([...f.attempts.values()]).toEqual([1]);expect(f.h.store.list('goal-release')).toHaveLength(1)
+})

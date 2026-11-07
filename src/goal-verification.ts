@@ -141,12 +141,15 @@ export class GoalVerification {
  }
  async perform(id:string){
   let round=this.host.store.get<VerificationRound>('goal-verification',id);if(!round||!['pending','running'].includes(round.state))return
+  if(this.host.shuttingDown)return false
   const save=(patch:Partial<VerificationRound>)=>{round={...round!,...patch};this.host.store.put('goal-verification',id,round)}
   try{
    const g=this.host.goals.get(round.goalId);if(g&&['paused','held','needs_input'].includes(g.state))return
    if(!g||!['active','waiting'].includes(g.state)||!this.current(round,g)){save({state:'stale',finishedAt:this.now()});return}
    if(round.ticketIds.some(id=>!this.host.goals.effectsSettled(id)))throw Error('Task has unfinished or uncertain effects')
-   save({state:'running',attempts:round.attempts+1})
+   // A previously running round is read-only work interrupted by a host stop;
+   // resume that attempt without consuming another recovery allowance.
+   save({state:'running',attempts:round.state==='running'?round.attempts:round.attempts+1})
    const node=round.nodeId?g.nodes?.find(n=>n.id===round!.nodeId):undefined,criteria=this.criteria(g,node)
    const checks=criteria.filter(cr=>cr.check).map(cr=>this.program(cr,round!.snapshot))
    const semantic=criteria.filter(cr=>!cr.check).map(cr=>({id:cr.id,description:cr.description}))
@@ -160,6 +163,7 @@ export class GoalVerification {
      schema:{type:'object',properties:{checks:{type:'array',minItems:semantic.length,maxItems:semantic.length,items:{type:'object',properties:{criterionId:{type:'string',enum:semantic.map(c=>c.id)},verdict:{type:'string',enum:['passed','failed','insufficient']},explanation:{type:'string'},evidenceIds:{type:'array',items:{type:'string'}}},required:['criterionId','verdict','explanation','evidenceIds'],additionalProperties:false}}},required:['checks'],additionalProperties:false},
      tools:access.tools,onTool:access.onTool,
     })
+    if(this.host.shuttingDown)return false
     let parsed:z.infer<typeof verdict>
     try{parsed=verdict.parse(JSON.parse(result.text))}catch(error){throw Error('Verification protocol: '+String(error))}
     if(parsed.checks.length!==semantic.length||semantic.some(cr=>parsed.checks.filter(ch=>ch.criterionId===cr.id).length!==1))throw Error('Verification protocol: Verifier must decide every requested criterion exactly once')
@@ -170,10 +174,20 @@ export class GoalVerification {
      checks.push({...ch,method:'agent'})
     }
     save({threadId:result.threadId})
+    // An incomplete transport response is not evidence that the work itself
+    // failed. Retry the independent review within the existing protocol limit;
+    // exhaustion returns to the normal insufficient-evidence path.
+    const unresolved=checks.filter(ch=>ch.verdict!=='passed')
+    if(unresolved.length&&unresolved.every(ch=>ch.verdict==='insufficient'&&/truncat|截断/i.test(ch.explanation))){
+     save({checks,state:'errored',error:'Verification protocol: verifier reported truncated evidence output',finishedAt:this.now()});return
+    }
    }
    const latest=this.host.goals.get(g.id)
    if(!latest||latest.state==='cancelled'||!this.current(round,latest)){save({state:'stale',finishedAt:this.now()});return}
    save({checks,state:checks.some(c=>c.verdict==='failed')?'failed':checks.some(c=>c.verdict==='insufficient')?'insufficient':'passed',finishedAt:this.now()})
-  }catch(error){save({state:'errored',error:String(error).slice(0,1000),finishedAt:this.now()})}
+  }catch(error){
+   if(this.host.shuttingDown){save({state:'running',error:undefined});return false}
+   save({state:'errored',error:String(error).slice(0,1000),finishedAt:this.now()})
+  }
  }
 }
