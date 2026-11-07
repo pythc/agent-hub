@@ -352,6 +352,21 @@ export class RouterMemory {
   }
   this.store.put('context-manifest',manifest.id,manifest)
  }
+ inherit(target:ContextManifest,source:ContextManifest){
+  this.validate(source);this.validate(target)
+  if(['tenantId','scopeId','entryId','routerId','epoch','generation'].some(k=>(target as any)[k]!==(source as any)[k]))throw Error('Context dependencies belong to another scope or entry')
+  const merge=<T>(left:T[],right:T[],key:(x:T)=>string)=>{
+   const result=[...left]
+   for(const item of right){const old=result.find(x=>key(x)===key(item));if(old&&stableDigest(old)!==stableDigest(item))throw Error('Context dependency changed');if(!old)result.push(item)}
+   return result
+  }
+  target.facts=merge(target.facts,source.facts,x=>x.id)
+  target.evidence=merge(target.evidence,source.evidence,x=>x.id)
+  target.inputEvidence=merge(target.inputEvidence??[],source.inputEvidence??[],x=>x.id)
+  target.knowledge=merge(target.knowledge??[],source.knowledge??[],x=>x.documentId)
+  target.taskOwners=merge(target.taskOwners,source.taskOwners,x=>x.id)
+  this.validate(target);this.store.put('context-manifest',target.id,target)
+ }
  validate(manifest:ContextManifest){
   this.reconcile()
   if(manifest.epoch!==this.scopes.epoch(manifest.tenantId)||manifest.generation!==this.generation(manifest.scopeId)||!this.scopes.sourceActive(this.scopes.binding(manifest.entryId)))throw Error('Context expired')

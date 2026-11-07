@@ -34,7 +34,7 @@ export function chatToolDetails(name:string,args:unknown):Pick<ExecutionCall,'ac
 export class ChatSessions {
   private listeners=new Map<string,Set<()=>void>>()
   private notifications=new Set<string>()
-  private streams=new Map<string,{runId:string;outputId:string;raw:string;timer?:ReturnType<typeof setTimeout>}>()
+  private streams=new Map<string,{runId:string;outputId:string;raw:string;authorize?:()=>void;timer?:ReturnType<typeof setTimeout>}>()
   private unsubscribe:()=>void
   constructor(private host:Runtime){
     host.store.db.exec("CREATE INDEX IF NOT EXISTS chat_message_page ON records(json_extract(body,'$.conversationId'),json_extract(body,'$.sequence')) WHERE kind='chat-message'")
@@ -55,16 +55,17 @@ export class ChatSessions {
     const saved={...call,conversationId:previous?.conversationId??run.conversationId,runId:previous?.runId??run.id}
     this.host.store.put('chat-call',call.id,saved);this.changed(saved.conversationId)
   }
-  output(jobId:string,runId:string,event:ModelOutput){
+  output(jobId:string,runId:string,event:ModelOutput,authorize?:()=>void){
     if(event.phase!=='answer')return
     const run=this.host.store.get<ChatRun>('chat-run',runId);if(!run||run.cancelRequested)return
     let stream=this.streams.get(jobId)
     if(!stream||event.type==='start'||stream.outputId!==event.id){
       if(stream?.timer)clearTimeout(stream.timer)
-      stream={runId,outputId:event.id,raw:''};this.streams.set(jobId,stream)
+      stream={runId,outputId:event.id,raw:'',authorize};this.streams.set(jobId,stream)
       const old=this.host.store.get<Message>('chat-message','reply:'+jobId)
       if(old?.status==='streaming'){this.host.store.put('chat-message',old.id,{...old,text:''});this.changed(run.conversationId)}
     }
+    stream.authorize=authorize
     if(event.type==='end')stream.raw=event.text??stream.raw
     else if(event.type==='delta')stream.raw+=event.text??''
     // Bound only the in-flight projection; the validated final reply is not truncated.
@@ -74,10 +75,15 @@ export class ChatSessions {
   private flushOutput(jobId:string){
     const stream=this.streams.get(jobId);if(!stream)return
     const run=this.host.store.get<ChatRun>('chat-run',stream.runId);if(!run||run.cancelRequested)return
-    const text=partialReply(stream.raw);if(text===undefined||!text)return
     const c=this.host.store.get<Conversation>('chat-conversation',run.conversationId)!
     // Authorization can change during the short projection buffer, before its timer fires.
-    try{this.host.routerIngress.authority(run.triggerId,c.discussion)}catch{return}
+    try{this.host.routerIngress.authority(run.triggerId,c.discussion);stream.authorize?.()}catch{
+      stream.raw=''
+      const old=this.host.store.get<Message>('chat-message','reply:'+jobId)
+      if(old?.status==='streaming'){this.host.store.put('chat-message',old.id,{...old,text:'',status:'interrupted'});this.changed(c.id)}
+      return
+    }
+    const text=partialReply(stream.raw);if(text===undefined||!text)return
     this.host.store.atomic(()=>this.message(c,{id:'reply:'+jobId,runId:run.id,role:'assistant',text,status:'streaming'}))
     this.changed(c.id)
   }

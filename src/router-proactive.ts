@@ -20,7 +20,7 @@ type Duty=z.infer<typeof dutySchema>&{scopeId:string;revision:number}
 type Controls=z.infer<typeof settingsSchema>&{scopeId:string;revision:number}
 type Schedule=z.infer<typeof scheduleSchema>&{scopeId:string;revision:number;entryId:string;bindingRevision:number;nextAt?:number;createdAt:number}
 export interface ScheduledRun {id:string;scheduleId:string;scopeId:string;revision:number;scheduledAt:number;createdAt:number;triggerId?:string;triggerHash?:string;spec:Schedule;state:'queued'|'running'|'waiting'|'completed'|'failed'|'cancelled'|'skipped';taskIds:string[];delivery:'none'|'pending'|'sent'|'failed';reason?:string;finishedAt?:number}
-export interface MessageBatch {id:string;scopeId:string;entryId:string;discussion:string;actor:string;strength:'explicit'|'inferred';policyVersion:string;settingsRevision:number;triggerIds:string[];firstAt:number;dueAt:number;state:'pending'|'evaluating'|'decided'|'failed';decision?:Intervention;reason?:string}
+export interface MessageBatch {id:string;scopeId:string;entryId:string;discussion:string;actor:string;strength:'explicit'|'inferred';policyVersion:string;settingsRevision:number;triggerIds:string[];firstAt:number;dueAt:number;state:'pending'|'evaluating'|'decided'|'failed';decision?:Intervention;manifest?:ContextManifest;reason?:string}
 export type Intervention=Assessment|{action:'clarify';reason:string;question:string}
 const terminal=new Set(['completed','failed','cancelled','skipped'])
 const defaults={enabled:false,debounceMs:1500,maxWaitMs:5000,cooldownMs:60000,revision:0}
@@ -274,7 +274,10 @@ export class RouterProactive {
     return
    }
    const existing=this.candidates(triggers,b.discussion,context),rules=this.host.routerIngress.rules(last)
-   const decision=b.decision??await this.host.evaluateIntervention({triggers,strength:b.strength,rules,existing,context})
+   const evaluated=b.decision?{decision:b.decision,manifest:b.manifest}:await this.host.evaluateIntervention({triggers,strength:b.strength,rules,existing,context})
+   const {decision,manifest}=evaluated
+   if(!manifest)throw Error('Batch decision context is unavailable; a fresh authorized input is required')
+   this.host.memory.validate(manifest)
    check()
    if(decision.action!=='clarify'){
     assessment.parse(decision)
@@ -282,17 +285,17 @@ export class RouterProactive {
    }
    const action=decision.action
    // Persist the selected action before effects. Retried continuations reuse the manager receipt.
-   store.put('router-batch',b.id,{...b,state:'evaluating',decision})
+   store.put('router-batch',b.id,{...b,state:'evaluating',decision,manifest})
    if(['accept','attach'].includes(action))store.put('router-input-set',last.id,{triggerIds:b.triggerIds})
-   if(action==='attach')await this.continueTask((decision as Assessment).targetTicketId!,triggers,b.discussion,context,'batch:'+b.id)
+   if(action==='attach')await this.continueTask((decision as Assessment).targetTicketId!,triggers,b.discussion,context,'batch:'+b.id,manifest)
    else if(action==='stop')await this.host.manager.call({action:'cancel',ticketId:(decision as Assessment).targetTicketId,requestId:'batch-stop:'+b.id,revision:this.host.settings.current().revision},{discussion:b.discussion,trigger:last,scoped:context})
    else if(action==='accept')store.enqueue('router:batch:'+b.id,'router',{discussion:b.discussion,triggerId:last.id,batchId:b.id})
    else if(action==='clarify'&&decision.action==='clarify'&&last.channel){
     const id='router-clarify:'+b.id
-    store.put('router-reply-owner',id,{discussion:b.discussion,triggerId:last.id,inputs:b.triggerIds})
+    store.put('router-reply-owner',id,{discussion:b.discussion,triggerId:last.id,inputs:b.triggerIds,manifest})
     store.outbox.send({id,channel:last.channel,kind:'reply',text:decision.question})
    }
-   store.put('router-batch',b.id,{...b,state:'decided',decision,reason:action==='ignore'&&decision.action!=='ignore'?'Observed without execution':decision.reason})
+   store.put('router-batch',b.id,{...b,state:'decided',decision,manifest,reason:action==='ignore'&&decision.action!=='ignore'?'Observed without execution':decision.reason})
    if(action!=='ignore')store.put('router-intervention-clock',stableDigest([b.scopeId,b.entryId,b.discussion]),this.now())
   }catch(error){return fail(String(error))}
  }
@@ -310,11 +313,12 @@ export class RouterProactive {
   if(result==='accepted')this.host.store.put('router-intervention-clock',stableDigest([b.scopeId,b.entryId,b.discussion]),this.now())
  }
  failCandidateBatch(id:string,error:unknown){const b=this.host.store.get<MessageBatch>('router-batch',id);if(b&&b.state==='evaluating')this.host.store.put('router-batch',id,{...b,state:'failed',reason:String(error)})}
- private async continueTask(ticketId:string,triggers:Trigger[],discussion:string,context:ScopeContext,requestId:string){
+ private async continueTask(ticketId:string,triggers:Trigger[],discussion:string,context:ScopeContext,requestId:string,decisionManifest?:ContextManifest){
   this.assertInputs(triggers.map(t=>t.id))
   const last=triggers.at(-1)!,ticket=this.host.store.tickets.get(ticketId)
   if(!ticket||ticket.ended?.by==='human'||ticket.ended&&!last.human)throw Error('A stopped or ended task cannot be resumed by this event')
   const packet=this.host.memory.build(context,{kind:'task_followup',triggers,ticketId},'router-followup')
+  if(decisionManifest)this.host.memory.inherit(packet.manifest,decisionManifest)
   this.host.memory.validate(packet.manifest)
   await this.host.manager.call({action:'send',ticketId,text:triggers.map(t=>t.text).join('\n\n'),requestId,revision:this.host.settings.current().revision},{discussion,trigger:last,scoped:context,manifest:packet.manifest})
  }
@@ -325,5 +329,6 @@ export class RouterProactive {
   if(scoped)return this.continueTask(ticketId,[trigger],discussion,scoped,'admit:'+trigger.id)
   await this.host.manager.call({action:'send',ticketId,text:trigger.text,requestId:'admit:'+trigger.id,revision:this.host.settings.current().revision},{discussion,trigger})
  }
- batchInputs(id:string){const b=this.host.store.get<MessageBatch>('router-batch',id);if(!b||b.state!=='decided')throw Error('Batch decision missing');this.assertInputs(b.triggerIds);return b.triggerIds.map(id=>this.host.store.triggers.get(id)!)}
+ batchInputs(id:string){const b=this.host.store.get<MessageBatch>('router-batch',id);if(!b||b.state!=='decided'||!b.manifest)throw Error('Batch decision context missing; a fresh authorized input is required');this.host.memory.validate(b.manifest);this.assertInputs(b.triggerIds);return b.triggerIds.map(id=>this.host.store.triggers.get(id)!)}
+ batchManifest(id:string){const b=this.host.store.get<MessageBatch>('router-batch',id);if(!b?.manifest)throw Error('Batch decision context missing');this.host.memory.validate(b.manifest);return b.manifest}
 }

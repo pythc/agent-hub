@@ -80,7 +80,7 @@ export class CodexModel implements Model {
     const additions:unknown[]=[],raw:unknown[]=[]
     const envelope=()=>({instructions:request.instructions,input:request.input,schema:request.schema,tools:request.tools,parameters:request.options?.parameters,...(protocolPath&&existsSync(protocolPath)?{history:nativeProtocolHistory(protocolPath)}:{raw}),additions})
     const check=(phase:string,reserve=false)=>checkBudget(envelope(),request.contextBudget,'native-protocol',phase,request.onBudget,reserve)
-    const client = new AppServer(this.config.codex, this.extraArgs, request.cwd,request.onHumanRequest,request.onProgress,request.onTool?async(name,args,callId)=>{
+    const guardedTool:ModelRequest['onTool']=request.onTool?async(name,args,callId)=>{
       if(budgetError)return {success:false,contentItems:[{type:'inputText',text:'Context budget exceeded; tool was not executed'}]}
       try{additions.push({callId,name,args});check('before_tool',true)}catch(error){if(!(error instanceof ContextBudgetExceeded))throw error;budgetError=error;setTimeout(()=>{void client.interrupt()},0);return {success:false,contentItems:[{type:'inputText',text:'Context budget exceeded; tool was not executed'}]}}
       let result=await request.onTool!(name,args,callId)
@@ -91,7 +91,8 @@ export class CodexModel implements Model {
       additions.push({callId,result})
       try{check('tool_receipt')}catch(error){if(!(error instanceof ContextBudgetExceeded))throw error;budgetError=error;setTimeout(()=>{void client.interrupt()},0)}
       return result
-    }:undefined,this.environment,request.onOutput,(method,params)=>{if(request.contextBudget&&method==='rawResponseItem/completed')raw.push(params.item)})
+    }:undefined
+    const client = new AppServer(this.config.codex, this.extraArgs, request.cwd,request.onHumanRequest,request.onProgress,guardedTool,this.environment,request.onOutput,(method,params)=>{if(request.contextBudget&&method==='rawResponseItem/completed')raw.push(params.item)})
     const abort = () => client.interrupt()
     request.signal?.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(() => client.fail(new Error('Turn deadline exceeded; inspect workspace before retrying')), this.config.turnTimeoutMs)
@@ -124,8 +125,8 @@ export class CodexModel implements Model {
         const effective=(await client.call('config/read',{includeLayers:false,cwd:request.cwd})).config
         const mcp=Object.fromEntries(Object.keys(effective.mcp_servers??{}).map(name=>[name,{enabled:false}]))
         if(request.workerMcp)mcp['superagent-worker']={...request.workerMcp,enabled:true,default_tools_approval_mode:'approve'} as any
-        if(request.role==='router'&&request.threadId&&request.tools?.length&&request.onTool){
-          bridge=await codexToolBridge(request.tools,request.onTool,request.signal)
+        if(request.role==='router'&&request.threadId&&request.tools?.length&&guardedTool){
+          bridge=await codexToolBridge(request.tools,guardedTool,request.signal)
           mcp[bridge.name]=bridge.config as any
         }
         const filesystem:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[request.cwd]:request.sandbox==='workspace-write'?'write':'read'}

@@ -612,3 +612,33 @@ it('C10 concurrent Router snapshots cannot overwrite a newer fact or task data r
  expect(results.map(r=>r.status).sort()).toEqual(['fulfilled','rejected']);expect(f.memory.fact(fact.id)?.revision).toBe(2)
  expect(()=>f.memory.validate(first)).toThrow('expired');expect(()=>f.memory.validate(second)).toThrow('expired')
 })
+
+it('retains source dependencies while a held reply is reviewed',async()=>{
+ const f=fixture();f.store.close();stores.splice(stores.indexOf(f.store),1)
+ const h=new Runtime(f.config,{model:{async run(){return {threadId:'review',turnId:'review',text:JSON.stringify({approved:true,reply:'Reviewed source'})}}}});hosts.push(h)
+ const receipt=h.receive('local','alice',{id:'review-dependencies',thread:'review-topic',scope:'g1',text:'Review this source',addressed:true}) as any
+ const trigger=h.store.triggers.get(receipt.triggerId)!,c=h.scopes.context(trigger,'local:review-topic')!
+ const doc=h.knowledge.command({action:'put',operationId:'source-doc',expectedRevision:0,title:'Source',content:'Source material'},c)
+ h.scopes.own('review-task',c,'codex');h.store.put('ticket','review-task',{id:'review-task',title:'Review',ended:{by:'worker'},assignments:[{report:{reply:'Reviewed source'}}]})
+ const packet=h.memory.build(c,{request:'Review'},'backend');packet.manifest.taskOwners=[{id:'review-task',epoch:1,dataRevision:1}];packet.manifest.knowledge=[{documentId:doc.id,revision:doc.revision}]
+ h.memory.bindInputs(c,packet.manifest,[trigger.id]);h.store.put('task-context','review-task',{manifest:packet.manifest})
+ h.store.outbox.send({id:'held-dependency-reply',kind:'reply',text:'Source material',channel:trigger.channel!})
+ h.store.db.prepare("UPDATE outbox SET status='held' WHERE id=?").run('held-dependency-reply')
+ h.store.put('reply-hold','held-dependency-reply',{ticketId:'review-task',revision:1})
+ h.store.put('router-reply-owner','held-dependency-reply',{triggerId:trigger.id,discussion:'local:review-topic',inputs:[trigger.id],taskIds:['review-task'],manifest:packet.manifest})
+ await h.scopeCommand({action:'reply.resolve',decision:'continue',operationId:'review-source',expectedRevision:1,messageId:'held-dependency-reply'})
+ const saved=h.store.get<any>('router-reply-owner','held-dependency-reply').manifest
+ expect(saved.knowledge).toContainEqual({documentId:doc.id,revision:1});expect(saved.inputEvidence).toEqual(packet.manifest.inputEvidence)
+ h.knowledge.command({action:'delete',operationId:'remove-source',expectedRevision:1,id:doc.id},c)
+ await h.flush();expect(h.store.deliveries().find(d=>d.id==='held-dependency-reply')?.status).toBe('dropped')
+})
+
+it('stops legacy ambiguous history cleanup before modifying unrelated records',()=>{
+ const f=fixture(),c=f.context(),e=f.memory.ingest(c),id='existing-task'
+ f.store.put('ticket',id,{id,title:'Existing task'})
+ f.store.put('knowledge-document',id,{id,kind:'document',tenantId:c.route.tenantId,scopeId:c.route.scopeId,entryId:c.route.entryId,owner:c.actor,triggerId:c.trigger.id,title:'Earlier document',content:'Original document',revision:1,deleted:false,citations:[],links:[],at:Date.now()})
+ expect(()=>f.memory.command(c,{action:'source.delete',operationId:'cleanup-ambiguous',expectedRevision:e.version,id:e.id},true)).toThrow('ambiguous document ID')
+ expect(f.store.get<any>('ticket',id).title).toBe('Existing task')
+ expect(f.memory.evidence(e.id)?.revoked).toBe(false)
+ expect(f.memory.cleanup.plans()).toHaveLength(0)
+})

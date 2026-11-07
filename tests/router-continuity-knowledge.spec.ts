@@ -250,3 +250,35 @@ it('offers authenticated operator knowledge and goal APIs without private-entry 
   expect(denied.status).not.toBe(200);expect(await denied.text()).toContain('impersonate')
  }finally{hosts.splice(hosts.indexOf(f.h),1);await server.closeRuntime();await new Promise<void>((resolve,reject)=>server.server.close((error?:Error)=>error?reject(error):resolve()))}
 })
+
+it('keeps a cited historical revision unavailable after its original input is withdrawn',()=>{
+ const f=fixture(),original=f.context(f.receive('Source version one')),wikiContext=f.context(f.receive('Summarize source'))
+ const doc=f.put(original,'Original version content')
+ const page=f.put(wikiContext,'Summary of original version',{kind:'wiki',citations:[{documentId:doc.id,revision:1,start:0,end:8}]})
+ f.h.store.put('source-invalid-trigger',original.trigger.id,{reason:'source content withdrawn'})
+ expect(()=>f.h.knowledge.command({action:'read',id:page.id},wikiContext)).toThrow('unavailable')
+ const updated=f.context(f.receive('Replace the source with a fresh version'))
+ f.put(updated,'Fresh version content',{id:doc.id,expectedRevision:1})
+ expect(f.h.knowledge.command({action:'read',id:doc.id},updated).content).toBe('Fresh version content')
+ expect(()=>f.h.knowledge.command({action:'read',id:page.id},wikiContext)).toThrow('unavailable')
+ expect(f.h.knowledge.command({action:'search',query:'Summary'},wikiContext).items).toEqual([])
+})
+
+it('keeps pending goal notices tied to the context that produced them',async()=>{
+ const f=fixture(),received=f.receive('Keep working on budget'),c=f.context(received),e=f.h.memory.ingest(c)
+ const fact=f.h.memory.command(c,{action:'remember',operationId:'notice-fact',expectedRevision:0,subject:'budget',content:'Budget 73',sourceIds:[e.id],candidate:false},true) as any
+ const packet=f.h.memory.build(c,{request:'budget'},'fixture')
+ expect(packet.manifest.facts.map(x=>x.id)).toContain(fact.id)
+ const g=f.h.goals.command({action:'start',operationId:'notice-goal',expectedRevision:0,title:'Budget review',objective:'Keep working on budget',authorizationQuote:'Keep working on budget',criteria:[{id:'check',description:'Verify budget'}]},c,packet.manifest) as any
+ f.h.goals.notice(g,'Review Budget 73')
+ f.h.memory.command(c,{action:'forget',operationId:'forget-notice-fact',expectedRevision:fact.revision,id:fact.id},true)
+ await f.h.flush()
+ expect(f.h.store.deliveries().find(d=>d.id.startsWith('goal-notice:'))?.status).toBe('dropped')
+})
+
+it('rejects a document identifier already occupied by another record',()=>{
+ const f=fixture(),context=f.context(f.receive('Save document'))
+ f.h.store.put('ticket','existing-task',{id:'existing-task',title:'Existing task'})
+ expect(()=>f.put(context,'Document text',{id:'existing-task'})).toThrow('conflicts with an existing record')
+ expect(f.h.store.get<any>('ticket','existing-task').title).toBe('Existing task')
+})

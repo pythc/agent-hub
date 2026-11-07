@@ -288,3 +288,23 @@ it('reads actual task files only within the owning conversation, including pagin
   for(const path of ['../','state/private.txt','private-link','.git/config'])await expect(h.chat.files(c.id,'owner',{ticket,path,kind:'files'})).rejects.toMatchObject({code:'file_unavailable'})
   expect((await h.chat.files(other.id,'owner')).tasks).toEqual([])
 })
+
+it('rechecks scoped memory before publishing buffered chat output',async()=>{
+ let context:any,fact:any
+ const f=fixture(async r=>{
+  r.onOutput?.({id:'answer',type:'delta',phase:'answer',text:'{"reply":"Budget 73'})
+  f.h.memory.command(context,{action:'forget',operationId:'forget-stream',expectedRevision:fact.revision,id:fact.id},true)
+  await new Promise(resolve=>setTimeout(resolve,100))
+  return {reply:'Budget 73'}
+ })
+ const chat=f.h.chat.create('owner')
+ f.h.scopes.command({action:'scope.put',operationId:'chat-scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',managers:[JSON.stringify(['local','operator'])],workerIds:['research','review'],sourceIds:['local'],backendIds:['codex']}})
+ f.h.scopes.command({action:'entry.bind',operationId:'chat-entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'chat:'+chat.id,history:'group'})
+ const seeded=f.h.receive('local','operator',{id:'seed',thread:'chat:'+chat.id,scope:'chat:'+chat.id,text:'Record budget',addressed:true}) as any
+ const trigger=f.h.store.triggers.get(seeded.triggerId)!;context=f.h.scopes.context(trigger,'local:chat:'+chat.id)!
+ const e=f.h.memory.ingest(context);fact=f.h.memory.command(context,{action:'remember',operationId:'stream-fact',expectedRevision:0,subject:'budget',content:'Budget 73',sourceIds:[e.id],candidate:false},true)
+ f.h.store.jobState('router:'+seeded.triggerId,'done')
+ send(f.h,chat.id,'budget')
+ await settle(f.h,()=>f.h.chat.view(chat.id,'owner').run?.state==='failed')
+ expect(f.h.chat.view(chat.id,'owner').messages.every(m=>m.role!=='assistant'||!m.text.includes('Budget 73'))).toBe(true)
+})

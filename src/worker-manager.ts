@@ -105,7 +105,12 @@ export class WorkerManager {
    if(context?.scoped){
     if(host.store.deliveries().some(d=>d.ticketId===input.ticketId&&!['sent','dropped'].includes(d.status)))throw Error('Reconcile pending task deliveries before changing the reply entry')
     host.scopes.noteInput(input.ticketId,context.scoped);host.memory.moveTaskContext(input.ticketId,context.scoped)
-    if(context.manifest){const owner=host.scopes.ownership(input.ticketId)!;context.manifest.taskOwners=[...context.manifest.taskOwners.filter(t=>t.id!==input.ticketId),{id:input.ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}];host.store.put('context-manifest',context.manifest.id,context.manifest)}
+    if(context.manifest){
+     const owner=host.scopes.ownership(input.ticketId)!;context.manifest.taskOwners=[...context.manifest.taskOwners.filter(t=>t.id!==input.ticketId),{id:input.ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}]
+     const saved=host.store.get<{manifest:ContextManifest}>('task-context',input.ticketId)
+     if(saved){host.memory.inherit(saved.manifest,context.manifest);host.store.put('task-context',input.ticketId,saved)}
+     host.store.put('context-manifest',context.manifest.id,context.manifest)
+    }
    }
    if(context?.trigger){
     if(context.trigger.human){

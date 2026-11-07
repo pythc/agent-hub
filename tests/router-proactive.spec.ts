@@ -319,3 +319,24 @@ it('does not relay withdrawn scoped follow-ups or expose them to a Router',async
  expect(f.h.store.list('router-followup')).toHaveLength(0)
  expect(f.h.store.tickets.get(task.id)?.ended).toBeTruthy()
 })
+
+it('withdraws a pending clarification when its source memory changes',async()=>{
+ const f=fixture(),seed=f.receive('Record the budget'),c=f.context(seed),e=f.h.memory.ingest(c)
+ f.h.store.jobState('router:'+seed.triggerId,'done')
+ const fact=f.h.memory.command(c,{action:'remember',operationId:'clarify-fact',expectedRevision:0,subject:'budget',content:'Budget 73',sourceIds:[e.id],candidate:false},true) as any
+ f.h.config.sources[0]!.capabilities.replies=false;f.enable();f.receive('ambiguous budget');f.advance(101)
+ await until(f.h,()=>batches(f.h).some(b=>b.decision?.action==='clarify'))
+ const message=f.h.store.deliveries().find(d=>d.id.startsWith('router-clarify:'))!
+ expect(message.status).toBe('pending')
+ f.h.memory.command(c,{action:'forget',operationId:'forget-clarify-fact',expectedRevision:fact.revision,id:fact.id},true)
+ f.h.config.sources[0]!.capabilities.replies=true;await f.h.flush()
+ expect(f.h.store.deliveries().find(d=>d.id===message.id)?.status).toBe('dropped')
+})
+
+it('does not send a restored clarification without its decision context',async()=>{
+ const f=fixture(),event=f.receive('Request clarification'),trigger=f.h.store.triggers.get(event.triggerId)!
+ f.h.store.outbox.send({id:'router-clarify:legacy',kind:'reply',text:'Which task?',channel:trigger.channel!})
+ f.h.store.put('router-reply-owner','router-clarify:legacy',{discussion:'local:g1-topic',triggerId:trigger.id,inputs:[trigger.id]})
+ await f.h.flush()
+ expect(f.h.store.deliveries().find(d=>d.id==='router-clarify:legacy')?.status).toBe('dropped')
+})

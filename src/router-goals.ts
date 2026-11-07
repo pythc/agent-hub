@@ -82,7 +82,7 @@ export class RouterGoals {
   if(state==='held')this.notice({...latest,state,reason},reason!)
  }
  notice(g:RouterGoal,text:string){
-  try{const {trigger}=this.anchor(g);if(!trigger.channel)return;const id='goal-notice:'+stableDigest([g.id,g.revision,text]);this.host.store.put('router-reply-owner',id,{discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId]});this.host.store.outbox.send({id,channel:trigger.channel,kind:'reply',text:'目标「'+g.title+'」尚未完成：'+text})}catch{}
+  try{const {trigger}=this.anchor(g);if(!trigger.channel)return;const ids=[...new Set([...(g.contextIds??[]),...this.host.replanning.contexts(g.id)])],manifests=ids.map(id=>{const manifest=this.host.store.get<ContextManifest>('context-manifest',id);if(!manifest)throw Error('Goal context unavailable');this.host.memory.validate(manifest);return manifest});const id='goal-notice:'+stableDigest([g.id,g.revision,text]);this.host.store.put('router-reply-owner',id,{discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests});this.host.store.outbox.send({id,channel:trigger.channel,kind:'reply',text:'目标「'+g.title+'」尚未完成：'+text})}catch{}
  }
  tick(){
   for(let g of this.host.store.list<RouterGoal>('router-goal')){

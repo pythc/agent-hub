@@ -58,9 +58,14 @@ export function planHistory(store:Store,stateDir:string,scopeId:string,id:string
 }
 function expandPlan(store:Store,stateDir:string,plan:HistoryPlan):HistoryPlan {
  const all=rows(store),ids=new Set(plan.roots),selected=new Map(plan.records.map(([k,id])=>[k+'\0'+id,[k,id] as [string,string]]))
+ const nonDocumentIds=new Set(all.filter(r=>r.kind!=='knowledge-document').map(r=>r.id))
  for(const [,id] of selected.values())ids.add(id)
  let changed=true
- while(changed){changed=false;for(const r of all){
+ while(changed){
+  // A legacy knowledge ID may be equal to an unrelated task or other record.
+  // Refuse ambiguous deletion before writing the revocation ledger or clearing data.
+  for(const d of all)if(d.kind==='knowledge-document'&&nonDocumentIds.has(d.id)&&(ids.has(d.id)||references(d.body,ids)))throw Error('History cleanup has an ambiguous document ID; reconcile the conflicting records before deleting')
+  changed=false;for(const r of all){
   if(excluded.test(r.kind)||selected.has(r.kind+'\0'+r.id))continue
   if(ids.has(r.id)||references(r.body,ids)){
    selected.set(r.kind+'\0'+r.id,[r.kind,r.id]);ids.add(r.id);changed=true

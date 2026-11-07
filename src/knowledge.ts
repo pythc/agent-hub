@@ -35,7 +35,11 @@ export class Knowledge {
   const source=this.host.store.triggers.get(d.triggerId);if(!source)return false
   try{this.host.scopes.assertTrigger(source)}catch{return false}
   if(this.host.memory.cleanup.blocked('knowledge-document',d.id,d))return false
-  return d.citations.every(ref=>{const source=this.host.store.get<KnowledgeDocument>('knowledge-document',ref.documentId);return !!source&&this.visible(source,c,branch)})
+  return d.citations.every(ref=>{
+   const current=this.host.store.get<KnowledgeDocument>('knowledge-document',ref.documentId)
+   const cited=current?.revision===ref.revision?current:this.host.store.get<KnowledgeDocument>('knowledge-version',ref.documentId+':'+ref.revision)
+   return !!current&&!!cited&&this.visible(current,c,branch)&&this.visible(cited,c,branch)
+  })
  }
  private documents(c:ScopeContext){this.host.scopes.assertCurrent(c);return this.host.store.list<KnowledgeDocument>('knowledge-document').filter(d=>this.visible(d,c))}
  private get(c:ScopeContext,id:string){const d=this.documents(c).find(d=>d.id===id);if(!d)throw Error('Document is unavailable in this entry');return d}
@@ -80,6 +84,7 @@ export class Knowledge {
    const receipt=store.get<any>('knowledge-receipt',key)
    if(receipt){if(receipt.fingerprint!==fingerprint)throw Error('operationId reused with different content');const d=store.get<KnowledgeDocument>('knowledge-document',receipt.documentId);if(!d||d.entryId!==c.route.entryId||d.owner!==c.actor&&!this.host.scopes.canManage(c)||this.host.memory.cleanup.blocked('knowledge-document',d.id,d))throw Error('Knowledge receipt no longer available');return receipt.result}
    const docId=x.id??'knowledge-'+key,old=store.get<KnowledgeDocument>('knowledge-document',docId)
+   if(!old&&store.db.prepare("SELECT 1 FROM records WHERE id=? AND kind<>'knowledge-document' LIMIT 1").get(docId))throw Error('Document ID conflicts with an existing record')
    if(old&&(old.entryId!==c.route.entryId||old.scopeId!==c.route.scopeId||old.deleted||old.owner!==c.actor&&!this.host.scopes.canManage(c)))throw Error('Document mutation is outside authority')
    if((old?.revision??0)!==x.expectedRevision)throw Error('Knowledge revision conflict')
    if(old&&this.host.memory.cleanup.blocked('knowledge-document',old.id,old))throw Error('Deleted source cannot be revived')
