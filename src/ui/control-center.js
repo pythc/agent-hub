@@ -1,4 +1,12 @@
-function controlConnections(){return Object.entries({codex:{kind:'codex'},...(S.base?.config.backends||{})}).map(([id,b])=>({id,kind:b.kind,model:b.kind==='codex'?S.base?.config.model:b.model,label:b.label||(b.kind==='codex'?'Codex':new URL(b.baseUrl).hostname+' · '+b.model)}))}
+function controlConnections() {
+  return Object.entries({ codex: { kind: 'codex' }, ...(S.base?.config.backends || {}) }).map(([id, backend]) => {
+    let endpoint = ''
+    try { endpoint = new URL(backend.baseUrl).hostname } catch {}
+    return { id, kind: backend.kind, model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
+      label: backend.label || (backend.kind === 'codex' ? 'Codex' : [endpoint, backend.model].filter(Boolean).join(' · ') || id),
+      connectionType: backend.subscription ? 'subscription' : backend.kind === 'codex' || backend.kind === 'cli' ? 'cli' : 'api' }
+  })
+}
 function controlField(id,label,value,onChange,options=null,placeholder=''){
  const input=el(options?'select':'input');input.id=id
  if(options)for(const [v,name]of options)input.add(new Option(name,v))
@@ -13,8 +21,8 @@ function executionDraft() {
   const route = config.execution || S.base.config.execution
   const backend = route.backend ?? S.base.config.execution.backend
   return {
-    router: route.roles?.router ?? backend,
-    routerModel: config.models?.router || '',
+    router: route.router?.backend ?? route.roles?.router ?? backend,
+    routerModel: route.router?.model || config.models?.router || '',
     workers: clone(route.workers?.length ? route.workers : Array.from(
       { length: Math.min(10, Math.max(1, config.concurrency || 1)) },
       (_, index) => ({
@@ -152,7 +160,7 @@ function controlNewConnection(id) {
 }
 function controlConnectionsPage() {
   const configured = entryState.data.entries.filter(entry => entry.status !== 'not-configured')
-  const result = [opHeading(L('Software connections', '软件接入'), null,
+  const result = [opHeading(L('Conversation entries', '会话入口'), null,
     configured.length ? opButton(L('Prepare usage instructions', '生成使用说明'),
       () => shareEntries(configured.map(entry => entry.id)), 'button') : null,
     opButton(L('New connection', '新建接入'), () => opNavigate('catalogue'), 'button primary', 'plus'))]
@@ -229,19 +237,16 @@ function resetNewModel() {
   })
 }
 function controlNewModel() {
+  if (!connectionStudio.touched && !entryModel.touched) {
+    resetNewModel()
+    Object.assign(connectionStudio, { kind: 'api', provider: '', name: '', command: '', args: '[]', model: '', auth: null, check: null, requestId: '', definitionId: '', editing: '',
+      account: '', ownerSource: '', ownerActor: '', background: false, models: [] })
+  }
   opNavigate('model-new')
 }
 function controlModels() {
-  if (entryState.page === 'model-new') {
-    const settings = entryModelSettings()
-    settings.open = true
-    settings.classList.add('operator-model-form')
-    return [
-      opButton(L('Model services', '模型服务'), () => opNavigate('models'), 'back-link', 'arrow'),
-      opHeading(L('New model service', '新建模型服务'), null),
-      settings
-    ]
-  }
+  if (entryState.page === 'model-new') return connectionCreation()
+  if (connectionStudio.editing && S.snap?.editableKeys?.includes('backends')) return connectionDefinitionEditor()
   const architecture = operator.work?.architecture
   const services = controlConnections()
   const rows = services.map(service => {
@@ -260,12 +265,17 @@ function controlModels() {
     if (S.base.config.execution.roles.subagent === service.id) roles.push(L('Subagent', '子代理'))
     const protocol = ({codex: 'Codex CLI', 'openai-responses': 'OpenAI Responses',
       'openai-chat': 'OpenAI Chat Completions', anthropic: 'Anthropic Messages'})[service.kind] || service.kind
-    return [el('strong', '', service.label), el('span', '', protocol),
+    const actions = add(el('div', 'actions'), check)
+    if (S.snap?.editableKeys?.includes('backends') && S.draft.backends?.[service.id]) actions.append(opButton(L('Edit', '编辑'), () => {
+      connectionStudio.editing = service.id; render()
+    }, 'button'))
+    const type = ({api: L('API service', 'API 服务'), cli: L('CLI backend', 'CLI 后端'), subscription: L('Subscription', '订阅账号')})[service.connectionType]
+    return [add(el('div'), el('strong', '', service.label), el('small', 'team-help', type)), el('span', '', protocol),
       el('span', '', service.model || L('Service default', '服务默认模型')),
-      el('span', '', roles.join(', ') || L('Unassigned', '未分配')), check]
+      el('span', '', roles.join(', ') || L('Unassigned', '未分配')), actions]
   })
-  const result = [opHeading(L('Model services', '模型服务'), null,
-    opButton(L('New model service', '新建模型服务'), controlNewModel, 'button primary', 'plus')),
+  const result = [opHeading(L('Model connections', '模型连接'), null,
+    opButton(L('New model connection', '新建模型连接'), controlNewModel, 'button primary', 'plus')),
     workspaceTable([L('Service', '服务名称'), L('Protocol', '协议'), L('Default model', '默认模型'),
       L('Used by', '使用角色'), L('Action', '操作')], rows)]
   if (entryModel.check || entryModel.saved) result.push(entryModelResult())

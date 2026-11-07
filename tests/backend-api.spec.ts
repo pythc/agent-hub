@@ -9,6 +9,7 @@ import {backendDefinition,type ApiDefinition} from '../src/backend-config.ts'
 import {configSchema} from '../src/config.ts'
 import {Runtime} from '../src/runtime.ts'
 import type {ModelRequest} from '../src/model.ts'
+import {TransientModelError} from '../src/model.ts'
 const servers:Server[]=[],roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();await Promise.all(servers.splice(0).map(s=>new Promise<void>(r=>{s.closeAllConnections();s.close(()=>r())})));for(const p of roots.splice(0))rmSync(p,{recursive:true,force:true});delete process.env.AGENTHUB_FIXTURE_KEY})
 const kinds=['openai-chat','openai-responses','anthropic'] as const
@@ -26,7 +27,82 @@ function output(kind:Kind,text:string,calls:{id:string;name:string;args:any}[]=[
 const definition=(kind:Kind,url:string,extra:any={}):ApiDefinition=>backendDefinition.parse({kind,baseUrl:url+'/v1',model:'fixture-model',requestTimeoutMs:3000,...extra}) as ApiDefinition
 const schema={type:'object',additionalProperties:false,properties:{answer:{type:'string'}},required:['answer']}
 const request=(extra:Partial<ModelRequest>={}):ModelRequest=>({cwd:tmpdir(),instructions:'Synthetic test',input:'read marker',schema,managed:true,tools:[{type:'function',name:'read_marker',description:'Read a synthetic marker',inputSchema:{type:'object',additionalProperties:false,properties:{path:{type:'string'}},required:['path']}}],...extra})
+it.each(kinds)('%s integrates streaming text with the managed tool loop without replaying tools',async kind=>{
+ const frame=(v:any)=>'data: '+(typeof v==='string'?v:JSON.stringify(v))+'\n\n',requests:any[]=[],deltas:string[]=[];let tools=0,finalSent=false,sawLive=false
+ const fixture=createServer(async(req,res)=>{
+  let raw='';for await(const chunk of req)raw+=chunk;const b=JSON.parse(raw);requests.push(b)
+  const tool=requests.length===1,text=JSON.stringify({answer:'Streamed marker'}),call={id:'stream-tool',name:'read_marker',args:{path:'marker.txt'}}
+  let data:any[]=[],terminal:any
+  if(kind==='openai-responses'){
+   data=tool?[]:[{type:'response.output_text.delta',item_id:'answer',content_index:0,delta:text.slice(0,12)},{type:'response.output_text.delta',item_id:'answer',content_index:0,delta:text.slice(12)}]
+   terminal={type:'response.completed',response:output(kind,tool?'':text,tool?[call]:[])}
+  }else if(kind==='openai-chat'){
+   data=tool?[{choices:[{index:0,delta:{tool_calls:[{index:0,id:call.id,type:'function',function:{name:call.name,arguments:JSON.stringify(call.args)}}]},finish_reason:'tool_calls'}]}]:[{choices:[{index:0,delta:{content:text.slice(0,12)}}]},{choices:[{index:0,delta:{content:text.slice(12)},finish_reason:'stop'}]}]
+   terminal='[DONE]'
+  }else{
+   data=[{type:'message_start',message:{id:'m',model:'fixture-model'}},{type:'content_block_start',index:0,content_block:tool?{type:'tool_use',id:call.id,name:call.name,input:{}}:{type:'text',text:''}},...(tool?[{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:JSON.stringify(call.args)}}]:[{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0,12)}},{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(12)}}]),{type:'content_block_stop',index:0},{type:'message_delta',delta:{stop_reason:tool?'tool_use':'end_turn'}}]
+   terminal={type:'message_stop'}
+  }
+  res.writeHead(200,{'content-type':'text/event-stream'});for(const d of data)res.write(frame(d))
+  setTimeout(()=>{if(!tool)finalSent=true;res.end(frame(terminal))},30)
+ });servers.push(fixture);await new Promise<void>(r=>fixture.listen(0,'127.0.0.1',r))
+ const model=new ApiModel('stream',definition(kind,'http://127.0.0.1:'+(fixture.address() as any).port),memory(),5000)
+ const result=await model.run(request({onOutput:e=>{if(e.type==='delta'){deltas.push(e.text??'');if(!finalSent)sawLive=true}},onTool:async(name,args)=>{tools++;expect(name).toBe('read_marker');expect(args).toEqual({path:'marker.txt'});return {success:true,contentItems:[{type:'inputText',text:'marker'}]}}}))
+ expect(requests.every(b=>b.stream===true)).toBe(true);expect(tools).toBe(1);expect(sawLive).toBe(true)
+ expect(JSON.parse(deltas.join(''))).toEqual({answer:'Streamed marker'});expect(JSON.parse(result.text)).toEqual({answer:'Streamed marker'})
+})
 function results(kind:Kind,b:any){return kind==='openai-chat'?b.messages.filter((m:any)=>m.role==='tool'):kind==='anthropic'?b.messages.flatMap((m:any)=>Array.isArray(m.content)?m.content.filter((c:any)=>c.type==='tool_result'):[]):b.input.filter((i:any)=>i.type==='function_call_output')}
+it.each(kinds)('%s recovers a reset connection in the same session without repeating a completed tool',async kind=>{
+ const bodies:any[]=[]
+ const root=mkdtempSync(join(tmpdir(),'api-recovery-'));roots.push(root);writeFileSync(join(root,'marker.txt'),'retained-tool-result')
+ const fixture=createServer(async(req,res)=>{
+  let raw='';for await(const chunk of req)raw+=chunk
+  const b=JSON.parse(raw);bodies.push(b)
+  if(bodies.length===3){req.socket.destroy();return}
+  const answer=bodies.length===1?output(kind,JSON.stringify({action:'accept',title:'Read marker',scope:'Read marker.txt',reason:'Requested',rules:[],ruleAssessments:[],targetTicketId:null})):
+   bodies.length===2?output(kind,'',[{id:'read-once',name:'superagent_read',args:{resource:'files/marker.txt'}}]):output(kind,JSON.stringify({state:'ready',summary:'Read',reply:'retained-tool-result',question:null,askedBy:null,handbacks:[]}))
+  res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(answer))
+ });servers.push(fixture);await new Promise<void>(r=>fixture.listen(0,'127.0.0.1',r))
+ const url='http://127.0.0.1:'+(fixture.address() as any).port
+ const config=configSchema.parse({stateDir:join(root,'state'),port:0,execution:{backend:'test'},backends:{test:definition(kind,url)},sources:[{id:'local',kind:'local',cwd:root,allowedActors:['alice']}]})
+ const host=new Runtime(config);hosts.push(host)
+ host.receive('local','alice',{id:'request',thread:'recovery',text:'Read marker.txt',addressed:true})
+ for(let n=0;n<600;n++){await host.tick();await new Promise(r=>setTimeout(r,5));if(host.store.deliveries().some(d=>d.text==='retained-tool-result'&&d.status==='sent'))break}
+ expect(host.store.deliveries().some(d=>d.text==='retained-tool-result'&&d.status==='sent')).toBe(true)
+ expect(bodies).toHaveLength(4);expect(JSON.stringify(bodies[3])).toContain('retained-tool-result')
+ const ticket=host.status().tickets[0]!,thread=host.store.get<any>('backend-thread',ticket.run!.threadId!)
+ expect(Object.keys(thread.effects)).toEqual(['read-once'])
+ expect(thread.turns.map((t:any)=>t.status)).toEqual(['failed','completed'])
+ expect(host.store.list<any>('execution-call').filter(c=>c.name==='superagent_read')).toHaveLength(1)
+})
+
+it.each(['request timeout','response reset'])('classifies %s as transient but not a user/turn cancellation',async mode=>{
+ const fixture=createServer((_req,res)=>{
+  if(mode==='response reset'){res.writeHead(200,{'content-type':'application/json','content-length':'1000'});res.write('{');setTimeout(()=>res.destroy(),10)}
+ });servers.push(fixture);await new Promise<void>(r=>fixture.listen(0,'127.0.0.1',r))
+ const url='http://127.0.0.1:'+(fixture.address() as any).port
+ const d=definition('openai-chat',url,{requestTimeoutMs:100})
+ await expect(new ApiModel('test',d,memory(),3000).run(request())).rejects.toBeInstanceOf(TransientModelError)
+ const abort=new AbortController();abort.abort(Error('Operator stopped'))
+ await expect(new ApiModel('test',d,memory(),3000).run(request({signal:abort.signal}))).rejects.toThrow('Operator stopped')
+ if(mode==='request timeout'){
+  const model=new ApiModel('test',definition('openai-chat',url,{requestTimeoutMs:3000}),memory(),100)
+  try{await model.run(request());throw Error('Expected turn deadline')}catch(error){expect(error).not.toBeInstanceOf(TransientModelError);expect(String(error)).toContain('deadline')}
+ }
+})
+
+it.each(kinds)('%s acknowledges source steering only when it enters the next persisted model step',async kind=>{
+ let control:any,consumed=0,release!:()=>void,calls=0,threadId=''
+ const gate=new Promise<void>(r=>{release=r})
+ const f=await server(async b=>{calls++;if(calls===1){await gate;return output(kind,'{"answer":"old"}')}expect(JSON.stringify(b)).toContain('new source input');return output(kind,'{"answer":"new"}')})
+ const store=memory(),model=new ApiModel('test',definition(kind,f.url),store,10000)
+ const running=model.run(request({onActive:c=>{control=c},onThread:id=>{threadId=id}}))
+ while(calls===0)await new Promise(r=>setTimeout(r,2))
+ await control.steer('new source input',()=>{consumed++;expect(JSON.stringify(store.get('backend-thread',threadId))).toContain('new source input')})
+ // The callback is not an enqueue receipt. The in-flight old response cannot finish this turn.
+ expect(consumed).toBe(0);release()
+ expect(JSON.parse((await running).text).answer).toBe('new');expect(consumed).toBe(1);expect(calls).toBe(2)
+})
 it.each(kinds)('%s executes a real HTTP tool loop and resumes persisted history without Codex',async kind=>{
  let calls=0
  const fixture=await server((b,path,h)=>{
@@ -105,7 +181,13 @@ it('cancels an in-flight API request and retains an interrupted turn',async()=>{
 })
 it('rejects unsafe endpoints and protocol-owned parameter overrides before network access',()=>{
  for(const baseUrl of ['http://example.com/v1','https://key:secret@example.com','https://example.com/v1?api_key=x'])expect(()=>definition('openai-chat',baseUrl)).toThrow()
- for(const parameters of [{messages:[]},{tools:[]},{model:'override'},{store:true},{n:5},{max_completion_tokens:1000000},{output_config:{}}])expect(()=>definition('openai-chat','https://example.com',{parameters})).toThrow('cannot replace')
+ for(const parameters of [{messages:[]},{tools:[]},{model:'override'},{store:true},{n:5},{max_completion_tokens:1000000}])expect(()=>definition('openai-chat','https://example.com',{parameters})).toThrow('cannot replace')
+ for(const parameters of [{output_config:{format:{}}},{text:{format:{}}}])expect(()=>definition('openai-chat','https://example.com',{parameters})).toThrow('managed by AgentHub')
+})
+it.each(['anthropic','openai-responses'] as const)('%s preserves provider output options alongside the managed response schema',async kind=>{
+ const parameters=kind==='anthropic'?{thinking:{type:'disabled'},output_config:{effort:'high'}}:{text:{verbosity:'low'}}
+ const f=await server(body=>{if(kind==='anthropic'){expect(body.thinking).toEqual({type:'disabled'});expect(body.output_config).toMatchObject({effort:'high',format:{schema}})}else expect(body.text).toMatchObject({verbosity:'low',format:{schema}});return output(kind,'{"answer":"valid"}')})
+ await new ApiModel('test',definition(kind,f.url,{parameters,outputFormat:'json-schema'}),memory(),10000).run(request())
 })
 it.each(kinds)('%s maps structured output to the protocol-specific server schema field',async kind=>{
  const f=await server(b=>{
@@ -121,22 +203,22 @@ it('enforces the tool-call budget before a large batch can execute any tool',asy
  await expect(new ApiModel('test',definition('openai-chat',f.url,{maxToolCalls:1}),memory(),10000).run(request({onTool:async()=>{calls++;return {success:true,contentItems:[]}}}))).rejects.toThrow('budget')
  expect(calls).toBe(0)
 })
-it.each(kinds)('%s executes managed subagents through the same protocol without any Codex installation',async kind=>{
+it.each(kinds.flatMap(kind=>[{kind,separate:false},{kind,separate:true}]))('$kind executes managed subagents without Codex (separate connection=$separate)',async({kind,separate})=>{
  const root=mkdtempSync(join(tmpdir(),'api-delegation-'));roots.push(root);const cwd=join(root,'files');mkdirSync(cwd);writeFileSync(join(cwd,'input.txt'),'delegated-file-marker')
  let childRequests=0
  const f=await server(b=>{
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
   if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Delegate',scope:'Delegate reading input.txt',rules:[],ruleAssessments:[],reason:'Synthetic request',targetTicketId:null}))
   const values=results(kind,b).map((r:any)=>{const text=kind==='openai-chat'?r.content:JSON.stringify(kind==='anthropic'?r.content:r.output);try{return JSON.parse(kind==='openai-chat'?text:(kind==='anthropic'?r.content[0].text:r.output[0].text))}catch{return {raw:text}}})
-  const ready={state:'ready',summary:'Delegation complete',reply:'delegated-file-marker',question:null,handbacks:[]}
-  if(instructions.includes('You are a managed subagent')){childRequests++;return JSON.stringify(values).includes('delegated-file-marker')?output(kind,JSON.stringify(ready)):output(kind,'',[{id:'child-read',name:'superagent_read',args:{resource:'files/input.txt'}}])}
+  const ready={state:'ready',summary:'Delegation complete',reply:'delegated-file-marker',question:null,askedBy:null,handbacks:[]}
+  if(instructions.includes('You are a managed subagent')){childRequests++;expect(b.model).toBe(separate?'child-model':'parent-model');expect(b.parent_option).toBe(separate?undefined:true);return JSON.stringify(values).includes('delegated-file-marker')?output(kind,JSON.stringify(ready)):output(kind,'',[{id:'child-read',name:'superagent_read',args:{resource:'files/input.txt'}}])}
   const job=values.find((v:any)=>v.id&&v.kind==='agent')
   if(!job)return output(kind,'',[{id:'spawn',name:'superagent_spawn',args:{prompt:'Read input.txt using resources, report its contents.',requestId:'child-one'}}])
   const latest=values.filter((v:any)=>v.id===job.id).at(-1)
   if(latest.state==='completed')return output(kind,JSON.stringify(ready))
   return output(kind,'',[{id:'wait-'+values.length,name:'superagent_job',args:{id:job.id,action:'wait',yieldMs:1000}}])
  })
- const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd,allowedActors:['operator']}]})
+ const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api',roles:separate?{subagent:'child'}:{},workers:[{id:'one',backend:'api',model:'parent-model',parameters:{parent_option:true}}]},backends:{api:definition(kind,f.url),child:definition(kind,f.url,{model:'child-model'})},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd,allowedActors:['operator']}]})
  const host=new Runtime(config);hosts.push(host);host.receive('local','operator',{id:'one',thread:'delegation',addressed:true,text:'Delegate reading input.txt to a managed child'})
  for(let i=0;i<200&&!host.store.deliveries().some(d=>d.kind==='reply'&&d.status==='sent');i++){await host.tick();await host.flush();await new Promise(r=>setTimeout(r,5))}
  expect(childRequests).toBeGreaterThanOrEqual(2);expect(host.work.list().some(w=>w.kind==='agent'&&w.state==='completed')).toBe(true)
@@ -147,7 +229,7 @@ it.each(kinds)('%s runs the actual Runtime routing/file/result/follow-up path wi
  const f=await server(b=>{
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
   if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Read',scope:'Read input.txt',rules:[],ruleAssessments:[],reason:'Synthetic human request',targetTicketId:null}))
-  if(JSON.stringify(results(kind,b)).includes('api-backend-file-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Read actual file',reply:'api-backend-file-marker',question:null,handbacks:[]}))
+  if(JSON.stringify(results(kind,b)).includes('api-backend-file-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Read actual file',reply:'api-backend-file-marker',question:null,askedBy:null,handbacks:[]}))
   return output(kind,'',[{id:'read-'+Math.random(),name:'superagent_read',args:{resource:'files/input.txt'}}])
  })
  const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd,allowedActors:['operator']}]})
@@ -169,7 +251,7 @@ it.skipIf(!['darwin','linux'].includes(process.platform)).each(kinds)('%s execut
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
   if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Command',scope:'Write and read result.txt with a sandboxed command',rules:[],ruleAssessments:[],reason:'Synthetic request',targetTicketId:null}))
   const receipts=JSON.stringify(results(kind,b))
-  if(receipts.includes('shell-api-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Command verified',reply:'shell-api-marker',question:null,handbacks:[]}))
+  if(receipts.includes('shell-api-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Command verified',reply:'shell-api-marker',question:null,askedBy:null,handbacks:[]}))
   return output(kind,'',[{id:'shell',name:'superagent_shell',args:{command:'printf shell-api-marker > result.txt; cat result.txt',requestId:'one',yieldMs:1000}}])
  })
  const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:process.platform==='linux'?'bubblewrap':'seatbelt',network:false},sources:[{id:'local',kind:'local',cwd,sandbox:'workspace-write',allowedActors:['operator']}]})

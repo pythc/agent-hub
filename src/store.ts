@@ -10,6 +10,7 @@ export interface Run {
   phase: 'idle' | 'starting' | 'running' | 'background' | 'interrupted' | 'uncertain' | 'human' | 'delivering' | 'merging'
   turnId?: string; prepared?:boolean; waitingForWriter?:boolean; error?: string; result?: string
   toolsVersion?:number;toolsDigest?:string;model?:string;backendId?:string;backendKind?:string
+  agentOptions?:import('./backend-config.ts').AgentOptions;migration?:string
   workerId?:string;interactiveReserve?:boolean
 }
 
@@ -103,6 +104,10 @@ export class Store implements Repositories {
   }
   recoverDeliveries():void {this.db.prepare("UPDATE outbox SET status='uncertain',error='Host stopped during delivery; reconcile destination before retry' WHERE status='sending'").run()}
   deliveryStarted(id:string):boolean{return this.db.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending'").run(id).changes===1}
+  routePendingDelivery(id:string,channel:OutboundMessage['channel']):void{
+    const row=this.db.prepare("SELECT body FROM outbox WHERE id=? AND status='pending'").get(id)
+    if(row)this.db.prepare("UPDATE outbox SET body=? WHERE id=? AND status='pending'").run(JSON.stringify({...JSON.parse(String(row.body)),channel}),id)
+  }
   readonly outbox = {
     send: (message: OutboundMessage) => { this.db.prepare('INSERT OR IGNORE INTO outbox(id,body) VALUES(?,?)').run(message.id, JSON.stringify(message)) },
     status: (id: string) => {

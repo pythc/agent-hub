@@ -5,19 +5,20 @@ import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {Ticket,Trigger} from './vendor/dsh-core/index.ts'
 import type {Run} from './store.ts'
-import {builtins,promptStatus,compose} from './prompts.ts'
+import {builtins,promptStatus,compose,composeCoordinator} from './prompts.ts'
 import {isHostPrivateFile} from './private-files.ts'
 
 export const readSchema=z.object({resource:z.string().min(1).max(2000),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(8000).default(4000),pageSize:z.number().int().min(1).max(50).default(20),cursor:z.string().optional()}).strict()
 export interface Principal {ticketId?:string;assignmentId?:string;agentId?:string}
 export interface ImageResource {kind:'image';mimeType:string;data:string;description?:string}
 export const resourceCatalog=[
+ 'tool-calls','tool-call/<id>',
  'tickets','triggers','threads','decisions','decision/<id>','thread/<key>','trigger/<id>',
  'ticket/<id>','ticket/<id>/assignment','ticket/<id>/assignments','ticket/<id>/inputs','ticket/<id>/input/<id>',
  'ticket/<id>/result','ticket/<id>/report/<id>','ticket/<id>/transcript','ticket/<id>/message/<n>',
- 'prompt-preview/<id>','settings','settings/<block>','prompts','prompts/current','prompts/defaults','prompts/<revision>',
+ 'agent-configuration/<call-id>','prompt-preview/<id>','settings','settings/<block>','prompts','prompts/current','prompts/defaults','prompts/<revision>',
  'asset/<id>','feishu/<trigger-id>/file/<key>','models','models/<provider>','jobs','job/<id>','files/<path>','directory/<path>','image/<path>',
- 'source/<source-id>/<resource>','github/issues/<n>','github/pulls/<n>','github/pulls/<n>/comments/<page>',
+ 'source/<source-id>/<resource>','trigger-source/<trigger-id>/<resource>','github/issues/<n>','github/pulls/<n>','github/pulls/<n>/comments/<page>',
  'github/pulls/<n>/reviews/<page>','github/pulls/<n>/thread/<comment>','github/pulls/<n>/checks',
  'github/commits/<sha>/checks','github/file/<path>','github/directory/<path>',
  'feishu/<trigger-id>/message','feishu/<trigger-id>/root','feishu/<trigger-id>/parent','feishu/<trigger-id>/thread',
@@ -86,6 +87,12 @@ export class Resources {
  private textPage(text:string,offset:number,limit:number,cursor:string,resource:string){return {text:text.slice(offset,offset+limit),characters:text.length,offset,nextOffset:offset+limit<text.length?offset+limit:null,cursor,resource}}
  private async load(resource:string,p:Principal,pageSize:number):Promise<any>{
   const store=this.host.store,parts=resource.split('/'),head=parts[0],id=parts[1]
+  if(resource==='tool-calls'){if(p.ticketId)this.ticket(p);return this.host.toolConnections.receipts(p.ticketId)}
+  if(head==='tool-call'){
+   const receipt=store.get<any>('tool-receipt',id!);if(!receipt)throw Error('Unknown tool call')
+   if(p.ticketId&&receipt.ticketId!==this.ticket(p).id)throw Error('Tool call is outside this worker')
+   return receipt
+  }
   if(['tickets','triggers','threads','decisions'].includes(resource)){
    this.admin(p)
    const kind={tickets:'ticket',triggers:'trigger',threads:'thread',decisions:'decision'}[resource]!
@@ -120,7 +127,8 @@ export class Resources {
     const n=Number(parts[3]);if(!Number.isSafeInteger(n)||!turns[n])throw Error('Unknown transcript message');return {...turns[n],...identity(turns[n])}
    }
   }
-  if(head==='prompt-preview'){this.admin(p);if(id==='worker'||id==='router')return {role:id,revision:this.host.settings.current().revision,text:compose(this.host.config,id,{preview:true,cwd:'<task directory>'},'preview')};const preview=store.get('prompt-preview',id!);if(!preview)throw Error('Unknown prompt preview');return preview}
+  if(head==='agent-configuration'){this.admin(p);const value=store.get('agent-configuration',id!);if(!value)throw Error('No configuration receipt for this call');return value}
+  if(head==='prompt-preview'){this.admin(p);if(id==='worker'||id==='router')return {role:id,revision:this.host.settings.current().revision,text:(id==='router'&&this.host.config.execution.router?.mode==='host'?composeCoordinator(this.host.config,{preview:true,cwd:'<task directory>'}):compose(this.host.config,id,{preview:true,cwd:'<task directory>'},'preview'))+(id==='router'&&this.host.config.execution.router?.prompt?'\nAgent instructions:\n'+this.host.config.execution.router.prompt:'')};const preview=store.get('prompt-preview',id!);if(!preview)throw Error('Unknown prompt preview');return preview}
   if(head==='settings'){
    this.admin(p);const current=this.host.settings.current()
    if(!id)return {revision:current.revision,blocks:Object.keys(current.config),history:this.host.settings.history().map(x=>({revision:x.revision,at:x.at}))}
@@ -167,28 +175,33 @@ export class Resources {
    if(head==='source'){sourceId=id;request=parts.slice(2).join('/')}
    else{sourceId=p.ticketId?this.ticket(p).mandate.actor.source:undefined;const matches=[...this.host.sources.values()].filter(s=>s.config.kind==='github');if(!sourceId||this.host.sources.get(sourceId)?.config.kind!=='github'){if(matches.length!==1)throw Error('Select source/<id>/github/...');sourceId=matches[0]!.config.id}request=resource}
    const source=this.host.sources.get(sourceId!)
-   if(!source?.read)throw Error('Source does not provide resource reads')
+   if(!source?.read||!source.config.enabled||!source.config.capabilities.resources)throw Error('Source does not provide enabled resource reads')
    if(p.ticketId)this.sourcePermission(this.ticket(p),sourceId!,request)
    return source.read({resource:request,pageSize})
   }
+  if(head==='trigger-source'){
+   const trigger=this.reached(p,parts[1]!),source=this.host.sources.get(trigger.source)
+   if(!source?.read||!source.config.enabled||!source.config.capabilities.resources)throw Error('Source does not provide enabled resource reads')
+   if(p.ticketId)this.sourcePermission(this.ticket(p),trigger.source,parts.slice(2).join('/'))
+   return source.read({resource:parts.slice(2).join('/'),trigger,pageSize})
+  }
   if(head==='feishu'){
    const triggerId=parts[1]!,trigger=this.reached(p,triggerId),source=this.host.sources.get(trigger.source)
-   if(source?.config.kind!=='feishu'||!source.read)throw Error('Not a Feishu trigger')
+   if(source?.config.kind!=='feishu'||!source.read||!source.config.enabled||!source.config.capabilities.resources)throw Error('Not an enabled Feishu resource')
    return source.read({resource:parts.slice(2).join('/'),trigger,pageSize})
   }
   if(head==='wecom'){
    const trigger=this.reached(p,parts[1]!),source=this.host.sources.get(trigger.source)
-   if(source?.config.kind!=='wecom'||!source.read)throw Error('Not a WeCom trigger')
+   if(source?.config.kind!=='wecom'||!source.read||!source.config.enabled||!source.config.capabilities.resources)throw Error('Not an enabled WeCom resource')
    return source.read({resource:parts.slice(2).join('/'),trigger,pageSize})
   }
   throw Error('Unknown resource. Read catalog for the supported grammar')
  }
  private visibleTrigger(p:Principal,t:Trigger){const own=this.ticket(p);return own.origin.triggerIds.includes(t.id)||own.inputs.some(i=>i.kind==='trigger'&&i.triggerId===t.id)}
  private sourcePermission(t:Ticket,source:string,resource:string){
-  const numbers=new Set([...t.channels.filter(c=>c.source===source).map(c=>c.thread),...(t.follows??[]).filter(f=>f.thread.startsWith(source+':')).map(f=>f.thread.slice(source.length+1))].map(x=>x.split('#').at(-1)))
-  const match=/^(?:github\/)?(?:issues|pulls)\/(\d+)/.exec(resource)
-  if(match&&!numbers.has(match[1]))throw Error('GitHub conversation is outside this worker')
-  if(!match&&t.mandate.actor.source!==source&&!t.follows?.some(f=>f.thread.startsWith(source+':')))throw Error('Source is outside this worker')
+  if(t.mandate.actor.source!==source&&!t.follows?.some(f=>f.thread.startsWith(source+':')))throw Error('Source is outside this worker')
+  const adapter=this.host.sources.get(source)
+  if(adapter){this.host.sourceRegistry.authorizeRead(adapter.config,t,resource);adapter.authorizeRead?.(t,resource)}
  }
 }
 export function imageResource(data:Buffer):ImageResource{

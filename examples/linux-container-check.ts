@@ -5,7 +5,7 @@ import {probeSandbox} from '../src/sandbox.ts'
 if(process.platform!=='linux'||process.getuid?.()===0)throw Error('Linux acceptance requires a non-root Linux user')
 const probe=await probeSandbox('bubblewrap','/missing/codex')
 const typecheck=spawnSync('npm',['run','typecheck'],{encoding:'utf8'});process.stderr.write(typecheck.stdout+typecheck.stderr)
-const test=spawnSync('./node_modules/.bin/vitest',['run','--reporter=json','--outputFile=/tmp/agenthub-vitest.json'],{encoding:'utf8',maxBuffer:8_000_000});process.stderr.write(test.stdout+test.stderr)
+const test=spawnSync('npm',['test','--','--reporter=json','--outputFile=/tmp/agenthub-vitest.json'],{encoding:'utf8',maxBuffer:8_000_000});process.stderr.write(test.stdout+test.stderr)
 const raw=JSON.parse(readFileSync('/tmp/agenthub-vitest.json','utf8'))
 for(const file of raw.testResults)for(const a of file.assertionResults)if(a.status==='failed')process.stderr.write(a.fullName+'\n'+a.failureMessages.join('\n')+'\n')
 const assertions=raw.testResults.flatMap((file:any)=>file.assertionResults.map((a:any)=>({file:file.name.replace(/^.*\/tests\//,'tests/'),name:a.fullName,status:a.status})))

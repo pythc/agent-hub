@@ -15,6 +15,29 @@ function context(){
  const ctx:SourceContext={store,receive:e=>events.push(e),bind:()=>{},closed:()=>{}}
  return {ctx,events}
 }
+it.each(['closed','merged'])('still receives inline human follow-ups after a PR is %s',async outcome=>{
+ const {ctx,events}=context(),paths:string[]=[],closes:string[]=[]
+ const config=configSchema.parse({sources:[{id:'github',kind:'github',cwd:'.',repository:'owner/repo'}]}).sources[0]!
+ ctx.store.threads.save({key:'github:owner/repo#7',ref:{source:'github',id:'owner/repo#7'},subscriptions:['ticket'],correlated:[],pending:[],createdAt:new Date().toISOString(),meta:{}})
+ ctx.closed=(_thread,state)=>{closes.push(state)}
+ let failed=false
+ const source=new GithubSource(config,{async request(_method,path){
+  paths.push(path)
+  if(path==='user')return {login:'agent'}
+  if(path.includes('issues?')||path.includes('issues/comments'))return []
+  if(path.endsWith('/issues/7'))return {number:7,state:'closed',pull_request:{},closed_at:new Date(Date.now()-10000).toISOString()}
+  if(path.endsWith('/pulls/7'))return {head:{sha:'a'},merged_at:outcome==='merged'?new Date(Date.now()-10000).toISOString():null}
+  if(path.includes('/comments?')){if(failed)throw Error('Temporary read failure');return [{id:42,body:'Please explain this merged line',updated_at:new Date().toISOString(),user:{login:'alice',type:'User'}}]}
+  return []
+ }})
+ await source.poll(ctx)
+ expect(events.map(e=>e.text)).toEqual(['Please explain this merged line'])
+ expect(closes).toEqual([outcome]);expect(paths.some(p=>p.includes('check-runs'))).toBe(false)
+ const before=ctx.store.get('thread-cursor','github:owner/repo#7');failed=true
+ await source.poll(ctx)
+ expect(ctx.store.get('thread-cursor','github:owner/repo#7')).toEqual(before)
+ expect(ctx.store.get<any>('thread-health','github:owner/repo#7').consecutiveFailures).toBe(1)
+})
 it('polls GitHub, preserves source identities, ignores own markers and maintains a durable cursor',async()=>{
  const {ctx,events}=context()
  const config=configSchema.parse({sources:[{id:'github',kind:'github',allowedActors:['alice'],cwd:'.',repository:'owner/repo'}]}).sources[0]!
@@ -31,6 +54,26 @@ it('polls GitHub, preserves source identities, ignores own markers and maintains
  await source.poll(ctx)
  expect(events[2].id).toBe(first)
  expect(ctx.store.get('source-cursor','github')).toBeDefined()
+})
+it('polls live subscriptions and the two-week horizon after the later of message or ticket completion',async()=>{
+ const {ctx}=context(),reads:number[]=[]
+ const now=Date.now(),at=(days:number)=>new Date(now-days*86400000).toISOString()
+ const config=configSchema.parse({sources:[{id:'github',kind:'github',cwd:'.',repository:'owner/repo'}]}).sources[0]!
+ const states=[{last:30,end:30},{last:30,end:13},{last:13,end:30},{last:30,end:null}]
+ for(const [index,state] of states.entries()){
+  const id='ticket-'+index
+  ctx.store.put('ticket',id,{id,...(state.end===null?{}:{ended:{at:at(state.end)}})})
+  ctx.store.threads.save({key:'github:owner/repo#'+(index+1),ref:{source:'github',id:'owner/repo#'+(index+1)},subscriptions:[id],createdAt:at(30),lastAt:at(state.last),correlated:[],pending:[],meta:{}})
+ }
+ const source=new GithubSource(config,{async request(_method,path){
+  if(path==='user')return {login:'agent'}
+  const match=/\/issues\/(\d+)$/.exec(path)
+  if(match){reads.push(Number(match[1]));return {state:'closed',closed_at:at(30)}}
+  return []
+ }})
+ await source.poll(ctx)
+ expect(reads).toEqual([2,3,4])
+ expect(ctx.store.threads.get('github:owner/repo#1')!.subscriptions).toEqual(['ticket-0'])
 })
 it('does not repeat an already published GitHub reply',async()=>{
  const config=configSchema.parse({sources:[{id:'github',kind:'github',allowedActors:['alice'],cwd:'.',repository:'owner/repo'}]}).sources[0]!
@@ -102,7 +145,7 @@ it('refuses credential-bearing HTTP requests to a different origin',async()=>{
 
 it('retains approval reviews with empty bodies and serves paginated source resources',async()=>{
  const {ctx,events}=context(),config=configSchema.parse({sources:[{id:'github',kind:'github',allowedActors:['alice'],cwd:'.',repository:'owner/repo'}]}).sources[0]!
- ctx.store.threads.save({key:'github:owner/repo#7',ref:{source:'github',id:'owner/repo#7'},subscriptions:['ticket'],correlated:[],pending:[],createdAt:'now',meta:{}})
+ ctx.store.threads.save({key:'github:owner/repo#7',ref:{source:'github',id:'owner/repo#7'},subscriptions:['ticket'],correlated:[],pending:[],createdAt:new Date().toISOString(),meta:{}})
  const source=new GithubSource(config,{async request(method,path){
   if(path.includes('issues?')||path.includes('issues/comments'))return []
   if(path.endsWith('/issues/7'))return {number:7,state:'open',pull_request:{}}

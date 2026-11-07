@@ -11,7 +11,7 @@ it('uses separate Router and Worker models across all three API protocols and re
  const server=createServer(async(req,res)=>{
   let body='';for await(const chunk of req)body+=chunk;const data=JSON.parse(body),path=req.url!;requests.push({path,model:data.model})
   const routing=data.model==='router-model',followup=JSON.stringify(data).includes('Classify this worker-owned follow-up')
-  const text=JSON.stringify(routing?{action:followup?'ignore':'accept',title:'Protocol work',scope:'Reply only',reason:'Explicit request',rules:[],ruleAssessments:[],targetTicketId:null}:{state:'ready',summary:'Worker result',reply:'From '+data.model,question:null,handbacks:[]})
+  const text=JSON.stringify(routing?{action:followup?'ignore':'accept',title:'Protocol work',scope:'Reply only',reason:'Explicit request',rules:[],ruleAssessments:[],targetTicketId:null}:{state:'ready',summary:'Worker result',reply:'From '+data.model,question:null,askedBy:null,handbacks:[]})
   const result=path.includes('/responses')?{status:'completed',output:[{type:'message',content:[{type:'output_text',text}]}]}:path.includes('/anthropic')?{stop_reason:'end_turn',content:[{type:'text',text}]}:{choices:[{message:{content:text}}]}
   res.setHeader('content-type','application/json');res.end(JSON.stringify(result))
  })

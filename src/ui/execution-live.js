@@ -1,5 +1,6 @@
 // Live call metadata drives the Tool Access Map motion; this file never executes tools.
-const executionToolLabels={superagent_read:['Read resources','读取资源'],superagent_shell:['Shell','命令执行'],superagent_job:['Background jobs','后台任务'],superagent_spawn:['Subagents','子智能体'],superagent_ack:['Acknowledge','确认收到'],superagent_progress:['Progress','进展记录'],superagent_publish:['Publish draft','发布草稿'],superagent_review:['Code review','代码评审'],superagent_follow:['Follow context','跟进上下文']}
+const executionToolLabels={worker_manage:['Manage Workers','管理 Worker'],superagent_tools:['Discover external tools','发现外部工具'],superagent_tool:['Call external tool','调用外部工具'],superagent_read:['Read resources','读取资源'],superagent_shell:['Shell','命令执行'],superagent_job:['Background jobs','后台任务'],superagent_spawn:['Subagents','子智能体'],superagent_ack:['Acknowledge','确认收到'],superagent_progress:['Progress','进展记录'],superagent_publish:['Publish draft','发布草稿'],superagent_review:['Code review','代码评审'],superagent_follow:['Follow context','跟进上下文']}
+const executionRouterTools=()=>[...new Set(['superagent_read',...(S.base?.config.execution?.management?.enabled?['worker_manage']:[]),...executionCalls().filter(call=>call.kind==='tool'&&executionCalls().some(parent=>parent.id===call.parentId&&parent.kind==='router')).map(call=>call.name)])]
 const executionCalls=()=>operator.work?.architecture?.activity||[]
 const executionState=state=>({running:L('Running','执行中'),completed:L('Completed','已完成'),failed:L('Failed','失败'),interrupted:L('Interrupted','已中断')})[state]||L('No calls','尚无调用')
 const executionCallState=call=>call.kind==='tool'&&call.state==='completed'?L('Returned','已返回'):executionState(call.state)
@@ -23,7 +24,7 @@ function executionTools(){
 function executionSelectTools(navigate=false){
  const root=executionView.root;if(!root?.isConnected)return
  const tools=root.querySelector('.execution-tools'),selected=executionView.selected,label=selected.kind==='router'?'Router':'Worker '+(executionDraft().workers.findIndex(w=>w.id===selected.id)+1)
- const names=selected.kind==='router'?['superagent_read']:(operator.work?.architecture?.tools||[])
+ const names=selected.kind==='router'?executionRouterTools():(operator.work?.architecture?.tools||[])
  const owner=el('button','execution-tools-owner',label);owner.type='button';owner.setAttribute('aria-label',L('Back to '+label,'返回 '+label));owner.onclick=()=>{const node=[...root.querySelectorAll('[data-select-kind]')].find(n=>n.dataset.selectKind===selected.kind&&(selected.kind==='router'||n.dataset.selectKey===selected.id));node?.focus({preventScroll:true});node?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'})}
  tools.replaceChildren(add(el('div','execution-tools-heading'),el('h2','',L('Tools','工具')),owner))
  for(const name of names){
@@ -134,6 +135,7 @@ function executionUpdateCallDialog(){
  const detail=el('div','execution-call-inspector'),name=selected.kind==='tool'?L(...(executionToolLabels[selected.name]||[selected.name,selected.name])):selected.kind==='router'?'Router':selected.kind==='subagent'?L('Subagent','子智能体'):'Worker'
  const metadata=el('dl');for(const [label,value]of [[L('State','状态'),executionCallState(selected)],[L('Duration','耗时'),executionDuration(selected)],[L('Software','软件入口'),entryName(selected.entryId)],[L('Actual service','实际服务'),selected.backend],[L('Actual model','实际模型'),selected.model]])if(value)metadata.append(el('dt','',label),el('dd','',value))
  detail.append(el('h3','',name),metadata)
+ if(selected.configurationResource)detail.append(el('p','team-help',L('Requested and sent settings are distinct from provider confirmation. A missing confirmed value does not prove the provider applied it.','请求参数、实际发送参数与服务商确认值分别记录。未确认不代表服务商已采用。')),integrationResource(selected.configurationResource,L('Configuration receipt','配置回执')))
  if(selected.kind==='tool')detail.append(el('p','control-hint',L('Arguments and output remain in the task resources.','参数和输出保留在任务资源中。')))
  if(selected.ticketId)detail.append(affectButton(L('Open task','查看任务'),()=>{executionView.inspect=null;void openOperatorTask(selected.ticketId)},{variant:'secondary'}))
  body.replaceChildren(list,detail)

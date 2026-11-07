@@ -3,6 +3,9 @@ import {resolve} from 'node:path'
 import {Ajv} from 'ajv'
 import type {ApiDefinition} from '../backend-config.ts'
 import type {BackendDescription,Model,ModelRequest,ModelResult,ToolContent} from '../model.ts'
+import {TransientModelError} from '../model.ts'
+import {readResponsesStream,readChatStream,readAnthropicStream} from './stream.ts'
+export {readResponsesStream} from './stream.ts'
 
 export interface ThreadStore {get<T>(kind:string,id:string):T|undefined;put(kind:string,id:string,value:unknown):void}
 type Call={id:string;name:string;arguments:string}
@@ -19,26 +22,33 @@ const errorText=(result:ToolResult)=>result.contentItems.filter(c=>c.type==='inp
 /** Provider-neutral agent loop. Providers propose calls; only the host executes scoped tools. */
 export class ApiModel implements Model {
  private active=new Set<string>()
- constructor(readonly id:string,readonly definition:ApiDefinition,private store:ThreadStore,private turnTimeoutMs:number,private credential?:()=>string|undefined){}
+ constructor(readonly id:string,readonly definition:ApiDefinition,private store:ThreadStore,private turnTimeoutMs:number,private credential?:()=>string|undefined|Promise<string|undefined>){}
  describe():BackendDescription{return {id:this.id,kind:this.definition.kind,model:this.definition.model,nativeTakeover:false,images:this.definition.images,resume:true,tools:true,steering:true,promptRefresh:true}}
  private endpoint(path:string){return this.definition.baseUrl.replace(/\/+$/,'')+'/'+path}
- private async http(path:string,signal:AbortSignal,body?:unknown):Promise<any>{
-  const d=this.definition,credential=this.credential?this.credential():d.apiKeyEnv?process.env[d.apiKeyEnv]:undefined
+ private async http(path:string,signal:AbortSignal,body?:unknown,onOutput?:ModelRequest['onOutput']):Promise<any>{
+  const d=this.definition,credential=this.credential?await this.credential():d.apiKeyEnv?process.env[d.apiKeyEnv]:undefined
   if(d.apiKeyEnv&&!credential?.trim())throw Error('Backend '+this.id+' requires environment variable '+d.apiKeyEnv)
-  const headers:Record<string,string>={'content-type':'application/json'}
+  const headers:Record<string,string>={...d.headers,...Object.fromEntries(Object.entries(d.headerEnv??{}).map(([key,env])=>{const value=process.env[env];if(!value)throw Error('Missing header environment variable '+env);return [key,value]})),'content-type':'application/json'}
   if(d.kind==='anthropic'){headers['anthropic-version']='2023-06-01';if(credential)headers['x-api-key']=credential}
   else if(credential)headers.authorization='Bearer '+credential
   let response:Response
   try{response=await fetch(this.endpoint(path),{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.any([signal,AbortSignal.timeout(d.requestTimeoutMs)]),redirect:'error'})}
-  catch{signal.throwIfAborted();throw Error('Backend '+this.id+' network request failed or timed out')}
+  catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' network request failed or timed out')}
   if(!response.ok){await response.body?.cancel();throw Error('Backend '+this.id+' HTTP '+response.status)}
   const reader=response.body?.getReader();if(!reader)throw Error('Backend response is empty')
+  if(response.headers.get('content-type')?.includes('text/event-stream'))return (d.kind==='anthropic'?readAnthropicStream:d.kind==='openai-chat'?readChatStream:readResponsesStream)(reader,d.maxContextBytes,signal,onOutput)
+  if(d.subscription&&body)throw Error('Subscription response must be an event stream')
   const chunks:Uint8Array[]=[];let bytes=0
-  for(;;){const value=await reader.read();if(value.done)break;bytes+=value.value.length;if(bytes>d.maxContextBytes){await reader.cancel();throw Error('Backend response size limit exceeded')}chunks.push(value.value)}
+  for(;;){
+   let value:ReadableStreamReadResult<Uint8Array>
+   try{value=await reader.read()}catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' response connection interrupted')}
+   if(value.done)break;bytes+=value.value.length;if(bytes>d.maxContextBytes){await reader.cancel();throw Error('Backend response size limit exceeded')}chunks.push(value.value)
+  }
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Backend returned invalid JSON')}
  }
  async catalog(provider?:string){
   if(provider&&provider!==this.id&&provider!==this.definition.kind)throw Error('Unknown backend model catalog: '+provider)
+  if(this.definition.subscription)return this.http('models',AbortSignal.timeout(20000))
   return {provider:this.id,kind:this.definition.kind,data:[{id:this.definition.model}],configuredOnly:true,capabilities:this.describe()}
  }
  async history(threadId:string,cwd:string){const t=this.thread(threadId,cwd);return {id:t.id,backendId:this.id,model:t.model,turns:t.turns}}
@@ -58,9 +68,9 @@ export class ApiModel implements Model {
  private body(t:ApiThread,instructions:string,r:ModelRequest){
   const d=this.definition,tools=r.tools??[]
   const finalInstructions=instructions+'\nReturn the final answer as exactly one JSON object matching this schema, without Markdown fences. Use tools before reporting completion when the task requires evidence.\n'+JSON.stringify(r.schema)
-  if(d.kind==='anthropic')return {...d.parameters,model:t.model,max_tokens:d.maxOutputTokens,system:finalInstructions,messages:t.messages,...(d.outputFormat==='json-schema'?{output_config:{format:{type:'json_schema',schema:r.schema}}}:{}),...(tools.length?{tools:tools.map(s=>({name:s.name,description:s.description,input_schema:s.inputSchema}))}:{})}
-  if(d.kind==='openai-responses')return {...d.parameters,model:t.model,max_output_tokens:d.maxOutputTokens,instructions:finalInstructions,input:t.messages,store:false,include:['reasoning.encrypted_content'],...(tools.length?{tools:tools.map(s=>({type:'function',name:s.name,description:s.description,parameters:s.inputSchema,strict:false}))}:{}),...(d.outputFormat==='prompt'?{}:{text:{format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',name:'agent_result',strict:true,schema:r.schema}}})}
-  return {[d.chatTokenField]:d.maxOutputTokens,...d.parameters,model:t.model,messages:[{role:'system',content:finalInstructions},...t.messages],...(tools.length?{tools:tools.map(s=>({type:'function',function:{name:s.name,description:s.description,parameters:s.inputSchema,strict:false}}))}:{}),...(d.outputFormat==='prompt'?{}:{response_format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',json_schema:{name:'agent_result',strict:true,schema:r.schema}}})}
+  if(d.kind==='anthropic')return {...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,max_tokens:d.maxOutputTokens,system:finalInstructions,messages:t.messages,...(d.outputFormat==='json-schema'?{output_config:{...(d.parameters.output_config as object??{}),format:{type:'json_schema',schema:r.schema}}}:{}),...(tools.length?{tools:tools.map(s=>({name:s.name,description:s.description,input_schema:s.inputSchema}))}:{})}
+  if(d.kind==='openai-responses')return {...d.parameters,model:t.model,max_output_tokens:d.maxOutputTokens,instructions:finalInstructions,input:t.messages,store:false,...(d.subscription||r.onOutput?{stream:true}:{}),include:['reasoning.encrypted_content'],...(tools.length?{tools:tools.map(s=>({type:'function',name:s.name,description:s.description,parameters:s.inputSchema,strict:false}))}:{}),...(d.outputFormat==='prompt'?{}:{text:{...(d.parameters.text as object??{}),format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',name:'agent_result',strict:true,schema:r.schema}}})}
+  return {[d.chatTokenField]:d.maxOutputTokens,...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,messages:[{role:'system',content:finalInstructions},...t.messages],...(tools.length?{tools:tools.map(s=>({type:'function',function:{name:s.name,description:s.description,parameters:s.inputSchema,strict:false}}))}:{}),...(d.outputFormat==='prompt'?{}:{response_format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',json_schema:{name:'agent_result',strict:true,schema:r.schema}}})}
  }
  private accept(response:any,t:ApiThread):{calls:Call[];text:string;wire:any[]}{
   const kind=this.definition.kind
@@ -95,7 +105,7 @@ export class ApiModel implements Model {
   this.active.add(t.id)
   const controller=new AbortController(),signal=r.signal?AbortSignal.any([controller.signal,r.signal]):controller.signal
   const timer=setTimeout(()=>controller.abort(Error('Backend turn deadline exceeded')),this.turnTimeoutMs)
-  const turn={id:randomUUID(),status:'inProgress',items:[] as any[],model:t.model},queue:string[]=[]
+  const turn={id:randomUUID(),status:'inProgress',items:[] as any[],model:t.model},queue:{text:string;onRead?:()=>void}[]=[]
   let instructions=r.instructions,repairs=0,toolCalls=0
   const persist=()=>this.store.put('backend-thread',t.id,t)
   const appendUser=(text:string)=>t.messages.push({role:'user',content:text})
@@ -107,13 +117,18 @@ export class ApiModel implements Model {
    t.turns.push(turn);appendUser(r.input);persist()
    r.onThread?.(t.id);r.onTurn?.(turn.id);r.onModel?.(t.model)
    r.onCapabilities?.({mcpServers:[],disabledPlugins:[],managed:true,backend:this.describe()})
-   r.onActive?.({interrupt:async()=>{controller.abort(Error('Backend turn interrupted'))},steer:async text=>{signal.throwIfAborted();queue.push(text)},refresh:async text=>{signal.throwIfAborted();instructions=text}})
+   r.onActive?.({interrupt:async()=>{controller.abort(Error('Backend turn interrupted'))},steer:async(text,onRead)=>{signal.throwIfAborted();queue.push({text,onRead})},refresh:async text=>{signal.throwIfAborted();instructions=text}})
    const validators=new Map((r.tools??[]).map(s=>[s.name,ajv.compile(s.inputSchema)])),validateOutput=ajv.compile(r.schema)
    for(let step=0;step<this.definition.maxSteps;step++){
-    signal.throwIfAborted();while(queue.length)appendUser('Operator steering within the existing mandate: '+queue.shift())
+    signal.throwIfAborted()
+    const incoming=queue.splice(0)
+    for(const item of incoming)appendUser((item.onRead?'Source input within the existing mandate: ':'Operator steering within the existing mandate: ')+item.text)
     const body=this.body(t,instructions,r);if(Buffer.byteLength(JSON.stringify(body))>this.definition.maxContextBytes)throw Error('Backend context size limit exceeded; explicit compaction or a new task is required')
+    persist();for(const item of incoming)item.onRead?.()
+    r.onConfiguration?.({requested:r.options??{},sent:{model:t.model,parameters:this.definition.parameters,maxOutputTokens:this.definition.maxOutputTokens,maxSteps:this.definition.maxSteps,maxToolCalls:this.definition.maxToolCalls,stream:!!(this.definition.subscription||r.onOutput)}})
     r.onProgress?.('backend/request')
-    const response=await this.http(this.definition.kind==='openai-chat'?'chat/completions':this.definition.kind==='anthropic'?'messages':'responses',signal,body)
+    r.onOutput?.({id:turn.id+':'+step,type:'start',phase:'answer'})
+    const response=await this.http(this.definition.kind==='openai-chat'?'chat/completions':this.definition.kind==='anthropic'?'messages':'responses',signal,body,r.onOutput)
     signal.throwIfAborted();if(typeof response.model==='string'){(turn as any).providerModel=response.model;r.onModel?.(response.model)}const accepted=this.accept(response,t),seen=new Set<string>()
     if((toolCalls+=accepted.calls.length)>this.definition.maxToolCalls)throw Error('Backend tool call budget exceeded')
     for(const call of accepted.calls){if(typeof call.id!=='string'||!call.id||typeof call.name!=='string'||typeof call.arguments!=='string'||call.arguments.length>1000000||seen.has(call.id)||t.effects[call.id])throw Error('Backend returned an invalid or repeated tool call ID');seen.add(call.id)}

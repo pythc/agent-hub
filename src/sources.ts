@@ -1,12 +1,15 @@
 import { z } from 'zod'
 import { createHash } from 'node:crypto'
-import type { Trigger, OutboundMessage } from './vendor/dsh-core/index.ts'
+import type { Trigger, OutboundMessage,Ticket } from './vendor/dsh-core/index.ts'
 import type { Store } from './store.ts'
 import type { SourceConfig } from './config.ts'
 
 export const incomingSchema = z.object({
   id: z.string().min(1).max(200), thread: z.string().min(1).max(300),
   text: z.string().min(1).max(100_000), addressed: z.boolean().default(true),
+  scope:z.string().min(1).max(300).optional(),at:z.string().datetime({offset:true}).optional(),
+  message:z.object({id:z.string().min(1).max(300),url:z.string().url().optional()}).strict().optional(),
+  attachments:z.array(z.object({id:z.string().min(1),name:z.string().optional(),mimeType:z.string().optional(),url:z.string().url().optional()}).strict()).max(100).optional(),
 }).strict()
 export type Incoming = z.infer<typeof incomingSchema>
 export interface SourceContext {
@@ -25,7 +28,14 @@ export interface Source {
   validThread?(thread:string):boolean
   members?(scope?:string):Promise<{id:string;name?:string;bot?:boolean}[]>
   identity?():Promise<{id:string;type:string;verified?:boolean}>
-  start?(context:SourceContext):void
+  isPullRequest?(trigger:Trigger):Promise<boolean>
+  initialBindings?(trigger:Trigger):Promise<{thread:string;own:boolean}[]>
+  readonly verificationCommand?:string
+  replay?(scope:string|undefined,since:string):{key:string;since:string}
+  check?():Promise<void>
+  references?(thread:string):string[]
+  authorizeRead?(ticket:Ticket,resource:string):void
+  start?(context:SourceContext):void|Promise<void>
   close?():Promise<void>
   context?(thread: string): Promise<unknown>
   read?(request:{resource:string;trigger?:Trigger;pageSize:number}):Promise<any>
@@ -34,14 +44,17 @@ export class UncertainDelivery extends Error {}
 /** Additional sources implement this interface, without modifying the domain. */
 export class MessageSource implements Source {
   constructor(readonly config: SourceConfig) {}
+  get verificationCommand(){return ''}
+  /** Retain the old adapter hook while exposing a platform-neutral task lifecycle. */
+  async initialBindings(trigger:Trigger){const legacy=(this as Source).isPullRequest;return legacy&&trigger.threads[0]&&await legacy.call(this,trigger)?[{thread:trigger.threads[0].id,own:false}]:[]}
   trigger(input: Incoming, actor: string, human = true): Trigger {
     return {
       id: this.config.id + ':' + input.id, source: this.config.id,
       threads: [{ source: this.config.id, id: input.thread }],
       actor: { source: this.config.id, id: actor }, human,
       ...(input.addressed ? { addressed: 'direct' as const } : {}),
-      at: new Date().toISOString(), text: input.text, meta: {},
-      channel: { source: this.config.id, thread: input.thread, address: { thread: input.thread } },
+      at: input.at??new Date().toISOString(), text: input.text, meta: {...(input.scope?{scope:input.scope}:{}),...(input.message?{message:input.message}:{}),...(input.attachments?{attachments:input.attachments}:{})},
+      channel: { source: this.config.id, thread: input.thread, address: { thread: input.thread,...(input.message?{messageId:input.message.id}:{}),...(input.message?.url?{url:input.message.url}:{}) } },
     }
   }
   async deliver(message: OutboundMessage): Promise<void> {
@@ -63,4 +76,8 @@ export class MessageSource implements Source {
 }
 export function bodyDigest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+export function stableDigest(value:unknown):string{
+  const canonical=(v:any):any=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v
+  return bodyDigest(canonical(value))
 }

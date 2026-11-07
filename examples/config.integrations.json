@@ -1,0 +1,25 @@
+{
+  "stateDir": "../.local/integrations-demo/state",
+  "port": 0,
+  "work": {"sandboxDriver": "disabled"},
+  "sourcePlugins": [{"module": "./plugins/team-events.ts"}],
+  "execution": {
+    "router": {"mode": "host", "model": "gpt-6.1-terra", "effort": "medium"},
+    "management": {"enabled": true},
+    "workers": [
+      {"id": "worker-1", "backend": "codex", "model": "gpt-6.1-sol", "effort": "high"},
+      {"id": "worker-2", "backend": "codex", "model": "gpt-6.1-sol", "effort": "high"},
+      {"id": "worker-3", "backend": "codex", "model": "gpt-6.1-sol", "effort": "high"},
+      {"id": "worker-4", "backend": "codex", "model": "gpt-6.1-sol", "effort": "high"}
+    ]
+  },
+  "sources": [
+    {"id": "local", "kind": "local", "cwd": "..", "allowedActors": ["operator"], "workspace": {"mode": "source"}},
+    {
+      "id": "team", "kind": "team-events", "options": {"tenant": "demo"},
+      "cwd": "..", "workspace": {"mode": "source"}, "allowedActors": ["example-operator"],
+      "listenScopes": ["work"], "tokenEnv": "AGENTHUB_TEAM_EVENTS_TOKEN",
+      "capabilities": {"events": true, "replies": false, "resources": false}
+    }
+  ]
+}

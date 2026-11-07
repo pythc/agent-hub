@@ -10,9 +10,10 @@ export class OperatorSessions {
  bindOrigin(origin:string){this.cookieName='agenthub_operator_'+new URL(origin).port}
  private prune(){const now=Date.now();for(const map of [this.pairs,this.sessions])for(const [key,expires]of map)if(expires<=now)map.delete(key)}
  link(origin:string){this.prune();if(this.pairs.size>=20)this.pairs.delete(this.pairs.keys().next().value!);const code=randomBytes(32).toString('base64url');this.pairs.set(digest(code),Date.now()+600000);return origin+'/configure#pair='+code}
+ consume(code:string){this.prune();return this.pairs.delete(digest(code))}
+ revokeAll(){this.sessions.clear();this.pairs.clear()}
  pair(code:string,response:ServerResponse){
-  this.prune();const key=digest(code)
-  if(!this.pairs.delete(key))return false
+  if(!this.consume(code))return false
   if(this.sessions.size>=100)this.sessions.delete(this.sessions.keys().next().value!)
   const session=randomBytes(32).toString('base64url');this.sessions.set(digest(session),Date.now()+12*60*60*1000)
   response.setHeader('set-cookie',this.cookieName+'='+session+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200')

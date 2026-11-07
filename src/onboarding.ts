@@ -10,6 +10,7 @@ import type {Runtime} from './runtime.ts'
 import {ApiModel} from './backends/api.ts'
 import {managedConnections,managedSecrets,prepareManagedConfig} from './managed-config.ts'
 import {Store} from './store.ts'
+import {cliEnvironment} from './codex.ts'
 
 const exec=promisify(execFile)
 export const onboardingPlanSchema=z.object({revision:z.number().int().min(0),connection:z.discriminatedUnion('kind',[
@@ -89,14 +90,14 @@ export class Onboarding {
   const definition=plan.next.backends[plan.connection.id]??{kind:'codex' as const};let remoteVerified=false
   if(definition.kind==='codex'){
    const command=definition.command??host.config.codex
-   for(const [name,args]of [['installation',['--version']],['sign-in',['login','status']]] as const){try{await exec(command,[...args],{timeout:10000,maxBuffer:64000,encoding:'utf8'});checks.push({id:name,status:'ok',code:name==='installation'?'codex_installed':'codex_signed_in'})}catch{checks.push({id:name,status:'required',code:name==='installation'?'codex_not_installed':'codex_sign_in_required'})}}
+   for(const [name,args]of [['installation',['--version']],['sign-in',['login','status']]] as const){try{await exec(command,[...(definition.args??[]),...args],{env:cliEnvironment(definition.env),timeout:10000,maxBuffer:64000,encoding:'utf8'});checks.push({id:name,status:'ok',code:name==='installation'?'codex_installed':'codex_signed_in'})}catch{checks.push({id:name,status:'required',code:name==='installation'?'codex_not_installed':'codex_sign_in_required'})}}
   }else{
    try{
     const records=new Map<string,unknown>(),memory={get:<T>(kind:string,key:string)=>records.get(kind+':'+key) as T|undefined,put:(kind:string,key:string,value:unknown)=>{records.set(kind+':'+key,value)}}
-    const model=new ApiModel(plan.connection.id,{...definition,maxSteps:2,maxToolCalls:1,maxOutputTokens:64,requestTimeoutMs:15000},memory,30000,()=>plan.key??(definition.apiKeyEnv?process.env[definition.apiKeyEnv]:undefined))
+    const model=new ApiModel(plan.connection.id,{...definition,maxSteps:2,maxToolCalls:1,maxOutputTokens:64,requestTimeoutMs:15000},memory,30000,()=>definition.subscription?host.subscriptions.credential(definition.subscription.account):plan.key??(definition.apiKeyEnv?process.env[definition.apiKeyEnv]:undefined))
     await model.run({cwd:host.config.stateDir,instructions:'Check this text connection. Do not use tools. Return {"ok":true}.',input:'Return {"ok":true}.',schema:{type:'object',properties:{ok:{const:true}},required:['ok'],additionalProperties:false},ephemeral:true,tools:[]})
     remoteVerified=true;checks.push({id:'connection',status:'ok',code:'model_replied'})
-   }catch(error){const text=String(error);checks.push({id:'connection',status:'required',code:/401|403/.test(text)?'api_key_rejected':/environment variable/.test(text)?'api_key_required':/schema|budget|output/.test(text)?'model_reply_invalid':'connection_failed'})}
+   }catch(error){const text=String(error);checks.push({id:'connection',status:'required',code:/Subscription sign-in/.test(text)?'subscription_sign_in_required':/401|403/.test(text)?'api_key_rejected':/environment variable/.test(text)?'api_key_required':/schema|budget|output/.test(text)?'model_reply_invalid':'connection_failed'})}
   }
   plan.lastCheck={ok:checks.every(c=>c.status==='ok'),checks,remoteVerified,preview:false};return plan.lastCheck
  }

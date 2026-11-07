@@ -11,5 +11,6 @@ done
 if [ -z "$task_node" ]; then echo "Node 22.19+ is required. Set SUPERAGENT_NODE to its executable." >&2; exit 1; fi
 cd "$task_root"
 if [ ! -f node_modules/tsx/dist/loader.mjs ]; then echo "Run npm ci with Node 22.19+ in this directory first." >&2; exit 1; fi
-if [ "$#" -eq 0 ]; then set -- serve examples/config.json; fi
+"$task_node" "$task_root/node_modules/vite/bin/vite.js" build --config "$task_root/web/chat/vite.config.ts"
+if [ "$#" -eq 0 ]; then set -- setup; fi
 exec "$task_node" --import "$task_root/node_modules/tsx/dist/loader.mjs" "$task_root/src/cli.ts" "$@"

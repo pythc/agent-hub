@@ -3,12 +3,17 @@ import { resolve, dirname } from 'node:path'
 import { z } from 'zod'
 import {builtins} from './prompts.ts'
 import {backendsSchema,executionSchema,validateBackendSelection} from './backend-config.ts'
+import {sourcePluginsSchema,sourceCapabilitiesSchema,toolConnectionsSchema} from './connector-config.ts'
+import {browserConfigSchema} from './browser-contract.ts'
 
 const sourceSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
   kind: z.string().regex(/^[a-z][a-z0-9_-]*$/),
   allowedActors: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
+  capabilities:sourceCapabilitiesSchema,
+  options:z.record(z.unknown()).default({}),
+  observed:z.boolean().optional(),
   allowedBots: z.array(z.string()).default([]),
   admission: z.record(z.object({
     listedUnaddressed: z.enum(['inferred','ignore']).default('inferred'),
@@ -45,6 +50,9 @@ export const configSchema = z.object({
   codex: z.string().default('codex'),
   backends:backendsSchema,
   execution:executionSchema,
+  sourcePlugins:sourcePluginsSchema,
+  toolConnections:toolConnectionsSchema,
+  browser:browserConfigSchema,
   model: z.string().optional(),
   models:z.object({router:z.string().optional(),worker:z.string().optional(),subagent:z.string().optional()}).strict().default({}),
   effort: z.enum(['low', 'medium', 'high', 'xhigh']).default('high'),
@@ -76,6 +84,8 @@ export function loadConfig(path: string): Config {
   const config = configSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
   validateBackendSelection(config)
   config.stateDir = resolve(base, config.stateDir)
+  for(const plugin of config.sourcePlugins)plugin.module=resolve(base,plugin.module)
+  for(const connection of Object.values(config.toolConnections))if(connection.transport.kind==='stdio'&&connection.transport.cwd)connection.transport.cwd=resolve(base,connection.transport.cwd)
   const ids = new Set<string>()
   for (const source of config.sources) {
     if (ids.has(source.id)) throw new Error('Duplicate source id: ' + source.id)

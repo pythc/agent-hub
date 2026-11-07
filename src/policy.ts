@@ -1,18 +1,19 @@
 import { createHash } from 'node:crypto'
 import type { Config, SourceConfig } from './config.ts'
 import { threadKey, type Policy, type SourceScope, type Mandate } from './vendor/dsh-core/index.ts'
+import {builtinSources,type SourceRegistry} from './source-plugins.ts'
 
 function rowOf(source: SourceConfig, scope: string) {
   return source.admission[scope] ?? source.admission.default ?? {
     listedUnaddressed: 'inferred' as const, unlistedAddressed: 'ignore' as const, unlistedUnaddressed: 'ignore' as const,
   }
 }
-export function makePolicy(config: Config, paused: () => boolean): Policy {
-  const version = createHash('sha256').update(JSON.stringify({ sources: config.sources.map(({id,allowedActors,allowedBots,admission})=>({id,allowedActors,allowedBots,admission})), rules: config.rules, mode: config.acceptMode })).digest('hex')
+export function makePolicy(config: Config, paused: () => boolean,registry:SourceRegistry=builtinSources): Policy {
+  const version = createHash('sha256').update(JSON.stringify({ sources: config.sources.map(s=>({id:s.id,allowedActors:s.allowedActors,allowedBots:s.allowedBots,admission:s.admission,enabled:s.enabled,capabilities:s.capabilities,listenScopes:s.listenScopes,observed:registry.observed(s)})), rules: config.rules, mode: config.acceptMode })).digest('hex')
   const find = (id: string) => config.sources.find(s => s.id === id)
   function authorized(mandate: Mandate): boolean {
     const source = find(mandate.actor.source)
-    if (!source?.enabled) return false
+    if (!source?.enabled||!source.capabilities.events) return false
     const row = mandate.basis.row ?? 'default'
     if (source.listenScopes && !source.listenScopes.includes(row)) return false
     if (mandate.basis.via === 'followup') return true
@@ -30,9 +31,9 @@ export function makePolicy(config: Config, paused: () => boolean): Policy {
     version, get paused() { return paused() }, evalTimeoutMs: config.turnTimeoutMs,
     gate(trigger,thread,tickets) {
       const source = find(trigger.source)
-      if (!source?.enabled) return { admissible:false,reason:'sourceDisabled' }
+      if (!source?.enabled||!source.capabilities.events) return { admissible:false,reason:'sourceDisabled' }
       const row = String(trigger.meta.scope ?? 'default')
-      const observed=source.kind!=='github'||!!source.github?.receiveAll
+      const observed=registry.observed(source)
       const listed = source.allowedActors.includes(trigger.actor.id)
       const base = { source:trigger.source,row,scope:{scope:row} }
       if (!trigger.human) {
@@ -52,11 +53,11 @@ export function makePolicy(config: Config, paused: () => boolean): Policy {
     admitsInferred: rules=>config.acceptMode==='auto' && rules.length>0 && rules.every(id=>config.rules.some(r=>r.id===id)),
   }
 }
-export function makeScope(config: Config): SourceScope {
+export function makeScope(config: Config,registry:SourceRegistry=builtinSources): SourceScope {
   return { scope:({source,meta})=>{
     const configured=config.sources.find(s=>s.id===source)
-    if(!configured?.enabled)return {listened:false,reason:'sourceDisabled'}
+    if(!configured?.enabled||!configured.capabilities.events)return {listened:false,reason:'sourceDisabled'}
     if(configured.listenScopes && !configured.listenScopes.includes(String(meta.scope??'default')))return {listened:false,reason:'scopeNotListened'}
-    return {listened:true,observed:configured.kind!=='github'||!!configured.github?.receiveAll,row:String(meta.scope??'default')}
+    return {listened:true,observed:registry.observed(configured),row:String(meta.scope??'default')}
   }}
 }

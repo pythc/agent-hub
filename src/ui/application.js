@@ -85,6 +85,8 @@ function languagePicker() {
   return language
 }
 function render(focusTitle = false) {
+  const motionSnapshot = WorkspaceMotion.capture()
+  workflowStoryUnmount()
   executionUnmount()
   const focused = document.activeElement,
     focusId = focused?.id,
@@ -93,12 +95,15 @@ function render(focusTitle = false) {
   if (S.surface === 'guide') {
     renderGuide()
     restorePageFocus(focusTitle, focusId, start, end)
+    WorkspaceMotion.settle(motionSnapshot)
     return
   }
   renderEntrySurface()
   restorePageFocus(focusTitle, focusId, start, end)
+  WorkspaceMotion.settle(motionSnapshot)
 }
 function restorePageFocus(focusTitle, focusId, start, end) {
+  if(typeof configurationHost !== 'undefined' && configurationHost && !configurationHost.active())return
   if (focusTitle) {
     document.getElementById('page-title')?.focus({ preventScroll: true })
     window.scrollTo(0, 0)
@@ -120,11 +125,12 @@ class ApiError extends Error {
     this.payload = payload
   }
 }
-async function api(path, body, publicRead = false) {
+async function api(path, body, publicRead = false, scope = workspaceContext.activeId) {
+  const epoch = workspaceContext.epoch
   const headers = {}
   if (!publicRead && S.token) headers.authorization = 'Bearer ' + S.token
   if (body !== undefined) headers['content-type'] = 'application/json'
-  const res = await fetch(path, {
+  const res = await fetch(workspacePath(path, publicRead, scope), {
     method: body === undefined ? 'GET' : 'POST',
     body: body === undefined ? undefined : JSON.stringify(body),
     headers,
@@ -136,6 +142,8 @@ async function api(path, body, publicRead = false) {
     )
   })
   const payload = await res.json().catch(() => null)
+  if (epoch !== workspaceContext.epoch) throw new ApiError(409, { code: 'workspace_obsolete', error: 'Workspace changed during request' })
+  if (res.status === 401 && entryState.account?.configured && !publicRead) { location.replace(location.pathname + location.search + location.hash); throw new ApiError(res.status, payload) }
   if (!res.ok || !payload) throw new ApiError(res.status, payload)
   return payload
 }
@@ -165,6 +173,7 @@ async function runtimeStatus() {
     S.status = { paused, sources, setup }
     S.statusError = false
   } catch (e) {
+    if (e.payload?.code === 'workspace_obsolete') return
     if (e.status === 401) throw e
     S.status = null
     S.statusError = true
@@ -195,14 +204,15 @@ function adopt(snap, rebaseOwnChange = false) {
   S.latest = null
 }
 function errorMessage(e) {
+  if (e.payload?.code === 'workspace_obsolete') return
   if (e.status === 401) {
     S.token = ''
     S.typed = ''
     S.authed = false
     setNotice(
       'error',
-      'Access denied. Enter a valid host token to continue.',
-      '访问被拒绝。请输入有效的宿主令牌。'
+      entryState.account?.configured ? 'Your session expired. Sign in again.' : 'Access denied. Enter a valid host token to continue.',
+      entryState.account?.configured ? '登录已过期，请重新登录。' : '访问被拒绝。请输入有效的宿主令牌。'
     )
     return
   }
@@ -274,12 +284,15 @@ async function connectHost(credential = S.typed, cookieSession = false) {
       await api('/pair', { code }, true)
       S.token = ''
     }
+    await workspaceDiscover()
     const [snap] = await Promise.all([snapshot(), runtimeStatus(), loadGuideContext(), health()])
     adopt(snap)
     S.authed = true
-    await readEntries()
+    // Client installation probes belong to the connection pages, not every navigation.
+    await Promise.all([readOperatorWork(), connectionDiscover(), integrationsDiscover()])
     if (!S.latest) announce(L('Connected to the host.', '已连接到宿主。'))
   })
+  if (S.authed) void ensureEntryInventory()
 }
 async function refreshStatus() {
   await run('refresh', async () => {
@@ -316,6 +329,8 @@ async function disconnect() {
   if ((dirty() || entryHasDraft()) && !confirm(L('Disconnect and discard this draft?', '断开连接并放弃当前草稿？'))) return
   await run('connect', async () => {
     await api('/logout', {})
+    if (entryState.account?.configured) { location.replace('/auth'); return }
+    workspaceReset()
     Object.assign(S, {
       authed: false,
       token: '',
