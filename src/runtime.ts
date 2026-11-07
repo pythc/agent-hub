@@ -35,7 +35,7 @@ import {SubscriptionAccounts} from './backends/subscription.ts'
 import {ExecutionActivity} from './execution-activity.ts'
 import {RouterIngress} from './router-ingress.ts'
 import {RouterCandidates,candidateSpecs} from './router-candidates.ts'
-import {relayRouterFollowups,returnRouterFollowup} from './router-followups.ts'
+import {relayRouterFollowups,returnRouterFollowup,reconsiderRouterFollowups,RouterFollowupBatch,followupSpecs} from './router-followups.ts'
 import {BrowserManager} from './browser-manager.ts'
 import type {BrowserDriver} from './browser-driver.ts'
 
@@ -405,8 +405,9 @@ export class Runtime {
       if(!this.paused)void this.merger.tick().catch(error=>this.store.audit({type:'merge.error',message:String(error)}))
       this.pollSources()
       this.engine.evaluateDue()
+      reconsiderRouterFollowups(this)
       for(const id of this.liveInputs.keys())void this.deliverLiveInputs(id)
-      const interactive=(job:Job)=>job.kind==='followup'||(job.kind==='execute'&&!!this.store.tickets.get((job.payload as any).ticketId)?.inputs.some(i=>i.kind==='trigger'&&i.human&&this.store.tickets.get((job.payload as any).ticketId)!.undelivered.includes(i.id)))
+      const interactive=(job:Job)=>job.kind==='followup'||job.kind==='router-followup'||(job.kind==='execute'&&!!this.store.tickets.get((job.payload as any).ticketId)?.inputs.some(i=>i.kind==='trigger'&&i.human&&this.store.tickets.get((job.payload as any).ticketId)!.undelivered.includes(i.id)))
       for (const job of this.store.jobs().sort((a,b)=>Number(interactive(b))-Number(interactive(a)))) {
         const payload = job.payload as any
         if(job.kind==='cleanup'){
@@ -419,13 +420,13 @@ export class Runtime {
           this.store.jobState(job.id, 'done')
           continue
         }
-        const routing=job.kind==='assess'||job.kind==='followup'||job.kind==='router'||job.kind==='router-admit'
-        const routerDiscussion=job.kind==='router'?payload.discussion:job.kind==='router-admit'?this.routerIngress.get(payload.triggerId)?.discussion:undefined
+        const routing=job.kind==='assess'||job.kind==='followup'||job.kind==='router'||job.kind==='router-admit'||job.kind==='router-followup'
+        const routerDiscussion=['router','router-followup'].includes(job.kind)?payload.discussion:job.kind==='router-admit'?this.routerIngress.get(payload.triggerId)?.discussion:undefined
         if(routerDiscussion&&this.controllers.has('router:'+routerDiscussion))continue
         // A previous job in this snapshot may have claimed this item into its inbox batch.
         if(this.store.db.prepare('SELECT state FROM jobs WHERE id=?').get(job.id)?.state!=='pending')continue
         const followupSlot=interactive(job)&&(!this.config.execution.workers||!!(payload.ticketId&&this.store.get<Run>('run',payload.ticketId)?.threadId))
-        const isRouting=(id:string)=>['assess:','followup:','router:','router-admit:'].some(prefix=>id.startsWith(prefix))
+        const isRouting=(id:string)=>['assess:','followup:','router:','router-admit:','router-followup:'].some(prefix=>id.startsWith(prefix))
         const workers=[...this.runningJobs.keys()].filter(id=>!isRouting(id)).length
         const reserved=this.store.list<Run>('run').filter(r=>r.phase==='background'&&r.ticketId!==payload.ticketId&&!this.controllers.has(r.ticketId)&&this.work.active(r.ticketId,r.assignmentId).length).length
         if(routing?[...this.runningJobs.keys()].filter(isRouting).length>=4:workers+reserved>=workerProfiles(this.config).length+(followupSlot?1:0))continue
@@ -450,7 +451,7 @@ export class Runtime {
     } finally { this.ticking = false;tickFinished() }
   }
   private async perform(job: Job,dispatch?:{profile:WorkerProfile;reserve:boolean}): Promise<void> {
-    if(job.kind==='router'||job.kind==='router-admit')await this.coordinate(job)
+    if(job.kind==='router'||job.kind==='router-admit'||job.kind==='router-followup')await this.coordinate(job)
     else if (job.kind === 'assess') await this.assess(job.payload as Candidate)
     else if(job.kind==='followup')await this.routeFollowup((job.payload as any).triggerId)
     else {
@@ -488,15 +489,17 @@ export class Runtime {
   private async coordinate(job:Job):Promise<void>{
     const candidates=job.kind==='router-admit'?RouterCandidates.claim(this,job):undefined
     if(job.kind==='router-admit'&&!candidates)return
+    const followups=job.kind==='router-followup'?new RouterFollowupBatch(this,job):undefined
+    if(followups&&!followups.actionable){followups.finish();return}
     const {messageId}=job.payload as {messageId?:string}
     const discussion=candidates?.batch.discussion??(job.payload as any).discussion as string
-    const triggerId=candidates?.batch.primary??(job.payload as any).triggerId as string
+    const triggerId=candidates?.batch.primary??followups?.trigger.id??(job.payload as any).triggerId as string
     if(this.store.get('router-result',job.id)||messageId&&this.store.get('router-read',messageId))return
     const trigger=this.store.triggers.get(triggerId);if(!trigger)throw Error('Router input missing')
     const source=this.sources.get(trigger.source)!.config
     // Upgrade old queued human turns through the current policy; never infer permission from session existence.
     if(!this.routerIngress.get(triggerId))this.store.atomic(()=>this.routerIngress.admit(trigger))
-    const mandate=candidates?undefined:this.routerIngress.authority(triggerId,discussion)
+    const mandate=candidates||followups?undefined:this.routerIngress.authority(triggerId,discussion)
     const previous=this.store.get<any>('router-session',discussion),controller=new AbortController(),key='router:'+discussion
     this.controllers.set(key,controller)
     const authorizedMessage=(m:any)=>{
@@ -507,14 +510,14 @@ export class Runtime {
     const pendingMessages=messageId?this.store.list<any>('router-inbox').filter(m=>m.channel.address.routerInbox===discussion&&!this.store.get('router-read',m.id)&&authorizedMessage(m)):[]
     if(messageId&&!pendingMessages.some(m=>m.id===messageId))throw Error('Worker result authorization withdrawn')
     const readMessages=new Set<string>(pendingMessages.map(m=>m.id)),readReports=new Map<string,string>()
-    const notices=this.store.list<any>('router-followup-notice').filter(n=>!n.read&&n.discussion===discussion&&n.actor===trigger.actor.id).slice(0,20)
     const schema={type:'object',properties:{reply:{type:'string'}},required:['reply'],additionalProperties:false}
     try{
       const result=await this.runModel({role:'router',...this.chat.binding(triggerId),activity:{sourceId:source.id,triggerId},cwd:source.cwd,threadId:previous?.threadId,signal:controller.signal,schema,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,sandbox:'read-only',
         instructions:composeCoordinator(this.config,{source:source.id,cwd:source.cwd,discussion}),
-        input:JSON.stringify({...candidates?candidates.card():messageId?{kind:'worker_result',messages:pendingMessages,mandate}:{kind:trigger.human?'user_message':'event',trigger,mandate,assessment:this.routerIngress.get(triggerId)?.assessment},...(notices.length?{followupsAlreadyDelivered:notices.map(n=>({triggerId:n.triggerId,owners:n.owners,text:this.store.triggers.get(n.triggerId)?.text.slice(0,400)}))}:{})}),tools:candidates?[...candidateSpecs,...managementSpecs]:managementSpecs,
+        input:JSON.stringify(followups?followups.card():candidates?candidates.card():messageId?{kind:'worker_result',messages:pendingMessages,mandate}:{kind:trigger.human?'user_message':'event',trigger,mandate,assessment:this.routerIngress.get(triggerId)?.assessment}),tools:followups?followupSpecs:candidates?[...candidateSpecs,...managementSpecs]:managementSpecs,
         onTool:async(name,args)=>{try{
           controller.signal.throwIfAborted();candidates?.check()
+          if(followups)return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(await followups.tool(name,args))}]}
           if(candidates&&name!=='worker_manage'){
             const result=await candidates.tool(name,args)
             return result?.kind==='image'?{success:true,contentItems:[{type:'inputImage',imageUrl:'data:'+result.mimeType+';base64,'+result.data}]}:{success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}
@@ -523,7 +526,7 @@ export class Runtime {
           if(candidates?.batch.decision?.action==='attach'&&(!['list','inspect','result','send'].includes((args as any).action)||(args as any).action==='send'&&(args as any).ticketId!==candidates.batch.decision.targetTicketId))throw Error('A continuation must stay with its existing task')
           const result=await this.manager.call(args,{discussion,trigger});if((args as any).ticketId&&result.report?.at)readReports.set((args as any).ticketId,result.report.at);if(['result','inspect'].includes((args as any).action)&&(args as any).ticketId)for(const m of this.store.list<any>('router-inbox'))if(m.ticketId===(args as any).ticketId&&m.channel.address.routerInbox===discussion)readMessages.add(m.id);return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}
         }catch(error){return {success:false,contentItems:[{type:'inputText',text:String(error)}]}}},
-        ...(!candidates&&this.chat.binding(triggerId)?{onOutput:(event:import('./model.ts').ModelOutput)=>{
+        ...(!candidates&&!followups&&this.chat.binding(triggerId)?{onOutput:(event:import('./model.ts').ModelOutput)=>{
           if(controller.signal.aborted)return
           // Apply the final-result authority fence to live output as well; native notification callbacks must not throw.
           try{this.routerIngress.authority(triggerId,discussion);if(pendingMessages.some(m=>!authorizedMessage(m)))throw Error('Worker result authorization withdrawn')}
@@ -533,12 +536,12 @@ export class Runtime {
         onThread:id=>this.store.put('router-session',discussion,{...previous,discussion,threadId:id,source:source.id,triggerId,at:Date.now()})})
       controller.signal.throwIfAborted()
       candidates?.check()
-      const quiet=!!candidates&&this.routerIngress.get(triggerId)?.state!=='accepted'
-      if(!quiet)this.routerIngress.authority(triggerId,discussion)
+      const quiet=followups?!followups.replied:!!candidates&&this.routerIngress.get(triggerId)?.state!=='accepted'
+      if(!quiet&&!followups)this.routerIngress.authority(triggerId,discussion)
       if(pendingMessages.some(m=>!authorizedMessage(m)))throw Error('Worker result authorization withdrawn')
       const output=JSON.parse(result.text);if(typeof output.reply!=='string')throw Error('Invalid Router reply')
       if(quiet)output.reply=''
-      this.store.atomic(()=>{candidates?.finish();for(const n of notices)this.store.put('router-followup-notice',n.triggerId,{...n,read:true});for(const [ticketId,at] of readReports)this.store.put('router-report-read',discussion+':'+ticketId,{at});for(const id of readMessages)this.store.put('router-read',id,{discussion,turnId:result.turnId});this.store.put('router-result',job.id,{discussion,threadId:result.threadId,turnId:result.turnId,reply:output.reply});this.chat.reply(job.id,triggerId,output.reply);if(output.reply.trim()&&trigger.channel)this.store.outbox.send({id:'router-reply:'+(messageId?bodyDigest([discussion,output.reply,[...readMessages].sort()]):job.id),channel:trigger.channel,kind:'reply',text:output.reply})})
+      this.store.atomic(()=>{candidates?.finish();followups?.finish();for(const [ticketId,at] of readReports)this.store.put('router-report-read',discussion+':'+ticketId,{at});for(const id of readMessages)this.store.put('router-read',id,{discussion,turnId:result.turnId});this.store.put('router-result',job.id,{discussion,threadId:result.threadId,turnId:result.turnId,reply:output.reply});this.chat.reply(job.id,triggerId,output.reply);if(output.reply.trim()&&trigger.channel)this.store.outbox.send({id:'router-reply:'+(messageId?bodyDigest([discussion,output.reply,[...readMessages].sort()]):job.id),channel:trigger.channel,kind:'reply',text:output.reply})})
     }catch(error){candidates?.fail(error);this.chat.endOutput(job.id,controller.signal.aborted?'interrupted':'failed');throw error}
     finally{this.chat.endOutput(job.id);this.controllers.delete(key)}
   }
@@ -814,17 +817,17 @@ export class Runtime {
   }
   pause(value: boolean): void { this.paused = value; this.store.put('settings', 'paused', value); this.store.audit({ type: 'pause', value }) }
   async cancelRouter(triggerId:string,discussion:string):Promise<void>{
-    const batch=this.store.list<{triggerIds:string[];jobIds:string[];phase:string}>('router-candidate').find(b=>b.triggerIds.includes(triggerId)&&!['complete','failed'].includes(b.phase))
+    const batch=this.store.list<{triggerIds:string[];jobIds:string[];phase:string}>('router-candidate').reverse().find(b=>b.triggerIds.includes(triggerId))
     const cancelled=new Set(batch?.triggerIds??[triggerId])
     for(const id of cancelled){this.store.put('router-cancelled',id,{at:Date.now(),discussion});this.routerIngress.cancel(id)}
-    this.store.db.prepare("UPDATE jobs SET state='cancelled' WHERE kind IN ('router','router-admit') AND state='pending' AND json_extract(payload,'$.triggerId')=?").run(triggerId)
-    const running=[...this.store.db.prepare("SELECT id FROM jobs WHERE kind IN ('router','router-admit') AND state='running' AND json_extract(payload,'$.triggerId')=?").all(triggerId),...(batch?.jobIds??[]).map(id=>({id}))]
+    for(const id of cancelled)this.store.db.prepare("UPDATE jobs SET state='cancelled' WHERE kind IN ('router','router-admit','router-followup') AND state='pending' AND json_extract(payload,'$.triggerId')=?").run(id)
+    const running=[...[...cancelled].flatMap(id=>this.store.db.prepare("SELECT id FROM jobs WHERE kind IN ('router','router-admit','router-followup') AND state='running' AND json_extract(payload,'$.triggerId')=?").all(id)),...(batch?.jobIds??[]).filter(id=>this.runningJobs.has(id)).map(id=>({id}))]
     if(running.length)this.controllers.get('router:'+discussion)?.abort()
     await Promise.allSettled(running.flatMap(j=>{const p=this.runningJobs.get(String(j.id));return p?[p]:[]}))
     // The cancellation fence also prevents new delegations and late Worker results from restarting this run.
     const owned=this.store.list<{ticketId:string;parentTrigger?:string}>('worker-assignment').filter(a=>!!a.parentTrigger&&cancelled.has(a.parentTrigger))
     for(const a of owned)if(!this.store.tickets.get(a.ticketId)?.ended)await this.stop(a.ticketId)
-    this.store.db.prepare("UPDATE jobs SET state='cancelled' WHERE kind IN ('router','router-admit') AND json_extract(payload,'$.triggerId')=? AND state IN ('pending','failed')").run(triggerId)
+    for(const id of cancelled)this.store.db.prepare("UPDATE jobs SET state='cancelled' WHERE kind IN ('router','router-admit','router-followup') AND json_extract(payload,'$.triggerId')=? AND state IN ('pending','failed')").run(id)
     for(const id of batch?.jobIds??[])this.store.jobState(id,'cancelled')
   }
   async stop(id: string): Promise<void> {

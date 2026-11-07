@@ -33,3 +33,10 @@ it('keeps pre-upgrade wire messages readable after a known-safe new turn boundar
  expect(recall(history,{turnId:'legacy-messages'}).contentItems[0]!.text).toContain('legacy legacy')
  expect(()=>recall(history,{callId:'missing'})).toThrow('Unknown')
 })
+
+it('recalls and searches messages steered into an archived turn without including the next turn',()=>{
+ const history={messages:[{role:'user',content:'initial'},{role:'user',content:'source correction: KEEP THE ORIGINAL'},{role:'assistant',content:'ack'},{role:'user',content:'unrelated next'}],turns:[{id:'old',wireStart:0,input:'initial',items:[]},{id:'next',wireStart:3,input:'unrelated next',items:[]}],effects:{}}
+ const text=recall(history,{turnId:'old',limit:8000}).contentItems[0]!.text!
+ expect(text).toContain('KEEP THE ORIGINAL');expect(text).not.toContain('unrelated next')
+ expect(recall(history,{query:'KEEP THE ORIGINAL'}).contentItems[0]!.text).toContain('old')
+})

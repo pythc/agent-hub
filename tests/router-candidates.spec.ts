@@ -1,5 +1,5 @@
 import {afterEach,expect,it} from 'vitest'
-import {mkdtempSync,rmSync,writeFileSync,symlinkSync} from 'node:fs'
+import {mkdtempSync,rmSync,writeFileSync,symlinkSync,mkdirSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
@@ -186,4 +186,91 @@ it('does not relay another actor, bots, revoked authorization, or human-stopped 
  f.h.ingest(f.source.trigger({id:'bot',thread:'topic',text:'Bot event',addressed:false},'alice',false));expect(f.h.store.list('router-followup')).toHaveLength(0)
  f.h.config.sources[0]!.allowedActors=[];send(f.h,'revoked');expect(f.h.store.list('router-followup')).toHaveLength(0)
  f.h.config.sources[0]!.allowedActors=['alice'];f.h.engine.stopTicket(task.ticketId,'Stopped by person');send(f.h,'stopped');expect(f.h.store.list('router-followup')).toHaveLength(0)
+})
+
+it('keeps unavailable evidence fenced across a restart until the resource is read successfully',async()=>{
+ const f=fixture(async r=>{expect((await tool(r,'orchestrator_route',{reason:'Ignore without retry'})).success).toBe(false);expect((await tool(r,'orchestrator_eval_read',{resource:'root'})).success).toBe(true);expect((await tool(r,'orchestrator_route',{reason:'No change requested'})).success).toBe(true);return {reply:''}})
+ ;(f.source as any).read=async()=>{throw Error('Temporary failure')}
+ send(f.h,'1');const batch=RouterCandidates.claim(f.h,f.h.store.jobs().find(j=>j.kind==='router-admit')!)!
+ await expect(batch.tool('orchestrator_eval_read',{resource:'root'})).rejects.toThrow('Temporary')
+ hosts.splice(hosts.indexOf(f.h),1);await f.h.close();(f.source as any).read=async()=>({message:'Discussion root'})
+ const restored=new Runtime(f.config,{model:f.model,sources:[f.source]});hosts.push(restored)
+ await settle(restored,()=>finished(restored));expect(restored.routerIngress.get('group:1')?.state).toBe('ignored')
+})
+
+it('reads personal setup workspace files while still excluding adjacent host state',async()=>{
+ const f=fixture(async r=>{expect(body(await tool(r,'orchestrator_eval_read',{resource:'repository/file/readme.txt'})).text).toBe('Project evidence');expect((await tool(r,'orchestrator_eval_read',{resource:'repository/file/escape'})).success).toBe(false);return {reply:''}})
+ const workspace=join(f.config.stateDir,'workspace');mkdirSync(workspace);f.source.config.cwd=workspace
+ writeFileSync(join(workspace,'readme.txt'),'Project evidence');writeFileSync(join(f.config.stateDir,'secret'),'private');symlinkSync(join(f.config.stateDir,'secret'),join(workspace,'escape'))
+ send(f.h,'1');await settle(f.h,()=>finished(f.h))
+})
+
+it('keeps a normal Router continuation job after accepted admission for crash or older-host recovery',async()=>{
+ const f=fixture();send(f.h,'1');send(f.h,'2')
+ const batch=RouterCandidates.claim(f.h,f.h.store.jobs().find(j=>j.kind==='router-admit')!)!
+ await batch.tool('orchestrator_eval_decide',accepted)
+ const continuation=f.h.store.jobs().filter(j=>j.kind==='router')
+ expect(continuation).toHaveLength(1);expect(continuation[0]!.payload).toMatchObject({triggerId:'group:2',discussion:'group:topic'})
+ batch.finish();expect(f.h.store.jobs().filter(j=>j.kind==='router')).toHaveLength(0)
+})
+
+it('cancels primary-owned work when an earlier member of a completed batch is cancelled',async()=>{
+ const f=fixture();send(f.h,'1');send(f.h,'2');const batch=RouterCandidates.claim(f.h,f.h.store.jobs().find(j=>j.kind==='router-admit')!)!
+ await batch.tool('orchestrator_eval_decide',accepted)
+ const task=await f.h.manager.call({action:'assign',id:'one',revision:0,requestId:'batch-task',text:accepted.scope},{discussion:'group:topic',trigger:f.h.store.triggers.get('group:2')!})
+ batch.finish();await f.h.cancelRouter('group:1','group:topic')
+ expect(f.h.store.tickets.get(task.ticketId)?.ended?.by).toBe('human');expect(()=>f.h.routerIngress.authority('group:2')).toThrow('cancelled')
+})
+
+it('stops an inferred task on an unmentioned human follow-up through the same persistent Router',async()=>{
+ let taskId=''
+ const f=fixture(async r=>{
+  if(r.role==='worker'){await new Promise<void>(resolve=>{if(r.signal?.aborted)resolve();else r.signal?.addEventListener('abort',()=>resolve(),{once:true})});return workerReport}
+  const input=JSON.parse(r.input)
+  if(input.kind==='proactive_candidates'){await tool(r,'orchestrator_eval_decide',accepted);taskId=body(await tool(r,'worker_manage',{action:'assign',revision:0,requestId:'work',id:'one',text:accepted.scope})).ticketId}
+  else if(input.kind==='task_followups'){
+   expect(r.threadId).toBeTruthy();expect(r.ephemeral).not.toBe(true);expect((await tool(r,'worker_manage',{action:'assign'})).success).toBe(false)
+   expect((await tool(r,'orchestrator_followup_stop',{triggerId:'group:stop',ticketId:taskId,explicit_stop_requested:true,evidence:'Please stop '+taskId})).success).toBe(true)
+   return {reply:'Stopped the requested task'}
+  }
+  return {reply:''}
+ })
+ send(f.h,'1');await settle(f.h,()=>finished(f.h)&&!!taskId)
+ send(f.h,'stop','Please stop '+taskId);await settle(f.h,()=>f.h.store.tickets.get(taskId)?.ended?.by==='human'&&f.h.store.deliveries().some(d=>d.text==='Stopped the requested task'))
+ const assignments=f.h.store.tickets.get(taskId)!.assignments.length
+ send(f.h,'later','Another detail');expect(f.h.store.tickets.get(taskId)!.assignments).toHaveLength(assignments);expect(f.h.store.list<any>('router-followup').filter(x=>x.triggerId==='group:later')).toHaveLength(0)
+})
+
+it('batches ordinary owned follow-ups for stop classification without new work or unsolicited replies',async()=>{
+ const f=fixture(async r=>{if(r.role==='worker')return workerReport;expect(JSON.parse(r.input).kind).toBe('task_followups');expect(JSON.parse(r.input).followups).toHaveLength(2);return {reply:'Unsolicited answer'}})
+ await delegated(f,'one');send(f.h,'one','Spelling detail');send(f.h,'two','More context')
+ await settle(f.h,()=>f.h.store.list<any>('router-followup-notice').every(n=>n.read))
+ expect(f.h.store.tickets.list()).toHaveLength(1);expect(f.h.store.deliveries().filter(d=>!d.channel.address.routerInbox)).toHaveLength(0)
+})
+
+it('can report a validated stop request that the host cannot perform without claiming it stopped',async()=>{
+ let taskId=''
+ const f=fixture(async r=>{const result=await tool(r,'orchestrator_followup_stop',{triggerId:'group:stop',ticketId:taskId,explicit_stop_requested:true,evidence:'Please stop '+taskId});expect(result.success).toBe(false);expect(result.contentItems[0]!.text).toContain('merge has been submitted');return {reply:'Cannot stop while the submitted merge is being reconciled'}})
+ taskId=(await delegated(f,'merging')).ticketId
+ f.h.store.put('run',taskId,{ticketId:taskId,assignmentId:f.h.store.tickets.get(taskId)!.assignments.at(-1)!.id,cwd:f.source.config.cwd,phase:'merging'})
+ send(f.h,'stop','Please stop '+taskId)
+ await settle(f.h,()=>f.h.store.deliveries().some(d=>d.text==='Cannot stop while the submitted merge is being reconciled'))
+ expect(f.h.store.tickets.get(taskId)?.ended).toBeUndefined();expect(f.h.store.list('router-followup-stopped')).toHaveLength(0)
+})
+
+it.each([true,false])('releases stopped follow-up owners before or after handback (stop first: %s)',async stopFirst=>{
+ const f=fixture(),one=await delegated(f,'one'),two=await delegated(f,'two','two');f.h.pause(true)
+ send(f.h,'follow','A separate new project');const relay=f.h.store.list<any>('router-followup').find(r=>r.ticketId===one.ticketId)
+ if(stopFirst)await f.h.stop(two.ticketId)
+ returnRouterFollowup(f.h,one.ticketId,relay.id,'Outside this task')
+ if(!stopFirst){expect(f.h.routerIngress.get('group:follow')?.state).toBe('ignored');await f.h.stop(two.ticketId);await f.h.tick()}
+ expect(f.h.routerIngress.get('group:follow')?.state).toBe('pending');expect(f.h.routerIngress.get('group:follow')?.revision).toBe(2);expect(f.h.store.tickets.get(two.ticketId)?.ended?.by).toBe('human')
+ await f.h.tick();expect(f.h.routerIngress.get('group:follow')?.revision).toBe(2)
+})
+
+it('shows shared discussion task summaries for deduplication without granting another actor task control',async()=>{
+ let taskId=''
+ const f=fixture(async r=>{if(r.role==='worker')return workerReport;const context=body(await tool(r,'orchestrator_eval'));expect(context.related.find((t:any)=>t.id===taskId)?.canAttach).toBe(false);expect((await tool(r,'orchestrator_eval_decide',{...accepted,action:'attach',targetTicketId:taskId})).success).toBe(false);await tool(r,'orchestrator_route',{reason:'Already handled in the existing task'});return {reply:''}})
+ taskId=(await delegated(f,'shared')).ticketId;send(f.h,'bob','Yes, fix that same typo','bob')
+ await settle(f.h,()=>finished(f.h));expect(f.h.store.tickets.list()).toHaveLength(1)
 })

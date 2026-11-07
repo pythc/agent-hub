@@ -32,8 +32,9 @@ export function recall(history:History,input:{turnId?:string;callId?:string;quer
   return {success:true,contentItems:[{type:'inputText' as const,text:JSON.stringify({text:text.slice(offset,offset+limit),characters:text.length,nextOffset:offset+limit<text.length?offset+limit:null})},...(offset===0?images:[])]}
  }
  const legacy=history.turns.some(t=>!Number.isSafeInteger(t.wireStart))
- if(input.turnId){value=input.turnId==='legacy-messages'&&legacy?history.messages.slice(0,history.turns.find(t=>Number.isSafeInteger(t.wireStart))?.wireStart):history.turns.find(t=>t.id===input.turnId);if(!value)throw Error('Unknown retained turn')}
- else value=[...(legacy?[{id:'legacy-messages',status:'archive',input:'Original wire messages recorded before turn boundaries were introduced'}]:[]),...history.turns.filter(t=>!input.query||JSON.stringify(t).toLowerCase().includes(input.query.toLowerCase())).map(t=>({id:t.id,status:t.status,input:typeof t.input==='string'?t.input.slice(0,160):undefined}))]
+ const fullTurn=(t:any)=>({...t,...(Number.isSafeInteger(t.wireStart)?{messages:history.messages.slice(t.wireStart,history.turns.find(next=>Number.isSafeInteger(next.wireStart)&&next.wireStart>t.wireStart)?.wireStart)}:{})})
+ if(input.turnId){const turn=history.turns.find(t=>t.id===input.turnId);value=input.turnId==='legacy-messages'&&legacy?history.messages.slice(0,history.turns.find(t=>Number.isSafeInteger(t.wireStart))?.wireStart):turn&&fullTurn(turn);if(!value)throw Error('Unknown retained turn')}
+ else value=[...(legacy?[{id:'legacy-messages',status:'archive',input:'Original wire messages recorded before turn boundaries were introduced'}]:[]),...history.turns.filter(t=>!input.query||JSON.stringify(fullTurn(t)).toLowerCase().includes(input.query.toLowerCase())).map(t=>({id:t.id,status:t.status,input:typeof t.input==='string'?t.input.slice(0,160):undefined}))]
  const text=JSON.stringify(value),offset=input.offset??0,limit=input.limit??4000
  return {success:true,contentItems:[{type:'inputText' as const,text:JSON.stringify({text:text.slice(offset,offset+limit),characters:text.length,nextOffset:offset+limit<text.length?offset+limit:null})}]}
 }
