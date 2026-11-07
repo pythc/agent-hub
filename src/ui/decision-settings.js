@@ -25,7 +25,9 @@ function decisionSettings() {
     decisionWrite('provider', value.startsWith('backend:') ? { kind: 'backend', id: value.slice(8) } : !value ? undefined : value === 'jev'
       ? { kind: 'jev', baseUrl: 'https://api.typesafe.ai/v1', model: 'jev-latest', apiKeyEnv: 'TYPESAFE_API_KEY' }
       : { kind: value, baseUrl: value === 'anthropic' ? 'https://api.anthropic.com/v1' : 'http://127.0.0.1:8080/v1', model: '', parameters: {}, outputFormat: 'json-schema', chatTokenField: 'max_tokens' })
-    if (value === 'jev') { decisionWrite('effort', undefined); decisionWrite('parameters', {}) }
+    const nextKind = value.startsWith('backend:') ? S.draft.backends[value.slice(8)]?.kind : value
+    if (['jev', 'anthropic'].includes(nextKind)) decisionWrite('effort', undefined)
+    if (nextKind === 'jev') decisionWrite('parameters', {})
     render()
   }, { values: choices }))
   if (provider && provider.kind !== 'backend') {
@@ -58,22 +60,32 @@ function decisionSettings() {
   if (provider) advanced.append(jsonField('decision.provider', L('Connection details (JSON)', '连接详情（JSON）'), { objectType: 'object' }))
   root.append(advanced)
   const test = el('div', 'stack'), result = el('div'); result.id = 'decision-test-result'; result.setAttribute('role', 'status')
-  test.append(teamField('decision-sample', L('Test message', '测试消息'), decisionView.sample, value => { decisionView.sample = value }))
+  const prior = decisionView.result
+  if (prior?.epoch === workspaceContext.epoch && prior.fingerprint === JSON.stringify(config) && prior.sample === decisionView.sample) result.textContent = prior.message
+  test.append(teamField('decision-sample', L('Test message', '测试消息'), decisionView.sample, value => { decisionView.sample = value; decisionView.result = null; result.textContent = '' }))
   const button = opButton(decisionView.busy ? L('Testing…', '正在测试…') : L('Test current draft', '测试当前草稿'), async () => {
     if (decisionView.busy || S.errors.size) return
     if (S.draft.decision?.provider?.kind === 'backend' && !same(S.base.config.backends, S.draft.backends)) {
       result.textContent = L('Save model connection changes before testing a shared connection.', '请先保存模型连接更改，再测试复用连接。'); return
     }
     decisionView.busy = true; button.disabled = true
-    const epoch = workspaceContext.epoch, fingerprint = JSON.stringify(S.draft.decision)
+    const epoch = workspaceContext.epoch, fingerprint = JSON.stringify(S.draft.decision), sample = decisionView.sample
+    const show = message => {
+      if (epoch !== workspaceContext.epoch || fingerprint !== JSON.stringify(S.draft.decision) || sample !== decisionView.sample) return
+      decisionView.result = { epoch, fingerprint, sample, message }
+      const current = document.getElementById('decision-test-result'); if (current) current.textContent = message
+    }
     try {
-      const response = await api('/decision/probe', { config: clone(S.draft.decision), text: decisionView.sample })
-      if (epoch !== workspaceContext.epoch || fingerprint !== JSON.stringify(S.draft.decision)) return
-      decisionView.result = response
-      result.textContent = response.status === 'ok' ? response.decisions.map(d => d.action).join(', ') + ' · ' + response.latencyMs + ' ms' : L('Unavailable: ', '不可用：') + response.code
-    } catch (error) { if (epoch === workspaceContext.epoch) result.textContent = error.message }
-    finally { decisionView.busy = false; button.disabled = !S.draft.decision?.provider }
+      const response = await api('/decision/probe', { config: clone(S.draft.decision), text: sample })
+      show(response.status === 'ok' ? response.decisions.map(d => d.action).join(', ') + ' · ' + response.latencyMs + ' ms' : L('Unavailable: ', '不可用：') + response.code)
+    } catch (error) { show(error.message) }
+    finally {
+      decisionView.busy = false
+      const current = document.getElementById('decision-test')
+      if (current) { current.disabled = !S.draft.decision?.provider || S.errors.size > 0 || !!S.snap?.preview; current.textContent = L('Test current draft', '测试当前草稿') }
+    }
   }, 'button')
+  button.id = 'decision-test'
   button.disabled = decisionView.busy || !provider || S.errors.size > 0 || !!S.snap?.preview
   test.append(button, result); root.append(test)
   const records = S.snap?.decisionCalls || []
