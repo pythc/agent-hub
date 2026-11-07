@@ -14,6 +14,8 @@ const add = (node, ...children) => {
   return node
 }
 const icons = {
+  sun: 'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5',
+  moon: 'M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z',
   brand: 'M4 6h5v5H4zM15 13h5v5h-5zM9 8.5h4a3 3 0 0 1 3 3V13M6.5 11v3a2 2 0 0 0 2 2H15',
   overview: 'M3.5 4h7v7h-7zM14 4h6.5v7H14zM3.5 14h7v6h-7zM14 14h6.5v6H14z',
   execution: 'M4 5h6v5H4zM14 14h6v5h-6zM7 10v5a2 2 0 0 0 2 2h5M10 7h7v4',
@@ -89,7 +91,7 @@ let S = {
   preview: null,
   promptIndex: null
 }
-const app = document.getElementById('app')
+const app = typeof configurationHost !== 'undefined' && configurationHost ? configurationHost.element : document.getElementById('app')
 const clone = (v) => (v === undefined ? undefined : structuredClone(v))
 function normalized(v) {
   if (Array.isArray(v)) return v.map(normalized)

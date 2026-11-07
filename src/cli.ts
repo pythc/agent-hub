@@ -12,8 +12,12 @@ import {initOffice} from './office.ts'
 import {preparePersonalSetup,rememberPersonalPort} from './personal-setup.ts'
 import {previewScopeMigration,applyScopeMigration,rollbackScopeMigration} from './scope-migration.ts'
 import {runCodexRouter} from './codex-router.ts'
+import {announceLaunch,parseLauncherArgs} from './personal-launch.ts'
 
-const [command, ...args] = process.argv.slice(2)
+const args = process.argv.slice(2)
+const command = args[0]==='--help'||args[0]==='-h'
+  ? 'help'
+  : !args.length || args[0]?.startsWith('--') ? 'setup' : args.shift()!
 async function main() {
   if(process.env.AGENTHUB_ENV_FILE)try{process.loadEnvFile(process.env.AGENTHUB_ENV_FILE)}catch{throw Error('Cannot load AGENTHUB_ENV_FILE; check its path and access permissions')}
   if(command==='office'){
@@ -65,19 +69,19 @@ async function main() {
   else if(command==='supervise'){if(!args[0])throw Error('Config file required');await supervise(args[0])}
   else if(command==='watch'){if(!args[0]||!args[1])throw Error('Host URL and token file required');await watch(args[0],args[1],args.includes('--once'))}
   else if (command === 'serve'||command==='setup') {
-    if (command==='serve'&&!args[0]) throw new Error('Usage: serve <config.json>')
-    const personal=command==='setup'?preparePersonalSetup(args[0]):undefined
+    const launch=parseLauncherArgs(args,1),file=launch.values[0]
+    if (command==='serve'&&!file) throw new Error('Usage: serve <config.json>')
+    const personal=command==='setup'?preparePersonalSetup(file):undefined
     if(personal&&!personal.created&&personal.config.port){
       try{
         const token=readFileSync(personal.config.stateDir+'/access-token','utf8').trim(),response=await fetch('http://127.0.0.1:'+personal.config.port+'/operator-link',{method:'POST',headers:{authorization:'Bearer '+token},signal:AbortSignal.timeout(2000)})
-        if(response.ok){console.log(JSON.stringify({...await response.json() as object,reused:true}));return}
+        if(response.ok){await announceLaunch({...await response.json() as {url:string},reused:true},launch.open);return}
       }catch{}
     }
-    const host = await Runtime.create(personal?.config??loadConfig(args[0]!))
+    const host = await Runtime.create(personal?.config??loadConfig(file!))
     try {
       const result = await serve(host)
       if(personal)rememberPersonalPort(personal.file,Number(new URL(result.url).port))
-      process.stdout.write(JSON.stringify({ url: result.operatorUrl, tokenFile: result.tokenPath,connectionFile:result.connectionFile,expiresIn:600 }) + '\n')
       let stopping = false
       const shutdown = async () => {
         if (stopping) return
@@ -87,6 +91,7 @@ async function main() {
       }
       process.once('SIGINT', () => { void shutdown() })
       process.once('SIGTERM', () => { void shutdown() })
+      await announceLaunch({ url: result.operatorUrl, tokenFile: result.tokenPath,connectionFile:result.connectionFile,expiresIn:600 },command==='setup'&&launch.open)
     } catch (error) { await host.close(); throw error }
   } else if (command === 'mcp') {
     if (!args[0] || !args[1]) throw new Error('Usage: mcp <http://127.0.0.1:port> <token-file>')
@@ -96,10 +101,10 @@ async function main() {
     if(!clientIds.includes(client as ClientId))throw Error('Unknown client')
     await startMcp(endpoint.origin, args[1],client)
   } else if(command==='open'){
-    const [url,tokenFile]=args;if(!url||!tokenFile)throw Error('Use open <loopback-url> <token-file>')
+    const launch=parseLauncherArgs(args,2),[url,tokenFile]=launch.values;if(!url||!tokenFile)throw Error('Use open <loopback-url> <token-file> [--no-open]')
     const endpoint=new URL(url);if(endpoint.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname))throw Error('Use a loopback host origin')
-    const response=await fetch(endpoint.origin+'/operator-link',{method:'POST',headers:{authorization:'Bearer '+readFileSync(tokenFile,'utf8').trim()}})
-    if(!response.ok)throw Error('Cannot create an operator link');console.log(JSON.stringify(await response.json()))
+    const response=await fetch(endpoint.origin+'/operator-link',{method:'POST',headers:{authorization:'Bearer '+readFileSync(tokenFile,'utf8').trim()},signal:AbortSignal.timeout(5000)})
+    if(!response.ok)throw Error('Cannot create an operator link');await announceLaunch(await response.json() as {url:string},launch.open)
   } else if (command === 'request' || command === 'status' || command === 'action') {
     const [url, tokenFile, ...rest] = args
     if (!url || !tokenFile) throw new Error('Usage: ' + command + ' <host-url> <token-file> [arguments]')
@@ -115,6 +120,6 @@ async function main() {
     })
     console.log(JSON.stringify(await response.json(), null, 2))
     if (!response.ok) process.exitCode = 1
-  } else console.log('Commands: setup [private-directory], serve <config>, open <url> <token-file>, mcp <url> <token-file>, router <url> <token-file> --prompt <message> [--resume <UUID>] [--json], request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
+  } else console.log('Commands: setup [private-directory] [--no-open] (default), serve <config>, open <url> <token-file> [--no-open], mcp <url> <token-file>, router <url> <token-file> --prompt <message> [--resume <UUID>] [--json], request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
 }
 main().catch(error => { console.error(String(error)); process.exitCode = 1 })

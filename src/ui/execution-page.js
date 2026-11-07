@@ -46,58 +46,8 @@ function executionInstructions(){
  dialog.oncancel=event=>{event.preventDefault();if(!S.busy)executionCloseInstructions()}
  return dialog
 }
-function controlExecution(){
- if(!S.base)return [accessPanel()]
- const draft=executionDraft(),options=controlConnections().map(service=>[service.id,service.label]),active=operator.work?.architecture?.workers||[],page=el('section','execution-page')
- if(executionView.mode==='calls')return executionCallsPage(page)
- page.append(opHeading(L('Execution','执行'),null),executionModeTabs())
- const form=el('fieldset','execution-form');form.disabled=!!S.busy||!!entryState.busy
- form.id='execution-mode-panel';form.setAttribute('role','tabpanel');form.setAttribute('aria-labelledby','execution-mode-tab-configuration')
- const graph=el('div','execution-graph tam-surface');graph.dataset.dense=String(draft.workers.length>4)
- const canvas=document.createElementNS('http://www.w3.org/2000/svg','svg');canvas.classList.add('execution-wires');graph.append(canvas)
- const inputs=el('section','execution-sources');inputs.setAttribute('aria-label',L('Connected software','已接入的软件'));const entries=entryState.data?.entries?.filter(entry=>entry.category==='client'?entry.client?.installed||entry.status==='verified':entry.sources?.some(source=>source.enabled))||[]
- const sourceList=el('div','execution-source-list')
- for(const entry of entries){
-  const button=opButton('',()=>opNavigate('detail',entry.id),'execution-source');button.dataset.entryId=entry.id;button.classList.add('tam-node')
-  let mark=opMark(entry.id)
-  if(executionAssets[entry.id]){mark=el('img','execution-source-logo');mark.src=executionAssets[entry.id];mark.alt='';mark.width=28;mark.height=28}
-  button.replaceChildren(mark,el('span','',entryName(entry)));sourceList.append(add(el('div','execution-source-group'),button,executionHistoryButton('app',entry.id)))
- }
- if(!entries.length)sourceList.append(el('p','execution-no-sources',L('No connections','尚未接入软件')))
- inputs.append(sourceList,affectButton(L('New connection','新建接入'),()=>opNavigate('catalogue'),{glyph:'plus'}))
- const router=add(el('section','execution-router tam-node'),executionNodeHeading('Router','router'),controlField('router-backend',L('Service','模型服务'),draft.router,value=>{draft.router=value;draft.routerModel='';editExecution(draft);render()},options),executionModel('router-model',draft.routerModel,draft.router,value=>{draft.routerModel=value;editExecution(draft)}),executionEditInstructions('router'),agentOptionsEditor('router',draft.routerOptions,()=>editExecution(draft)))
- const queue=el('div','execution-queue tam-node',L('Queue','队列'));queue.setAttribute('aria-label',L('Task queue','任务队列'))
- const pool=el('section','execution-workers'),count=controlField('worker-count',L('Count','数量'),String(draft.workers.length),value=>executionSetCount(Number(value)),Array.from({length:10},(_,i)=>[String(i+1),String(i+1)])),select=count.querySelector('select')
- const less=affectButton('−',()=>executionSetCount(draft.workers.length-1),{disabled:draft.workers.length<=1}),more=affectButton('+',()=>executionSetCount(draft.workers.length+1),{disabled:draft.workers.length>=10});less.setAttribute('aria-label',L('Remove a Worker','减少一个 Worker'));more.setAttribute('aria-label',L('Add a Worker','增加一个 Worker'))
- const stepper=add(el('div','execution-stepper'),less,select,more);count.append(stepper,el('span','execution-count-range','1–10'))
- pool.append(add(el('div','execution-pool-heading'),el('h2','','Workers'),count))
- draft.workers.forEach((worker,index)=>{
-  const live=active.find(item=>item.id===worker.id),heading=executionNodeHeading('Worker '+(index+1),'worker',worker.id,index)
-  const fields=add(el('div','execution-worker-fields'),controlField('worker-'+index+'-backend',L('Service','模型服务'),worker.backend,value=>{worker.backend=value;delete worker.model;editExecution(draft);render()},options),executionModel('worker-'+index+'-model',worker.model,worker.backend,value=>{worker.model=value;editExecution(draft)}))
-  const row=add(el('section','execution-worker tam-node'),heading,fields,agentOptionsEditor(worker.id,worker,()=>editExecution(draft)));row.dataset.workerId=worker.id
-  if(live?.active?.length)row.append(el('p','execution-worker-task',live.active.map(task=>task.title).join(' · ')))
-  pool.append(row)
- })
- if(!executionView.selected||executionView.selected.kind==='worker'&&!draft.workers.some(w=>w.id===executionView.selected.id))executionView.selected={kind:'worker',id:draft.workers[0].id};graph.append(inputs,router,queue,pool,executionTools())
- form.append(el('p','execution-live-status'),graph,add(el('div','execution-bottom'),el('p','control-hint',L('Changes apply to new conversations.','参数与指令用于后续轮次；已有任务更换后端需显式迁移。')),affectButton(L('New service','新建模型服务'),controlNewModel,{glyph:'plus'})))
- const inherited = L('Inherit from Worker', '继承发起的 Worker')
- const subagent = detail(L('Subagent model override', '子代理模型覆盖'),
-  add(el('div','execution-worker-fields'),
-   controlField('subagent-backend',L('Service','模型服务'),S.draft.execution.roles?.subagent || '',value=>{
-    clearRelated('execution')
-    set(S.draft,'execution.roles.subagent',value || undefined)
-    updateBar()
-   },[['',inherited],...options]),
-   controlField('subagent-model',L('Model','模型'),S.draft.models?.subagent || '',value=>{
-    clearRelated('models')
-    set(S.draft,'models.subagent',value.trim() || undefined)
-    updateBar()
-   },null,inherited)))
- form.append(subagent)
- const policy=detail(L('Router coordination','Router 协调'),add(el('div','settings-stack'),
- controlField('router-mode',L('Router location','Router 所在位置'),S.draft.execution.router?.mode??'assessment',value=>{clearRelated('execution');set(S.draft,'execution.router.mode',value);updateBar()},[['assessment',L('Legacy assessment','兼容：临时受理')],['client',L('Current CLI conversation','当前 CLI 会话')],['host',L('Persistent host Router','宿主持久 Router')]]),
- controlField('router-management',L('Manage Workers','管理 Workers'),String(S.draft.execution.management?.enabled??false),value=>{clearRelated('execution');set(S.draft,'execution.management',{...S.draft.execution.management,enabled:value==='true',maxWorkers:S.draft.execution.management?.maxWorkers??10});updateBar()},[['false',L('Disabled','关闭')],['true',L('Enabled within configured limits','按配置范围开启')]])))
- form.append(policy)
- page.append(form);const dialog=executionInstructions();if(dialog)page.append(dialog);const calls=executionCallDialog();if(calls)page.append(calls)
- queueMicrotask(()=>executionMount(page));return [page]
+function controlExecution() {
+  if (!S.base) return [accessPanel()]
+  if (executionView.mode === 'calls') return executionCallsPage(el('section', 'execution-page'))
+  return teamConfiguration()
 }

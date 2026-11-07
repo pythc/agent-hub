@@ -5,8 +5,8 @@ import type {ScopeContext} from './router-scope.ts'
 import type {RouterAdmission} from './router-ingress.ts'
 import type {ContextManifest} from './router-memory.ts'
 import type {ToolSpec} from './model.ts'
-import {assessment,validateRuleAssessment,type Assessment} from './schemas.ts'
-import {stableDigest} from './sources.ts'
+import {assessment,type Assessment} from './schemas.ts'
+import {stableDigest,bodyDigest} from './sources.ts'
 import {taskView} from './task-context.ts'
 import {timingSchema,nextTime,latestDue,type Timing} from './schedule-time.ts'
 
@@ -156,7 +156,7 @@ export class RouterProactive {
   const c=this.host.scopes.context(t,a.discussion);if(!c)return false
   const settings=this.controls(c.route.scopeId);if(!settings.enabled)return false
   const now=this.now(),strength=a.mandate!.strength,key=stableDigest([c.route.scopeId,c.route.entryId,a.discussion,c.actor,strength,a.policyVersion,settings.revision])
-  const existing=this.host.store.list<MessageBatch>('router-batch').find(b=>b.state==='pending'&&b.id.startsWith(key+':')&&now<b.firstAt+settings.maxWaitMs)
+  const existing=this.host.store.list<MessageBatch>('router-batch').find(b=>b.state==='pending'&&b.id.startsWith(key+':')&&b.triggerIds.length<20&&now<b.firstAt+settings.maxWaitMs)
   if(existing){existing.triggerIds.push(t.id);existing.dueAt=Math.min(now+settings.debounceMs,existing.firstAt+settings.maxWaitMs);this.host.store.put('router-batch',existing.id,existing)}
   else{const id=key+':'+stableDigest(t.id);this.host.store.put('router-batch',id,{id,scopeId:c.route.scopeId,entryId:c.route.entryId,discussion:a.discussion,actor:c.actor,strength,policyVersion:a.policyVersion,settingsRevision:settings.revision,triggerIds:[t.id],firstAt:now,dueAt:now+settings.debounceMs,state:'pending'} satisfies MessageBatch)}
   return true
@@ -267,22 +267,20 @@ export class RouterProactive {
   }
   try{
    check();store.put('router-batch',b.id,{...b,state:'evaluating'})
+   if(b.strength==='inferred'){
+    // Debounce and cooldown select when to wake the persistent Router. Admission
+    // itself uses its candidate tools; it must not create a second assessor session.
+    store.atomic(()=>{for(const t of triggers){const a=this.host.routerIngress.get(t.id)!;store.enqueue('router-admit:'+bodyDigest([t.id,b.policyVersion,a.revision,b.id]),'router-admit',{triggerId:t.id,policyVersion:b.policyVersion,revision:a.revision,scopeBatchId:b.id})}})
+    return
+   }
    const existing=this.candidates(triggers,b.discussion,context),rules=this.host.routerIngress.rules(last)
    const decision=b.decision??await this.host.evaluateIntervention({triggers,strength:b.strength,rules,existing,context})
    check()
    if(decision.action!=='clarify'){
     assessment.parse(decision)
-    if(b.strength==='inferred')validateRuleAssessment(decision,rules)
     if(['attach','stop'].includes(decision.action)&&!existing.some(t=>t.id===decision.targetTicketId))throw Error('Task target is outside the authorized continuation candidates')
    }
-   let action=decision.action
-   if(b.strength==='inferred'){
-    if(decision.action==='clarify'||decision.action==='stop')action='ignore'
-    else{
-     for(const t of triggers)this.host.routerIngress.decide(t.id,b.policyVersion,decision,false)
-     if(store.get<RouterAdmission>('router-admission',last.id)?.state!=='accepted')action='ignore'
-    }
-   }
+   const action=decision.action
    // Persist the selected action before effects. Retried continuations reuse the manager receipt.
    store.put('router-batch',b.id,{...b,state:'evaluating',decision})
    if(['accept','attach'].includes(action))store.put('router-input-set',last.id,{triggerIds:b.triggerIds})
@@ -298,6 +296,20 @@ export class RouterProactive {
    if(action!=='ignore')store.put('router-intervention-clock',stableDigest([b.scopeId,b.entryId,b.discussion]),this.now())
   }catch(error){return fail(String(error))}
  }
+ validateCandidateBatch(id:string){
+  const b=this.host.store.get<MessageBatch>('router-batch',id)
+  if(!b||b.state!=='evaluating'||b.strength!=='inferred')throw Error('Scoped candidate batch is no longer active')
+  const settings=this.controls(b.scopeId)
+  if(!settings.enabled||settings.revision!==b.settingsRevision)throw Error('Batch settings changed; fresh input required')
+  for(const id of b.triggerIds){const t=this.host.store.triggers.get(id);if(!t)throw Error('Batch source unavailable');this.host.scopes.assertTrigger(t);const c=this.host.scopes.context(t,b.discussion);if(!c||c.route.scopeId!==b.scopeId||c.route.entryId!==b.entryId||this.host.routerIngress.policy(t).version!==b.policyVersion)throw Error('Batch ownership or policy changed')}
+  return b
+ }
+ finishCandidateBatch(id:string,decision:Assessment|undefined,result:string|undefined){
+  const b=this.validateCandidateBatch(id)
+  this.host.store.put('router-batch',id,{...b,state:'decided',decision,reason:decision?.reason??result??'Ignored by Router'})
+  if(result==='accepted')this.host.store.put('router-intervention-clock',stableDigest([b.scopeId,b.entryId,b.discussion]),this.now())
+ }
+ failCandidateBatch(id:string,error:unknown){const b=this.host.store.get<MessageBatch>('router-batch',id);if(b&&b.state==='evaluating')this.host.store.put('router-batch',id,{...b,state:'failed',reason:String(error)})}
  private async continueTask(ticketId:string,triggers:Trigger[],discussion:string,context:ScopeContext,requestId:string){
   this.assertInputs(triggers.map(t=>t.id))
   const last=triggers.at(-1)!,ticket=this.host.store.tickets.get(ticketId)

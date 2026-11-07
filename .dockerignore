@@ -6,12 +6,16 @@
 !start.sh
 !src/
 !src/**
+!web/
+!web/**
 !tests/
 !tests/**
 !plugins/
 !plugins/**
 !examples/
 !examples/linux-container-check.ts
+!examples/plugins/
+!examples/plugins/**
 plugins/codex/.mcp.json
 plugins/codex/mcp.json
 !deployment/

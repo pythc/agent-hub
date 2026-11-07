@@ -36,7 +36,7 @@ API 断网用例启动真实本地 HTTP 服务，先让 Worker 通过 `superagen
 3. 同一个 turn 最终回复 B；原生历史包含完整更正消息。
 4. checkpoint 调用一次，输入读取回执一次，历史 turn 数为一。
 
-可复跑脚本：[parity-native-smoke.ts](../examples/parity-native-smoke.ts)。本机成功记录：[evidence.json](../.local/parity-acceptance/native-u7rYIw/evidence.json)；完整检查日志：[check.log](../.local/parity-acceptance/check.log)。`.local` 证据不随源码提交。
+可复跑脚本：[parity-native-smoke.ts](../examples/parity-native-smoke.ts)。历史实测的原始记录和日志保存在本机 `.local/`，不随源码发布；可用上述脚本独立复跑。
 
 ## 结论与边界
 

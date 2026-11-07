@@ -15,6 +15,8 @@ import {backupState,verifyBackup} from './backup.ts'
 
 // Persistent formats owned by this host. Unknown plugin kinds require an explicit migration adapter.
 export const migrationKinds=new Set(`trigger disposition thread ticket decision run clock settings settings-history settings-backends
+browser-profile browser-session browser-receipt chat-call chat-conversation chat-message chat-revision chat-run
+router-cancelled router-candidate router-candidate-job router-followup router-followup-notice router-followup-stop-attempt router-followup-stopped router-handback
 approval asset backend-binding backend-thread capabilities entry-client-event entry-client-install entry-client-receipt entry-invite entry-label entry-plan entry-verification
 execution-call health member-preview merge-attempt merge-grant onboarding onboarding-deployment pr-delivery progress prompt-preview prompt-use resource-page retired-worker review-action review-rounds
 router-input-set router-duty router-proactive-settings router-schedule router-schedule-run router-batch router-intervention-clock proactive-receipt router-admission router-delegation router-error router-inbox router-migration router-read router-reply-owner router-report-read router-result router-session router-version
@@ -56,6 +58,12 @@ export function previewScopeMigration(config:Config,value:unknown):MigrationPlan
    }
   }
   for(const item of items.filter(i=>i.kind==='work')){const work=lookup('work',item.id);let alive=false;if(work.kind==='shell'&&Number.isSafeInteger(work.pid)&&work.pid>0){try{process.kill(work.pid,0);alive=true}catch(error:any){if(error.code!=='ESRCH')alive=true}}if(['starting','running'].includes(work.state)||alive){item.status='held';item.reason='background_work_not_drained'}}
+  for(const item of items){
+   const value=lookup(item.kind,item.id)
+   if(item.kind==='browser-session'&&value.active||item.kind==='browser-receipt'&&['running','uncertain'].includes(value.state)||item.kind==='chat-call'&&value.state==='running'||item.kind==='chat-message'&&value.status==='streaming'){
+    item.status='held';item.reason='Reconcile in-flight external effects'
+   }
+  }
   for(const table of ['jobs','outbox'])for(const r of db.prepare('SELECT * FROM '+table+' ORDER BY id').all()){
    const state=String(r.state??r.status),uncertain=['running','sending','uncertain'].includes(state)
    items.push({kind:table,id:String(r.id),status:uncertain?'held':'unchanged',...(uncertain?{reason:'Reconcile in-flight external effects'}:{})})

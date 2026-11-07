@@ -13,7 +13,7 @@ let close: (() => Promise<void>) | undefined
 afterEach(async () => { await close?.(); close = undefined })
 it('serves authenticated APIs and connects a real stdio MCP client to the same host', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-interface-'))
-  const config = configSchema.parse({ stateDir: join(root,'state'), port: 0, sources: [{ id:'local',kind:'local',allowedActors:['operator'],cwd:root }] })
+  const config = configSchema.parse({ stateDir: join(root,'state'), port: 0, prompts: {shared:'Saved shared instructions',router:'Saved Router instructions',worker:'Saved Worker instructions'}, sources: [{ id:'local',kind:'local',allowedActors:['operator'],cwd:root }] })
   const model: Model = { async run(r) {
     const routing = r.ephemeral
     r.onThread?.('test-native');r.onTurn?.('turn-test')
@@ -39,6 +39,36 @@ it('serves authenticated APIs and connects a real stdio MCP client to the same h
   await client.connect(transport)
   const tools = await client.listTools()
   expect(tools.tools.map(t=>t.name)).toEqual(expect.arrayContaining(['agent_send','agent_status','agent_stop','agent_takeover','agent_return']))
+  // Exercise the SDK's Zod-to-JSON-Schema bridge and its real argument parser.
+  const read = tools.tools.find(t=>t.name==='agent_read')!.inputSchema
+  expect(read.required).toEqual(['resource'])
+  expect(read.properties).toMatchObject({ offset: { default: 0 }, limit: { default: 4000 }, pageSize: { default: 20 } })
+  const workers = tools.tools.find(t=>t.name==='worker_manage')!.inputSchema
+  expect(workers.required).toEqual(['action'])
+  expect(workers.properties).toMatchObject({ patch: { type: 'object' }, profile: { type: 'object' } })
+  const save = tools.tools.find(t=>t.name==='agent_settings_save')!.inputSchema
+  expect(save.required).toEqual(['revision','patch'])
+  expect(save.properties).toMatchObject({ patch: { type: 'object', additionalProperties: {} } })
+  const catalog = await client.callTool({name:'agent_read',arguments:{resource:'catalog'}})
+  expect(catalog.isError).toBe(false)
+  expect(JSON.parse((catalog.content as {text:string}[])[0]!.text).resources).toBeInstanceOf(Array)
+  const before = structuredClone(runtime.settings.current())
+  const saved = await client.callTool({name:'agent_settings_save',arguments:{revision:before.revision,patch:{effort:'low'}}})
+  expect(saved.isError).toBe(false)
+  expect(runtime.settings.current().config).toEqual({...before.config,effort:'low'})
+  const after = structuredClone(runtime.settings.current())
+  for (const role of ['router','worker']) {
+    const preview = await client.callTool({name:'agent_prompt_preview',arguments:{role}})
+    expect(preview.isError).toBe(false)
+    const text = JSON.parse((preview.content as {text:string}[])[0]!.text).text
+    expect(text).toContain('Saved shared instructions')
+    expect(text).toContain(role==='router'?'Saved Router instructions':'Saved Worker instructions')
+  }
+  for (const patch of [[], {typo:true}]) {
+    const rejected = await client.callTool({name:'agent_settings_save',arguments:{revision:after.revision,patch}})
+    expect(rejected.isError).toBe(true)
+    expect(runtime.settings.current()).toEqual(after)
+  }
   const sent = await client.callTool({name:'agent_send',arguments:{source:'local',discussion:'doc-review',requestId:'request-1',text:'Compare the supplied documents'}})
   expect(sent.isError).toBe(false)
   for(let i=0;i<100 && !runtime.store.deliveries().some(d=>d.kind==='reply');i++)await new Promise(resolve=>setTimeout(resolve,20))
@@ -47,6 +77,14 @@ it('serves authenticated APIs and connects a real stdio MCP client to the same h
   expect(payload.tickets).toHaveLength(1)
   expect(payload.tickets[0].ended.outcome).toBe('completed')
   const auth={authorization:'Bearer '+readFileSync(host.tokenPath,'utf8').trim(),'content-type':'application/json'}
+  for (const [prompts, marker] of [[{shared:'Unsaved draft'},'Unsaved draft'],[{},undefined]] as const) {
+    const preview = await fetch(host.url+'/prompt-preview',{method:'POST',headers:auth,body:JSON.stringify({role:'worker',prompts})})
+    expect(preview.status).toBe(200)
+    const {text} = await preview.json() as {text:string}
+    expect(text).not.toContain('Saved shared instructions')
+    if(marker)expect(text).toContain(marker)
+    expect(runtime.settings.current()).toEqual(after)
+  }
   const spoof=await fetch(host.url+'/send',{method:'POST',headers:auth,body:JSON.stringify({source:'local',actor:'admin',event:{id:'bad',thread:'x',text:'bad'}})})
   expect(spoof.status).toBe(400)
 })

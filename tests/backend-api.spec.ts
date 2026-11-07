@@ -28,6 +28,30 @@ function output(kind:Kind,text:string,calls:{id:string;name:string;args:any}[]=[
 const definition=(kind:Kind,url:string,extra:any={}):ApiDefinition=>backendDefinition.parse({kind,baseUrl:url+'/v1',model:'fixture-model',requestTimeoutMs:3000,...extra}) as ApiDefinition
 const schema={type:'object',additionalProperties:false,properties:{answer:{type:'string'}},required:['answer']}
 const request=(extra:Partial<ModelRequest>={}):ModelRequest=>({cwd:tmpdir(),instructions:'Synthetic test',input:'read marker',schema,managed:true,tools:[{type:'function',name:'read_marker',description:'Read a synthetic marker',inputSchema:{type:'object',additionalProperties:false,properties:{path:{type:'string'}},required:['path']}}],...extra})
+it.each(kinds)('%s integrates streaming text with the managed tool loop without replaying tools',async kind=>{
+ const frame=(v:any)=>'data: '+(typeof v==='string'?v:JSON.stringify(v))+'\n\n',requests:any[]=[],deltas:string[]=[];let tools=0,finalSent=false,sawLive=false
+ const fixture=createServer(async(req,res)=>{
+  let raw='';for await(const chunk of req)raw+=chunk;const b=JSON.parse(raw);requests.push(b)
+  const tool=requests.length===1,text=JSON.stringify({answer:'Streamed marker'}),call={id:'stream-tool',name:'read_marker',args:{path:'marker.txt'}}
+  let data:any[]=[],terminal:any
+  if(kind==='openai-responses'){
+   data=tool?[]:[{type:'response.output_text.delta',item_id:'answer',content_index:0,delta:text.slice(0,12)},{type:'response.output_text.delta',item_id:'answer',content_index:0,delta:text.slice(12)}]
+   terminal={type:'response.completed',response:output(kind,tool?'':text,tool?[call]:[])}
+  }else if(kind==='openai-chat'){
+   data=tool?[{choices:[{index:0,delta:{tool_calls:[{index:0,id:call.id,type:'function',function:{name:call.name,arguments:JSON.stringify(call.args)}}]},finish_reason:'tool_calls'}]}]:[{choices:[{index:0,delta:{content:text.slice(0,12)}}]},{choices:[{index:0,delta:{content:text.slice(12)},finish_reason:'stop'}]}]
+   terminal='[DONE]'
+  }else{
+   data=[{type:'message_start',message:{id:'m',model:'fixture-model'}},{type:'content_block_start',index:0,content_block:tool?{type:'tool_use',id:call.id,name:call.name,input:{}}:{type:'text',text:''}},...(tool?[{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:JSON.stringify(call.args)}}]:[{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0,12)}},{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(12)}}]),{type:'content_block_stop',index:0},{type:'message_delta',delta:{stop_reason:tool?'tool_use':'end_turn'}}]
+   terminal={type:'message_stop'}
+  }
+  res.writeHead(200,{'content-type':'text/event-stream'});for(const d of data)res.write(frame(d))
+  setTimeout(()=>{if(!tool)finalSent=true;res.end(frame(terminal))},30)
+ });servers.push(fixture);await new Promise<void>(r=>fixture.listen(0,'127.0.0.1',r))
+ const model=new ApiModel('stream',definition(kind,'http://127.0.0.1:'+(fixture.address() as any).port),memory(),5000)
+ const result=await model.run(request({onOutput:e=>{if(e.type==='delta'){deltas.push(e.text??'');if(!finalSent)sawLive=true}},onTool:async(name,args)=>{tools++;expect(name).toBe('read_marker');expect(args).toEqual({path:'marker.txt'});return {success:true,contentItems:[{type:'inputText',text:'marker'}]}}}))
+ expect(requests.every(b=>b.stream===true)).toBe(true);expect(tools).toBe(1);expect(sawLive).toBe(true)
+ expect(JSON.parse(deltas.join(''))).toEqual({answer:'Streamed marker'});expect(JSON.parse(result.text)).toEqual({answer:'Streamed marker'})
+})
 function results(kind:Kind,b:any){return kind==='openai-chat'?b.messages.filter((m:any)=>m.role==='tool'):kind==='anthropic'?b.messages.flatMap((m:any)=>Array.isArray(m.content)?m.content.filter((c:any)=>c.type==='tool_result'):[]):b.input.filter((i:any)=>i.type==='function_call_output')}
 it.each(kinds)('%s budgets full instructions, tools and provider parameters before HTTP',async kind=>{
  const f=await server(()=>output(kind,'{"answer":"never"}')),store=memory()
@@ -262,4 +286,27 @@ it.skipIf(!['darwin','linux'].includes(process.platform)).each(kinds)('%s execut
  expect(host.work.list()).toEqual([expect.objectContaining({kind:'shell',state:'completed',exitCode:0})])
  expect(host.work.list()[0]!.cwd.startsWith(join(config.stateDir,'work'))).toBe(true)
  expect(host.store.deliveries().some(d=>d.kind==='reply'&&d.text==='shell-api-marker'&&d.status==='sent')).toBe(true)
+})
+
+it.each(kinds)('%s assesses proactive messages, delegates and receives results in one persistent Router conversation',async kind=>{
+ let step=0
+ const decision={action:'accept',title:'Correct label',scope:'Correct the agreed typo',reason:'Agreed correction',rules:['typo'],targetTicketId:null,ruleAssessments:[{id:'typo',matched:true,reason:'Existing copy standard'}],direction:{implementation_requested:true,target_basis:'existing-standard',requires_design_decision:false,evidence:'Match the agreed existing label'},intent_evidence:'Correct the typo on the settings page to the agreed existing label'}
+ const wire=await server(body=>{
+  const instructions=body.instructions??body.system??body.messages?.[0]?.content??''
+  if(!instructions.startsWith('You are the persistent Router'))return output(kind,JSON.stringify({state:'ready',summary:'Fixture checked',reply:'Worker fixture evidence',question:null,askedBy:null,handbacks:[]}))
+  const turns=body.input??body.messages,latest=turns.findLast((m:any)=>m.role==='user'&&typeof m.content==='string')
+  if(latest?.content.includes('"kind":"worker_result"'))return output(kind,JSON.stringify({reply:'Router verified fixture evidence'}))
+  const actions=[{id:'context',name:'orchestrator_eval',args:{}},{id:'decision',name:'orchestrator_eval_decide',args:decision},{id:'assign',name:'worker_manage',args:{action:'assign',id:'one',revision:0,requestId:'once',text:decision.scope}}]
+  const call=actions[step++];return output(kind,JSON.stringify({reply:''}),call?[call]:[])
+ })
+ const root=mkdtempSync(join(tmpdir(),'router-api-parity-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),port:0,acceptMode:'auto',rules:[{id:'typo',instruction:'Fix agreed copy errors'}],backends:{fixture:{kind,baseUrl:wire.url,model:'fixture'}},execution:{router:{mode:'host',backend:'fixture'},management:{enabled:true},workers:[{id:'one',backend:'fixture'}]},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd:root,allowedActors:['alice']}]})
+ const host=new Runtime(config);hosts.push(host)
+ host.receive('local','alice',{id:'one',thread:'topic',text:'Correct the typo to match the existing label',addressed:false})
+ for(let i=0;i<400&&!host.store.deliveries().some(d=>d.text==='Router verified fixture evidence');i++){await host.tick();await new Promise(r=>setTimeout(r,5))}
+ expect(host.routerIngress.get('local:one')?.state).toBe('accepted');expect(host.store.tickets.list()).toHaveLength(1)
+ expect(host.store.deliveries().filter(d=>!d.channel.address.routerInbox).map(d=>d.text)).toEqual(['Router verified fixture evidence'])
+ const router=host.store.list<any>('router-session')[0],thread=host.store.get<any>('backend-thread',router.threadId)
+ expect(thread.turns).toHaveLength(2);expect(thread.turns[0].items.filter((i:any)=>i.type==='functionCall').map((i:any)=>i.name)).toEqual(['orchestrator_eval','orchestrator_eval_decide','worker_manage'])
+ expect(host.store.list('backend-thread')).toHaveLength(2)
 })

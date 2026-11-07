@@ -10,6 +10,10 @@ const entryState = {
   sharedGuide: null,
   data: null,
   loading: false,
+  sessionChecked: false,
+  inventoryLoading: false,
+  inventoryError: false,
+  inventoryRequest: 0,
   busy: '',
   error: null,
   probe: null,
@@ -70,7 +74,7 @@ const entryText = (value) =>
     ? (lang === 'en' ? value.en : value.zh || value['zh-CN']) || value.en || ''
     : String(value ?? '')
 const selectedEntry = () => entryState.data?.entries?.find((e) => e.id === entryState.selected)
-const entryHasDraft = () => entryState.touched || entryModel.touched
+const entryHasDraft = () => entryState.touched || entryModel.touched || connectionStudio.touched || !!integrations.draft
 function entrySafeDetail(value) {
   let text = String(value ?? '')
   for (const secret of [
@@ -86,7 +90,7 @@ function entrySafeDetail(value) {
 const workspacePages = {
   tasks: 'home', 'tasks/history': 'activity', attention: 'attention', connections: 'catalog',
   'connections/new': 'catalogue', models: 'models', 'models/new': 'model-new',
-  execution: 'execution', prompts: 'prompts', usage: 'usage'
+  integrations: 'integrations', execution: 'execution', prompts: 'prompts', usage: 'usage'
 }
 const advancedPages = ['host', 'intake', 'runtime', 'delivery', 'json', 'revisions']
 function workspaceHash() {
@@ -102,10 +106,15 @@ function workspaceHash() {
 }
 function updateWorkspaceLocation(replace = false) {
   const url = new URL(location.href)
+  if(typeof configurationHost !== 'undefined' && configurationHost){url.pathname='/configure';url.search=''}
   url.hash = workspaceHash()
-  if (url.href !== location.href) history[replace ? 'replaceState' : 'pushState'](null, '', url)
+  if (url.href !== location.href) {
+    history[replace ? 'replaceState' : 'pushState'](null, '', url)
+    if(typeof configurationHost !== 'undefined' && configurationHost) window.dispatchEvent(new Event('roppo:navigation'))
+  }
 }
 function applyWorkspaceLocation() {
+  if(typeof configurationHost !== 'undefined' && configurationHost && !configurationHost.active())return
   const hash = location.hash.slice(1)
   const page = Object.hasOwn(workspacePages, hash) ? workspacePages[hash] : null
   let matched
@@ -162,6 +171,7 @@ function entryNavigate(page, id = '', options = {}) {
   if (page === 'advanced' && !S.authed) void loadConnectInfo()
   if (enteringHistory && S.authed)
     void entryRun('work-page', readOperatorWork)
+  if (S.authed) void ensureEntryInventory()
   return true
 }
 function chooseEntryRole(role) {
@@ -185,6 +195,7 @@ function chooseEntryRole(role) {
   if (role === 'user' && !entryState.publicGuide) void entryRun('load', loadEntryGuide)
 }
 function entryError(error) {
+  if (error.payload?.code === 'workspace_obsolete') return
   if (error.status === 401) {
     S.authed = false
     S.token = ''
@@ -317,12 +328,42 @@ async function loadEntryGuide() {
   if (!Array.isArray(data.entries)) throw Error('Invalid entry guide response')
   entryState.publicGuide = data
 }
+function needsEntryInventory() {
+  return ['catalog', 'catalogue', 'detail', 'usage', 'model-new'].includes(entryState.page) ||
+    entryState.page === 'models' && entryModel.creating
+}
+async function readEntryInventory(rebaseOwnChange = false) {
+  const request = ++entryState.inventoryRequest, epoch = workspaceContext.epoch
+  entryState.inventoryLoading = true
+  entryState.inventoryError = false
+  try {
+    const data = await api('/entry-setup')
+    if (request !== entryState.inventoryRequest || epoch !== workspaceContext.epoch) return
+    if (!Array.isArray(data.entries) || !Number.isInteger(data.revision)) throw Error('Invalid entry setup response')
+    if (S.base && data.revision !== S.base.revision) {
+      const latest = await snapshot()
+      if (request !== entryState.inventoryRequest || epoch !== workspaceContext.epoch) return
+      adopt(latest, rebaseOwnChange)
+    }
+    if (request !== entryState.inventoryRequest || epoch !== workspaceContext.epoch) return
+    entryState.data = data
+  } catch (error) {
+    if (request !== entryState.inventoryRequest || epoch !== workspaceContext.epoch) return
+    entryState.inventoryError = true
+    throw error
+  } finally {
+    if (request === entryState.inventoryRequest) entryState.inventoryLoading = false
+  }
+}
+async function ensureEntryInventory() {
+  if (!S.authed || !needsEntryInventory() || entryState.data || entryState.inventoryLoading || entryState.inventoryError) return
+  const epoch = workspaceContext.epoch
+  try { await readEntryInventory() }
+  catch (error) { entryError(error) }
+  finally { if (epoch === workspaceContext.epoch && needsEntryInventory()) render() }
+}
 async function readEntries(rebaseOwnChange = false) {
-  const [data] = await Promise.all([api('/entry-setup'), readOperatorWork()])
-  if (!Array.isArray(data.entries) || !Number.isInteger(data.revision))
-    throw Error('Invalid entry setup response')
-  entryState.data = data
-  if (S.base && data.revision !== S.base.revision) adopt(await snapshot(), rebaseOwnChange)
+  await Promise.all([readEntryInventory(rebaseOwnChange), readOperatorWork(), connectionDiscover(), integrationsDiscover()])
 }
 async function refreshEntries() {
   await entryRun('refresh', async () => {
@@ -348,6 +389,8 @@ async function acceptEntryInvite() {
 async function startEntrySession() {
   if (entryState.loading) return
   entryState.loading = true
+  entryState.sessionChecked = false
+  entryState.error = null
   if (!entryState.sharedGuide && !entryState.invite && entryState.role === 'user') {
     try {
       const cached = JSON.parse(sessionStorage.getItem('agenthub.entry.guide') || 'null')
@@ -363,7 +406,11 @@ async function startEntrySession() {
       await api('/pair', { code }, true)
     }
     const session = await api('/session', undefined, true)
+    entryState.sessionChecked = true
     entryState.operator = session.operator === true
+    entryState.account = session.account || null
+    if (session.account?.authenticated && !entryState.invite && location.pathname !== "/usage") entryState.role = "operator"
+    render()
     if (entryState.operator && entryState.role !== 'user') {
       await loadConnectInfo()
       await connectHost('', true)

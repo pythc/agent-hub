@@ -97,7 +97,7 @@ function guideHeader() {
   return add(
     el('header', 'guide-header'),
     guideBrand(),
-    add(el('div', 'tools'), action(L('Connections & attention', '入口与待处理'), () => entryNavigate('home'), 'text-action'), add(el('label', 'inline'), icon('lang'), languagePicker()), advanced)
+    add(el('div', 'tools'), action(L('Connections & attention', '入口与待处理'), () => entryNavigate('home'), 'text-action'), themeToggle(), add(el('label', 'inline'), icon('lang'), languagePicker()), advanced)
   )
 }
 function stepList() {

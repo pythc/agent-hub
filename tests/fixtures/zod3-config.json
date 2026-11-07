@@ -1,0 +1,403 @@
+{
+  "zod": "3.25.76",
+  "cases": [
+    {
+      "name": "minimal",
+      "input": {
+        "stateDir": "/tmp/roppo-compat/state",
+        "sources": [
+          {
+            "id": "local",
+            "kind": "local",
+            "cwd": "/tmp/roppo-compat/work",
+            "allowedActors": [
+              "operator"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "stateDir": "/tmp/roppo-compat/state",
+        "port": 4319,
+        "codex": "codex",
+        "backends": {},
+        "execution": {
+          "backend": "codex",
+          "roles": {}
+        },
+        "sourcePlugins": [],
+        "toolConnections": {},
+        "browser": {
+          "enabled": true,
+          "maxSessions": 8,
+          "timeoutMs": 20000,
+          "idleMs": 900000
+        },
+        "models": {},
+        "effort": "high",
+        "concurrency": 2,
+        "turnTimeoutMs": 600000,
+        "work": {
+          "sandboxDriver": "codex",
+          "backgroundTimeoutMs": 1800000,
+          "maxAgents": 8,
+          "maxDepth": 3,
+          "maxOutputBytes": 1000000,
+          "autoRecover": true,
+          "network": true
+        },
+        "delivery": {
+          "workerPublish": false,
+          "authorization": "per-head",
+          "maxDraftLines": 100000,
+          "commitName": "Super-agent",
+          "commitEmail": "superagent@localhost.invalid",
+          "automatedReviewers": [],
+          "maxReviewRounds": 3,
+          "autoMerge": false,
+          "requiredReviewers": [],
+          "maxChangedLines": 200,
+          "requireChecks": true,
+          "method": "squash"
+        },
+        "watchdog": {
+          "staleMs": 600000,
+          "intervalMs": 30000
+        },
+        "prompts": {
+          "shared": "",
+          "router": "",
+          "worker": "",
+          "delivery": "",
+          "team": {
+            "communication": "",
+            "scope": "",
+            "delivery": ""
+          },
+          "skills": {},
+          "overrides": {}
+        },
+        "acceptMode": "observe",
+        "rules": [],
+        "sources": [
+          {
+            "id": "local",
+            "kind": "local",
+            "allowedActors": [
+              "operator"
+            ],
+            "enabled": true,
+            "capabilities": {
+              "events": true,
+              "replies": true,
+              "resources": true
+            },
+            "options": {},
+            "allowedBots": [],
+            "admission": {},
+            "pollSeconds": 60,
+            "cwd": "/tmp/roppo-compat/work",
+            "sandbox": "read-only"
+          }
+        ]
+      }
+    },
+    {
+      "name": "configured",
+      "input": {
+        "stateDir": "/tmp/roppo-compat/state",
+        "sources": [
+          {
+            "id": "local",
+            "kind": "local",
+            "cwd": "/tmp/roppo-compat/work",
+            "allowedActors": [
+              "operator"
+            ]
+          },
+          {
+            "id": "events",
+            "kind": "external",
+            "cwd": "/tmp/roppo-compat/events",
+            "admission": {
+              "guest": {}
+            },
+            "capabilities": {
+              "replies": false
+            },
+            "options": {
+              "nested": {
+                "enabled": false,
+                "value": null
+              }
+            }
+          },
+          {
+            "id": "github",
+            "kind": "github",
+            "cwd": "/tmp/roppo-compat/repo",
+            "repository": "example/repository",
+            "github": {}
+          }
+        ],
+        "concurrency": 4,
+        "acceptMode": "auto",
+        "backends": {
+          "api": {
+            "kind": "openai-responses",
+            "baseUrl": "https://api.example.invalid/v1",
+            "model": "example-model",
+            "defaults": {
+              "effort": "none",
+              "parameters": {
+                "parallel_tool_calls": false,
+                "metadata": null
+              }
+            }
+          }
+        },
+        "execution": {
+          "backend": "api",
+          "router": {
+            "mode": "host",
+            "backend": "api",
+            "effort": "medium"
+          },
+          "management": {
+            "enabled": true,
+            "maxWorkers": 4
+          },
+          "workers": [
+            {
+              "id": "research",
+              "backend": "api",
+              "effort": "high",
+              "parameters": {
+                "temperature": 0
+              }
+            }
+          ]
+        },
+        "prompts": {
+          "shared": "Retain custom instructions",
+          "skills": {
+            "research": "Read sources first"
+          }
+        },
+        "work": {
+          "sandboxDriver": "disabled",
+          "network": false
+        },
+        "delivery": {
+          "commitEmail": "owner@localhost.invalid",
+          "requireChecks": false
+        },
+        "toolConnections": {
+          "docs": {
+            "transport": {
+              "kind": "stdio",
+              "command": "node"
+            },
+            "allowedTools": [
+              "lookup"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "stateDir": "/tmp/roppo-compat/state",
+        "port": 4319,
+        "codex": "codex",
+        "backends": {
+          "api": {
+            "kind": "openai-responses",
+            "baseUrl": "https://api.example.invalid/v1",
+            "model": "example-model",
+            "images": false,
+            "maxSteps": 64,
+            "maxToolCalls": 256,
+            "maxContextBytes": 16000000,
+            "maxOutputTokens": 8192,
+            "requestTimeoutMs": 120000,
+            "outputFormat": "prompt",
+            "parameters": {},
+            "defaults": {
+              "effort": "none",
+              "parameters": {
+                "parallel_tool_calls": false,
+                "metadata": null
+              }
+            },
+            "chatTokenField": "max_completion_tokens"
+          }
+        },
+        "execution": {
+          "backend": "api",
+          "roles": {},
+          "router": {
+            "effort": "medium",
+            "backend": "api",
+            "mode": "host"
+          },
+          "management": {
+            "enabled": true,
+            "maxWorkers": 4
+          },
+          "workers": [
+            {
+              "effort": "high",
+              "parameters": {
+                "temperature": 0
+              },
+              "id": "research",
+              "backend": "api"
+            }
+          ]
+        },
+        "sourcePlugins": [],
+        "toolConnections": {
+          "docs": {
+            "enabled": true,
+            "transport": {
+              "kind": "stdio",
+              "command": "node",
+              "args": [],
+              "env": {}
+            },
+            "allowedTools": [
+              "lookup"
+            ],
+            "timeoutMs": 30000
+          }
+        },
+        "browser": {
+          "enabled": true,
+          "maxSessions": 8,
+          "timeoutMs": 20000,
+          "idleMs": 900000
+        },
+        "models": {},
+        "effort": "high",
+        "concurrency": 4,
+        "turnTimeoutMs": 600000,
+        "work": {
+          "sandboxDriver": "disabled",
+          "backgroundTimeoutMs": 1800000,
+          "maxAgents": 8,
+          "maxDepth": 3,
+          "maxOutputBytes": 1000000,
+          "autoRecover": true,
+          "network": false
+        },
+        "delivery": {
+          "workerPublish": false,
+          "authorization": "per-head",
+          "maxDraftLines": 100000,
+          "commitName": "Super-agent",
+          "commitEmail": "owner@localhost.invalid",
+          "automatedReviewers": [],
+          "maxReviewRounds": 3,
+          "autoMerge": false,
+          "requiredReviewers": [],
+          "maxChangedLines": 200,
+          "requireChecks": false,
+          "method": "squash"
+        },
+        "watchdog": {
+          "staleMs": 600000,
+          "intervalMs": 30000
+        },
+        "prompts": {
+          "shared": "Retain custom instructions",
+          "router": "",
+          "worker": "",
+          "delivery": "",
+          "team": {
+            "communication": "",
+            "scope": "",
+            "delivery": ""
+          },
+          "skills": {
+            "research": "Read sources first"
+          },
+          "overrides": {}
+        },
+        "acceptMode": "auto",
+        "rules": [],
+        "sources": [
+          {
+            "id": "local",
+            "kind": "local",
+            "allowedActors": [
+              "operator"
+            ],
+            "enabled": true,
+            "capabilities": {
+              "events": true,
+              "replies": true,
+              "resources": true
+            },
+            "options": {},
+            "allowedBots": [],
+            "admission": {},
+            "pollSeconds": 60,
+            "cwd": "/tmp/roppo-compat/work",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "events",
+            "kind": "external",
+            "allowedActors": [],
+            "enabled": true,
+            "capabilities": {
+              "events": true,
+              "replies": false,
+              "resources": true
+            },
+            "options": {
+              "nested": {
+                "enabled": false,
+                "value": null
+              }
+            },
+            "allowedBots": [],
+            "admission": {
+              "guest": {
+                "listedUnaddressed": "inferred",
+                "unlistedAddressed": "ignore",
+                "unlistedUnaddressed": "ignore"
+              }
+            },
+            "pollSeconds": 60,
+            "cwd": "/tmp/roppo-compat/events",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "github",
+            "kind": "github",
+            "allowedActors": [],
+            "enabled": true,
+            "capabilities": {
+              "events": true,
+              "replies": true,
+              "resources": true
+            },
+            "options": {},
+            "allowedBots": [],
+            "admission": {},
+            "pollSeconds": 60,
+            "github": {
+              "command": "/agent",
+              "receiveAll": false,
+              "gh": "gh",
+              "transport": "http"
+            },
+            "cwd": "/tmp/roppo-compat/repo",
+            "sandbox": "read-only",
+            "repository": "example/repository"
+          }
+        ]
+      }
+    }
+  ]
+}

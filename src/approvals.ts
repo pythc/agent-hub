@@ -22,7 +22,7 @@ export class Approvals {
     if(!item||item.status!=='pending'||!pending||item.expiresAt<=Date.now())throw Error('Approval is expired or no longer active')
     let result:unknown
     if(item.native.method==='item/tool/requestUserInput'){
-      const answers=z.record(z.object({answers:z.array(z.string()).max(10)}).strict()).parse(value)
+      const answers=z.record(z.string(),z.object({answers:z.array(z.string()).max(10)}).strict()).parse(value)
       const ids=(item.native.params.questions??[]).map((q:any)=>q.id)
       if(Object.keys(answers).some(k=>!ids.includes(k)))throw Error('Unknown question id')
       if(ids.some((id:string)=>!answers[id]?.answers.length||answers[id]!.answers.some(a=>!a.trim())))throw Error('Answer each question before submitting')

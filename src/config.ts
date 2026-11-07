@@ -4,6 +4,7 @@ import { z } from 'zod'
 import {builtins} from './prompts.ts'
 import {backendsSchema,executionSchema,validateBackendSelection} from './backend-config.ts'
 import {sourcePluginsSchema,sourceCapabilitiesSchema,toolConnectionsSchema} from './connector-config.ts'
+import {browserConfigSchema} from './browser-contract.ts'
 
 const sourceSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
@@ -12,14 +13,14 @@ const sourceSchema = z.object({
   allowedActors: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
   capabilities:sourceCapabilitiesSchema,
-  options:z.record(z.unknown()).default({}),
+  options:z.record(z.string(),z.unknown()).prefault({}),
   observed:z.boolean().optional(),
   allowedBots: z.array(z.string()).default([]),
-  admission: z.record(z.object({
+  admission: z.record(z.string(),z.object({
     listedUnaddressed: z.enum(['inferred','ignore']).default('inferred'),
     unlistedAddressed: z.enum(['explicit','inferred','ignore']).default('ignore'),
     unlistedUnaddressed: z.enum(['inferred','ignore']).default('ignore'),
-  }).strict()).default({}),
+  }).strict()).prefault({}),
   memberSync:z.object({scope:z.string().optional(),enabled:z.boolean().default(false)}).strict().optional(),
   listenScopes: z.array(z.string()).optional(),
   pollSeconds: z.number().min(1).default(60),
@@ -52,19 +53,20 @@ export const configSchema = z.object({
   execution:executionSchema,
   sourcePlugins:sourcePluginsSchema,
   toolConnections:toolConnectionsSchema,
+  browser:browserConfigSchema,
   model: z.string().optional(),
-  models:z.object({router:z.string().optional(),worker:z.string().optional(),subagent:z.string().optional()}).strict().default({}),
+  models:z.object({router:z.string().optional(),worker:z.string().optional(),subagent:z.string().optional()}).strict().prefault({}),
   effort: z.enum(['low', 'medium', 'high', 'xhigh']).default('high'),
   concurrency: z.number().int().min(1).max(10).default(2),
   turnTimeoutMs: z.number().int().min(1000).default(600_000),
-  work:z.object({sandboxDriver:z.enum(['codex','seatbelt','bubblewrap','disabled']).default('codex'),backgroundTimeoutMs:z.number().int().min(100).default(1800000),maxAgents:z.number().int().min(1).max(32).default(8),maxDepth:z.number().int().min(1).max(8).default(3),maxOutputBytes:z.number().int().min(1024).max(16000000).default(1000000),autoRecover:z.boolean().default(true),network:z.boolean().default(true)}).strict().default({}),
-  delivery:z.object({workerPublish:z.boolean().default(false),authorization:z.enum(['per-head','policy']).default('per-head'),maxDraftLines:z.number().int().min(1).default(100000),commitName:z.string().min(1).default('Super-agent'),commitEmail:z.string().email().default('superagent@localhost.invalid'),automatedReviewers:z.array(z.string()).default([]),maxReviewRounds:z.number().int().min(1).max(10).default(3),autoMerge:z.boolean().default(false),mergeGh:z.string().optional(),requiredReviewers:z.array(z.string()).default([]),maxChangedLines:z.number().int().min(1).default(200),requireChecks:z.boolean().default(true),method:z.enum(['squash','merge','rebase']).default('squash')}).strict().default({}),
-  watchdog: z.object({ staleMs: z.number().min(1000).default(600000), intervalMs: z.number().min(1000).default(30000) }).strict().default({}),
+  work:z.object({sandboxDriver:z.enum(['codex','seatbelt','bubblewrap','disabled']).default('codex'),backgroundTimeoutMs:z.number().int().min(100).default(1800000),maxAgents:z.number().int().min(1).max(32).default(8),maxDepth:z.number().int().min(1).max(8).default(3),maxOutputBytes:z.number().int().min(1024).max(16000000).default(1000000),autoRecover:z.boolean().default(true),network:z.boolean().default(true)}).strict().prefault({}),
+  delivery:z.object({workerPublish:z.boolean().default(false),authorization:z.enum(['per-head','policy']).default('per-head'),maxDraftLines:z.number().int().min(1).default(100000),commitName:z.string().min(1).default('Super-agent'),commitEmail:z.string().email().default('superagent@localhost.invalid'),automatedReviewers:z.array(z.string()).default([]),maxReviewRounds:z.number().int().min(1).max(10).default(3),autoMerge:z.boolean().default(false),mergeGh:z.string().optional(),requiredReviewers:z.array(z.string()).default([]),maxChangedLines:z.number().int().min(1).default(200),requireChecks:z.boolean().default(true),method:z.enum(['squash','merge','rebase']).default('squash')}).strict().prefault({}),
+  watchdog: z.object({ staleMs: z.number().min(1000).default(600000), intervalMs: z.number().min(1000).default(30000) }).strict().prefault({}),
   prompts: z.object({ shared:z.string().default(''), router:z.string().default(''), worker:z.string().default(''), delivery:z.string().default(''),
-    team:z.object({communication:z.string().default(''),scope:z.string().default(''),delivery:z.string().default('')}).strict().default({}),
-    skills:z.record(z.string().regex(/^[a-z][a-z0-9-]*$/),z.string()).default({}),
-    overrides:z.record(z.string().refine(id=>id in builtins,'Unknown prompt part'),z.object({text:z.string(),base:z.string().regex(/^[a-f0-9]{64}$/)}).strict()).default({}),
-  }).strict().default({}).superRefine((value,ctx)=>{
+    team:z.object({communication:z.string().default(''),scope:z.string().default(''),delivery:z.string().default('')}).strict().prefault({}),
+    skills:z.record(z.string().regex(/^[a-z][a-z0-9-]*$/),z.string()).prefault({}),
+    overrides:z.record(z.string().refine(id=>id in builtins,'Unknown prompt part'),z.object({text:z.string(),base:z.string().regex(/^[a-f0-9]{64}$/)}).strict()).prefault({}),
+  }).strict().prefault({}).superRefine((value,ctx)=>{
     if(Object.keys(value.skills).some(k=>['superagent','superagent-worker','github','feishu','dsh-superagent-github','dsh-superagent-feishu'].includes(k)))ctx.addIssue({code:'custom',message:'Reserved built-in skill name'})
     if(JSON.stringify(value).length>64000)ctx.addIssue({code:'custom',message:'Prompt configuration exceeds 64000 characters'})
     for(const [part,required] of [['environment',['{variables}']],['runtime/environment',['{variables}']],['policy',['{version}','{mode}','{rules}']],['runtime/policy',['{version}','{mode}','{rules}']],['runtime/policy/none',['{version}','{mode}']]] as const){

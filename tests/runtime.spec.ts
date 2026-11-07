@@ -186,7 +186,7 @@ it('records proactive observations without executing them', async () => {
   const model:Model={async run(request){
     if(!request.ephemeral)throw Error('Observe mode must not execute')
     const result=await fixture.run(request)
-    const value=JSON.parse(result.text);value.rules=['compare'];value.ruleAssessments=[{id:'compare',matched:true,reason:'Changed documents match'}]
+    const value=JSON.parse(result.text);value.rules=['compare'];value.ruleAssessments=[{id:'compare',matched:true,reason:'Changed documents match'}];value.direction={implementation_requested:true,target_basis:'specified',requires_design_decision:false,evidence:'Compare the changed documents'};value.intent_evidence='Requested comparison of the changed documents against their prior versions'
     return {...result,text:JSON.stringify(value)}
   }}
   const runtime=new Runtime(config,{model});hosts.push(runtime)

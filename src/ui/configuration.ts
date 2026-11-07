@@ -1,34 +1,18 @@
+import {configurationScripts} from './configuration-assets.ts'
 import { readFileSync } from 'node:fs'
+import {roppoMark} from './account.ts'
 
 // Ship the existing same-origin, inline document contract without a browser build step.
 const asset = (name: string) => readFileSync(new URL(name, import.meta.url), 'utf8')
-const client = [
-  'controls.js',
-  'sections.js',
-  'getting-started.js',
-  'setup-session.js',
-  'first-request.js',
-  'entry-session.js',
-  'entry-views.js',
-  'entry-model.js',
-  'entry-configure.js',
-  'operator-workspace.js',
-  'control-center.js',
-  'agent-options.js',
-  'affect-ui.js',
-  'flow-motion.js',
-  'execution-page.js',
-  'execution-live.js',
-  'execution-map.js',
-  'application.js'
-]
+const client = configurationScripts
   .map(asset)
   .join('\n')
 
 export const configurationPage: string = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light"><title>Configuration · AgentHub</title>
-<link rel="icon" href="data:,"><style>${asset('configuration.css')}\n${asset('operator-workspace.css')}\n${asset('workspace-settings.css')}\n${asset('affect-ui.css')}\n${asset('flow-motion.css')}\n${asset('execution-page.css')}</style></head>
+<meta name="color-scheme" content="light dark"><title>Workspace · Roppo</title>
+<script>${asset('theme-init.js')}</script>
+<link rel="icon" href="${roppoMark}"><style>:root{--roppo-mark:url('${roppoMark}')}\n${asset('configuration.css')}\n${asset('operator-workspace.css')}\n${asset('workspace-settings.css')}\n${asset('affect-ui.css')}\n${asset('flow-motion.css')}\n${asset('execution-page.css')}\n${asset('team-studio.css')}\n${asset('theme.css')}\n${asset('workspace-motion.css')}\n${asset('workflow-story.css')}\n${asset('integrations.css')}</style></head>
 <body><div id="app"></div><div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
 <noscript>Enable JavaScript to configure AgentHub. 请启用 JavaScript 以配置 AgentHub。</noscript>
-<script>(() => { 'use strict';\nconst executionAssets=${JSON.stringify(Object.fromEntries(['feishu','wecom'].map(id=>[id,'data:image/x-icon;base64,'+readFileSync(new URL('assets/'+id+'.ico',import.meta.url)).toString('base64')])))};\n${client}\n})();</script></body></html>`
+<script>(() => { 'use strict';\nconst configurationHost=null;\nconst executionAssets=${JSON.stringify(Object.fromEntries(['feishu','wecom'].map(id=>[id,'data:image/x-icon;base64,'+readFileSync(new URL('assets/'+id+'.ico',import.meta.url)).toString('base64')])))};\n${client}\n})();</script></body></html>`

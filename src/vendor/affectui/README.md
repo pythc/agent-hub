@@ -7,7 +7,7 @@ The Execution page uses native-DOM adaptations of the free MIT components:
 
 The original component CSS is in `src/ui/affect-ui.css`; `src/ui/affect-ui.js`
 provides the native button/loading and tab/keyboard adapters. Execution-only
-styles supply AgentHub's green palette and typography. Original source URLs and
+styles supply the layout and typography; shared Roppo theme tokens provide the current black/white palette. Original source URLs and
 SHA-256 hashes are recorded in `provenance.json`; the license is retained here.
 React 19 is not required by this adaptation. React lifecycle, width-morph and
 pointer-drag mechanics are not part of this adapter; keyboard operation, focus,

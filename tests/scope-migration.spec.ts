@@ -209,3 +209,24 @@ it('G19 distinguishes replayed message cursors, failed sources and unrecoverable
   const gap=s.get<any>('maintenance-gap','window');expect(gap.sources[0]).toMatchObject({status:'messages_replayed',unrecoverable:['unretained_platform_events']});expect(gap.sources[1].mode).toBe('external_replay_required');expect(gap.zeroLossVerified).toBe(false)
  }finally{s.close()}
 })
+
+it('preserves mainline chat, browser and Router inbox formats across migration and rollback',async()=>{
+ const f=fixture(),db=new DatabaseSync(f.path)
+ const entries=[['chat-conversation','chat',{id:'chat',discussion:'local:topic'}],['chat-message','m',{id:'m',conversationId:'chat',text:'Saved chat',status:'complete'}],['chat-run','r',{id:'r',triggerId:'input'}],['chat-call','c',{id:'c',state:'completed'}],['chat-revision','chat',{hash:'hash',revision:2}],['browser-profile','browser',{id:'browser'}],['browser-session','session',{id:'session',active:false}],['browser-receipt','receipt',{id:'receipt',state:'completed',result:{ok:true}}],['router-candidate','candidate',{id:'candidate',phase:'complete',triggerIds:['input']}],['router-candidate-job','job','candidate'],['router-followup','followup',{id:'followup',triggerId:'input',ticketId:'done'}],['router-followup-notice','notice',{triggerId:'input',read:true}],['router-handback','input',{triggerId:'input'}]] as const
+ for(const [kind,id,body] of entries)db.prepare('INSERT INTO records VALUES(?,?,?)').run(kind,id,JSON.stringify(body))
+ db.close()
+ const plan=previewScopeMigration(f.config,f.spec);expect(plan.counts.conflict).toBe(0)
+ await applyScopeMigration(f.config,f.spec,plan.fingerprint)
+ const migrated=new Store(f.path);for(const [kind,id,body] of entries)expect(migrated.get(kind,id)).toEqual(body);migrated.close()
+ await rollbackScopeMigration(f.config,f.spec.operationId)
+ const old=new DatabaseSync(f.path);expect(old.prepare('PRAGMA user_version').get()!.user_version).toBe(5)
+ for(const [kind,id,body] of entries)expect(JSON.parse(String(get(old,kind,id)))).toEqual(body)
+ old.close()
+})
+
+it.each([['browser-session',{active:true}],['browser-receipt',{state:'running'}],['browser-receipt',{state:'uncertain'}],['chat-call',{state:'running'}],['chat-message',{status:'streaming'}]])('refuses to migrate unresolved %s operations',async(kind,body)=>{
+ const f=fixture(),db=new DatabaseSync(f.path);db.prepare('INSERT INTO records VALUES(?,?,?)').run(kind as string,'in-flight',JSON.stringify(body));db.close()
+ const plan=previewScopeMigration(f.config,f.spec)
+ expect(plan.items.find(i=>i.kind===kind&&i.id==='in-flight')?.status).toBe('held')
+ await expect(applyScopeMigration(f.config,f.spec,plan.fingerprint)).rejects.toThrow('reconcile')
+})

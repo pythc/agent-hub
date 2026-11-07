@@ -14,7 +14,7 @@ import {bodyDigest} from '../src/sources.ts'
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
 const rules=[{id:'build',instruction:'Investigate failed builds and report evidence.'},{id:'docs',instruction:'Update docs when an API changes.'}]
-const accept:Assessment={action:'accept',title:'Investigate build',scope:'Investigate the failed build only',reason:'Build failure matches build rule',rules:['build'],targetTicketId:null,ruleAssessments:[{id:'build',matched:true,reason:'Build failed'},{id:'docs',matched:false,reason:'No API change'}]}
+const accept:Assessment={action:'accept',direction:{implementation_requested:true,target_basis:'existing-standard',requires_design_decision:false,evidence:'Investigate the failed build'},intent_evidence:'Investigate failed builds',title:'Investigate build',scope:'Investigate the failed build only',reason:'Build failure matches build rule',rules:['build'],targetTicketId:null,ruleAssessments:[{id:'build',matched:true,reason:'Build failed'},{id:'docs',matched:false,reason:'No API change'}]}
 const report={state:'ready',summary:'Checked build',reply:'Worker evidence',question:null,askedBy:null,handbacks:[]}
 function config(extra:Record<string,unknown>={}){
  const root=mkdtempSync(join(tmpdir(),'router-ingress-'));roots.push(root)
@@ -25,10 +25,17 @@ async function until(h:Runtime,predicate:()=>boolean){for(let i=0;i<400;i++){awa
 function fixture(calls:ModelRequest[],decision:unknown=accept):Model{return {async run(r){
  calls.push(r);const threadId=r.threadId??'thread-'+calls.length,turnId='turn-'+calls.length;r.onThread?.(threadId);r.onTurn?.(turnId)
  if(r.schema===undefined)throw Error('Missing schema')
- const input=JSON.parse(r.input)
+ let input=JSON.parse(r.input)
+ if(input.kind==='proactive_candidates'){
+  const result=await r.onTool!('orchestrator_eval_decide',decision,'decision')
+  if(!result.success)throw Error(JSON.stringify(result))
+  const admitted=JSON.parse((result.contentItems[0] as any).text)
+  if(admitted.state!=='accepted')return {threadId,turnId,text:JSON.stringify({reply:''})}
+  input={kind:'event',trigger:{id:input.primary},mandate:admitted.mandate}
+ }
  if(r.ephemeral)return {threadId,turnId,text:JSON.stringify(decision)}
  if(r.role==='router'){
-  if(input.kind!=='worker_result'){
+  if(!['worker_result','task_followups'].includes(input.kind)){
    const list=await r.onTool!('worker_manage',{action:'list'},'list')
    const revision=JSON.parse((list.contentItems[0] as any).text).revision
    const response=await r.onTool!('worker_manage',{action:'assign',id:'one',revision,requestId:'task-'+input.trigger.id,text:input.mandate.scope},'assign')
@@ -44,7 +51,7 @@ const admission=(h:Runtime,id='event')=>h.store.list<RouterAdmission>('router-ad
 it('routes a rule-admitted bot through Router and preserves inferred authority in the Worker mandate',async()=>{
  const calls:ModelRequest[]=[],h=host(config(),fixture(calls));receive(h)
  await until(h,()=>h.store.deliveries().some(d=>d.text==='Router summary'&&d.status==='sent'))
- expect(calls.map(r=>r.ephemeral?'admission':r.role)).toEqual(['admission','router','worker','router'])
+ expect(calls.map(r=>r.ephemeral?'admission':r.role)).toEqual(['router','worker','router'])
  expect(calls.filter(r=>r.role==='router').every(r=>r.options?.effort==='medium')).toBe(true)
  expect(calls.find(r=>r.role==='worker')?.options?.effort).toBe('high')
  const ticket=h.store.tickets.list()[0]!
@@ -57,8 +64,8 @@ it('routes a rule-admitted bot through Router and preserves inferred authority i
 it.each(['off','observe'] as const)('never dispatches inferred work in %s mode',async mode=>{
  const calls:ModelRequest[]=[],h=host(config({acceptMode:mode}),fixture(calls));receive(h)
  if(mode==='observe')await until(h,()=>admission(h).state==='observed');else await h.tick()
- expect(calls.map(r=>r.ephemeral)).toEqual(mode==='observe'?[true]:[])
- expect(h.store.tickets.list()).toHaveLength(0);expect(h.store.list('router-result')).toHaveLength(0)
+ expect(calls.map(r=>!!r.ephemeral)).toEqual(mode==='observe'?[false]:[])
+ expect(h.store.tickets.list()).toHaveLength(0);expect(h.store.deliveries()).toHaveLength(0)
 })
 
 it.each([
@@ -83,17 +90,17 @@ it('honors explicit admission for an unlisted human and does not require allowed
  expect(h.store.tickets.list()[0]!.mandate).toMatchObject({strength:'explicit',actor:{id:'guest'},basis:{via:'admission',cell:'unlistedAddressed'}})
 })
 
-it('uses a valid conversation anchor for unaddressed follow-ups and never fans user messages out to Workers',async()=>{
+it('relays an unaddressed follow-up only to its existing task under the original mandate',async()=>{
  const calls:ModelRequest[]=[],h=host(config(),fixture(calls));receive(h,'first',true)
  await until(h,()=>h.store.deliveries().some(d=>d.text==='Router summary'&&d.status==='sent'))
- const original=h.store.tickets.list()[0]!,before=original.inputs.length
- // Even a Worker that follows the external conversation must not directly consume user messages in host mode.
- const external=h.store.threads.get('local:discussion')??{key:'local:discussion',ref:{source:'local',id:'discussion'},createdAt:new Date().toISOString(),subscriptions:[],correlated:[],pending:[],meta:{}}
- external.subscriptions.push(original.id);h.store.threads.save(external)
+ const original=h.store.tickets.list()[0]!,mandate=structuredClone(original.mandate)
  receive(h,'followup',true,false)
- await until(h,()=>h.store.tickets.list().length===2&&h.store.tickets.list().every(t=>t.ended))
- expect(admission(h,'followup')).toMatchObject({state:'accepted',anchor:admission(h,'first').triggerId,mandate:{strength:'explicit',basis:{via:'followup'}}})
- expect(h.store.tickets.get(original.id)!.inputs).toHaveLength(before)
+ await until(h,()=>calls.filter(r=>r.role==='worker').length===2&&!!h.store.tickets.get(original.id)?.ended)
+ expect(admission(h,'followup')).toMatchObject({state:'ignored',reason:'workerOwnedFollowup'})
+ expect(h.store.tickets.list()).toHaveLength(1)
+ const task=h.store.tickets.get(original.id)!
+ expect(task.mandate).toEqual(mandate)
+ expect(task.inputs.some(i=>i.kind==='trigger'&&h.store.triggers.get(i.triggerId)?.meta.externalTriggerId===admission(h,'followup').triggerId)).toBe(true)
  expect(calls.some(r=>r.ephemeral)).toBe(false)
 })
 
@@ -134,11 +141,11 @@ it('rechecks authority for tool mutations and final replies after revocation dur
 
 it('rejects stale assessment after a rule edit and reassesses under the new version',async()=>{
  const c=config(),calls:ModelRequest[]=[];let release!:()=>void,first=true
- const model=fixture(calls),h=host(c,{async run(r){if(r.ephemeral&&first){first=false;await new Promise<void>(resolve=>release=resolve)}return model.run(r)}})
+ const model=fixture(calls),h=host(c,{async run(r){if(JSON.parse(r.input).kind==='proactive_candidates'&&first){first=false;await new Promise<void>(resolve=>release=resolve)}return model.run(r)}})
  receive(h);await until(h,()=>!!release)
  h.updateSettings(0,{rules:[{id:'build',instruction:'Only investigate release builds'},rules[1]]});release()
  await until(h,()=>h.store.tickets.list().some(t=>t.ended))
- expect(calls.filter(r=>r.ephemeral)).toHaveLength(2)
+ expect(calls.filter(r=>JSON.parse(r.input).kind==='proactive_candidates')).toHaveLength(2)
  expect(admission(h).policyVersion).toBe(h.routerIngress.policy().version)
  expect(h.store.tickets.list()).toHaveLength(1)
 })
@@ -172,14 +179,14 @@ it('moves old queued Engine evaluations into Router admission without direct Wor
  const trigger=h.sources.get('local')!.trigger({id:'old',thread:'discussion',text:'Build failed',addressed:true},'build-bot',false)
  h.engine.receive(trigger);h.engine.evaluateDue()
  await until(h,()=>h.store.deliveries().some(d=>d.text==='Router summary'&&d.status==='sent'))
- expect(calls.map(r=>r.ephemeral?'admission':r.role)).toEqual(['admission','router','worker','router'])
+ expect(calls.map(r=>r.ephemeral?'admission':r.role)).toEqual(['router','worker','router'])
  expect(h.store.tickets.list()).toHaveLength(1)
 })
 
 it('admits unaddressed human work by rules without promoting it to explicit authority',async()=>{
  const calls:ModelRequest[]=[],h=host(config(),fixture(calls));receive(h,'event',true,false)
  await until(h,()=>h.store.tickets.list().some(t=>t.ended))
- expect(calls.filter(r=>r.ephemeral)).toHaveLength(1)
+ expect(calls.filter(r=>JSON.parse(r.input).kind==='proactive_candidates')).toHaveLength(1)
  expect(h.store.tickets.list()[0]!.mandate).toMatchObject({strength:'inferred',basis:{via:'admission',cell:'listedUnaddressed',rules:['build']}})
 })
 
@@ -220,7 +227,7 @@ it('rechecks a report read through inspect before returning it under a different
   }
   return model.run(r)
  }})
- receive(h,'bot',false);await until(h,()=>h.store.deliveries().some(d=>d.text==='Router summary'&&d.status==='sent'))
+ receive(h,'inferred',true,false);await until(h,()=>h.store.deliveries().some(d=>d.text==='Router summary'&&d.status==='sent'))
  receive(h,'human',true);await until(h,()=>h.store.list('router-error').length>0)
  expect(inspected).toBe(true)
  expect(h.store.deliveries().some(d=>d.text==='Revoked report must not be forwarded')).toBe(false)
@@ -279,33 +286,30 @@ it('blocks managed Worker tools if the rule authority is withdrawn during execut
  expect(denied).toBe(true)
 })
 
-it.each(['auto','observe'] as const)('routes a bot update of existing human-owned work through Router in %s mode',async mode=>{
- let task='',workerRuns=0,sent=false,h:Runtime
- h=host(config({acceptMode:mode}),{async run(r){
+it.each(['auto','observe'] as const)('rejects a bot attachment to human-owned work in %s mode',async mode=>{
+ let task='',workerRuns=0,denied=false
+ const h=host(config({acceptMode:mode}),{async run(r){
   const threadId=r.threadId??'thread-'+r.role,turnId='turn';r.onThread?.(threadId);r.onTurn?.(turnId)
-  if(r.ephemeral){expect(JSON.parse(r.input).existing.map((t:any)=>t.id)).toContain(task);return {threadId,turnId,text:JSON.stringify({...accept,action:'attach',targetTicketId:task})}}
-  if(r.role==='worker'){workerRuns++;return {threadId,turnId,text:JSON.stringify(workerRuns===1?{...report,state:'waiting',reply:''}:report)}}
   const input=JSON.parse(r.input)
+  if(r.role==='worker'){workerRuns++;return {threadId,turnId,text:JSON.stringify({...report,state:'waiting',reply:''})}}
+  if(input.kind==='proactive_candidates'){
+   expect(input.related.find((t:any)=>t.id===task)).toMatchObject({canAttach:false})
+   const result=await r.onTool!('orchestrator_eval_decide',{...accept,action:'attach',targetTicketId:task},'attach')
+   denied=!result.success
+   await r.onTool!('orchestrator_route',{reason:'Task belongs to another actor'},'ignore')
+  }
   if(input.kind==='user_message'){
    const result=await r.onTool!('worker_manage',{action:'assign',id:'one',revision:0,requestId:'initial',text:'Investigate and wait for build results'},'assign')
    task=JSON.parse((result.contentItems[0] as any).text).ticketId
   }
-  if(input.kind==='event'){
-   const result=await r.onTool!('worker_manage',{action:'send',ticketId:task,revision:0,requestId:'bot-update',text:'The build failed; inspect the new evidence within the existing task'},'send')
-   expect(result.success).toBe(true);sent=true
-  }
   return {threadId,turnId,text:JSON.stringify({reply:''})}
  }})
  receive(h,'human',true);await until(h,()=>workerRuns===1&&h.store.tickets.get(task)?.assignments.at(-1)?.report?.state==='waiting')
- receive(h,'bot',false)
- await until(h,()=>mode==='observe'?admission(h,'bot').state==='observed':workerRuns===2&&!!h.store.tickets.get(task)?.ended)
- // The admission attach is now bound directly to the original task, not another free Router turn.
- expect(sent).toBe(false);expect(workerRuns).toBe(mode==='auto'?2:1)
- const attached=h.store.get<any>('worker-command',bodyDigest([admission(h,'bot').discussion,'admit:'+admission(h,'bot').triggerId]))
- if(mode==='auto')expect(attached).toMatchObject({status:'completed',result:{ticketId:task,status:'queued'}});else expect(attached).toBeUndefined()
+ const mandate=structuredClone(h.store.tickets.get(task)!.mandate)
+ receive(h,'bot',false);await until(h,()=>admission(h,'bot').state==='ignored')
+ expect(denied).toBe(true);expect(workerRuns).toBe(1)
  expect(h.store.tickets.list()).toHaveLength(1)
- expect(h.store.tickets.get(task)!.mandate.strength).toBe('explicit') // original task mandate never changes
- expect(h.store.tickets.get(task)!.inputs.some(i=>i.kind==='trigger'&&i.triggerId===admission(h,'bot').triggerId)).toBe(false)
+ expect(h.store.tickets.get(task)!.mandate).toEqual(mandate)
 })
 
 it('accepts a real HTTP bot event, runs four Workers under one Router, and sends only the Router summary to the callback',async()=>{
@@ -323,7 +327,8 @@ it('accepts a real HTTP bot event, runs four Workers under one Router, and sends
    if(r.ephemeral)return {threadId,turnId,text:JSON.stringify(accept)}
    if(r.role==='worker')return {threadId,turnId,text:JSON.stringify({...report,reply:'Evidence '+r.activity?.workerId})}
    const input=JSON.parse(r.input)
-   if(input.kind==='event')for(let i=0;i<4;i++){
+   if(input.kind==='proactive_candidates'){const decision=await r.onTool!('orchestrator_eval_decide',accept,'decision');if(!decision.success)throw Error(JSON.stringify(decision))}
+   if(input.kind==='proactive_candidates')for(let i=0;i<4;i++){
     const response=await r.onTool!('worker_manage',{action:'assign',id:'worker-'+i,revision:0,requestId:'part-'+i,text:'Investigate failed build part '+i},'assign-'+i)
     if(!response.success)throw Error(JSON.stringify(response))
    }
@@ -342,7 +347,7 @@ it('accepts a real HTTP bot event, runs four Workers under one Router, and sends
   expect(calls.filter(r=>r.role==='worker').every(r=>r.model==='sol'&&r.options?.effort==='high')).toBe(true)
   expect(calls.filter(r=>r.role==='router'&&!r.threadId).every(r=>r.model==='terra'&&r.options?.effort==='medium')).toBe(true)
   const routerTurns=calls.filter(r=>r.role==='router'&&!r.ephemeral)
-  expect(routerTurns.slice(1).every(r=>r.threadId==='http-thread-2'&&r.options?.effort==='medium')).toBe(true)
+  expect(routerTurns.slice(1).every(r=>r.threadId==='http-thread-1'&&r.options?.effort==='medium')).toBe(true)
   expect(h.store.list('router-session')).toHaveLength(1)
   expect(h.store.list('router-inbox')).toHaveLength(4)
   expect(h.store.tickets.list().every(t=>t.mandate.strength==='inferred'&&t.mandate.basis.rules?.includes('build'))).toBe(true)

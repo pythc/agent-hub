@@ -44,7 +44,7 @@ npm start -- router http://127.0.0.1:PORT /absolute/path/to/access-token \
 
 ## 真实证据
 
-证据根目录：`/Users/alex/Documents/ChatGPT/竞赛/outputs/agenthub-design-20261106/cli-router-reviewed-v2`。
+原始证据保存在本机私有目录 `cli-router-reviewed-v2`，不随源码发布。
 
 | 检查 | 实际结果 |
 | --- | --- |

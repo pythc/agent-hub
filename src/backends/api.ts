@@ -6,6 +6,9 @@ import type {BackendDescription,Model,ModelRequest,ModelResult,ToolContent} from
 import {TransientModelError} from '../model.ts'
 import {checkBudget,protocolBytes,receiptReference,ContextBudgetExceeded} from '../context-budget.ts'
 import {protocolTombstone} from '../history-cleanup.ts'
+import {readResponsesStream,readChatStream,readAnthropicStream} from './stream.ts'
+import {contextProjection,recall,recallSpec} from './context.ts'
+export {readResponsesStream} from './stream.ts'
 
 export interface ThreadStore {get<T>(kind:string,id:string):T|undefined;put(kind:string,id:string,value:unknown):void}
 type Call={id:string;name:string;arguments:string}
@@ -25,7 +28,7 @@ export class ApiModel implements Model {
  constructor(readonly id:string,readonly definition:ApiDefinition,private store:ThreadStore,private turnTimeoutMs:number,private credential?:()=>string|undefined|Promise<string|undefined>){}
  describe():BackendDescription{return {id:this.id,kind:this.definition.kind,model:this.definition.model,nativeTakeover:false,images:this.definition.images,resume:true,tools:true,steering:true,promptRefresh:true}}
  private endpoint(path:string){return this.definition.baseUrl.replace(/\/+$/,'')+'/'+path}
- private async http(path:string,signal:AbortSignal,body?:unknown):Promise<any>{
+ private async http(path:string,signal:AbortSignal,body?:unknown,onOutput?:ModelRequest['onOutput']):Promise<any>{
   const d=this.definition,credential=this.credential?await this.credential():d.apiKeyEnv?process.env[d.apiKeyEnv]:undefined
   if(d.apiKeyEnv&&!credential?.trim())throw Error('Backend '+this.id+' requires environment variable '+d.apiKeyEnv)
   const headers:Record<string,string>={...d.headers,...Object.fromEntries(Object.entries(d.headerEnv??{}).map(([key,env])=>{const value=process.env[env];if(!value)throw Error('Missing header environment variable '+env);return [key,value]})),'content-type':'application/json'}
@@ -36,7 +39,7 @@ export class ApiModel implements Model {
   catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' network request failed or timed out')}
   if(!response.ok){await response.body?.cancel();throw Error('Backend '+this.id+' HTTP '+response.status)}
   const reader=response.body?.getReader();if(!reader)throw Error('Backend response is empty')
-  if(response.headers.get('content-type')?.includes('text/event-stream'))return readResponsesStream(reader,d.maxContextBytes,signal)
+  if(response.headers.get('content-type')?.includes('text/event-stream'))return (d.kind==='anthropic'?readAnthropicStream:d.kind==='openai-chat'?readChatStream:readResponsesStream)(reader,d.maxContextBytes,signal,onOutput)
   if(d.subscription&&body)throw Error('Subscription response must be an event stream')
   const chunks:Uint8Array[]=[];let bytes=0
   for(;;){
@@ -75,10 +78,12 @@ export class ApiModel implements Model {
  }
  private body(t:ApiThread,instructions:string,r:ModelRequest){
   const d=this.definition,tools=r.tools??[]
-  const finalInstructions=instructions+'\nReturn the final answer as exactly one JSON object matching this schema, without Markdown fences. Use tools before reporting completion when the task requires evidence.\n'+JSON.stringify(r.schema)
-  if(d.kind==='anthropic')return {...d.parameters,model:t.model,max_tokens:d.maxOutputTokens,system:finalInstructions,messages:t.messages,...(d.outputFormat==='json-schema'?{output_config:{...(d.parameters.output_config as object??{}),format:{type:'json_schema',schema:r.schema}}}:{}),...(tools.length?{tools:tools.map(s=>({name:s.name,description:s.description,input_schema:s.inputSchema}))}:{})}
-  if(d.kind==='openai-responses')return {...d.parameters,model:t.model,max_output_tokens:d.maxOutputTokens,instructions:finalInstructions,input:t.messages,store:false,...(d.subscription?{stream:true}:{}),include:['reasoning.encrypted_content'],...(tools.length?{tools:tools.map(s=>({type:'function',name:s.name,description:s.description,parameters:s.inputSchema,strict:false}))}:{}),...(d.outputFormat==='prompt'?{}:{text:{...(d.parameters.text as object??{}),format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',name:'agent_result',strict:true,schema:r.schema}}})}
-  return {[d.chatTokenField]:d.maxOutputTokens,...d.parameters,model:t.model,messages:[{role:'system',content:finalInstructions},...t.messages],...(tools.length?{tools:tools.map(s=>({type:'function',function:{name:s.name,description:s.description,parameters:s.inputSchema,strict:false}}))}:{}),...(d.outputFormat==='prompt'?{}:{response_format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',json_schema:{name:'agent_result',strict:true,schema:r.schema}}})}
+  const context=tools.some(t=>t.name===recallSpec.name)?contextProjection(t,Math.min(128000,Math.floor(d.maxContextBytes/2))):{messages:t.messages,notice:''}
+  t={...t,messages:context.messages}
+  const finalInstructions=instructions+(context.notice?'\n'+context.notice:'')+'\nReturn the final answer as exactly one JSON object matching this schema, without Markdown fences. Use tools before reporting completion when the task requires evidence.\n'+JSON.stringify(r.schema)
+  if(d.kind==='anthropic')return {...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,max_tokens:d.maxOutputTokens,system:finalInstructions,messages:t.messages,...(d.outputFormat==='json-schema'?{output_config:{...(d.parameters.output_config as object??{}),format:{type:'json_schema',schema:r.schema}}}:{}),...(tools.length?{tools:tools.map(s=>({name:s.name,description:s.description,input_schema:s.inputSchema}))}:{})}
+  if(d.kind==='openai-responses')return {...d.parameters,model:t.model,max_output_tokens:d.maxOutputTokens,instructions:finalInstructions,input:t.messages,store:false,...(d.subscription||r.onOutput?{stream:true}:{}),include:['reasoning.encrypted_content'],...(tools.length?{tools:tools.map(s=>({type:'function',name:s.name,description:s.description,parameters:s.inputSchema,strict:false}))}:{}),...(d.outputFormat==='prompt'?{}:{text:{...(d.parameters.text as object??{}),format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',name:'agent_result',strict:true,schema:r.schema}}})}
+  return {[d.chatTokenField]:d.maxOutputTokens,...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,messages:[{role:'system',content:finalInstructions},...t.messages],...(tools.length?{tools:tools.map(s=>({type:'function',function:{name:s.name,description:s.description,parameters:s.inputSchema,strict:false}}))}:{}),...(d.outputFormat==='prompt'?{}:{response_format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',json_schema:{name:'agent_result',strict:true,schema:r.schema}}})}
  }
  private accept(response:any,t:ApiThread):{calls:Call[];text:string;wire:any[]}{
   const kind=this.definition.kind
@@ -108,12 +113,14 @@ export class ApiModel implements Model {
  }
  async run(r:ModelRequest):Promise<ModelResult>{
   if(r.workerMcp)throw Error('API backends require explicit host tool definitions, not a native MCP bridge')
+  const canRecall=r.role==='router'&&r.managed&&(!r.options?.tools||r.options.tools.includes(recallSpec.name))
+  if(canRecall){if(r.tools?.some(t=>t.name===recallSpec.name))throw Error('backend_recall is reserved for retained API history');r={...r,tools:[...r.tools??[],recallSpec]}}
   const t:ApiThread=r.threadId?this.thread(r.threadId,r.cwd):{format:1,id:'api:'+this.id+':'+randomUUID(),backendId:this.id,kind:this.definition.kind,endpoint:this.definition.baseUrl.replace(/\/+$/,''),model:r.model??this.definition.model,cwd:resolve(r.cwd),messages:[],turns:[],effects:{}}
   if(this.active.has(t.id))throw Error('Backend thread already has an active writer')
   this.active.add(t.id)
   const controller=new AbortController(),signal=r.signal?AbortSignal.any([controller.signal,r.signal]):controller.signal
   const timer=setTimeout(()=>controller.abort(Error('Backend turn deadline exceeded')),this.turnTimeoutMs)
-  const turn={id:randomUUID(),status:'inProgress',items:[] as any[],model:t.model},queue:{text:string;onRead?:()=>void}[]=[]
+  const turn={id:randomUUID(),status:'inProgress',items:[] as any[],model:t.model,input:r.input,wireStart:0},queue:{text:string;onRead?:()=>void}[]=[]
   let instructions=r.instructions,repairs=0,toolCalls=0
   const persist=()=>this.store.put('backend-thread',t.id,t)
   const appendUser=(text:string)=>t.messages.push({role:'user',content:text})
@@ -122,7 +129,7 @@ export class ApiModel implements Model {
    // A process may have died after a side effect and before its receipt. Never replay it.
    if(t.pending?.length){const results=t.pending.map(call=>{const effect=t.effects[call.id]!;return effect?.state==='completed'?effect.result!:failure('Previous tool execution was interrupted and may have taken effect. Inspect retained jobs and external state before any explicit retry; it was not replayed.')});this.appendResults(t,t.pending,results);delete t.pending}
    for(const old of t.turns)if(old.status==='inProgress')old.status='interrupted'
-   t.turns.push(turn);appendUser(r.input);persist()
+   turn.wireStart=t.messages.length;t.turns.push(turn);appendUser(r.input);persist()
    r.onThread?.(t.id);r.onTurn?.(turn.id);r.onModel?.(t.model)
    r.onCapabilities?.({mcpServers:[],disabledPlugins:[],managed:true,backend:this.describe()})
    r.onActive?.({interrupt:async()=>{controller.abort(Error('Backend turn interrupted'))},steer:async(text,onRead)=>{signal.throwIfAborted();queue.push({text,onRead})},refresh:async text=>{signal.throwIfAborted();instructions=text}})
@@ -134,9 +141,10 @@ export class ApiModel implements Model {
     const body=this.body(t,instructions,r);if(Buffer.byteLength(JSON.stringify(body))>this.definition.maxContextBytes)throw Error('Backend context size limit exceeded; explicit compaction or a new task is required')
     checkBudget(body,r.contextBudget,'api-wire','request',r.onBudget)
     persist();for(const item of incoming)item.onRead?.()
-    r.onConfiguration?.({requested:r.options??{},sent:{model:t.model,parameters:this.definition.parameters,maxOutputTokens:this.definition.maxOutputTokens,maxSteps:this.definition.maxSteps,maxToolCalls:this.definition.maxToolCalls,stream:!!this.definition.subscription}})
+    r.onConfiguration?.({requested:r.options??{},sent:{model:t.model,parameters:this.definition.parameters,maxOutputTokens:this.definition.maxOutputTokens,maxSteps:this.definition.maxSteps,maxToolCalls:this.definition.maxToolCalls,stream:!!(this.definition.subscription||r.onOutput)}})
     r.onProgress?.('backend/request')
-    const response=await this.http(this.definition.kind==='openai-chat'?'chat/completions':this.definition.kind==='anthropic'?'messages':'responses',signal,body)
+    r.onOutput?.({id:turn.id+':'+step,type:'start',phase:'answer'})
+    const response=await this.http(this.definition.kind==='openai-chat'?'chat/completions':this.definition.kind==='anthropic'?'messages':'responses',signal,body,r.onOutput)
     signal.throwIfAborted();if(typeof response.model==='string'){(turn as any).providerModel=response.model;r.onModel?.(response.model)}const accepted=this.accept(response,t),seen=new Set<string>()
     if((toolCalls+=accepted.calls.length)>this.definition.maxToolCalls)throw Error('Backend tool call budget exceeded')
     for(const call of accepted.calls){if(typeof call.id!=='string'||!call.id||typeof call.name!=='string'||typeof call.arguments!=='string'||call.arguments.length>1000000||seen.has(call.id)||t.effects[call.id])throw Error('Backend returned an invalid or repeated tool call ID');seen.add(call.id)}
@@ -152,7 +160,7 @@ export class ApiModel implements Model {
       if(!budgetError)try{checkBudget({request:this.body(t,instructions,r),completedResults:results},r.contextBudget,'api-wire','before_tool',r.onBudget,true)}catch(error){if(!(error instanceof ContextBudgetExceeded))throw error;budgetError=error}
       signal.throwIfAborted();const effect:Effect={call,digest:hash(call.name+'\n'+call.arguments),state:'started'};t.effects[call.id]=effect;persist()
       let result:ToolResult
-      try{const args=JSON.parse(call.arguments),validate=validators.get(call.name);if(budgetError)result=failure('Context budget exceeded before execution; tool was not executed');else if(!validate||!r.onTool)result=failure('Tool is not in this activation capability set');else if(!validate(args))result=failure('Invalid tool arguments: '+ajv.errorsText(validate.errors));else{r.onProgress?.('backend/tool/'+call.name);result=await r.onTool(call.name,args,call.id)}}
+      try{const args=JSON.parse(call.arguments),validate=validators.get(call.name);if(budgetError)result=failure('Context budget exceeded before execution; tool was not executed');else if(!validate||!r.onTool&&!(canRecall&&call.name===recallSpec.name))result=failure('Tool is not in this activation capability set');else if(!validate(args))result=failure('Invalid tool arguments: '+ajv.errorsText(validate.errors));else{r.onProgress?.('backend/tool/'+call.name);result=canRecall&&call.name===recallSpec.name?recall(t,args as Parameters<typeof recall>[1]):await r.onTool!(call.name,args,call.id)}}
       catch{result=failure('Host tool failed. Inspect task state and permissions before retrying; side effects may be uncertain.')}
       if(result.contentItems.some(c=>c.type==='inputImage')&&!this.definition.images)result=failure('This backend is configured without image support. Image bytes were not sent to the model.')
       for(const item of result.contentItems)if(item.type==='inputImage')image(item.imageUrl!)
@@ -174,23 +182,4 @@ export class ApiModel implements Model {
   }catch(error){turn.status=signal.aborted?'interrupted':'failed';turn.items.push({type:'error',text:signal.aborted?'Backend turn interrupted':String(error)});persist();throw error}
   finally{clearTimeout(timer);this.active.delete(t.id)}
  }
-}
-
-/** Parse SSE across arbitrary UTF-8/chunk boundaries; only a completed event is success. */
-export async function readResponsesStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal){
- const decoder=new TextDecoder();let buffer='',bytes=0
- try{for(;;){
-  signal.throwIfAborted();const chunk=await reader.read();if(chunk.done)throw new TransientModelError('Responses stream disconnected before response.completed')
-  bytes+=chunk.value.length;if(bytes>maxBytes)throw Error('Backend response size limit exceeded')
-  buffer+=decoder.decode(chunk.value,{stream:true});buffer=buffer.replace(/\r\n/g,'\n')
-  let end:number
-  while((end=buffer.indexOf('\n\n'))>=0){
-   const event=buffer.slice(0,end);buffer=buffer.slice(end+2)
-   const data=event.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n')
-   if(!data||data==='[DONE]')continue
-   let value:any;try{value=JSON.parse(data)}catch{throw Error('Invalid Responses stream event')}
-   if(['error','response.failed','response.incomplete'].includes(value.type))throw Error('Responses stream '+value.type+': '+String(value.response?.error?.code??value.error?.code??value.code??'incomplete').slice(0,120))
-   if(value.type==='response.completed'){if(value.response?.status!=='completed')throw Error('Invalid completed response');return value.response}
-  }
- }}finally{await reader.cancel().catch(()=>{})}
 }

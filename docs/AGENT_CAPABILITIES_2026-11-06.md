@@ -1,6 +1,6 @@
 # Router / Worker 独立配置与三类后端接入
 
-日期：2026-11-06。实现位于 `codex/deepseek-parity-fixes-20261106` 独立工作树，叠加此前七项一致性修复；没有合并、部署或更改原运行实例。
+初版实现日期：2026-11-06。本文包含该次实现的配置说明与历史验收结果；当前代码已整合到 Roppo 工作区。历史测试数量不代表当前全量回归数量。
 
 ## 已实现的行为
 
@@ -125,7 +125,7 @@ CLI 前台模式必须由 CLI 自身的设置选模型和 effort，宿主设置�
 | DeepSeek 核心 | 未修改 | `src/vendor` 无差异，沿用此前核心一致性检查 |
 | 原实例 | 未更改 | 原 checkout 保持干净；没有重启或应用新配置 |
 
-本地实测证据目录：`/Users/alex/Documents/ChatGPT/竞赛/outputs/agenthub-design-20261106`。失败的前两次宿主实测也保留：第一次发现分类器提示词与持续 Router 职责冲突，第二次发现 Worker 误把父请求当作完整任务；均已修复，并补充对应回归断言。
+原始实测证据保存在本机私有目录，不随源码发布。失败的前两次宿主实测也保留：第一次发现分类器提示词与持续 Router 职责冲突，第二次发现 Worker 误把父请求当作完整任务；均已修复，并补充对应回归断言。
 
 可重复的隔离示例为 `examples/agent-capabilities-smoke.ts`、`examples/cli-router-smoke.ts`、`examples/capabilities-ui-preview.ts`。用 `AGENTHUB_CODEX` 指定实际 Codex 二进制、`AGENTHUB_SMOKE_DIR` 指定新证据目录；前两个会真实调用模型。前台示例现使用 on-request + auto_review 的正常批准机制；拒绝或调用失败时明确失败。
 

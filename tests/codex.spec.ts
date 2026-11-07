@@ -18,6 +18,16 @@ it('verifies native deletion and treats retry after successful deletion as idemp
  expect(await m.purge('owned',root)).toEqual({local:'verified',provider:'not_managed'})
  expect(await m.purge('owned',root)).toEqual({local:'verified',provider:'not_managed'})
 })
+it('forwards scoped native assistant deltas before terminal and keeps commentary separate',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-stream-'));roots.push(root);const binary=join(root,'codex'),events:any[]=[]
+ writeFileSync(binary,'#!'+process.execPath+`\nconst send=x=>console.log(JSON.stringify(x));require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.id)return;send({id:m.id,result:m.method==='thread/start'?{thread:{id:'native'}}:m.method==='turn/start'?{turn:{id:'turn'}}:{}});if(m.method==='turn/start'){const event=(method,p)=>send({method,params:{threadId:'native',turnId:'turn',...p}});event('item/started',{item:{id:'c',type:'agentMessage',phase:'commentary'}});event('item/agentMessage/delta',{itemId:'c',delta:'Public progress'});event('item/started',{item:{id:'a',type:'agentMessage',phase:'final_answer'}});event('item/agentMessage/delta',{itemId:'a',delta:'first'});event('item/agentMessage/delta',{threadId:'other',itemId:'a',delta:'foreign'});event('item/agentMessage/delta',{turnId:'older',itemId:'a',delta:'stale'});event('item/reasoning/textDelta',{itemId:'r',delta:'private'});setTimeout(()=>{event('item/agentMessage/delta',{itemId:'a',delta:' second'});event('item/completed',{item:{id:'a',type:'agentMessage',phase:'final_answer',text:'first second'}});event('turn/completed',{turn:{id:'turn',status:'completed'}})},30)}})\n`,{mode:0o700})
+ const model=new CodexModel({codex:binary,effort:'high',turnTimeoutMs:10000});let settled=false
+ const pending=model.run({cwd:root,instructions:'test',input:'test',schema:{},onOutput:e=>{events.push(e);if(e.type==='delta')expect(settled).toBe(false)}}).then(r=>{settled=true;return r})
+ expect((await pending).text).toBe('first second')
+ expect(events.filter(e=>e.type==='delta'&&e.phase==='answer').map(e=>e.text).join('')).toBe('first second')
+ expect(events.some(e=>e.phase==='commentary')).toBe(true)
+ expect(JSON.stringify(events)).not.toContain('private')
+})
 it('confirms a steered source input from native history, not the RPC acknowledgement',async()=>{
  const root=mkdtempSync(join(tmpdir(),'native-inbox-'));roots.push(root)
  const binary=join(root,'codex');let consumed=0,acknowledgedBeforeRead=false
@@ -55,4 +65,13 @@ it('does not create invalid startup entries for absent MCP aliases and disables 
  expect(config.plugins).toEqual({example:{enabled:false}})
  expect(config.features.shell_tool).toBe(false)
  expect(config.permissions['superagent-managed'].filesystem[envFile]).toBe('deny')
+})
+
+it('binds native output to the acknowledged turn even when notifications share its stdout chunk',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-batched-stream-'));roots.push(root);const binary=join(root,'codex'),events:any[]=[]
+ writeFileSync(binary,'#!'+process.execPath+`\nconst send=x=>process.stdout.write(JSON.stringify(x)+'\\n');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.id)return;if(m.method!=='turn/start'){send({id:m.id,result:m.method==='thread/start'?{thread:{id:'native'}}:{}});return}const e=(method,params)=>({method,params:{threadId:'native',turnId:'current',...params}});const batch=[e('item/started',{turnId:'previous',item:{id:'old',type:'agentMessage',phase:'final_answer'}}),e('item/agentMessage/delta',{turnId:'previous',itemId:'old',delta:'before-ack-stale'}),{id:m.id,result:{turn:{id:'current'}}},e('item/started',{item:{id:'answer',type:'agentMessage',phase:'final_answer'}}),e('turn/started',{turn:{id:'previous'}}),e('item/agentMessage/delta',{turnId:'previous',itemId:'answer',delta:'after-ack-stale'}),e('item/agentMessage/delta',{itemId:'answer',delta:'correct'}),e('item/completed',{item:{id:'answer',type:'agentMessage',phase:'final_answer',text:'correct'}}),e('turn/completed',{turn:{id:'current',status:'completed'}})];process.stdout.write(batch.map(JSON.stringify).join('\\n')+'\\n')})\n`,{mode:0o700})
+ const model=new CodexModel({codex:binary,effort:'high',turnTimeoutMs:10000})
+ await expect(model.run({cwd:root,instructions:'test',input:'test',schema:{},onOutput:e=>events.push(e)})).resolves.toMatchObject({text:'correct',turnId:'current'})
+ expect(events.filter(e=>e.type==='delta').map(e=>e.text).join('')).toBe('correct')
+ expect(JSON.stringify(events)).not.toContain('stale')
 })

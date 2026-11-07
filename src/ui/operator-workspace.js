@@ -11,11 +11,11 @@ Object.assign(icons, {
   conversations:'M3 4h14v10H8l-5 4V4zM17 9h4v12l-5-4h-5v-3',search:'M21 21l-6-6M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0'
 })
 const opPages = () => ({
-  home: L('Tasks', '任务'), attention: L('Needs your attention', '待我处理'),
-  activity: L('Tasks', '任务'), catalog: L('Software connections', '软件接入'),
+  home: L('Workspace', '工作区'), attention: L('Needs your attention', '待我处理'),
+  activity: L('Tasks', '任务'), catalog: L('Conversation entries', '会话入口'),
   catalogue: L('New connection', '新建接入'), detail: entryName(entryState.selected),
-  models: L('Model services', '模型服务'), 'model-new': L('New model service', '新建模型服务'),
-  execution: L('Execution', '执行'), prompts: L('Prompts', '提示词'),
+  models: L('Model connections', '模型连接'), 'model-new': L('New model connection', '新建模型连接'),
+  integrations: L('Tools and apps', '工具与应用'), execution: L('Agent team', 'Agent 团队'), prompts: L('Shared instructions', '共享指令'),
   usage: L('Usage guide', '使用指引'), advanced: L('Advanced settings', '高级设置')
 })
 function opButton(text,callback,kind='button',glyph){const button=action(text,callback,kind,glyph);if(kind.includes('icon-button')&&glyph){button.setAttribute('aria-label',text);button.title=text;button.replaceChildren(icon(glyph))}return button}
@@ -37,6 +37,7 @@ async function readOperatorWork() {
     operator.work = await api(operatorWorkPath())
     operator.error = false
   } catch (error) {
+    if (error.payload?.code === 'workspace_obsolete') return
     operator.error = true
     if (error.status === 401) throw error
   }
@@ -46,15 +47,14 @@ function confirmWorkspaceAction(title, description, label, callback) {
   const heading = el('h2', '', title)
   heading.id = 'workspace-confirm-title'
   dialog.setAttribute('aria-labelledby', heading.id)
-  const cancel = opButton(L('Cancel', '取消'), () => dialog.close(), 'button')
+  const cancel = opButton(L('Cancel', '取消'), () => WorkspaceMotion.closeDialog(dialog), 'button')
   const confirmAction = opButton(label, () => {
-    dialog.close()
-    callback()
+    WorkspaceMotion.closeDialog(dialog, callback)
   }, 'button primary')
   dialog.append(heading, el('p', '', description), add(el('div', 'actions'), cancel, confirmAction))
   dialog.onclose = () => dialog.remove()
   app.querySelector('.operator-workspace').append(dialog)
-  dialog.showModal()
+  WorkspaceMotion.openDialog(dialog)
   cancel.focus()
 }
 function workspaceTable(headings, values) {
@@ -309,14 +309,15 @@ function opApproval(approval){
 }
 async function answerOperatorApproval(id,answer){await entryRun('approval',async()=>{await api('/approval',{id,answer});operator.drawer=await api('/entry-workspace/task/'+encodeURIComponent(operator.drawer.id));await readOperatorWork()})}
 function renderOperatorWorkspace(){
-  document.documentElement.lang=lang;document.title=(opPages()[entryState.page]||opPages().home)+' · AgentHub'
+  if(typeof configurationHost === 'undefined' || !configurationHost || configurationHost.active()) document.title=(opPages()[entryState.page]||opPages().home)+' · Roppo'
   const root=el('div','operator-workspace'),shell=el('div','app-shell'),rail=el('aside','sidebar');rail.id='operator-sidebar';rail.setAttribute('aria-label',L('Workspace navigation','工作台导航'))
   const close=opButton(L('Close navigation','关闭导航'),()=>setOperatorMenu(false),'icon-button sidebar-close','close');close.id='operator-menu-close'
-  rail.append(add(el('div','brand'),add(el('span','brand-symbol'),icon('brand')),el('span','','AgentHub'),el('span','version',S.health?.version||'0.10')),close,add(el('div','workspace'),el('span','workspace-avatar','A'),add(el('div'),el('strong','',L('My workspace','我的工作空间')),el('small','',L('Personal deployment','个人部署')))))
+  rail.append(add(el('div','brand'),el('span','roppo-brand-mark'),el('span','','Roppo'),el('span','version',S.health?.version||'0.10')),close,workspaceTrigger())
   const nav=el('nav');nav.setAttribute('aria-label',L('Main navigation','主导航'))
-  for(const [page,glyph]of [['home','overview'],['attention','inbox'],['catalog','sources'],['models','cpu'],['execution','execution'],['prompts','prompts']]){
-    if(page==='catalog')nav.append(el('span','nav-group',L('Configuration','配置')))
-    const b=opButton('',()=>opNavigate(page),'operator-nav-link');b.replaceChildren(icon(glyph),el('span','',opPages()[page]));if(page===entryState.page||page==='home'&&entryState.page==='activity'||page==='catalog'&&['detail','catalogue'].includes(entryState.page)||page==='models'&&entryState.page==='model-new')b.setAttribute('aria-current','page');if(page==='attention'&&operator.work?.attentionTotal)b.append(el('span','nav-count',operator.work.attentionTotal));nav.append(b)
+  const chatLink=add(el('a','operator-nav-link'),icon('prompts'),el('span','',L('Conversations','对话')));chatLink.href='/chat';nav.append(chatLink)
+  for(const [page,glyph]of [['home','overview'],['activity','work'],['attention','inbox'],['execution','execution'],['models','cpu'],['catalog','sources'],['integrations','work'],['prompts','prompts']]){
+    if(page==='execution')nav.append(el('span','nav-group',L('Configuration','配置')))
+    const b=opButton('',()=>opNavigate(page,'',page==='execution'?{view:'configuration'}:undefined),'operator-nav-link');b.replaceChildren(icon(glyph),el('span','',opPages()[page]));if(page===entryState.page||page==='catalog'&&['detail','catalogue'].includes(entryState.page)||page==='models'&&entryState.page==='model-new')b.setAttribute('aria-current','page');if(page==='attention'&&operator.work?.attentionTotal)b.append(el('span','nav-count',operator.work.attentionTotal));nav.append(b)
   }
   const host=add(el('div','host-mini'),el('span','status-dot'),add(el('div'),el('strong','',L('Management host','管理宿主')),el('span','',location.host)),icon('monitor'))
   const guideLink = opButton(L('Usage guide','使用指引'),()=>opNavigate('usage'),'utility-link','book')
@@ -324,28 +325,51 @@ function renderOperatorWorkspace(){
   const settingsLink = opButton(L('Advanced settings','高级设置'),()=>opNavigate('advanced'),'utility-link','advanced')
   if (entryState.page === 'advanced') settingsLink.setAttribute('aria-current','page')
   if (entryState.page === 'usage') guideLink.setAttribute('aria-current','page')
-  rail.append(nav,add(el('div','sidebar-bottom'),host,guideLink,settingsLink,add(el('div','profile'),el('span','profile-avatar','A'),add(el('div'),el('strong','',L('Operator','操作员')),el('span','',L('Manage this deployment','管理此部署'))))))
+  const owner = entryState.account?.user
+  const profile = add(el(owner ? 'a' : 'div','profile'),el('span','profile-avatar',owner?.displayName?.slice(0,1).toUpperCase() || 'R'),add(el('div'),el('strong','',owner?.displayName || L('Operator','操作员')),el('span','',owner ? L('Your account','你的账号') : L('Manage this deployment','管理此部署'))))
+  if (owner) { profile.href='/account'; profile.setAttribute('aria-label',L('Your account','你的账号')) }
+  rail.append(nav,add(el('div','sidebar-bottom'),host,guideLink,settingsLink,profile))
   const toggle=opButton(L('Open navigation','打开导航'),()=>setOperatorMenu(true),'icon-button mobile-menu','menu');toggle.id='operator-menu';toggle.setAttribute('aria-expanded',String(operator.menu));toggle.setAttribute('aria-controls','operator-sidebar')
-  const top=add(el('header','topbar'),add(el('div','breadcrumb'),toggle,el('span','',L('My workspace','我的工作空间')),el('span','slash','/'),el('strong','',opPages()[entryState.page]||opPages().home)),add(el('div','topbar-tools'),languagePicker(),opButton(L('Refresh','刷新'),refreshEntries,'icon-button','refresh'),opButton(L('Use assistant','使用助手'),()=>opNavigate('usage'),'text-button')))
+  const top=add(el('header','topbar'),add(el('div','breadcrumb'),toggle,el('span','',workspaceName()),el('span','slash','/'),el('strong','',opPages()[entryState.page]||opPages().home)),add(el('div','topbar-tools'),themeToggle(),languagePicker(),opButton(L('Refresh','刷新'),refreshEntries,'icon-button','refresh'),opButton(L('New conversation','新建会话'),()=>{location.href='/chat'},'text-button')))
   const main=el('main');main.id='main';main.tabIndex=-1
-  if(entryState.data.preview)main.append(el('p','alert warning',L('Isolated preview: installation and external execution are unavailable.','隔离预览：安装和外部执行不可用。')))
+  if(entryState.data?.preview)main.append(el('p','alert warning',L('Isolated preview: installation and external execution are unavailable.','隔离预览：安装和外部执行不可用。')))
   if(entryState.error){const error=add(el('div','alert error'),el('p','',L(...entryState.error.text)),entryState.error.detail?detail(L('Details','详情'),raw(entryState.error.detail)):null,opButton(L('Refresh','刷新'),refreshEntries,'button'));error.id='entry-error';error.tabIndex=-1;error.setAttribute('role','alert');main.append(error)}
   if(operator.error)main.append(add(el('div','alert warning'),el('p','',L('Work status could not be loaded. Existing values may be outdated.','任务状态未能读取，已有数据可能已过时。')),opButton(L('Refresh','刷新'),refreshEntries,'button')))
   const content=el('fieldset','operator-body');content.disabled=!!entryState.busy||!!S.busy
   const views = {
-    home: opTasks, activity: opTasks, attention: opAttention, catalog: opCatalogue, catalogue: opCatalogue,
+    home: workspaceHome, activity: opTasks, attention: opAttention, catalog: opCatalogue, catalogue: opCatalogue,
     detail: opConnection, models: opModels, 'model-new': opModels, execution: controlExecution,
-    prompts: controlPrompts, usage: opUsage, advanced: renderWorkspaceSettings
+    integrations: controlIntegrations, prompts: controlPrompts, usage: opUsage, advanced: renderWorkspaceSettings
   }
   if (S.latest) main.append(conflictPanel())
   if (entryState.page === 'advanced' && S.statusError) main.append(el('p','alert warning',L('Host status is unavailable. Refresh in Host status.','宿主状态暂不可用，请在宿主状态中刷新。')))
-  content.append(...(views[entryState.page] || opTasks)().filter(Boolean))
+  const ready = S.authed && S.base
+  const waitingForEntries = needsEntryInventory() && !entryState.data
+  const waitingForWork = ['home','activity','attention'].includes(entryState.page) && !operator.work && !operator.error
+  if (!ready || waitingForEntries || waitingForWork) {
+    const failed = !entryState.loading && !ready || waitingForEntries && entryState.inventoryError
+    const state = el('div', 'workspace-page-loading')
+    state.append(opHeading(opPages()[entryState.page] || opPages().home, null))
+    const label = el('p', failed ? 'workspace-load-error' : 'workspace-loading', failed ? L('Couldn’t load this page.', '页面加载失败。') : L('Loading…', '加载中…'))
+    label.setAttribute('role', failed ? 'alert' : 'status');state.append(label)
+    if (failed) state.append(opButton(L('Retry', '重试'), () => ready ? refreshEntries() : startEntrySession(), 'button'))
+    content.append(state)
+  } else content.append(...(views[entryState.page] || opTasks)().filter(Boolean))
   main.append(content)
-  if (S.notice || S.busy) main.prepend(noticeView())
+  if (S.notice || S.busy && S.busy !== 'connect') main.prepend(noticeView())
   if (entryState.busy) main.append(el('p','entry-progress',L('Working…','正在处理…')))
   const savebar = el('div', 'savebar')
   savebar.id = 'savebar'
   savebar.hidden = document.getElementById('savebar')?.hidden ?? true
+  if(typeof configurationHost !== 'undefined' && configurationHost) {
+    const dialog=opTaskDialog()
+    root.append(main,savebar)
+    if(dialog)root.append(dialog)
+    app.replaceChildren(root)
+    updateBar()
+    if(dialog && configurationHost.active())dialog.showModal()
+    return
+  }
   const body = add(el('div','main-shell'),top,main,savebar)
   const scrim=opButton(L('Close navigation background','关闭导航背景'),()=>setOperatorMenu(false),'nav-scrim')
   shell.append(rail,scrim,body);const skip=el('a','skip',L('Skip to content','跳至主要内容'));skip.href='#main';root.append(skip,shell);const dialog=opTaskDialog();if(dialog)root.append(dialog);app.replaceChildren(root)

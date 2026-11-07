@@ -10,7 +10,7 @@ export function mergeParameters(base:Record<string,unknown>={},override:Record<s
  return result
 }
 function isRecord(v:unknown):v is Record<string,unknown>{return !!v&&typeof v==='object'&&!Array.isArray(v)}
-export function mergeOptions(base:AgentOptions={},override:AgentOptions={}):AgentOptions{return {...structuredClone(base),...structuredClone(override),parameters:mergeParameters(base.parameters,override.parameters)}}
+export function mergeOptions(base:AgentOptions={},override:AgentOptions={}):AgentOptions{return {...structuredClone(base),...structuredClone(override),parameters:mergeParameters(base.parameters,override.parameters),...((base.browser||override.browser)?{browser:{...base.browser,...override.browser}}:{})}}
 export function apiOptions(d:ApiDefinition,o:AgentOptions):ApiDefinition{
  let parameters=mergeParameters(d.parameters,o.parameters)
  if(o.effort!==undefined){

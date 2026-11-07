@@ -36,7 +36,9 @@ it('returns an authenticated configuration inventory without testing providers o
  try{
   const f=await fixture();expect((await fetch(f.host.url+'/configuration')).status).toBe(401)
   const page=await fetch(f.host.url+'/configure');expect(page.status).toBe(200);expect(page.headers.get('content-type')).toContain('text/html');expect(page.headers.get('content-security-policy')).toContain("connect-src 'self'")
-  const script=/<script>([\s\S]*?)<\/script>/.exec(await page.text())?.[1];expect(script).toBeTruthy();expect(()=>new Script(script!)).not.toThrow()
+  const scripts=[...(await page.text()).matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match=>match[1]!)
+  expect(scripts.length).toBeGreaterThan(0)
+  for(const script of scripts)expect(()=>new Script(script)).not.toThrow()
   const response=await fetch(f.host.url+'/configuration',{headers:f.headers}),data=await response.json()
   expect(response.status).toBe(200);expect(data.editableKeys).toContain('execution');expect(data.editableKeys).toContain('backends')
   expect(data.restartRequiredKeys).toContain('sources.deployment');expect(data.sourceEditableKeys).toContain('allowedActors')

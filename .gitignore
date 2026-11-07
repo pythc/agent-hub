@@ -1,4 +1,5 @@
 node_modules/
+/node_modules
 .superagent/
 .agenthub-api/
 coverage/
@@ -16,3 +17,12 @@ examples/acceptance-config.json
 plugins/codex/.mcp.json
 deployment/*.plist
 .DS_Store
+
+/dist/chat/
+
+# Private design notes, local acceptance output, and Python caches.
+/.impeccable/
+__pycache__/
+*.py[cod]
+/docs/design/
+/docs/brand/

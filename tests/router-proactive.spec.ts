@@ -18,11 +18,23 @@ function fixture(custom?:(r:ModelRequest,input:any)=>Promise<any>){
  const calls:ModelRequest[]=[]
  const config=configSchema.parse({stateDir:join(root,'state'),acceptMode:'auto',rules:[],work:{sandboxDriver:'disabled'},execution:{router:{mode:'host',model:'terra',effort:'medium'},management:{enabled:true},workers:[{id:'one',backend:'codex',model:'sol',effort:'high'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice','bob'],allowedBots:['build-bot'],observed:true}]})
  const model:Model={async run(r){
-  calls.push(r);const input=JSON.parse(r.input),threadId=r.threadId??'native-'+calls.length,turnId='turn-'+calls.length;r.onThread?.(threadId);r.onTurn?.(turnId)
+  calls.push(r);let input=JSON.parse(r.input);const threadId=r.threadId??'native-'+calls.length,turnId='turn-'+calls.length;r.onThread?.(threadId);r.onTurn?.(turnId)
   const override=await custom?.(r,input);if(override!==undefined)return {threadId,turnId,text:JSON.stringify(override)}
   if(r.ephemeral){const text=input.triggers.map((t:any)=>t.text).join('\n'),action=text.includes('ambiguous')?'clarify':text.includes('continue')?'attach':text.includes('ignore')?'ignore':'accept';return {threadId,turnId,text:JSON.stringify({action,title:'Work',scope:text,reason:'Matched explicit input or written duty',question:'请选择要继续的任务。',rules:input.rules.map((r:any)=>r.id),ruleAssessments:input.rules.map((r:any)=>({id:r.id,matched:true,reason:'matched'})),targetTicketId:action==='attach'?input.existing[0]?.id??null:null})}}
+  if(input.kind==='proactive_candidates'){
+   const read=await r.onTool!('orchestrator_eval',{},'eval')
+   if(!read.success)throw Error(JSON.stringify(read))
+   const context=JSON.parse((read.contentItems[0] as any).text),text=context.triggers.map((t:any)=>t.text).join('\n')
+   const target=text.includes('continue')?input.related.find((t:any)=>t.canAttach&&!t.ended):undefined
+   const result=await r.onTool!('orchestrator_eval_decide',{action:target?'attach':text.includes('ignore')?'ignore':'accept',title:'Work',scope:text,reason:'Written duty with a settled request',rules:context.rules.map((r:any)=>r.id),ruleAssessments:context.rules.map((r:any)=>({id:r.id,matched:true,reason:'Build failure'})),targetTicketId:target?.id??null,direction:{implementation_requested:true,target_basis:'existing-standard',requires_design_decision:false,evidence:text},intent_evidence:text},'decide')
+   if(!result.success)throw Error(JSON.stringify(result))
+   const decision=JSON.parse((result.contentItems[0] as any).text)
+   if(decision.state!=='accepted')return {threadId,turnId,text:JSON.stringify({reply:''})}
+   if(target){const sent=await r.onTool!('worker_manage',{action:'send',ticketId:target.id,revision:0,requestId:'continue-'+input.primary,text},'send');if(!sent.success)throw Error(JSON.stringify(sent));return {threadId,turnId,text:JSON.stringify({reply:''})}}
+   input={kind:'event',trigger:{id:input.primary},mandate:decision.mandate}
+  }
   if(r.role==='router'){
-   if(input.kind!=='worker_result'&&(input.mandate.scope.includes('start')||input.schedule)){
+   if(!['worker_result','task_followups'].includes(input.kind)&&(input.mandate.scope.includes('start')||input.schedule)){
     const result=await r.onTool!('worker_manage',{action:'assign',id:'one',text:input.mandate.scope,requestId:'assign-'+input.trigger.id,revision:0},'assign')
     if(!result.success)throw Error(JSON.stringify(result))
    }
@@ -77,7 +89,7 @@ it('rejects duty/schedule management by ordinary members and inferred inputs',()
  expect(()=>f.plan(bot.triggerId)).toThrow('human authorization')
 })
 it('invalidates an in-flight decision after rule changes and freezes inputs during evaluation',async()=>{
- let release!:()=>void;const f=fixture(async r=>{if(r.ephemeral)await new Promise<void>(r=>release=r)})
+ let release!:()=>void;const f=fixture(async r=>{if(JSON.parse(r.input).kind==='proactive_candidates')await new Promise<void>(r=>release=r)})
  f.enable();f.duty();f.receive('start build',{actor:'build-bot',human:false});f.advance(101)
  await until(f.h,()=>!!release);f.receive('start another build',{actor:'build-bot',human:false});expect(batches(f.h)).toHaveLength(2)
  f.duty('observe','g1',1);release();await until(f.h,()=>batches(f.h)[0]!.state==='failed');expect(f.h.store.tickets.list()).toHaveLength(0)
@@ -146,15 +158,15 @@ it.each(['off','observe'] as const)('retains the global %s ceiling over an auto 
  const f=fixture();f.enable();f.duty();f.h.config.acceptMode=mode
  f.receive('start build',{actor:'build-bot',human:false});f.advance(101)
  if(mode==='observe')await until(f.h,()=>batches(f.h)[0]?.state==='decided');else await f.h.tick()
- expect(f.h.store.tickets.list()).toHaveLength(0);expect(f.calls.filter(r=>!r.ephemeral)).toHaveLength(0)
+ expect(f.h.store.tickets.list()).toHaveLength(0);expect(f.calls.filter(r=>r.role==='worker')).toHaveLength(0);expect(f.calls.filter(r=>JSON.parse(r.input).kind==='proactive_candidates')).toHaveLength(mode==='observe'?1:0)
 })
 it('enforces inferred cooldown on queued batches without delaying explicit requests',async()=>{
  const f=fixture();f.enable({cooldownMs:1000});f.duty();f.receive('build failed',{actor:'build-bot',human:false});f.advance(101)
  await until(f.h,()=>batches(f.h)[0]?.state==='decided')
  f.receive('build failed again',{actor:'build-bot',human:false});f.receive('ignore human request');f.advance(101)
  await until(f.h,()=>batches(f.h).find(b=>b.strength==='explicit')?.state==='decided')
- expect(batches(f.h).filter(b=>b.state==='pending')).toHaveLength(1);expect(f.calls.filter(r=>r.ephemeral)).toHaveLength(2)
- f.advance(1000);await until(f.h,()=>batches(f.h).every(b=>b.state==='decided'));expect(f.calls.filter(r=>r.ephemeral)).toHaveLength(3)
+ expect(batches(f.h).filter(b=>b.state==='pending')).toHaveLength(1);expect(f.calls.filter(r=>r.ephemeral||JSON.parse(r.input).kind==='proactive_candidates')).toHaveLength(2)
+ f.advance(1000);await until(f.h,()=>batches(f.h).every(b=>b.state==='decided'));expect(f.calls.filter(r=>r.ephemeral||JSON.parse(r.input).kind==='proactive_candidates')).toHaveLength(3)
 })
 it('cancels a running occurrence, fences late output and preserves the recurring schedule',async()=>{
  let release!:()=>void;const f=fixture(async(r,input)=>{if(input.schedule){await new Promise<void>(r=>release=r);return {reply:'Do not publish cancelled output'}}})
@@ -174,15 +186,14 @@ it('follows an open task through the scheduler without changing its ID, backend 
  await until(f.h,()=>runs(f.h)[0]?.state==='completed'&&runs(f.h)[0]?.delivery==='sent')
  expect(f.h.store.tickets.list()).toHaveLength(1);expect(runs(f.h)[0]?.taskIds).toEqual([ticket.id]);expect(f.h.store.get<any>('run',ticket.id).threadId).toBe(before.threadId);expect(f.h.store.get<any>('run',ticket.id).backendId??'codex').toBe(before.backendId??'codex');expect(workerCalls).toBe(2)
 })
-it('binds legacy admission attach to the original task instead of invoking a free Router delegation',async()=>{
+it('binds persistent Router candidate attachment to the original task',async()=>{
  let calls=0;const f=fixture(async(r,input)=>{
   if(r.role==='worker'&&++calls===1)return {state:'waiting',summary:'Waiting',reply:'Waiting',question:null,askedBy:null,handbacks:[]}
-  if(r.ephemeral)return {action:input.existing.length?'attach':'accept',title:'Continue',scope:'start or continue the build investigation',reason:'Same discussion follow-up',rules:input.rules.map((r:any)=>r.id),ruleAssessments:input.rules.map((r:any)=>({id:r.id,matched:true,reason:'Build failure'})),targetTicketId:input.existing[0]?.id??null}
  })
  f.duty();f.receive('start build',{actor:'build-bot',human:false});await until(f.h,()=>f.h.store.tickets.list()[0]?.assignments.at(-1)?.report?.state==='waiting')
  const original=f.h.store.tickets.list()[0]!,routers=f.calls.filter(r=>r.role==='router'&&!r.ephemeral).length
  f.receive('continue build',{actor:'build-bot',human:false});await until(f.h,()=>calls===2&&!!f.h.store.tickets.get(original.id)?.ended)
- expect(f.h.store.tickets.list()).toHaveLength(1);expect(f.calls.filter(r=>r.role==='router'&&!r.ephemeral).length).toBeLessThanOrEqual(routers+1)
+ expect(f.h.store.tickets.list()).toHaveLength(1);expect(f.calls.filter(r=>r.role==='router'&&!r.ephemeral).length).toBeLessThanOrEqual(routers+2)
 })
 it('keeps all batch inputs authoritative after delegation, including a later withdrawal of the first message',async()=>{
  const f=fixture();f.enable();const first=f.receive('start calculation');f.receive('verify it');f.advance(101)
@@ -218,7 +229,11 @@ it('exposes operator APIs with authentication and keeps model views within the c
   expect((await fetch(server.url+'/router-proactive',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'list',scopeId:'team'})})).status).toBe(401)
   const response=await fetch(server.url+'/router-proactive',{method:'POST',headers,body:JSON.stringify({action:'list',scopeId:'team'})})
   expect(response.ok).toBe(true);expect((await response.json() as any).schedules).toHaveLength(1)
-  const html=await (await fetch(server.url+'/router-proactive')).text();expect(html).toContain('职责与定时任务');expect(html).not.toContain(one.triggerId)
+  const locked=await (await fetch(server.url+'/router-proactive')).text();expect(locked).not.toContain('职责与定时任务');expect(locked).not.toContain(one.triggerId)
+  const setup=await fetch(server.url+'/account/setup',{method:'POST',headers,body:JSON.stringify({username:'test.owner',displayName:'Owner',password:'local test passphrase',remember:true})})
+  expect(setup.status).toBe(201)
+  const cookie=setup.headers.get('set-cookie')!.split(';')[0]!
+  const html=await (await fetch(server.url+'/router-proactive',{headers:{cookie}})).text();expect(html).toContain('职责与定时任务');expect(html).not.toContain(one.triggerId)
  }finally{await new Promise<void>(resolve=>server.server.close(()=>resolve()))}
 })
 it('rejects an oversized batch within the full scoped context budget before inference or delegation',async()=>{
@@ -253,4 +268,54 @@ it('preserves arbitrary existing global rule IDs instead of reserving a new pref
  const f=fixture();f.h.config.rules=[{id:'duty:legacy',instruction:'Investigate build failures'}];f.enable()
  f.receive('start build check',{actor:'build-bot',human:false});f.advance(101)
  await until(f.h,()=>f.h.store.tickets.list().some(t=>t.ended));expect(f.h.store.tickets.list()).toHaveLength(1)
+})
+
+it('splits more than twenty inferred inputs without losing candidates or starting assessor threads',async()=>{
+ const f=fixture();f.enable();f.duty()
+ for(let i=0;i<23;i++)f.receive('build failure '+i,{actor:'build-bot',human:false})
+ expect(batches(f.h).map(b=>b.triggerIds.length)).toEqual([20,3])
+ f.advance(101);await until(f.h,()=>batches(f.h).every(b=>b.state==='decided'))
+ expect(f.h.store.list<any>('router-admission').filter(a=>a.state==='accepted')).toHaveLength(23)
+ const turns=f.calls.filter(r=>JSON.parse(r.input).kind==='proactive_candidates')
+ expect(turns).toHaveLength(2);expect(f.calls.some(r=>r.ephemeral)).toBe(false)
+ expect(turns[1]?.threadId).toBe('native-1')
+ expect(f.h.store.list<any>('router-candidate').every(b=>b.phase==='complete')).toBe(true)
+})
+
+it('withdraws a batched inferred task if an earlier admitted message is revoked',async()=>{
+ const f=fixture();f.enable();f.duty()
+ const first=f.receive('start build',{actor:'build-bot',human:false});f.receive('also verify build',{actor:'build-bot',human:false})
+ f.advance(101);await until(f.h,()=>f.h.store.tickets.list().length===1)
+ f.h.store.put('source-invalid-trigger',first.triggerId,{reason:'recalled'})
+ await until(f.h,()=>f.h.store.db.prepare("SELECT id FROM jobs WHERE kind='start' AND state='blocked'").all().length===1)
+ expect(f.calls.some(r=>r.role==='worker')).toBe(false)
+ expect(f.h.store.deliveries().some(d=>d.status==='sent'&&!d.channel.address.routerInbox)).toBe(false)
+})
+
+it('invalidates candidate context after a historical evidence source is deleted',async()=>{
+ const f=fixture();f.duty()
+ const earlier=f.receive('ignore this old build note',{actor:'build-bot',human:false})
+ await until(f.h,()=>f.h.routerIngress.get(earlier.triggerId)?.state==='ignored')
+ f.receive('start current build',{actor:'build-bot',human:false})
+ await until(f.h,()=>f.h.store.tickets.list().length===1)
+ const task=f.h.store.tickets.list()[0]!,manifest=f.h.store.get<any>('task-context',task.id).manifest
+ const e=f.h.memory.ingest(f.context(earlier))
+ expect(manifest.inputEvidence).toContainEqual({id:e.id,version:e.version})
+ const manager=f.receive('delete the old evidence')
+ f.h.memory.command(f.context(manager),{action:'source.delete',id:e.id,operationId:'delete-old-context',expectedRevision:e.version})
+ expect(()=>f.h.memory.validate(manifest)).toThrow()
+ await until(f.h,()=>f.h.store.db.prepare("SELECT id FROM jobs WHERE kind='start' AND state='blocked'").all().length===1)
+ expect(f.calls.some(r=>r.role==='worker')).toBe(false)
+})
+
+it('does not relay withdrawn scoped follow-ups or expose them to a Router',async()=>{
+ const f=fixture();f.receive('start existing work')
+ await until(f.h,()=>f.h.store.deliveries().some(d=>d.status==='sent'&&!d.channel.address.routerInbox))
+ const before=f.calls.length,task=f.h.store.tickets.list()[0]!
+ const t=f.h.sources.get('local')!.trigger({id:'recalled-followup',thread:'g1-topic',scope:'g1',text:'secret recalled text',addressed:false},'alice',true)
+ f.h.store.put('source-invalid-trigger',t.id,{reason:'recalled'})
+ f.h.ingest(t);for(let n=0;n<4;n++)await f.h.tick()
+ expect(f.calls).toHaveLength(before)
+ expect(f.h.store.list('router-followup')).toHaveLength(0)
+ expect(f.h.store.tickets.get(task.id)?.ended).toBeTruthy()
 })

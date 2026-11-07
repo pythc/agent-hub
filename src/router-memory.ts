@@ -16,7 +16,7 @@ export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:s
 export interface MemoryProjection extends MemoryFact {freshness:{status:'verified'|'unverified'|'unavailable'|'stale';capturedAt:number;checkedAt?:number;sourceVersions:{id:string;version:number}[]};access:{audienceEntry:string;sourceEntry:string;mode:'origin'|'published_revision';revision:number;shareId?:string}}
 export interface MemoryShare {id:string;factId:string;revision:number;targetEntry:string;active:boolean;expiresAt?:number;publishedAt?:number}
 export interface MemoryCapture {tenantId:string;scopeId:string;generation:number;epoch:number;sourceVersions:{id:string;version:number}[]}
-export interface ContextManifest {id:string;triggerId:string;actor:string;tenantId:string;scopeId:string;entryId:string;routerId:string;epoch:number;generation:number;facts:{id:string;revision:number}[];evidence:{id:string;version:number}[];knowledge?:{documentId:string;revision:number}[];taskOwners:{id:string;epoch:number;dataRevision?:number}[];bytes:number;truncated:boolean;retrieval?:{status:string;reason?:string};at:number;backend:string;sessionKey:string}
+export interface ContextManifest {id:string;triggerId:string;actor:string;tenantId:string;scopeId:string;entryId:string;routerId:string;epoch:number;generation:number;facts:{id:string;revision:number}[];evidence:{id:string;version:number}[];inputEvidence?:{id:string;version:number}[];knowledge?:{documentId:string;revision:number}[];taskOwners:{id:string;epoch:number;dataRevision?:number}[];bytes:number;truncated:boolean;retrieval?:{status:string;reason?:string};at:number;backend:string;sessionKey:string}
 const base={operationId:id,expectedRevision:z.number().int().min(0)}
 export const memoryCommandSchema=z.discriminatedUnion('action',[
  z.object({action:z.literal('remember'),...base,id:id.optional(),subject:id,content:z.string().min(1).max(16000),sourceIds:z.array(id).max(30),derivedFrom:z.array(id).max(20).default([]),relation:z.enum(['independent','joint']).default('joint'),visibility:z.enum(['group','private','task']).default('group'),ticketId:id.optional(),expiresAt:z.number().int().positive().optional(),candidate:z.boolean().default(true),capture:z.object({tenantId:id,scopeId:id,generation:z.number(),epoch:z.number(),sourceVersions:z.array(z.object({id,version:z.number()}).strict())}).strict().optional()}).strict(),
@@ -336,6 +336,22 @@ export class RouterMemory {
   const manifest:ContextManifest={id:'context-'+randomUUID(),triggerId:c.trigger.id,actor:c.actor,tenantId:c.route.tenantId,scopeId:s.id,entryId:c.route.entryId,routerId:s.routerId,epoch:c.route.epoch,generation:this.generation(s.id),facts:facts.map(f=>({id:f.id,revision:f.revision})),evidence:facts.flatMap(f=>f.sources.map(e=>({id:e.id,version:e.version}))),taskOwners:c.route.taskId?[{id:c.route.taskId,epoch:c.route.ownerEpoch!,dataRevision:this.scopes.ownership(c.route.taskId)?.dataRevision??1}]:[],bytes:Buffer.byteLength(rendered),truncated,retrieval:{status:retrieval.status,...(retrieval.reason?{reason:retrieval.reason}:{})},at:Date.now(),backend,sessionKey:stableDigest([s.routerId,c.route.entryId,c.route.discussion,c.route.epoch,backend])}
   this.store.put('context-manifest',manifest.id,manifest);return {input:rendered,manifest}
  }
+ bindInputs(c:ScopeContext,manifest:ContextManifest,ids:string[]){
+  for(const id of new Set(ids)){
+   const trigger=this.store.triggers.get(id)
+   if(!trigger)throw Error('Context input unavailable')
+   this.scopes.assertTrigger(trigger)
+   const input=this.scopes.context(trigger,c.route.discussion)
+   if(!input||input.route.entryId!==c.route.entryId||input.route.scopeId!==c.route.scopeId)throw Error('Context input is outside this entry')
+   const e=this.ingest(input)
+   if(!this.canEvidence(e,c))throw Error('Context input revoked')
+   manifest.inputEvidence??=[]
+   const previous=manifest.inputEvidence.find(ref=>ref.id===e.id)
+   if(previous&&previous.version!==e.version)throw Error('Context input changed')
+   if(!previous)manifest.inputEvidence.push({id:e.id,version:e.version})
+  }
+  this.store.put('context-manifest',manifest.id,manifest)
+ }
  validate(manifest:ContextManifest){
   this.reconcile()
   if(manifest.epoch!==this.scopes.epoch(manifest.tenantId)||manifest.generation!==this.generation(manifest.scopeId)||!this.scopes.sourceActive(this.scopes.binding(manifest.entryId)))throw Error('Context expired')
@@ -344,6 +360,13 @@ export class RouterMemory {
   this.scopes.assertTrigger(trigger)
   const context:ScopeContext={trigger,actor:manifest.actor,route:{triggerId:trigger.id,discussion:trigger.source+':'+trigger.threads[0]!.id,entryId:manifest.entryId,tenantId:manifest.tenantId,scopeId:manifest.scopeId,routerId:manifest.routerId,epoch:manifest.epoch,bindingRevision:this.scopes.binding(manifest.entryId).revision}}
   this.validateKnowledge?.(context,manifest.knowledge??[])
+  for(const ref of manifest.inputEvidence??[]){
+   const e=this.evidence(ref.id),entry=e&&this.scopes.binding(e.entryId)
+   if(!e||e.revoked||e.version!==ref.version||e.tenantId!==manifest.tenantId||!entry||!this.scopes.sourceActive(entry)||e.capturedAt<=(this.store.get<any>('source-entry-state',entry.id)?.historyCutoff??0))throw Error('Context input expired')
+   const input=e.locator.startsWith('trigger:')&&this.store.triggers.get(e.locator.slice(8))
+   if(!input)throw Error('Context input unavailable')
+   this.scopes.assertTrigger(input)
+  }
   for(const ref of manifest.facts){const f=this.fact(ref.id);if(!f||!this.visible(f,context)||f.revision!==ref.revision||f.state!=='active'||f.expiresAt!==undefined&&f.expiresAt<=Date.now()||!this.supported(f))throw Error('Context fact expired')}
   for(const t of manifest.taskOwners){const owner=this.scopes.ownership(t.id);if(!owner||owner.ownerEpoch!==t.epoch||owner.routerId!==manifest.routerId)throw Error('Task owner changed');if((owner.dataRevision??1)!==(t.dataRevision??1))throw Error('Task input changed');this.scopes.checkTaskEntry(owner,manifest.entryId,'context');this.scopes.checkTaskEntry(owner,manifest.entryId,'result')}
  }

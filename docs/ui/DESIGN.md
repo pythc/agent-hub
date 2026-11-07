@@ -1,3 +1,5 @@
+> Historical entry-layout baseline. Current theme tokens and appearance are defined in [the root DESIGN.md](../../DESIGN.md) and `src/ui/theme.css`; the green palette below is superseded.
+
 ---
 name: AgentHub Configuration
 description: Bilingual operator interface for inspecting a host and editing revisioned runtime settings.

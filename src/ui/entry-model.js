@@ -50,7 +50,7 @@ function entryModelCanApply() {
     entryModel.plan &&
     check &&
     !check.checks.some((c) => c.status === 'required') &&
-    (check.ok === true || (entryState.data.preview === true && check.preview === true))
+    (check.ok === true || (S.snap?.preview === true && check.preview === true))
   )
 }
 function entryModelResult() {
@@ -296,7 +296,7 @@ async function checkEntryModel() {
     entryModel.saved = false
     const connection = entryModelConnection()
     const plan = await api('/entry-setup/model/plan', {
-      revision: entryState.data.revision,
+      revision: S.base.revision,
       connection,
       select: false,
       ...(entryModel.creating && entryModel.name.trim() ? { name: entryModel.name.trim() } : {})

@@ -10,7 +10,7 @@ import type {Trigger} from './vendor/dsh-core/index.ts'
 import {bodyDigest} from './sources.ts'
 import type {ToolSpec} from './model.ts'
 const actions=['list','inspect','create','clone','configure','set_prompt','assign','send','pause','resume','cancel','retire','destroy','result','migrate','rebuild'] as const
-export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional(),patch:z.record(z.unknown()).optional(),unset:z.array(z.string()).optional(),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
+export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional(),patch:z.record(z.string(),z.unknown()).optional(),unset:z.array(z.string()).optional(),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
 export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers within the configured policy. Read list for the current revision; mutations require revision and a stable requestId. assign delegates a task; inspect/result return actual state. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. New backend/model applies to new tasks; migrate explicitly hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a current scope manager, fresh task text and workspaceReviewed=true only after reviewing retained artifacts under current permissions. It quarantines old text and starts a new session on the same task/backend/workspace. It never runs until a new authorized follow-up.',inputSchema:{type:'object',properties:{action:{type:'string',enum:actions},requestId:{type:'string'},revision:{type:'integer'},id:{type:'string'},from:{type:'string'},profile:{type:'object'},patch:{type:'object'},unset:{type:'array',items:{type:'string'}},prompt:{type:'string'},text:{type:'string'},discussion:{type:'string'},ticketId:{type:'string'},acceptance:{type:'string'},cancelRunning:{type:'boolean'},workspaceReviewed:{type:'boolean'},waitMs:{type:'integer',minimum:0,maximum:5000}},required:['action'],additionalProperties:false}}]
 export interface RouterContext {discussion:string;trigger?:Trigger;scoped?:ScopeContext;manifest?:ContextManifest}
 interface Delegation {ticketId:string;workerId:string;discussion:string;source:string;actor:string;parentTrigger?:string;mode:'client'|'host'}
@@ -22,7 +22,7 @@ export class WorkerManager {
  private active(id:string){return this.runs(id).filter(r=>['starting','running','background','human','delivering','merging'].includes(r.phase))}
  list(context?:RouterContext){
   const c=context?.scoped,allowed=(ticketId:string)=>{try{if(c)this.host.scopes.checkTask(ticketId,c);else if(context)this.checkContext(this.host.store.get<Delegation>('worker-assignment',ticketId),context);return true}catch{return false}}
-  const workers=workerProfiles(this.host.config).filter(w=>!c||this.host.scopes.scope(c.route.scopeId).workerIds.includes(w.id)).map(w=>({...w,status:w.state??'idle',active:this.active(w.id).filter(r=>allowed(r.ticketId)).map(r=>r.ticketId),tasks:this.tasks(w.id).filter(t=>allowed(t.ticketId)).map(t=>t.ticketId)}))
+  const workers=workerProfiles(this.host.config).filter(w=>!c||this.host.scopes.scope(c.route.scopeId).workerIds.includes(w.id)).map(w=>({...w,status:this.active(w.id).some(r=>allowed(r.ticketId))?'running':w.state??'idle',active:this.active(w.id).filter(r=>allowed(r.ticketId)).map(r=>r.ticketId),tasks:this.tasks(w.id).filter(t=>allowed(t.ticketId)).map(t=>t.ticketId)}))
   return {revision:this.host.settings.current().revision,policy:this.host.config.execution.management??{enabled:false},workers}
  }
  validateSettings(patch:unknown){
@@ -31,7 +31,7 @@ export class WorkerManager {
  }
  private checkContext(a:Delegation|undefined,c?:RouterContext,mutate=false,allowHeld=false){
   if(c?.scoped){if(!a)throw Error('Task unavailable');this.host.scopes.checkTask(a.ticketId,c.scoped,mutate,allowHeld);if(!mutate)this.host.scopes.checkTaskEntry(this.host.scopes.ownership(a.ticketId)!,c.scoped.route.entryId,'result',allowHeld);if(!allowHeld){const anchor=this.host.store.get<TaskContinuation>('task-continuation',a.ticketId);if(anchor)this.host.routerIngress.authority(anchor.triggerId,anchor.discussion);else if(a.parentTrigger)this.host.routerIngress.authority(a.parentTrigger,a.discussion);const saved=this.host.store.get<{manifest:ContextManifest}>('task-context',a.ticketId);if(saved)this.host.memory.validate(saved.manifest)}return}
-  if(c&&(!a||a.discussion!==c.discussion||c.trigger&&a.source!==c.trigger.source))throw Error('Task is outside this Router discussion')
+  if(c&&(!a||a.discussion!==c.discussion||c.trigger&&(a.source!==c.trigger.source||a.actor!==c.trigger.actor.id)))throw Error('Task is outside this Router discussion')
   if(c&&a?.mode==='host'&&a.parentTrigger)this.host.routerIngress.authority(a.parentTrigger,a.discussion)
  }
  async call(value:unknown,context?:RouterContext):Promise<any>{
@@ -88,7 +88,7 @@ export class WorkerManager {
    const actor=context?.trigger?.actor.id??source.allowedActors[0]!
    const id='delegation:'+key,thread='delegation:'+key
    const origin=context?.trigger??host.sources.get(source.id)!.trigger({id,thread,text:input.text,addressed:true},actor)
-   const trigger:Trigger={...origin,id,threads:[{source:source.id,id:thread}],at:new Date().toISOString(),text:input.text,meta:{...origin.meta,delegatedBy:'router',parentTrigger:context?.trigger?.id??null},channel:{source:source.id,thread,address:{routerInbox:discussion}}}
+   const trigger:Trigger={...origin,id,threads:[{source:source.id,id:thread}],at:new Date().toISOString(),text:origin.text,meta:{...origin.meta,delegatedBy:'router',parentTrigger:context?.trigger?.id??null},channel:{source:source.id,thread,address:{routerInbox:discussion}}}
    if(context?.trigger)host.store.put('router-delegation',id,{parentTrigger:context.trigger.id,discussion})
    host.engine.receive(trigger)
    const decision=host.engine.decide(id,{kind:'accept',title:input.text.slice(0,100),scope:input.text+(input.acceptance?'\nAcceptance: '+input.acceptance:''),reason:'Router delegation within admitted scope',rules:mandate?.basis.rules??[]})
@@ -108,8 +108,7 @@ export class WorkerManager {
     if(context.manifest){const owner=host.scopes.ownership(input.ticketId)!;context.manifest.taskOwners=[...context.manifest.taskOwners.filter(t=>t.id!==input.ticketId),{id:input.ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}];host.store.put('context-manifest',context.manifest.id,context.manifest)}
    }
    if(context?.trigger){
-    if(ticket.ended){
-     if(!context.trigger.human)throw Error('A bot event cannot resume completed work')
+    if(context.trigger.human){
      if(context.trigger.id===origin.id||context.trigger.meta.delegatedBy)throw Error('A new user follow-up is required to resume completed work')
      // Preserve the user's original event, but attach an internal Router instruction to the Worker.
      // Attaching the external event directly would add its user-facing reply channel to the task.
@@ -117,12 +116,13 @@ export class WorkerManager {
      host.store.triggers.save(followup)
      host.engine.attach(input.ticketId,followup.id,input.text)
     }
-    else host.engine.note(input.ticketId,input.text)
+    else {if(ticket.ended)throw Error('A bot event cannot resume completed work');host.engine.note(input.ticketId,input.text)}
    }else{
     const followup=host.sources.get(a.source)!.trigger({id:'router-followup-'+key,thread:origin.threads[0]!.id,text:input.text,addressed:true},a.actor)
     followup.channel=origin.channel
     host.engine.receive(followup)
    }
+   if(context?.trigger&&!context.scoped)host.store.put('worker-assignment',input.ticketId,{...a,parentTrigger:context.trigger.id})
    allowNewTaskInputs(host.store,input.ticketId,previousInputs)
    return complete({ticketId:input.ticketId,status:'queued',revision:host.settings.current().revision})
   })

@@ -89,7 +89,7 @@ export class CodexModel implements Model {
       additions.push({callId,result})
       try{check('tool_receipt')}catch(error){if(!(error instanceof ContextBudgetExceeded))throw error;budgetError=error;setTimeout(()=>{void client.interrupt()},0)}
       return result
-    }:undefined,this.environment,(method,params)=>{if(request.contextBudget&&method==='rawResponseItem/completed')raw.push(params.item)})
+    }:undefined,this.environment,request.onOutput,(method,params)=>{if(request.contextBudget&&method==='rawResponseItem/completed')raw.push(params.item)})
     const abort = () => client.interrupt()
     request.signal?.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(() => client.fail(new Error('Turn deadline exceeded; inspect workspace before retrying')), this.config.turnTimeoutMs)
@@ -212,12 +212,14 @@ class AppServer {
   humanRequest?: string
   readonly inputReceipts=new Map<string,()=>void>()
   private id = 0
-  private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>()
+  private pending = new Map<number, { method:string; resolve: (value: any) => void; reject: (error: Error) => void }>()
+  private earlyOutput:RpcMessage[]=[]
   private complete?: (turn: any) => void
   private rejectCompletion?: (error: Error) => void
   private failure?: Error
   private terminal?: any
-  constructor(binary: string, args: string[], cwd: string,private readonly onRequest?:ModelRequest['onHumanRequest'],private readonly onProgress?:ModelRequest['onProgress'],private readonly onTool?:ModelRequest['onTool'],environment?:Record<string,string>,private readonly onNotification?:(method:string,params:any)=>void) {
+  private outputPhases=new Map<string,'answer'|'commentary'>()
+  constructor(binary: string, args: string[], cwd: string,private readonly onRequest?:ModelRequest['onHumanRequest'],private readonly onProgress?:ModelRequest['onProgress'],private readonly onTool?:ModelRequest['onTool'],environment?:Record<string,string>,private readonly onOutput?:ModelRequest['onOutput'],private readonly onNotification?:(method:string,params:any)=>void) {
     const env=cliEnvironment(environment)
     this.process = spawn(binary, [...args, 'app-server', '--stdio'], { cwd, stdio: 'pipe', shell: false,env })
     // stderr may contain credentials or tool content; diagnostics use protocol errors.
@@ -238,7 +240,7 @@ class AppServer {
     if (this.failure) return Promise.reject(this.failure)
     const id = ++this.id
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      this.pending.set(id, { method, resolve, reject })
       try { this.write({ id, method, params }) } catch (error) { this.pending.delete(id); reject(error) }
     })
   }
@@ -258,7 +260,13 @@ class AppServer {
       if (!pending) return
       this.pending.delete(Number(message.id))
       if (message.error) pending.reject(new Error('RPC ' + message.error.code + ': ' + message.error.message))
-      else pending.resolve(message.result)
+      else {
+        // Bind synchronously: readline can deliver more notifications from the same
+        // stdout chunk before the awaiting turn/start continuation gets to run.
+        if(pending.method==='turn/start')this.turnId=message.result?.turn?.id
+        pending.resolve(message.result)
+        if(pending.method==='turn/start'&&this.turnId){const buffered=this.earlyOutput.splice(0);for(const event of buffered)this.receive(event)}
+      }
       return
     }
     if(message.id!==undefined&&message.method==='item/tool/call'&&this.onTool){
@@ -292,10 +300,24 @@ class AppServer {
       return
     }
     const params = message.params
+    if(!this.turnId&&/^(?:item\/(?:started|completed|agentMessage\/delta)|turn\/(?:started|completed))$/.test(message.method)){
+      if(this.earlyOutput.length>=1000)throw Error('Native output arrived without a confirmed turn')
+      this.earlyOutput.push(message);return
+    }
     this.onNotification?.(message.method,params)
     if(message.method)this.onProgress?.(message.method)
     if (this.threadId && params?.threadId && params.threadId !== this.threadId) return
-    if (message.method === 'turn/started') this.turnId = params.turn.id
+    if (message.method === 'turn/started' && params.turn?.id !== this.turnId) return
+    if (this.turnId && params?.turnId && params.turnId !== this.turnId) return
+    if(message.method==='item/started'&&params?.item?.type==='agentMessage'){
+      const id=params.item.id,phase=params.item.phase==='commentary'?'commentary':'answer'
+      if(typeof id==='string'){this.outputPhases.set(id,phase);this.onOutput?.({id,type:'start',phase})}
+    }
+    if(message.method==='item/agentMessage/delta'&&typeof params?.delta==='string'&&typeof params.itemId==='string'){
+      const phase=this.outputPhases.get(params.itemId)
+      // An item start establishes its phase; unknown or reasoning items are never guessed to be answers.
+      if(phase)this.onOutput?.({id:params.itemId,type:'delta',phase,text:params.delta})
+    }
     if ((message.method === 'item/started' || message.method === 'item/completed') && params?.item?.type === 'userMessage') {
       for(const part of params.item.content??[]){
         const receipt=this.inputReceipts.get(part.text)
@@ -305,6 +327,7 @@ class AppServer {
     if (message.method === 'item/completed' && params?.item?.type === 'agentMessage') {
       const item = params.item
       if (item.phase !== 'commentary') this.answer = item.text ?? ''
+      if(typeof item.id==='string')this.onOutput?.({id:item.id,type:'end',phase:item.phase==='commentary'?'commentary':'answer',text:item.text??''})
     }
     if (message.method === 'turn/completed') {
       if (this.turnId && params.turn.id !== this.turnId) return

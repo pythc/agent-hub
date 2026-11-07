@@ -11,6 +11,8 @@ export class TransientModelError extends Error {}
 export interface NativeRequest { id:string; method:string; params:any }
 export interface ToolSpec {type:'function';name:string;description:string;inputSchema:Record<string,unknown>}
 export interface ToolContent {type:'inputText'|'inputImage';text?:string;imageUrl?:string}
+/** Public assistant output only. Provider reasoning and tool arguments never enter this channel. */
+export interface ModelOutput {id:string;type:'start'|'delta'|'end';text?:string;phase:'answer'|'commentary'}
 export interface ModelRequest {
   contextBudget?:import('./context-budget.ts').ContextBudget
   contextId?:string
@@ -36,6 +38,7 @@ export interface ModelRequest {
   onActive?: (control:NativeControl)=>void
   onHumanRequest?: (request:NativeRequest)=>Promise<unknown>
   onProgress?: (event:string)=>void
+  onOutput?: (event:ModelOutput)=>void
   onThread?: (id: string) => void; onTurn?: (id: string) => void
 }
 export interface ModelResult { threadId: string; turnId: string; text: string }

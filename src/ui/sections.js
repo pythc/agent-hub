@@ -138,6 +138,7 @@ function renderDelivery() {
 }
 function settingsGroupName(key) {
   return ({
+    backends: L('Model connections', '模型连接'),
     execution: L('Execution', '执行配置'), models: L('Role models', '角色模型'),
     model: L('Default model', '默认模型'), effort: L('Reasoning effort', '推理强度'),
     concurrency: L('Worker count', 'Worker 数量'), acceptMode: L('Intake mode', '接收模式'),
