@@ -1,2 +1,4 @@
 # Preserve verbatim third-party license formatting.
 docs/licenses/** -whitespace
+# Preserve the upstream license bytes; only its existing line-end spaces are exempt.
+src/vendor/weknora/LICENSE whitespace=-blank-at-eol

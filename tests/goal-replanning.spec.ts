@@ -62,7 +62,9 @@ it('recovers a queued plan and then an applied graph across two restarts without
 })
 it('retains open-task execution evidence when unrelated review activity exceeds the display history window',async()=>{
  let f!:ReturnType<typeof fixture>
- f=fixture({onPlan:async(_r,input)=>{if(input.kind==='goal_plan_review')for(let i=0;i<220;i++){const id=f.h.activity.begin('tool','unrelated-read');f.h.activity.finish(id,'completed')}}})
+ // Batch fixture writes while exercising every real begin/finish/prune call;
+ // hundreds of independent disk commits otherwise dominate slower CI runners.
+ f=fixture({onPlan:async(_r,input)=>{if(input.kind==='goal_plan_review')f.h.store.atomic(()=>{for(let i=0;i<220;i++){const id=f.h.activity.begin('tool','unrelated-read');f.h.activity.finish(id,'completed')}})}})
  f.start();await f.h.goals.advance()
  const ticketId=f.goal().nodes![0]!.ticketId!
  await f.h.activity.tool('superagent_shell',{ticketId},async()=>({success:true}))
@@ -70,7 +72,7 @@ it('retains open-task execution evidence when unrelated review activity exceeds 
  await until(f,()=>f.plans().some(r=>['applied','stale','errored'].includes(r.state)))
  expect(f.plans()[0]?.state).toBe('applied');expect(f.h.activity.list().some(c=>c.id===retained)).toBe(true)
  await until(f,()=>f.goal().state==='completed')
- for(let i=0;i<220;i++){const id=f.h.activity.begin('tool','after-completion');f.h.activity.finish(id,'completed')}
+ f.h.store.atomic(()=>{for(let i=0;i<220;i++){const id=f.h.activity.begin('tool','after-completion');f.h.activity.finish(id,'completed')}})
  expect(f.h.activity.list().some(c=>c.id===retained)).toBe(false)
  expect(f.h.activity.list().filter(c=>c.state!=='running')).toHaveLength(200)
 })
