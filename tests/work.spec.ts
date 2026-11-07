@@ -39,9 +39,12 @@ it('holds a review server without a slot or completion wake after handoff',async
  await settle(f,item.id);expect(f.wakes).toEqual([])
 })
 it('kills command descendants when its assignment ends',async()=>{
- const f=fixture(),item=await f.manager.shell(f.owner,'sleep 1; printf escaped > escaped.txt','slow',0)
- await new Promise(r=>setTimeout(r,100))
+ const f=fixture(),item=await f.manager.shell(f.owner,'(printf ready > ready.txt; while [ ! -f release.txt ]; do sleep 0.05; done; printf escaped > escaped.txt) & wait','slow',0)
+ // A release barrier prevents a busy CI runner from writing before cancellation.
+ for(let n=0;n<200&&!existsSync(join(f.cwd,'ready.txt'));n++)await new Promise(r=>setTimeout(r,20))
+ expect(existsSync(join(f.cwd,'ready.txt'))).toBe(true)
  await f.manager.endAssignment('task','a')
+ writeFileSync(join(f.cwd,'release.txt'),'released')
  await new Promise(r=>setTimeout(r,1200))
  expect(existsSync(join(f.cwd,'escaped.txt'))).toBe(false)
  expect(f.store.get<any>('work',item.id).state).toBe('cancelled')
