@@ -9,6 +9,9 @@ import type { Trigger, OutboundMessage } from '../vendor/dsh-core/index.ts'
 
 export type FeishuRequest=(method:string,path:string,body?:unknown,signal?:AbortSignal)=>Promise<any>
 export class FeishuSource extends MessageSource {
+  override get verificationCommand(){return this.config.feishu?.command??'/agent'}
+  replay(scope:string|undefined,since:string){if(!this.config.feishu!.chats.includes(scope??''))throw Error('Chat not configured');return {key:this.config.id+':'+scope,since:String(Math.floor(Date.parse(since)/1000))}}
+  async check(){if((this.config.feishu!.otherChats==='mentions'||this.config.feishu!.directMessages)&&!this.config.feishu!.liveEvents)throw Error('Enable Feishu liveEvents for mentions from other chats')}
   private live?:ChildProcessWithoutNullStreams
   private closing=false
   private pendingEvents=Promise.resolve()
@@ -37,7 +40,9 @@ export class FeishuSource extends MessageSource {
   private permitted(chat:string){return this.config.feishu!.chats.includes(chat)||this.discovered.has(chat)}
   validThread(thread:string){const i=thread.indexOf(':');return i>0&&this.permitted(thread.slice(0,i))&&/^om_[A-Za-z0-9_-]+$/.test(thread.slice(i+1))}
   async identity(){
-    const bot=await this.api('GET','bot/v3/info');return {id:bot.bot?.open_id??bot.open_id??this.config.feishu!.mentionId,type:'bot'}
+    const bot=await this.api('GET','bot/v3/info'),id=bot.bot?.open_id??bot.open_id??this.config.feishu!.mentionId
+    if(this.config.feishu!.mentionId&&id!==this.config.feishu!.mentionId)throw Error('Bot identity does not match mentionId')
+    return {id,type:'bot'}
   }
   async members(scope?:string){
     const chat=scope??this.config.feishu!.chats[0]!

@@ -1,0 +1,146 @@
+/* Shared semantic palette. Light is the default; the head bootstrap restores an explicit dark choice. */
+:root {
+  color-scheme: light;
+  --canvas: #ffffff;
+  --surface: #ffffff;
+  --surface-soft: #fafafa;
+  --surface-hover: #f5f5f5;
+  --surface-selected: #f0f0f0;
+  --surface-muted: #ebebeb;
+  --text-primary: #171717;
+  --text-secondary: #444444;
+  --text-muted: #666666;
+  --border-subtle: #e5e5e5;
+  --border-strong: #aaaaaa;
+  --action: #171717;
+  --action-hover: #333333;
+  --on-action: #ffffff;
+  --focus-ring: #737373;
+  --focus-soft: #17171724;
+  --selection-bg: #d4d4d4;
+  --diagram-line: #a3a3a3;
+  --diagram-off: #dedede;
+  --neutral-dot: #737373;
+  --status-success: #21683e;
+  --status-success-bg: #eef8f1;
+  --status-warning: #805400;
+  --status-warning-bg: #fff8e8;
+  --status-warning-border: #e5c990;
+  --status-danger: #a82b32;
+  --status-danger-bg: #fff1f2;
+  --status-danger-border: #e7adb1;
+  --status-info: #315d99;
+  --status-info-bg: #eef4ff;
+  --status-info-border: #adc5e7;
+  --brand-blue: #315d99;
+  --brand-blue-bg: #eef4ff;
+  --brand-green: #21683e;
+  --brand-green-bg: #eef8f1;
+  --brand-purple: #70449d;
+  --brand-purple-bg: #f5effc;
+  --text-inverse-bg: #262626;
+  --shadow-soft: #0000000d;
+  --shadow-dialog: #00000029;
+  --overlay: #00000045;
+  --edge-highlight: #ffffff20;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #111111;
+  --surface: #191919;
+  --surface-soft: #161616;
+  --surface-hover: #242424;
+  --surface-selected: #292929;
+  --surface-muted: #303030;
+  --text-primary: #f5f5f5;
+  --text-secondary: #d4d4d4;
+  --text-muted: #ababab;
+  --border-subtle: #333333;
+  --border-strong: #666666;
+  --action: #f5f5f5;
+  --action-hover: #d4d4d4;
+  --on-action: #171717;
+  --focus-ring: #a3a3a3;
+  --focus-soft: #ffffff30;
+  --selection-bg: #484848;
+  --diagram-line: #777777;
+  --diagram-off: #3b3b3b;
+  --neutral-dot: #a3a3a3;
+  --status-success: #8ed6a7;
+  --status-success-bg: #172c20;
+  --status-warning: #efc675;
+  --status-warning-bg: #302616;
+  --status-warning-border: #68512b;
+  --status-danger: #ffa0a7;
+  --status-danger-bg: #341c20;
+  --status-danger-border: #71343d;
+  --status-info: #a4c6fa;
+  --status-info-bg: #1b283d;
+  --status-info-border: #405c82;
+  --brand-blue: #a4c6fa;
+  --brand-blue-bg: #1b283d;
+  --brand-green: #8ed6a7;
+  --brand-green-bg: #172c20;
+  --brand-purple: #d5b3fa;
+  --brand-purple-bg: #2e213c;
+  --text-inverse-bg: #ebebeb;
+  --shadow-soft: #00000040;
+  --shadow-dialog: #00000080;
+  --overlay: #00000080;
+  --edge-highlight: #ffffff08;
+}
+html, body, .operator-workspace { background: var(--canvas); }
+html { scrollbar-color: var(--border-strong) var(--canvas); }
+.operator-workspace { --rail: var(--canvas); }
+input, select, textarea, dialog { background-color: var(--surface); color: var(--text-primary); }
+input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--action); }
+::selection { background: var(--selection-bg); color: var(--text-primary); }
+.operator-workspace ::selection { color: var(--text-primary); }
+.operator-workspace .pill.green { color: var(--status-success); background: var(--status-success-bg); }
+.operator-workspace .toast { color: var(--on-action); }
+
+/* The content adapter scopes vendor selectors under .management-content and loads
+   them lazily. Keep theme tokens above those defaults in either rendering path. */
+:root .ui-seg, :root .management-content .ui-seg {
+  --ui-seg-tray: var(--surface-selected);
+  --ui-seg-pill: var(--surface);
+  --ui-seg-line: var(--border-subtle);
+  --ui-seg-ink: var(--text-primary);
+  --ui-seg-text: var(--text-secondary);
+  --ui-seg-soft: var(--text-muted);
+  --ui-seg-muted: var(--text-muted);
+  --ui-seg-count: var(--surface-muted);
+  --ui-seg-accent: var(--status-info);
+  --ui-seg-accent-soft: var(--status-info-bg);
+  --ui-seg-focus: var(--focus-ring);
+}
+:root .ui-button, :root .management-content .ui-button {
+  --ui-btn-ink: var(--text-primary);
+  --ui-btn-on-ink: var(--on-action);
+  --ui-btn-surface: var(--surface);
+  --ui-btn-surface-hover: var(--surface-hover);
+  --ui-btn-line: var(--border-subtle);
+  --ui-btn-muted: var(--text-muted);
+  --ui-btn-hover: var(--text-primary);
+  --ui-btn-fill: var(--surface-selected);
+  --ui-btn-danger: var(--status-danger);
+  --ui-btn-danger-bg: var(--status-danger-bg);
+  --ui-btn-focus: var(--focus-ring);
+}
+:root .ui-button[data-variant="primary"], :root .management-content .ui-button[data-variant="primary"] { background: var(--action); color: var(--on-action); border-color: var(--action); box-shadow: none; }
+:root .ui-button[data-variant="primary"]:hover:not(:disabled), :root .management-content .ui-button[data-variant="primary"]:hover:not(:disabled) { background: var(--action-hover); border-color: var(--action-hover); }
+.theme-toggle, .operator-workspace .theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 36px; height: 36px; padding: 8px; border: 1px solid var(--border-subtle);
+  border-radius: 7px; background: var(--surface); color: var(--text-primary); cursor: pointer;
+}
+.theme-toggle:hover { background: var(--surface-hover); }
+.theme-toggle .icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
+.theme-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+@media (max-width: 700px) {
+  .theme-toggle, .operator-workspace .theme-toggle { width: 40px; height: 40px; }
+  .operator-workspace .topbar-tools { gap: 6px; }
+}
+
+:root[data-theme-switching] *, :root[data-theme-switching] *::before, :root[data-theme-switching] *::after { transition: none !important; }

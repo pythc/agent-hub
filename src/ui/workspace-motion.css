@@ -1,0 +1,27 @@
+:root { --ui-ease-out: cubic-bezier(.22,1,.36,1); --ui-feedback: 140ms; }
+.operator-workspace .motion-dialog[open] { animation: none; }
+.operator-workspace .motion-dialog::backdrop { animation: motion-backdrop 180ms ease-out; }
+.operator-workspace .motion-dialog[data-motion-closing=true] { pointer-events: none; }
+.operator-workspace :is(.button,.theme-toggle,.connection-kind) { transition: background-color var(--ui-feedback) ease, border-color var(--ui-feedback) ease, transform var(--ui-feedback) var(--ui-ease-out); }
+.operator-workspace :is(.button,.theme-toggle,.connection-kind):active:not(:disabled) { transform: translateY(1px); }
+.operator-workspace .team-node > .team-node-head > .icon:last-child { transition: transform 180ms var(--ui-ease-out); }
+.operator-workspace .team-node[aria-pressed=true] > .team-node-head > .icon:last-child { transform: translateX(3px); }
+.operator-workspace .team-node { transition: border-color 180ms ease, background-color 180ms ease; }
+@media (hover:hover) and (pointer:fine) {
+  .operator-workspace .team-node:hover > .team-node-head > .icon:last-child { transform: translateX(3px); }
+}
+@keyframes motion-backdrop { from { opacity: 0; } to { opacity: 1; } }
+html[data-motion-paused=true] .tam-surface .tam-flow { animation-play-state: paused; }
+.execution-call-map[data-stale=false] .execution-map-center-state[data-state=running]::before,
+.execution-call-map[data-stale=false] .execution-map-node[data-state=running] .execution-map-node-state::before {
+  content: ''; display: inline-block; width: 5px; height: 5px; margin-right: 5px;
+  border-radius: 50%; background: currentColor; vertical-align: middle;
+  animation: motion-working 1400ms ease-in-out infinite;
+}
+@keyframes motion-working { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+html[data-motion-paused=true] .execution-call-map ::before { animation-play-state: paused; }
+@media (prefers-reduced-motion:reduce) {
+  .operator-workspace .motion-dialog::backdrop { animation: none; }
+  .operator-workspace :is(.button,.theme-toggle,.connection-kind):active:not(:disabled) { transform: none; }
+  .execution-call-map ::before { animation: none !important; }
+}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and workflows / 提问与交流
+    url: https://github.com/pythc/agent-hub/discussions
+    about: Ask for help or share how you use Roppo.
+  - name: Private vulnerability report / 私密漏洞报告
+    url: https://github.com/pythc/agent-hub/security/advisories/new
+    about: Report sensitive issues privately; do not include secrets in public issues.

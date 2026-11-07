@@ -1,0 +1,12 @@
+Roppo (repository: agent-hub)
+Copyright 2026 Roppo contributors
+
+Original project code is licensed under the Apache License, Version 2.0.
+
+This product includes domain-core software developed by the DeepSeek Harness
+Team, distributed under the MIT License. Its notice is retained in
+src/vendor/LICENSE. The adapted upstream core regression test is covered by
+that notice as well.
+
+Other third-party components retain their own licenses. See THIRD_PARTY.md,
+src/vendor/affectui/LICENSE, and docs/licenses/ for notices distributed here.

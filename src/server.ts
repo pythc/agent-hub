@@ -6,11 +6,10 @@ import { z } from 'zod'
 import { Runtime } from './runtime.ts'
 import { incomingSchema } from './sources.ts'
 import { deliverDraft } from './delivery.ts'
-import { dashboard } from './web.ts'
 import {configSchema,type Config} from './config.ts'
 import {randomUUID} from 'node:crypto'
 import {readSchema} from './resources.ts'
-import {compose,promptStatus} from './prompts.ts'
+import {compose,composeCoordinator,promptStatus} from './prompts.ts'
 import {configurationSnapshot} from './configuration.ts'
 import {SettingsError} from './settings.ts'
 import {configurationPage} from './ui/configuration.ts'
@@ -21,10 +20,17 @@ import {EntrySetup,entryIds} from './entry-setup.ts'
 import {clientIds} from './clients.ts'
 import {clientStatus} from './client-status.ts'
 import {operatorWorkspace,operatorTask} from './operator-workspace.ts'
+import {PersonalAccount,AccountError,setupAccountSchema,loginAccountSchema,recoverAccountSchema,passwordSchema} from './personal-account.ts'
+import {accountPage} from './ui/account.ts'
+import {chatPage,chatAsset} from './ui/chat-page.ts'
+import {ChatError} from './chat.ts'
+import {BrowserError} from './browser-contract.ts'
+import {browserRequest} from './browser-http.ts'
 
-export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config)=>Runtime;clientHome?:string;clientName?:string}={}) {
+export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config)=>Runtime|Promise<Runtime>;clientHome?:string;clientName?:string}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
   const connectionFile=join(runtime.config.stateDir,'connection.json')
+  const account=new PersonalAccount(runtime.config.stateDir)
   let changing=false,unavailable=false,runtimeClosed=false,endpoint='',stopping=false,closingRuntime:Promise<void>|undefined
   const onboarding=new Onboarding(()=>runtime,options.configurationPreview===true)
   const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
@@ -32,13 +38,16 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   async function rebuild(config:Config){
     await stopRuntime()
     if(stopping)throw Error('Host is stopping')
-    const next=options.createRuntime?options.createRuntime(configSchema.parse(config)):new Runtime(configSchema.parse(config))
+    const next=await (options.createRuntime?options.createRuntime(configSchema.parse(config)):Runtime.create(configSchema.parse(config)))
     runtime=next;runtimeClosed=false;closingRuntime=undefined;runtime.endpoint=endpoint;runtime.start()
   }
   let token: string
   try { token = readFileSync(tokenPath, 'utf8').trim() }
   catch { token = randomBytes(32).toString('hex'); writeFileSync(tokenPath, token, { mode: 0o600, flag: 'wx' }) }
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
+    if(response.headersSent){response.end();return}
+    if(error instanceof ChatError||error instanceof BrowserError){send(response,error.status,{error:error.message,code:error.code});return}
+    if(error instanceof AccountError){send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof OnboardingError){if(error.code==='setup_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof SettingsError){send(response,error.status,{error:error.message,code:error.code,...(error.code==='settings_conflict'?{currentRevision:runtime.settings.current().revision}:{})});return}
     if(error instanceof z.ZodError){send(response,400,{error:'Configuration or request validation failed',code:'validation_error',issues:error.issues.map(issue=>({path:issue.path,message:issue.message}))});return}
@@ -66,25 +75,66 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     res.setHeader('referrer-policy','no-referrer')
     let requestOrigin=''
     try{const authority=new URL('http://'+req.headers.host);if(!['127.0.0.1','localhost','[::1]'].includes(authority.hostname)||authority.port!==new URL(endpoint).port||authority.username||authority.password||authority.pathname!=='/'||authority.search||authority.hash)throw Error();requestOrigin=authority.origin}catch{send(res,403,{error:'Use this host’s local origin',code:'host_origin_required'});return}
-    if(req.method==='POST'&&req.headers.origin&&req.headers.origin!==requestOrigin){send(res,403,{error:'Use this page’s own origin',code:'same_origin_required'});return}
-    if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/'].includes(path)) {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
-      res.end(req.method==='HEAD'?undefined:path==='/'?dashboard:configurationPage)
+    if(['POST','PATCH'].includes(req.method??'')&&req.headers.origin&&req.headers.origin!==requestOrigin){send(res,403,{error:'Use this page’s own origin',code:'same_origin_required'});return}
+    const browserOperator=account.configured?account.authorized(req):sessions.authorized(req)
+    if((req.method==='GET'||req.method==='HEAD')&&path.startsWith('/chat-assets/')){
+      const name=path.slice('/chat-assets/'.length),asset=chatAsset(name)
+      if(!asset){send(res,404,{code:'not_found'});return}
+      const type=name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.png')?'image/png':name.endsWith('.woff2')?'font/woff2':'application/octet-stream'
+      res.writeHead(200,{'content-type':type});res.end(req.method==='HEAD'?undefined:asset);return
+    }
+    if((req.method==='GET'||req.method==='HEAD')&&path==='/chat'){
+      res.setHeader('content-security-policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'")
+      res.setHeader('content-type','text/html; charset=utf-8')
+      const page=account.authorized(req)?chatPage():accountPage
+      res.end(req.method==='HEAD'?undefined:page);return
+    }
+    if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/', '/auth', '/account', '/usage'].includes(path)) {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
+      const page=path==='/usage'?configurationPage:path==='/auth'||path==='/account'||!account.authorized(req)?accountPage:chatPage()
+      res.end(req.method==='HEAD'?undefined:page)
       return
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && path === '/health') { send(res, 200, { ok: !unavailable, version: '0.10.0',...(changing?{restarting:true}:{}) }); return }
-    if(req.method==='GET'&&path==='/connect-info'){send(res,200,{connectionFile,preview:options.configurationPreview===true});return}
-    if(req.method==='GET'&&path==='/session'){send(res,200,{operator:authorized(req)||sessions.authorized(req)});return}
+    if(req.method==='GET'&&path==='/connect-info'){
+      if(account.configured&&!browserOperator&&!authorized(req)){send(res,401,{code:'account_login_required'});return}
+      send(res,200,{connectionFile,preview:options.configurationPreview===true});return
+    }
+    if(req.method==='GET'&&path==='/session'){send(res,200,{operator:authorized(req)||browserOperator,...(account.configured?{account:account.status(req)}:{})});return}
+    if(req.method==='GET'&&path==='/account/status'){send(res,200,account.status(req,authorized(req)||sessions.authorized(req)));return}
+    if(req.method==='POST'&&path.startsWith('/account/')){
+      if(req.headers.origin!==requestOrigin&&!authorized(req)){send(res,403,{code:'same_origin_required'});return}
+      if(path==='/account/setup'){
+        if(!authorized(req)&&!sessions.authorized(req))throw new AccountError('account_setup_link_required','Open the setup link printed by the local launcher.',403)
+        const result=await account.setup(setupAccountSchema.parse(await body(req)),res)
+        sessions.revokeAll();send(res,201,result);return
+      }
+      if(path==='/account/login'){send(res,200,await account.login(loginAccountSchema.parse(await body(req)),res));return}
+      if(path==='/account/recover'){send(res,200,await account.recover(recoverAccountSchema.parse(await body(req)),res));return}
+      if(!account.authorized(req))throw new AccountError('account_login_required','Sign in to your account.',401)
+      if(path==='/account/logout'||path==='/account/logout-all'){send(res,200,account.logout(req,res,path==='/account/logout-all'));return}
+      if(path==='/account/profile'){
+        const input=z.object({displayName:z.string().trim().min(1).max(60)}).strict().parse(await body(req));send(res,200,account.updateProfile(req,input.displayName));return
+      }
+      if(path==='/account/password'){
+        const input=z.object({currentPassword:z.string().min(1).max(128),password:passwordSchema}).strict().parse(await body(req));send(res,200,await account.changePassword(req,res,input.currentPassword,input.password));return
+      }
+      if(path==='/account/recovery-code'){
+        const input=z.object({currentPassword:z.string().min(1).max(128)}).strict().parse(await body(req));send(res,200,await account.replaceRecovery(req,input.currentPassword));return
+      }
+      send(res,404,{code:'not_found'});return
+    }
     if(req.method==='POST'&&path==='/pair'){
       if(req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
       const input=z.object({code:z.string().min(32).max(100)}).strict().parse(await body(req))
-      const paired=sessions.pair(input.code,res);send(res,paired?200:401,{operator:paired,...(!paired?{code:'pair_expired'}:{})});return
+      const paired=account.configured?sessions.consume(input.code):sessions.pair(input.code,res)
+      send(res,paired?200:401,{operator:paired&&(!account.configured||account.authorized(req)),...(account.configured?{loginRequired:!account.authorized(req)}:{}),...(!paired?{code:'pair_expired'}:{})});return
     }
     if(req.method==='GET'&&path==='/entry-guide'){send(res,200,entries.publicGuide());return}
     if(req.method==='POST'&&path==='/entry-guide'){const input=z.object({invite:z.string().min(20).max(100)}).strict().parse(await body(req));send(res,200,await entries.invitation(input.invite));return}
     if(changing||unavailable){send(res,503,{error:'The host is applying configuration. Please try again shortly.',code:unavailable?'setup_recovery_required':'configuration_restarting'});return}
-    const operator=authorized(req)||sessions.authorized(req)
-    if(req.method==='POST'&&!authorized(req)&&sessions.authorized(req)&&req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
+    const operator=authorized(req)||browserOperator
+    if(['POST','PATCH'].includes(req.method??'')&&!authorized(req)&&browserOperator&&req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
     if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply','/entry-setup/probe','/entry-setup/plan','/entry-setup/apply','/entry-setup/model/plan','/entry-setup/model/check','/entry-setup/model/apply','/entry-setup/verification','/operator-link','/logout'].includes(path)){
       if(!operator){send(res,401,{error:'Access token required',code:'token_required'});return}
       send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
@@ -100,13 +150,76 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const source = runtime.sources.get(id)?.config
       const secret = source?.tokenEnv && process.env[source.tokenEnv]
       if (!source || source.kind === 'local' || !secret || !authorized(req, secret)) { send(res, 401, { error: 'Unauthorized connector' }); return }
-      const input = z.object({ actor: z.string(), human: z.boolean(), event: incomingSchema }).strict().parse(await body(req))
+      const input = z.object({ actor: z.string().min(1).max(300), human: z.boolean(), event: incomingSchema }).strict().parse(await body(req))
       send(res, 202, runtime.receive(id, input.actor, input.event, input.human))
       return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/api/browser'||path.startsWith('/api/browser/')){
+      await browserRequest(runtime,account.status(req).user?.id??'local-operator',req,res,()=>body(req),()=>!changing&&!unavailable&&!stopping&&(authorized(req)||(account.configured?account.authorized(req):sessions.authorized(req))));return
+    }
+    if(path.startsWith('/api/chat/')){
+      if(options.configurationPreview&&req.method!=='GET'){send(res,403,{code:'preview_restricted'});return}
+      const owner=account.status(req).user?.id??'local-operator'
+      const query=new URL(req.url!,'http://localhost').searchParams
+      if(path==='/api/chat/readiness'&&req.method==='GET'){send(res,200,{...runtime.chat.readiness(),...(options.configurationPreview?{ready:false,code:'preview_restricted'}:{}),user:account.status(req).user??null});return}
+      if(path==='/api/chat/conversations'){
+        if(req.method==='GET'){send(res,200,{conversations:runtime.chat.list(owner,query.get('archived')==='true')});return}
+        if(req.method==='POST'){send(res,201,runtime.chat.create(owner));return}
+      }
+      const match=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})(?:\/(messages|events|cancel|files))?$/)
+      if(match){
+        const id=match[1]!,action=match[2]
+        if(!action&&req.method==='PATCH'){
+          const patch=z.object({title:z.string().trim().min(1).max(100).optional(),archived:z.boolean().optional()}).strict().parse(await body(req))
+          send(res,200,runtime.chat.update(id,owner,patch));return
+        }
+        if((!action||action==='messages')&&req.method==='GET'){
+          const before=query.has('before')?z.coerce.number().int().positive().parse(query.get('before')):undefined
+          send(res,200,runtime.chat.view(id,owner,before));return
+        }
+        if(action==='files'&&req.method==='GET'){
+          const input=z.object({ticket:z.string().min(1).optional(),path:z.string().max(1800).optional(),kind:z.enum(['directory','files']).optional(),offset:z.coerce.number().int().nonnegative().optional(),cursor:z.string().uuid().optional()}).strict().parse(Object.fromEntries(query))
+          send(res,200,await runtime.chat.files(id,owner,input));return
+        }
+        if(action==='messages'&&req.method==='POST'){
+          const input=z.object({text:z.string().trim().min(1).max(100000),clientMessageId:z.string().uuid()}).strict().parse(await body(req))
+          send(res,202,runtime.chat.send(id,owner,input));return
+        }
+        if(action==='cancel'&&req.method==='POST'){
+          const input=z.object({runId:z.string().min(1).max(500)}).strict().parse(await body(req))
+          send(res,200,await runtime.chat.cancel(id,owner,input.runId));return
+        }
+        if(action==='events'&&req.method==='GET'){
+          runtime.chat.view(id,owner)
+          res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache','connection':'keep-alive','x-accel-buffering':'no'});res.flushHeaders()
+          let last=String(req.headers['last-event-id']??''),heartbeat=0
+          const update=()=>{
+            if(res.writableEnded||res.destroyed)return
+            if(res.writableLength>131072){res.end();return}
+            if(changing||unavailable||stopping||!authorized(req)&&!(account.configured?account.authorized(req):sessions.authorized(req))){res.write('event: reconnect\ndata: {}\n\n');res.end();return}
+            try{
+              const revision=String(runtime.chat.revision(id,owner))
+              if(revision!==last){last=revision;res.write('id: '+revision+'\nevent: change\ndata: '+JSON.stringify({revision})+'\n\n')}
+              else if(++heartbeat%20===0)res.write(': keepalive\n\n')
+            }catch{res.end()}
+          }
+          const unsubscribe=runtime.chat.subscribe(id,owner,update)
+          const timer=setInterval(update,750);timer.unref();res.on('close',()=>{clearInterval(timer);unsubscribe()});update();return
+        }
+      }
+      send(res,404,{code:'not_found'});return
+    }
+    if(req.method==='GET'&&path==='/integrations'){send(res,200,{adapters:runtime.sourceRegistry.catalog(),sources:runtime.config.sources.map(s=>({id:s.id,kind:s.kind,enabled:s.enabled,capabilities:s.capabilities})),tools:runtime.toolConnections.configured()});return}
+    if(req.method==='POST'&&path==='/workers'){send(res,200,await runtime.manager.call(await body(req)));return}
+    if(req.method==='GET'&&path==='/workers'){send(res,200,runtime.manager.list());return}
+    if(req.method==='GET'&&path==='/subscription/accounts'){send(res,200,runtime.subscriptions.list());return}
+    if(req.method==='POST'&&path==='/subscription/login'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.begin(input.account));return}
+    if(req.method==='POST'&&path==='/subscription/status'){const input=z.object({attempt:z.string()}).strict().parse(await body(req));send(res,200,runtime.subscriptions.status(input.attempt));return}
+    if(req.method==='POST'&&path==='/subscription/logout'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.logout(input.account));return}
+    if(req.method==='POST'&&path==='/subscription/models'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.models(input.account));return}
     if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(endpoint),expiresIn:600});return}
-    if(req.method==='POST'&&path==='/logout'){sessions.logout(req,res);send(res,200,{operator:false});return}
+    if(req.method==='POST'&&path==='/logout'){if(account.configured)account.logout(req,res);else sessions.logout(req,res);send(res,200,{operator:false});return}
     if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
     if(req.method==='GET'&&path==='/entry-workspace'){
       const query=new URL(req.url!,'http://localhost').searchParams,input=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25),
@@ -153,7 +266,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/read'){const {ticketId,...input}=readSchema.extend({ticketId:z.string().optional()}).parse(await body(req));send(res,200,await runtime.resources.read(input,ticketId?{ticketId}:{}));return}
     if(req.method==='POST'&&path==='/prompt-preview'){
       const input=z.object({role:z.enum(['router','worker']),prompts:configSchema.shape.prompts.optional()}).strict().parse(await body(req)),id=randomUUID()
-      const text=compose({...runtime.config,...(input.prompts?{prompts:input.prompts}:{})},input.role,{preview:true,cwd:'<task directory>',mandate:'<immutable task mandate>'},'preview')
+      const previewConfig={...runtime.config,...(input.prompts?{prompts:input.prompts}:{})}
+      const text=(input.role==='router'&&previewConfig.execution.router?.mode==='host'?composeCoordinator(previewConfig,{preview:true,cwd:'<task directory>'}):compose(previewConfig,input.role,{preview:true,cwd:'<task directory>',mandate:'<immutable task mandate>'},'preview'))+(input.role==='router'&&previewConfig.execution.router?.prompt?'\nAgent instructions:\n'+previewConfig.execution.router.prompt:'')
       const result={id,role:input.role,text,revision:runtime.settings.current().revision,at:Date.now()};runtime.store.put('prompt-preview',id,result);send(res,200,{...result,resource:'prompt-preview/'+id});return
     }
     if(req.method==='GET'&&path==='/prompts'){send(res,200,{parts:promptStatus(runtime.config),history:runtime.store.list('prompt-use')});return}
@@ -161,9 +275,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const input=z.object({source:z.string(),scope:z.string().optional(),since:z.string().datetime()}).strict().parse(await body(req))
       const source=runtime.sources.get(input.source)
       if(!source)throw Error('Unknown source')
-      if(source.config.kind==='feishu'&&!source.config.feishu?.chats.includes(input.scope??''))throw Error('Chat not configured')
-      const key=source.config.kind==='feishu'?input.source+':'+input.scope:input.source
-      runtime.store.put('source-cursor',key,{since:source.config.kind==='feishu'?String(Math.floor(Date.parse(input.since)/1000)):input.since})
+      if(!source.replay)throw Error('This adapter does not support polling replay; resend original event IDs through its event transport')
+      const cursor=source.replay(input.scope,input.since)
+      runtime.store.put('source-cursor',cursor.key,{since:cursor.since})
       send(res,200,{ok:true});return
     }
     if(req.method==='POST'&&path==='/retry-delivery'){
@@ -212,7 +326,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const input=z.object({source:z.string(),thread:z.string()}).strict().parse(await body(req))
       if(input.source==='$agent'){send(res,200,await runtime.resources.read({resource:input.thread}));return}
       const source=runtime.sources.get(input.source)
-      if(!source?.context)throw Error('Source does not provide context reading')
+      if(!source?.context||!source.config.enabled||!source.config.capabilities.resources)throw Error('Source does not provide enabled context reading')
       send(res,200,await source.context(input.thread));return
     }
     if (req.method === 'GET' && path === '/status') {
@@ -226,6 +340,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,200,view);return
     }
     if(req.method==='POST'&&path==='/request'){
+      if(runtime.config.execution.router?.mode==='client'){send(res,409,{code:'client_router_use_worker_manage',error:'This CLI conversation is the Router. Use worker_manage list/assign/result in this conversation; no second Router model is started.'});return}
       const input=z.object({text:z.string().min(1).max(100000),discussion:z.string().min(1).max(300).optional(),requestId:z.string().min(1).max(200).optional()}).strict().parse(await body(req))
       const source=runtime.config.sources.find(s=>s.kind==='local'&&s.enabled);if(!source)throw new OnboardingError('local_entry_missing','Add a local operator source before connecting a client.')
       const discussion=input.discussion??randomUUID(),requestId=input.requestId??randomUUID(),result=runtime.receive(source.id,source.allowedActors[0]!,{id:requestId,thread:discussion,text:input.text,addressed:true}) as any

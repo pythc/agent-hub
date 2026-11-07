@@ -1,4 +1,4 @@
-import {mkdtempSync,rmSync,readFileSync,existsSync,statSync,symlinkSync,mkdirSync,appendFileSync} from 'node:fs'
+import {mkdtempSync,rmSync,readFileSync,existsSync,statSync,symlinkSync,mkdirSync,appendFileSync,writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createServer} from 'node:http'
@@ -9,6 +9,7 @@ import {serve} from '../src/server.ts'
 import {managedFiles,prepareManagedConfig,prepareManagedFiles,managedConnections} from '../src/managed-config.ts'
 import {backupState,verifyBackup,restoreState} from '../src/backup.ts'
 import {Store} from '../src/store.ts'
+import {Setup} from '../src/setup.ts'
 
 const cleanup:(()=>Promise<void>)[]=[],roots:string[]=[],envKeys:string[]=[]
 afterEach(async()=>{for(const close of cleanup.splice(0).reverse())await close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});for(const key of envKeys.splice(0))delete process.env[key]})
@@ -30,12 +31,36 @@ async function provider(){
   const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString()),all=JSON.stringify(body)
   requests.push({authorization:req.headers.authorization,key:req.headers['x-api-key'] as string|undefined})
   if(req.headers.authorization!=='Bearer synthetic-onboarding-key'&&req.headers['x-api-key']!=='synthetic-onboarding-key'){res.writeHead(401);res.end('{}');return}
-  const answer=all.includes('targetTicketId')?{action:'accept',title:'First request',scope:'Say hello',reason:'Explicit local request',rules:[],ruleAssessments:[],targetTicketId:null}:all.includes('handbacks')?{state:'ready',summary:'Hello',reply:'Hello from your assistant.',question:null,handbacks:[]}:{ok:true}
+  const answer=all.includes('targetTicketId')?{action:'accept',title:'First request',scope:'Say hello',reason:'Explicit local request',rules:[],ruleAssessments:[],targetTicketId:null}:all.includes('handbacks')?{state:'ready',summary:'Hello',reply:'Hello from your assistant.',question:null,askedBy:null,handbacks:[]}:{ok:true}
   const text=JSON.stringify(answer),value=req.url==='/v1/responses'?{status:'completed',output:[{type:'message',content:[{type:'output_text',text}]}]}:req.url==='/v1/messages'?{stop_reason:'end_turn',content:[{type:'text',text}]}:{choices:[{message:{content:text}}]}
   res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(value))
  });await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))})
  return {url:'http://127.0.0.1:'+(server.address() as any).port+'/v1',requests}
 }
+it('checks the actual CLI profile and environment for independently configured Workers',async()=>{
+ const f=await fixture(),binary=join(f.root,'profile-cli'),log=join(f.root,'profile-checks.jsonl'),key='AGENTHUB_TEST_CLI_PROFILE'
+ envKeys.push(key);process.env[key]='fixture-profile'
+ writeFileSync(binary,'#!'+process.execPath+'\n'+`require('node:fs').appendFileSync(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),profile:process.env.CLI_PROFILE})+'\\n');console.log('CLI ready')`,{mode:0o700})
+ f.runtime.updateSettings(0,{backends:{profile:{kind:'codex',command:binary,args:['--profile','work'],env:{CLI_PROFILE:key}}},execution:{...f.runtime.config.execution,workers:[{id:'independent',backend:'profile'}]}})
+ const checked=await new Setup(f.runtime).check()
+ expect(checked.checks.find(c=>c.id==='profile-auth')?.status).toBe('ok')
+ const plan=await f.post('/onboarding/plan',{revision:1,connection:{kind:'existing',id:'profile'}})
+ expect((await f.post('/onboarding/check',{id:plan.body.id})).body).toMatchObject({ok:true,remoteVerified:false})
+ const requests=readFileSync(log,'utf8').trim().split('\n').map(l=>JSON.parse(l))
+ expect(requests).toHaveLength(4);expect(requests.every(r=>r.profile==='fixture-profile'&&r.args.slice(0,2).join(' ')==='--profile work')).toBe(true)
+})
+it('uses the selected subscription account for connection checks and reports missing sign-in',async()=>{
+ const f=await fixture();f.runtime.updateSettings(0,{backends:{subscription:{kind:'openai-responses',baseUrl:'https://api.openai.com/v1',model:'fixture',subscription:{provider:'chatgpt',account:'selected',owner:{source:'local',actor:'operator'},backgroundAuthorized:true}}}})
+ let account:string|undefined;f.runtime.subscriptions.credential=async id=>{account=id;throw Error('Subscription sign-in required')}
+ const plan=await f.post('/onboarding/plan',{revision:1,connection:{kind:'existing',id:'subscription'}})
+ expect((await f.post('/onboarding/check',{id:plan.body.id})).body).toMatchObject({ok:false,remoteVerified:false,checks:[{code:'subscription_sign_in_required'}]})
+ expect(account).toBe('selected')
+})
+it('does not start a second Router for ordinary requests in CLI client mode',async()=>{
+ const f=await fixture();f.runtime.updateSettings(0,{execution:{...f.runtime.config.execution,router:{mode:'client'}}})
+ const result=await f.post('/request',{text:'Do work'})
+ expect(result.status).toBe(409);expect(result.body.code).toBe('client_router_use_worker_manage');expect(f.runtime.store.list('trigger')).toEqual([])
+})
 it.each(['openai-responses','openai-chat','anthropic'] as const)('takes a beginner from %s setup through a real protocol check, restart and first Runtime reply',async protocol=>{
  const api=await provider(),f=await fixture();f.runtime.store.put('run','retained',{ticketId:'retained',threadId:'legacy-native-thread',cwd:f.root,phase:'idle'})
  const plan=await f.post('/onboarding/plan',{revision:0,connection:{kind:'api',protocol,baseUrl:api.url,model:'fixture',apiKey:'synthetic-onboarding-key'}})

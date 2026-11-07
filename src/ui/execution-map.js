@@ -1,17 +1,17 @@
 // The original Tool Access Map composition, driven by recorded host calls.
 function executionModeTabs(){
- const tabs=affectSegmented({id:'execution-mode-tab',label:L('Execution view','执行视图'),value:executionView.mode,options:[{value:'calls',label:L('Calls','调用'),controls:'execution-mode-panel'},{value:'configuration',label:L('Configuration','配置')+(changed().some(key=>['execution','models','concurrency'].includes(key))?' •':''),controls:'execution-mode-panel'}],onChange:value=>opNavigate('execution','',{view:value})})
+ const tabs=affectSegmented({id:'execution-mode-tab',label:L('Execution view','执行视图'),value:executionView.mode,options:[{value:'calls',label:L('Live activity','运行记录'),controls:'execution-mode-panel'},{value:'configuration',label:L('Configure team','配置团队')+(changed().some(key=>['execution','models','concurrency'].includes(key))?' •':''),controls:'execution-mode-panel'}],onChange:value=>opNavigate('execution','',{view:value})})
  tabs.classList.add('execution-mode-tabs');return tabs
 }
 function executionActors(){
  const architecture=operator.work?.architecture,services=controlConnections(),label=id=>services.find(s=>s.id===id)?.label||(id==='codex'?'Codex':L('Model service','模型服务'))
- return [{kind:'router',id:'router',name:'Router',backend:label(architecture?.router.backend),model:architecture?.router.model},...(architecture?.workers||[]).map((worker,index)=>({kind:'worker',id:worker.id,name:'Worker '+(index+1),backend:label(worker.backend),model:worker.model}))]
+ return [{kind:'router',id:'router',name:'Router',backend:label(architecture?.router.backend),model:architecture?.router.model},...(architecture?.workers||[]).map((worker,index)=>({kind:'worker',id:worker.id,name:worker.label||'Worker '+(index+1),backend:label(worker.backend),model:worker.model}))]
 }
 const executionActorValue=actor=>actor.kind+':'+actor.id
 function executionCurrentActor(){const actors=executionActors();return actors.find(actor=>actor.kind===executionView.selected?.kind&&(actor.kind==='router'||actor.id===executionView.selected.id))||actors[0]}
 function executionCallsPage(page){
  page.classList.add('execution-calls-page')
- page.append(opHeading(L('Execution','执行')),executionModeTabs())
+ page.append(opHeading(L('Agent team','Agent 团队')),executionModeTabs())
  const panel=el('section','execution-call-overview');panel.id='execution-mode-panel';panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby','execution-mode-tab-calls')
  const actor=executionCurrentActor();executionView.selected={kind:actor.kind,id:actor.id}
  panel.append(el('div','execution-map-topline'))
@@ -41,7 +41,7 @@ function executionMapBody(){
   const entries=entryState.data?.entries?.filter(entry=>entry.category==='client'?entry.client?.installed||entry.status==='verified':entry.sources?.some(source=>source.enabled))||[]
   for(const entry of entries)left.append(executionMapNode({key:'app-'+entry.id,kind:'app',id:entry.id,name:entryName(entry)}))
   if(!entries.length)left.append(affectButton(L('New connection','新建接入'),()=>opNavigate('catalogue'),{glyph:'plus'}))
-  left.append(executionMapNode({key:'tool-superagent_read',kind:'tool',id:'superagent_read',name:L(...executionToolLabels.superagent_read)}))
+  for(const name of executionRouterTools())left.append(executionMapNode({key:'tool-'+name,kind:'tool',id:name,name:L(...(executionToolLabels[name]||[name,name]))}))
   for(const worker of actors.filter(a=>a.kind==='worker'))right.append(executionMapNode({key:'worker-'+worker.id,kind:'worker',id:worker.id,name:worker.name,model:worker.model,action:()=>executionPickActor(worker,true)}))
   const queue=el('div','execution-map-queue tam-node',L('Queue','队列'));queue.dataset.mapKey='queue';map.append(queue)
  }else{
@@ -65,6 +65,7 @@ function executionMountCallMap(){
 }
 function executionPaintCallMap(){
  const root=executionView.root,map=root?.querySelector('.execution-call-map');if(!map)return
+ map.dataset.stale=String(executionView.stale)
  if(root.querySelector('#execution-actor-tabs').dataset.actors!==JSON.stringify(executionActors().map(executionActorValue))){render();return}
  const actor=executionCurrentActor();if(map.dataset.actor!==executionActorValue(actor)){executionMountCallMap();return}
  const calls=executionCalls(),records=calls.filter(call=>executionMatches(call,actor.kind,actor.id)),running=records.filter(call=>call.state==='running').length,active=records.find(call=>call.kind===actor.kind&&call.state==='running'),service=active?.backend||actor.backend,model=active?.model||actor.model

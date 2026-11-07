@@ -5,9 +5,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json vitest.config.ts start.sh ./
 COPY src ./src
+COPY web ./web
 COPY tests ./tests
 COPY plugins ./plugins
 COPY examples/linux-container-check.ts ./examples/linux-container-check.ts
+COPY examples/plugins ./examples/plugins
 RUN chown -R node:node /opt/agent-hub
 USER node
 CMD ["npm", "run", "check"]

@@ -3,12 +3,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import {readSchema} from './resources.ts'
+import {workerCommandSchema} from './worker-manager.ts'
 import {randomUUID} from 'node:crypto'
 
 export async function startMcp(url: string, tokenFile: string,client='generic') {
   const token = readFileSync(tokenFile, 'utf8').trim()
   const bridgeId=randomUUID()
-  const server = new McpServer({ name: 'agent-hub', version: '0.10.0' },{instructions:'AgentHub carries out work asynchronously in a persistent background session. Use agent_request for ordinary requests; no source or request identifiers are needed. Reuse its returned discussion for follow-ups in the same conversation. Query agent_status for progress and the actual reply; accepted is not completed. Preserve requestId on retries. Operator settings and control tools affect the local host.'})
+  const server = new McpServer({ name: 'agent-hub', version: '0.10.0' },{instructions:'AgentHub carries out work asynchronously in a persistent background session. When execution.router.mode is client, this conversation is the Router: use worker_manage to delegate and collect results, then reply here. Use agent_request for ordinary host-mode requests; no source or request identifiers are needed. Reuse its returned discussion for follow-ups in the same conversation. Query agent_status for progress and the actual reply; accepted is not completed. Preserve requestId on retries. Operator settings and control tools affect the local host.'})
   async function api(path: string, value?: unknown) {
     try {
       const clientName=server.server.getClientVersion()?.name??'',reported=client==='generic'?(/cursor/i.test(clientName)?'cursor':/visual studio|vscode/i.test(clientName)?'vscode':/workbuddy|codebuddy/i.test(clientName)?'workbuddy':/codex/i.test(clientName)?'codex':'generic'):client
@@ -22,6 +23,7 @@ export async function startMcp(url: string, tokenFile: string,client='generic') 
       return { isError: !response.ok, content:data?.kind==='image'?[{type:'image' as const,mimeType:data.mimeType,data:data.data}]:[{ type: 'text' as const, text: JSON.stringify(data) }] }
     } catch { return { isError: true, content: [{ type: 'text' as const, text: 'Cannot reach the agent host. Start the configured serve process.' }] } }
   }
+  server.registerTool('worker_manage',{description:'Act as the user-facing Router and manage AgentHub Workers. Use list to read policy and revision. Mutations require a stable requestId and revision. assign needs id, text, discussion; result needs ticketId. Keep the user in this conversation and report actual Worker results.',inputSchema:workerCommandSchema.shape},async args=>api('/workers',args))
   server.registerTool('agent_request',{description:'Give the background assistant an ordinary request. The host selects the local operator entry and creates identifiers. For follow-ups reuse the returned discussion. Completion is asynchronous: use agent_status to retrieve the actual reply.',inputSchema:{text:z.string().min(1),discussion:z.string().optional(),requestId:z.string().optional()}},async args=>api('/request',args))
   server.registerTool('agent_send', {
     description: 'Send a request or follow-up to the background agent. Reuse a discussion reference only when it belongs to this conversation. Work is asynchronous. Preserve requestId on transport retries.',

@@ -7,12 +7,21 @@ import type {Model,ModelRequest,ModelResult,ToolContent} from './model.ts'
 export type {Model,ModelRequest,ModelResult,NativeControl,NativeRequest,ToolSpec,ToolContent} from './model.ts'
 interface RpcMessage { id?: number | string; method?: string; params?: any; result?: any; error?: { code: number; message: string } }
 
+export function cliEnvironment(environment?:Record<string,string>){
+  const env={...process.env}
+  for(const [key,reference] of Object.entries(environment??{})){
+    if(process.env[reference]===undefined)throw Error('Missing CLI environment variable '+reference)
+    env[key]=process.env[reference]
+  }
+  return env
+}
+
 /** One owned stdio process per activation. Persistent threads survive activations. */
 export class CodexModel implements Model {
-  constructor(private readonly config: Pick<Config, 'codex' | 'model' | 'effort' | 'turnTimeoutMs'>, private readonly extraArgs: string[] = []) {}
+  constructor(private readonly config: Pick<Config, 'codex' | 'model' | 'effort' | 'turnTimeoutMs'>, private readonly extraArgs: string[] = [],private readonly environment?:Record<string,string>) {}
   describe(){return {id:'codex',kind:'codex',nativeTakeover:true,images:true,resume:true,tools:true,steering:true,promptRefresh:true,model:this.config.model}}
   async expose(threadId:string,cwd:string):Promise<void>{
-    const client=new AppServer(this.config.codex,this.extraArgs,cwd)
+    const client=new AppServer(this.config.codex,this.extraArgs,cwd,undefined,undefined,undefined,this.environment)
     const timer=setTimeout(()=>client.fail(Error('Expose deadline exceeded')),20000)
     try{
       await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.10.0'}})
@@ -21,13 +30,13 @@ export class CodexModel implements Model {
     }finally{clearTimeout(timer);await client.close()}
   }
   async history(threadId:string,cwd:string):Promise<any>{
-    const client=new AppServer(this.config.codex,this.extraArgs,cwd)
+    const client=new AppServer(this.config.codex,this.extraArgs,cwd,undefined,undefined,undefined,this.environment)
     const timer=setTimeout(()=>client.fail(Error('History deadline exceeded')),20000)
     try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.10.0'}});client.notify('initialized');return (await client.call('thread/read',{threadId,includeTurns:true})).thread}
     finally{clearTimeout(timer);await client.close()}
   }
   async catalog(provider?:string):Promise<any>{
-    const client=new AppServer(this.config.codex,this.extraArgs,process.cwd())
+    const client=new AppServer(this.config.codex,this.extraArgs,process.cwd(),undefined,undefined,undefined,this.environment)
     const timer=setTimeout(()=>client.fail(Error('Model catalog deadline exceeded')),20000)
     try{
       await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.10.0'}});client.notify('initialized')
@@ -40,7 +49,7 @@ export class CodexModel implements Model {
   async run(request: ModelRequest): Promise<ModelResult> {
     // Disable configured servers in the per-thread managed config below. A
     // startup override for a missing server creates an invalid partial entry.
-    const client = new AppServer(this.config.codex, this.extraArgs, request.cwd,request.onHumanRequest,request.onProgress,request.onTool)
+    const client = new AppServer(this.config.codex, this.extraArgs, request.cwd,request.onHumanRequest,request.onProgress,request.onTool,this.environment,request.onOutput)
     const abort = () => client.interrupt()
     request.signal?.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(() => client.fail(new Error('Turn deadline exceeded; inspect workspace before retrying')), this.config.turnTimeoutMs)
@@ -48,6 +57,24 @@ export class CodexModel implements Model {
       if (request.signal?.aborted) throw new Error('Cancelled')
       await client.call('initialize', { clientInfo: { name: 'agent-hub', version: '0.10.0' },capabilities:{experimentalApi:true} })
       client.notify('initialized')
+      const options=request.options??{},custom=options.parameters??{}
+      for(const key of Object.keys(custom))if(!['thread','turn','config'].includes(key))throw Error('Codex parameters require thread, turn or config namespaces: '+key)
+      for(const key of ['maxOutputTokens','maxSteps','maxToolCalls'] as const)if(options[key]!==undefined)throw Error('Codex does not expose the host API limit '+key)
+      for(const part of ['thread','turn','config'])if(custom[part]!==undefined&&(!custom[part]||typeof custom[part]!=='object'||Array.isArray(custom[part])))throw Error('Codex '+part+' parameters must be an object')
+      const threadOptions=(custom.thread??{}) as Record<string,unknown>,turnOptions=(custom.turn??{}) as Record<string,unknown>,configOptions=(custom.config??{}) as Record<string,unknown>
+      const allowedThread=['allowProviderModelFallback','experimentalRawEvents','historyMode','modelProvider','personality','projectId','serviceName','serviceTier','sessionStartSource','threadSource']
+      const allowedTurn=['additionalContext','clientUserMessageId','personality','responsesapiClientMetadata','responsesapiClientMetadataPatch','serviceTier','serviceTierForTurn','summary']
+      for(const key of Object.keys(threadOptions))if(!allowedThread.includes(key))throw Error('Unsupported or host-owned Codex thread parameter: '+key)
+      for(const key of Object.keys(turnOptions))if(!allowedTurn.includes(key))throw Error('Unsupported or host-owned Codex turn parameter: '+key)
+      const owned=['threadId','input','outputSchema','developerInstructions','baseInstructions','dynamicTools','cwd','approvalPolicy','permissions','sandbox','config','model','ephemeral','excludeTurns','disabledPluginIds','effort']
+      for(const key of [...Object.keys(threadOptions),...Object.keys(turnOptions)])if(owned.includes(key))throw Error('Codex parameter is managed by the host: '+key)
+      for(const key of Object.keys(configOptions))if(!['model_reasoning_summary','model_verbosity','model_context_window','model_auto_compact_token_limit','service_tier','personality'].includes(key))throw Error('Unsupported or host-owned Codex config parameter: '+key)
+      for(const key of Object.keys(configOptions))if(/^(mcp_servers|plugins|features|permissions|approval_policy|sandbox|model|developer_instructions|base_instructions)(\.|$)/.test(key))throw Error('Codex configuration is managed by the host: '+key)
+      const effort=options.effort??this.config.effort
+      if(options.effort==='none'||options.effort==='minimal'){
+        const catalog=await client.call('model/list',{}),model=catalog.data?.find((m:any)=>m.model===(request.model??this.config.model)||m.id===(request.model??this.config.model))
+        if(!model?.supportedReasoningEfforts?.some((e:any)=>e.reasoningEffort===effort))throw Error('Codex model has not confirmed support for reasoning effort '+effort)
+      }
       let isolated:Record<string,unknown>|undefined
       if(request.managed){
         const effective=(await client.call('config/read',{includeLayers:false,cwd:request.cwd})).config
@@ -59,10 +86,11 @@ export class CodexModel implements Model {
         isolated={mcp_servers:mcp,plugins:Object.fromEntries(Object.keys(effective.plugins??{}).map(name=>[name,{enabled:false}])),features:{apps:false,shell_tool:false,unified_exec:false,multi_agent:false,browser_use:false,computer_use:false},permissions:{'superagent-managed':{extends:request.sandbox==='workspace-write'?':workspace':':read-only',filesystem,network:{enabled:false}}}}
       }
       const params = {
+        ...threadOptions,
         cwd: request.cwd, approvalPolicy: request.onHumanRequest||request.operator?'on-request':'never', ...(request.managed?{permissions:'superagent-managed'}:{sandbox:request.sandbox??'read-only'}),
         ...((request.model||(!request.threadId?this.config.model:undefined))?{model:request.model||this.config.model}:{}),
         developerInstructions: request.instructions,
-        ...(isolated?{config:isolated}:{}),
+        ...((isolated||Object.keys(configOptions).length)?{config:{...configOptions,...isolated}}:{}),
       }
       const result = request.threadId
         ? await resumeThread(client,{ ...params, threadId: request.threadId, excludeTurns: true },request)
@@ -80,15 +108,18 @@ export class CodexModel implements Model {
       if (request.title) await client.call('thread/name/set', { threadId, name: request.title })
       // Arm completion before starting: notifications may arrive before the RPC reply.
       const completed = client.completion()
+      request.onConfiguration?.({requested:options,sent:{model:result.model??request.model??this.config.model,effort,parameters:custom},confirmed:result.model?{model:result.model}:undefined})
       const started = await client.call('turn/start', {
-        threadId, input: [{ type: 'text', text: request.input }],
+        ...turnOptions,threadId, input: [{ type: 'text', text: request.input }],
         ...(!request.operator?{disabledPluginIds:['agent-hub@agent-hub-local','codex-superagent@codex-superagent-local']}:{}),
-        effort: this.config.effort, outputSchema: request.schema,
+        effort, outputSchema: request.schema,
       })
       client.turnId = started.turn.id
       request.onTurn?.(client.turnId!)
-      request.onActive?.({interrupt:()=>client.interrupt(),refresh:async(text:string)=>{await client.call('thread/inject_items',{threadId,items:[{type:'message',role:'developer',content:[{type:'input_text',text}]}]})},steer:async(text:string)=>{
-        await client.call('turn/steer',{threadId,expectedTurnId:client.turnId,input:[{type:'text',text}]})
+      request.onActive?.({interrupt:()=>client.interrupt(),refresh:async(text:string)=>{await client.call('thread/inject_items',{threadId,items:[{type:'message',role:'developer',content:[{type:'input_text',text}]}]})},steer:async(text:string,onRead?:()=>void)=>{
+        if(onRead)client.inputReceipts.set(text,onRead)
+        try{await client.call('turn/steer',{threadId,expectedTurnId:client.turnId,input:[{type:'text',text}]})}
+        catch(error){client.inputReceipts.delete(text);throw error}
       }})
       if (request.signal?.aborted) await client.interrupt()
       const terminal = await completed
@@ -130,14 +161,18 @@ class AppServer {
   turnId?: string
   answer = ''
   humanRequest?: string
+  readonly inputReceipts=new Map<string,()=>void>()
   private id = 0
-  private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>()
+  private pending = new Map<number, { method:string; resolve: (value: any) => void; reject: (error: Error) => void }>()
+  private earlyOutput:RpcMessage[]=[]
   private complete?: (turn: any) => void
   private rejectCompletion?: (error: Error) => void
   private failure?: Error
   private terminal?: any
-  constructor(binary: string, args: string[], cwd: string,private readonly onRequest?:ModelRequest['onHumanRequest'],private readonly onProgress?:ModelRequest['onProgress'],private readonly onTool?:ModelRequest['onTool']) {
-    this.process = spawn(binary, [...args, 'app-server', '--stdio'], { cwd, stdio: 'pipe', shell: false })
+  private outputPhases=new Map<string,'answer'|'commentary'>()
+  constructor(binary: string, args: string[], cwd: string,private readonly onRequest?:ModelRequest['onHumanRequest'],private readonly onProgress?:ModelRequest['onProgress'],private readonly onTool?:ModelRequest['onTool'],environment?:Record<string,string>,private readonly onOutput?:ModelRequest['onOutput']) {
+    const env=cliEnvironment(environment)
+    this.process = spawn(binary, [...args, 'app-server', '--stdio'], { cwd, stdio: 'pipe', shell: false,env })
     // stderr may contain credentials or tool content; diagnostics use protocol errors.
     this.process.stderr.resume()
     createInterface({ input: this.process.stdout }).on('line', line => {
@@ -156,7 +191,7 @@ class AppServer {
     if (this.failure) return Promise.reject(this.failure)
     const id = ++this.id
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      this.pending.set(id, { method, resolve, reject })
       try { this.write({ id, method, params }) } catch (error) { this.pending.delete(id); reject(error) }
     })
   }
@@ -176,7 +211,13 @@ class AppServer {
       if (!pending) return
       this.pending.delete(Number(message.id))
       if (message.error) pending.reject(new Error('RPC ' + message.error.code + ': ' + message.error.message))
-      else pending.resolve(message.result)
+      else {
+        // Bind synchronously: readline can deliver more notifications from the same
+        // stdout chunk before the awaiting turn/start continuation gets to run.
+        if(pending.method==='turn/start')this.turnId=message.result?.turn?.id
+        pending.resolve(message.result)
+        if(pending.method==='turn/start'&&this.turnId){const buffered=this.earlyOutput.splice(0);for(const event of buffered)this.receive(event)}
+      }
       return
     }
     if(message.id!==undefined&&message.method==='item/tool/call'&&this.onTool){
@@ -210,12 +251,33 @@ class AppServer {
       return
     }
     const params = message.params
+    if(!this.turnId&&/^(?:item\/(?:started|completed|agentMessage\/delta)|turn\/(?:started|completed))$/.test(message.method)){
+      if(this.earlyOutput.length>=1000)throw Error('Native output arrived without a confirmed turn')
+      this.earlyOutput.push(message);return
+    }
     if(message.method)this.onProgress?.(message.method)
     if (this.threadId && params?.threadId && params.threadId !== this.threadId) return
-    if (message.method === 'turn/started') this.turnId = params.turn.id
+    if (message.method === 'turn/started' && params.turn?.id !== this.turnId) return
+    if (this.turnId && params?.turnId && params.turnId !== this.turnId) return
+    if(message.method==='item/started'&&params?.item?.type==='agentMessage'){
+      const id=params.item.id,phase=params.item.phase==='commentary'?'commentary':'answer'
+      if(typeof id==='string'){this.outputPhases.set(id,phase);this.onOutput?.({id,type:'start',phase})}
+    }
+    if(message.method==='item/agentMessage/delta'&&typeof params?.delta==='string'&&typeof params.itemId==='string'){
+      const phase=this.outputPhases.get(params.itemId)
+      // An item start establishes its phase; unknown or reasoning items are never guessed to be answers.
+      if(phase)this.onOutput?.({id:params.itemId,type:'delta',phase,text:params.delta})
+    }
+    if ((message.method === 'item/started' || message.method === 'item/completed') && params?.item?.type === 'userMessage') {
+      for(const part of params.item.content??[]){
+        const receipt=this.inputReceipts.get(part.text)
+        if(receipt){this.inputReceipts.delete(part.text);receipt()}
+      }
+    }
     if (message.method === 'item/completed' && params?.item?.type === 'agentMessage') {
       const item = params.item
       if (item.phase !== 'commentary') this.answer = item.text ?? ''
+      if(typeof item.id==='string')this.onOutput?.({id:item.id,type:'end',phase:item.phase==='commentary'?'commentary':'answer',text:item.text??''})
     }
     if (message.method === 'turn/completed') {
       if (this.turnId && params.turn.id !== this.turnId) return

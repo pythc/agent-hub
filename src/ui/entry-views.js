@@ -537,7 +537,31 @@ function entryCatalogue() {
   return result
 }
 function renderEntrySurface() {
-  if (entryState.role === 'operator' && S.authed && entryState.data) {
+  if(typeof configurationHost !== 'undefined' && configurationHost && !(entryState.role === 'operator' && (entryState.operator || S.authed))) {
+    const main=el('div','workspace-bootstrap')
+    const status=el('p',entryState.error?'workspace-load-error':'workspace-loading',entryState.error?L('Couldn’t load this page.','页面加载失败。'):L('Loading…','加载中…'))
+    status.setAttribute('role',entryState.error?'alert':'status');main.append(status)
+    if(entryState.error)main.append(action(L('Retry','重试'),startEntrySession,'button'))
+    app.replaceChildren(main);return
+  }
+  if (!entryState.sessionChecked) {
+    document.documentElement.lang = lang
+    document.title = 'Roppo'
+    const main = el('main', 'workspace-bootstrap')
+    main.id = 'main'
+    main.append(add(el('div', 'brand'), el('span', 'roppo-brand-mark'), el('strong', '', 'Roppo')))
+    if (entryState.error) {
+      const message = el('p', 'workspace-load-error', L('Couldn’t load the workspace.', '工作区加载失败。'))
+      message.setAttribute('role', 'alert')
+      main.append(message, action(L('Retry', '重试'), startEntrySession, 'button'))
+    } else {
+      const status = el('p', 'workspace-loading', L('Loading…', '加载中…'))
+      status.setAttribute('role', 'status');main.append(status)
+    }
+    app.replaceChildren(main)
+    return
+  }
+  if (entryState.role === 'operator' && (entryState.operator || S.authed)) {
     renderOperatorWorkspace()
     return
   }
@@ -560,6 +584,7 @@ function renderEntrySurface() {
     logo,
     add(
       el('div', 'tools'),
+      themeToggle(),
       languagePicker(),
       entryState.role
         ? action(

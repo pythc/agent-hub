@@ -1,0 +1,34 @@
+name: Bug report / 问题反馈
+description: Report reproducible behavior that is not working as expected.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "English or 中文 are welcome. Remove tokens, cookies, passwords, recovery codes, and private data. For vulnerabilities, use the private security reporting link instead."
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened? / 问题现象
+      description: Describe expected and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      description: Use a minimal example with synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment / 环境
+      description: Commit or version, OS, Node version, backend type, and browser if relevant. Do not include credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted logs or screenshots / 脱敏证据
+      description: Include errors and whether the problem persists after a restart. Do not attach the state directory.

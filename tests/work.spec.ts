@@ -9,7 +9,7 @@ const roots:string[]=[],managers:WorkManager[]=[],stores:Store[]=[]
 afterEach(async()=>{for(const m of managers.splice(0))await m.close();for(const s of stores.splice(0))s.close();for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true})})
 function fixture(timeout=2000){
  const root=mkdtempSync(join(tmpdir(),'managed-work-'));roots.push(root);const cwd=join(root,'project');mkdirSync(cwd)
- const config=configSchema.parse({stateDir:join(root,'state'),codex:process.env.CODEX_BINARY??'codex',work:{backgroundTimeoutMs:timeout,...(process.platform==='linux'?{sandboxDriver:'bubblewrap'}:{})},sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd}]})
+ const config=configSchema.parse({stateDir:join(root,'state'),codex:process.env.CODEX_BINARY??'codex',work:{backgroundTimeoutMs:timeout,sandboxDriver:process.env.CODEX_BINARY?'codex':process.platform==='darwin'?'seatbelt':'bubblewrap'},sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd}]})
  const store=new Store(join(config.stateDir,'state.sqlite'));stores.push(store);writeFileSync(join(config.stateDir,'host.lock'),String(process.pid))
  const wakes:any[]=[],owner:WorkOwner={ticketId:'task',assignmentId:'a',cwd,sandbox:'workspace-write',depth:0}
  const manager=new WorkManager(store,config,{valid:()=>true,wake:w=>wakes.push(w),agent:async(item,signal)=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true}))});managers.push(manager)

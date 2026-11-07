@@ -21,7 +21,7 @@ it('refuses symlinked setup locations and configuration files',()=>{
  const file=join(root,'config.json');writeFileSync(join(root,'other.json'),'{}');symlinkSync(join(root,'other.json'),file);expect(()=>preparePersonalSetup(root)).toThrow('regular file')
 })
 it('starts from one setup command, remembers its chosen port, and reuses the running host on the next command',async()=>{
- const root=directory(),args=['--import',join(process.cwd(),'node_modules/tsx/dist/loader.mjs'),join(process.cwd(),'src/cli.ts'),'setup',root],child=spawn(process.execPath,args,{stdio:['ignore','pipe','pipe']})
+ const root=directory(),args=['--import',join(process.cwd(),'node_modules/tsx/dist/loader.mjs'),join(process.cwd(),'src/cli.ts'),'setup',root,'--no-open'],child=spawn(process.execPath,args,{stdio:['ignore','pipe','pipe']})
  const ended=new Promise<void>(r=>child.once('close',()=>r()));close.push(async()=>{child.kill('SIGTERM');await ended})
  const boot=await new Promise<any>((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Setup did not start')),10000);child.once('error',reject);child.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(l=>l.startsWith('{'));if(line){clearTimeout(timer);try{resolve(JSON.parse(line))}catch(error){reject(error)}}});child.stderr.resume()})
  expect(boot.url).toContain('/configure#pair=');const origin=new URL(boot.url).origin

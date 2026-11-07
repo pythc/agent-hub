@@ -80,7 +80,9 @@ function savedGuideFields() {
         )
       )
     )
-  controls.push(requestComposer(!ready || preview || saved.paused))
+  const clientRouter = S.base?.config.execution?.router?.mode === 'client'
+  if (clientRouter) controls.push(el('p', 'alert warning', L('Continue in your connected CLI Router. Ask it to delegate using worker_manage.', '请在已接入的 CLI Router 中继续对话，让它通过 worker_manage 委派任务。')))
+  controls.push(requestComposer(!ready || preview || saved.paused || clientRouter))
   const history = el('section', 'inbox-history')
   history.id = 'inbox-history'
   drawHistory(history)
@@ -272,7 +274,7 @@ function drawHistory(node = document.getElementById('inbox-history')) {
   }
 }
 function inboxCanSend() {
-  return S.authed && guide.saved?.ready && !guide.saved.paused && !guide.saved.preview && !isGuidePreview()
+  return S.base?.config.execution?.router?.mode !== 'client' && S.authed && guide.saved?.ready && !guide.saved.paused && !guide.saved.preview && !isGuidePreview()
 }
 async function sendRequest(text, fromComposer) {
   if (!inboxCanSend() || guide.busy) return

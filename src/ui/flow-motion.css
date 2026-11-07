@@ -1,14 +1,14 @@
-/* Scoped to the execution surface. Override the green tokens with AgentHub's own. */
+/* Scoped to recorded execution. Only running edges animate. */
 .tam-surface {
   position: relative;
-  --tam-accent: #268363;
-  --tam-line: #a2cdbb;
-  --tam-off: #dce4df;
-  --tam-error: #c47652;
+  --tam-accent: var(--status-success);
+  --tam-line: var(--diagram-line);
+  --tam-off: var(--diagram-off);
+  --tam-error: var(--status-danger);
 }
 .tam-surface .tam-connections { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .tam-surface .tam-base { fill: none; stroke: var(--tam-off); stroke-width: 1.25; stroke-dasharray: 2 4; }
-.tam-surface .tam-path { fill: none; stroke: var(--tam-line); stroke-width: 1.35; opacity: 0; stroke-dasharray: 1; stroke-dashoffset: 0; }
+.tam-surface .tam-path { fill: none; stroke: var(--tam-line); stroke-width: 1.35; opacity: 0; stroke-dasharray: 1; stroke-dashoffset: 0; transition: stroke 180ms ease, opacity 180ms ease; }
 .tam-surface .tam-path[data-available="true"] { opacity: 1; }
 .tam-surface .tam-path.tam-draw[data-available="true"] { animation: tam-draw 700ms cubic-bezier(.22,1,.36,1) both; animation-delay: var(--tam-delay, 0ms); }
 .tam-surface .tam-path[data-state="running"] { stroke: var(--tam-accent); }

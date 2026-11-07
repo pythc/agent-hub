@@ -5,13 +5,14 @@ import {DatabaseSync} from 'node:sqlite'
 import {z} from 'zod'
 import {configSchema,type Config} from './config.ts'
 import {backendsSchema} from './backend-config.ts'
+import {sourceDeployment} from './connector-config.ts'
 
 const overlaySchema=z.object({format:z.literal(1),backends:backendsSchema,sources:z.array(configSchema.shape.sources.element)}).strict()
 const secretsSchema=z.record(z.string().regex(/^AGENTHUB_SETUP_[A-Z0-9_]+$/),z.string().min(1).max(16000))
 export type ManagedConnections=z.infer<typeof overlaySchema>
 const same=(a:unknown,b:unknown):boolean=>JSON.stringify(normalize(a))===JSON.stringify(normalize(b))
 function normalize(value:any):any{return Array.isArray(value)?value.map(normalize):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,normalize(value[k])])):value}
-const deployment=(source:Config['sources'][number])=>Object.fromEntries(['id','kind','cwd','workspace','sandbox','repository','feishu','wecom','github','replyUrl','tokenEnv'].map(k=>[k,(source as any)[k]]))
+const deployment=sourceDeployment
 export const managedFiles=(state:string)=>({directory:join(state,'setup'),connections:join(state,'setup','connections.json'),secrets:join(state,'setup','credentials.json'),journal:join(state,'setup','transaction.json')})
 export function atomicPrivateFile(path:string,text:string){
  mkdirSync(dirname(path),{recursive:true,mode:0o700})
