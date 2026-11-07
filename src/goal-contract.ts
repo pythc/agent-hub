@@ -13,10 +13,10 @@ export const criterionSchema=z.object({
  ]).optional(),
 }).strict()
 export type GoalCriterion=z.infer<typeof criterionSchema>
-export const nodeSchema=z.object({id,title:z.string().min(1).max(300),instruction:z.string().min(1).max(16000),workerId:id,dependsOn:z.array(id).max(100).default([]),criterionIds:z.array(id).min(1).max(50)}).strict()
+export const nodeSchema=z.object({id,title:z.string().min(1).max(300),instruction:z.string().min(1).max(16000),workerId:id,dependsOn:z.array(id).max(100).default([]),criterionIds:z.array(id).max(50),derivedFrom:id.optional(),supports:z.array(id).min(1).max(50).optional(),outputs:z.array(path).min(1).max(20).optional()}).strict()
 export interface GoalNode extends z.infer<typeof nodeSchema> {
  ticketId?:string;state:'pending'|'running'|'verifying'|'passed'|'held'|'waiting_dependency';roundId?:string;
- repairs:number;recoveries:number;refreshFrom?:string;retryAt?:number;failure?:GoalFailure;reason?:string;
+ repairs:number;recoveries:number;repairStart?:number;refreshFrom?:string;retryAt?:number;failure?:GoalFailure;reason?:string;
 }
 export interface GoalFailure {kind:'transient'|'quota'|'environment'|'uncertain'|'quality'|'protocol';reason:string;retryAt?:number}
 export function classifyGoalFailure(error:string,now:number,attempt:number):GoalFailure {
@@ -32,6 +32,8 @@ export function validateGraph(nodes:z.infer<typeof nodeSchema>[],criteria:GoalCr
  const byId=new Map(nodes.map(n=>[n.id,n]));if(byId.size!==nodes.length)throw Error('Duplicate goal node id')
  const criterionIds=new Set(criteria.map(c=>c.id))
  for(const n of nodes){
+  if(!n.criterionIds.length&&(!n.derivedFrom||!byId.has(n.derivedFrom)||!n.supports?.length||!n.outputs?.length))throw Error('Intermediate nodes need an original parent, supported criteria and outputs')
+  if(n.supports?.some(id=>!criterionIds.has(id)))throw Error('Unknown supported criterion')
   if(new Set(n.criterionIds).size!==n.criterionIds.length||n.criterionIds.some(id=>!criterionIds.has(id)))throw Error('Unknown or duplicate node criterion')
   if(new Set(n.dependsOn).size!==n.dependsOn.length||n.dependsOn.some(id=>!byId.has(id)))throw Error('Unknown or duplicate dependency')
  }

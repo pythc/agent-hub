@@ -1,0 +1,74 @@
+/** Native acceptance: real failure, autonomous graph revisions, process and review restart. */
+import {mkdirSync,existsSync,readFileSync,writeFileSync} from 'node:fs'
+import {resolve,join} from 'node:path'
+import {spawn} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
+import {createHash} from 'node:crypto'
+import {Runtime} from '../src/runtime.ts'
+import {configSchema} from '../src/config.ts'
+import type {RouterGoal} from '../src/router-goals.ts'
+
+const root=resolve(process.env.AGENTHUB_SMOKE_DIR??'/tmp/agenthub-goal-replanning-'+Date.now()),cwd=join(root,'workspace'),phase=process.env.AGENTHUB_SMOKE_PHASE
+const sourceFiles=['src/goal-contract.ts','src/goal-verification.ts','src/goal-evidence.ts','src/goal-replanning.ts','src/router-goals.ts','src/runtime.ts','src/client-status.ts','src/scope-migration.ts','src/execution-activity.ts']
+const implementation=Object.fromEntries(sourceFiles.map(p=>[p,createHash('sha256').update(readFileSync(new URL('../'+p,import.meta.url))).digest('hex')]))
+const interruptReview=process.env.AGENTHUB_SMOKE_INTERRUPT_REVIEW==='1',phaseCount=interruptReview?4:3,finalPhase=String(phaseCount-1),recheck=process.env.AGENTHUB_SMOKE_RECHECK==='1'
+if(recheck&&phase!==undefined)throw Error('Recheck cannot run a task phase')
+const digest=(x:unknown)=>createHash('sha256').update(JSON.stringify(x)).digest('hex')
+const expected=Array.from({length:12},(_,i)=>['R'+String(i+1).padStart(2,'0'),['A','B','C'][i%3],(i+1)*10])
+const contract={action:'start',operationId:'native-replan',expectedRevision:0,title:'Versioned invoice audit',objective:'Read all 30 version-2 invoices in input.ndjson, retain each ID’s first occurrence in source order, produce result.json with normalized rows and category totals, and a reconciled report.md. Preserve input.ndjson and legacy-importer.mjs. Only local workspace processing is authorized; never deploy, install packages, contact external services, or change acceptance values.',authorizationQuote:'Continuously process input.ndjson until the report passes independent acceptance',maxParallel:2,maxRepairs:0,maxReplans:2,
+ criteria:[
+  {id:'rows',description:'result.json rows exactly preserve all twelve first occurrences as [id,category,amount] in source order',files:['input.ndjson','legacy-failure.txt'],check:{kind:'json_equals',path:'result.json',pointer:'/rows',expected}},
+  {id:'totals',description:'result.json has independently reconciled category totals',check:{kind:'json_equals',path:'result.json',pointer:'/totals',expected:{A:220,B:260,C:300}}},
+  {id:'report',description:'report.md accurately reconciles input.ndjson and result.json: 30 source rows, 12 unique IDs, 18 duplicates, A=220 B=260 C=300 and grand total 780. Describe the observed legacy parser failure and successful replacement method with source file references. Claims must be supported by artifacts and host execution records.',files:['input.ndjson','legacy-failure.txt','result.json','report.md']},
+ ],nodes:[
+  {id:'build',title:'Import and aggregate invoices',instruction:'Initial implementation strategy: run exactly node legacy-importer.mjs input.ndjson > legacy-failure.txt 2>&1 as a foreground command, preserving its exit status; read the diagnostic in a separate command. If the importer fails, report blocked with the actual exit status and diagnostic; do not attempt another implementation in this initial turn. This is a strategy restriction for the initial attempt only. The Router may independently approve a replacement strategy. A useful alternative is to separate version-2 decoding and duplicate validation into intermediate tasks before final aggregation; use built-in Node facilities without installing anything. Preserve original inputs. Once prerequisites are independently accepted, write result.json meeting the original criteria.',workerId:'one',criterionIds:['rows','totals']},
+  {id:'report',title:'Reconcile and report',instruction:'Read all original source data, actual legacy diagnostic and accepted result.json. Write report.md with the reconciled row counts, duplicate details, category totals, grand total, parser failure and actual alternative method. Reference the files. Do not modify source files or result.json.',workerId:'two',dependsOn:['build'],criterionIds:['report']},
+ ]}
+if(phase===undefined){
+ if(!recheck&&existsSync(join(root,'state')))throw Error('Use a fresh acceptance directory')
+ const fixtureInput=Array.from({length:30},(_,i)=>{const [id,category,amount]=expected[i%12]!;return JSON.stringify({schema:2,invoice:{id,category,amount}})}).join('\n')+'\n'
+ const fixtureImporter="import {readFileSync} from 'node:fs'; const rows=readFileSync(process.argv[2],'utf8').trim().split('\\n').map(JSON.parse); if(rows.some(x=>x.schema!==1)){console.error('Unsupported schema: legacy importer accepts schema 1; input contains schema 2 nested invoices. No output was produced.');process.exit(2)} console.log(JSON.stringify(rows));\n"
+ const inputs={'input.ndjson':digest(fixtureInput),'legacy-importer.mjs':digest(fixtureImporter)}
+ if(!recheck){
+ mkdirSync(cwd,{recursive:true});writeFileSync(join(cwd,'input.ndjson'),fixtureInput);writeFileSync(join(cwd,'legacy-importer.mjs'),fixtureImporter)
+ writeFileSync(join(root,'contract.json'),JSON.stringify(contract,null,2))
+ for(let p=0;p<phaseCount;p++)await new Promise<void>((ok,fail)=>{const child=spawn(process.execPath,['--import','tsx',fileURLToPath(import.meta.url)],{env:{...process.env,AGENTHUB_SMOKE_DIR:root,AGENTHUB_SMOKE_PHASE:String(p)},stdio:'inherit'});child.on('error',fail);child.on('exit',(code,signal)=>code===0?ok():fail(Error('Acceptance child '+p+' exited '+code+' '+signal)))})
+ }
+ const phases=Array.from({length:phaseCount},(_,i)=>i).map(p=>JSON.parse(readFileSync(join(root,'phase-'+p+'.json'),'utf8'))),final=phases.at(-1)!,goal=final.goals[0],original=phases[0].goals[0],plan=final.plans.find((p:any)=>p.state==='applied'),build=goal.nodes.find((n:any)=>n.id==='build'),result=JSON.parse(readFileSync(join(cwd,'result.json'),'utf8'))
+ const applied=final.plans.filter((r:any)=>r.state==='applied'),expectedResumes=applied.flatMap((r:any)=>{
+  const affected=new Set(r.snapshot.failureNodeIds);let grew=true
+  while(grew){grew=false;for(const n of r.snapshot.nodes)if(!affected.has(n.id)&&n.dependsOn.some((id:string)=>affected.has(id))){affected.add(n.id);grew=true}}
+  return r.snapshot.nodes.filter((n:any)=>affected.has(n.id)&&n.ticketId).map((n:any)=>r.id+':'+n.ticketId)
+ }).sort(),actualResumes=final.dispatches.map((r:any)=>r.replanId+':'+r.ticketId).sort()
+ const finalRound=final.rounds.find((r:any)=>r.id===goal.finalRoundId&&r.state==='passed'),acceptedFiles=finalRound?.snapshot.evidence.filter((e:any)=>e.kind==='file')??[]
+ const checks={processRestarts:phases.length===phaseCount&&new Set(phases.map(p=>p.pid)).size===phaseCount,oneGoal:final.goals.length===1,goalCompleted:goal.state==='completed',failedParser:phases[0].work.some((w:any)=>w.exitCode===2)&&phases[0].releases.length===0,queuedPlanRecovered:phases[0].plans.some((r:any)=>r.state==='pending'),appliedGraphRecovered:phases[phaseCount-2].plans.some((r:any)=>r.state==='applied'),interruptedReviewRecovered:!interruptReview||(phases[1].plans.some((r:any)=>r.state==='reviewing'&&r.proposal)&&final.plans[0].plannerThread===phases[1].plans[0].plannerThread&&final.sessions.filter((s:any)=>s.agentId?.endsWith(':review')).length>=2),boundedDistinctPlans:applied.length>=1&&applied.length<=contract.maxReplans&&new Set(applied.map((r:any)=>r.id)).size===applied.length&&goal.replans===applied.length&&goal.planRevision===original.planRevision+applied.length,splitIntoIntermediateSteps:goal.nodes.length>2&&plan.proposal.additions.length>0,modifiedDependencies:JSON.stringify(build.dependsOn)!==JSON.stringify(original.nodes.find((n:any)=>n.id==='build').dependsOn),retainedOriginalTask:build.ticketId===original.nodes.find((n:any)=>n.id==='build').ticketId,sameWorkerThread:final.sessions.filter((s:any)=>s.ticketId===build.ticketId&&!!s.workerId).length===1,immutableContract:phases.every(p=>digest(p.goals[0].contract)===digest(original.contract)),unchangedAcceptance:phases.every(p=>digest(p.goals[0].criteria)===digest(original.criteria)&&p.goals[0].objective===original.objective),independentPlannerReview:applied.every((r:any)=>!!r.plannerThread&&!!r.reviewerThread&&r.plannerThread!==r.reviewerThread&&r.review?.approved),allNodesVerified:goal.nodes.every((n:any)=>n.state==='passed'),oneResumePerPlanTask:new Set(actualResumes).size===actualResumes.length&&digest(actualResumes)===digest(expectedResumes),noDuplicateTasks:final.tickets.length===goal.nodes.length,noUnacceptedRelease:final.releases.length>0&&final.releases.every((r:any)=>final.rounds.some((v:any)=>!v.nodeId&&v.state==='passed'&&v.finishedAt<=r.at)),correctRows:digest(result.rows)===digest(expected),correctTotals:result.totals.A===220&&result.totals.B===260&&result.totals.C===300,unchangedInputs:Object.entries(inputs).every(([p,hash])=>digest(readFileSync(join(cwd,p),'utf8'))===hash),currentFilesMatchAcceptance:acceptedFiles.length>0&&acceptedFiles.every((e:any)=>e.missing?!existsSync(join(cwd,e.key)):existsSync(join(cwd,e.key))&&readFileSync(join(cwd,e.key),'utf8')===e.content),noRouterErrors:final.errors.length===0,unchangedCode:phases.every(p=>digest(p.implementation)===digest(implementation))}
+ const evidence={ok:Object.values(checks).every(Boolean),checks,implementation,phases:phases.map(p=>({phase:p.phase,pid:p.pid,at:p.at})),goal,plan,plans:final.plans,files:['input.ndjson','legacy-importer.mjs','legacy-failure.txt','result.json','report.md'].map(p=>({path:p,jsonTextSha256:digest(readFileSync(join(cwd,p),'utf8'))}))}
+ writeFileSync(join(root,recheck?'evidence-rechecked.json':'evidence.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify({ok:evidence.ok,checks,root}));if(!evidence.ok)process.exitCode=1
+}else{
+ const workerPrompt='Perform only the assigned local stage with superagent_shell. Use foreground commands and built-in Node facilities. No deployment, installations, external services or background work. Intermediate tasks deliver ONLY their assigned intermediate files; original acceptance values remain binding for the overall goal. Follow independently reviewed implementation updates from the host. Report the actual failed command and diagnostic when blocked; never describe an unexecuted step as done.'
+ const config=configSchema.parse({stateDir:join(root,'state'),acceptMode:'auto',codex:process.env.AGENTHUB_CODEX??'codex',turnTimeoutMs:600000,work:{sandboxDriver:process.platform==='darwin'?'seatbelt':'codex',network:false},execution:{router:{mode:'host',model:'gpt-6.1-terra',effort:'medium',prompt:'For this explicit local acceptance fixture, call router_goal start exactly once with the attached GoalContract. Host scheduling owns verification, autonomous replanning and continuation. Do not manually assign, cancel, send Workers, change files, or create schedules. On later results inspect the existing goal; reply ACCEPTED only if completed, otherwise empty reply. Do not create another goal.'},management:{enabled:true,maxWorkers:2},workers:[{id:'one',backend:'codex',model:'gpt-6.1-sol',effort:'high',tools:['superagent_shell'],prompt:workerPrompt},{id:'two',backend:'codex',model:'gpt-6.1-sol',effort:'high',tools:['superagent_shell'],prompt:workerPrompt}]},sources:[{id:'local',kind:'local',cwd,sandbox:'workspace-write',workspace:{mode:'source'},allowedActors:['operator']}]})
+ const h=new Runtime(config)
+ const snapshot=()=>({phase:Number(phase),pid:process.pid,at:Date.now(),implementation,goals:h.store.list('router-goal'),plans:h.store.list('goal-replan'),dispatches:h.store.list('goal-plan-dispatch'),rounds:h.store.list('goal-verification'),releases:h.store.list('goal-release'),tickets:h.store.tickets.list(),sessions:h.store.list('model-session'),calls:h.activity.list(),work:h.work.list(),errors:h.store.list('router-error'),jobs:h.store.db.prepare('SELECT id,state,error FROM jobs').all()})
+ try{
+  if(phase==='0'){
+   h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'audit',tenantId:'acceptance',name:'Replan acceptance',contextBytes:768000,managers:[JSON.stringify(['local','operator'])],workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
+   h.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'audit',sourceId:'local',accountNamespace:'local',nativeId:'audit',history:'group'})
+   h.receive('local','operator',{id:'audit',thread:'audit',scope:'audit',addressed:true,text:'Continuously process input.ndjson until the report passes independent acceptance. You may autonomously change implementation and split dependent tasks after failures, keeping the original objective, local-only authorization and acceptance intact. Never deploy. GoalContract: '+JSON.stringify(contract)})
+  }
+  if(interruptReview&&phase==='2'){const state=snapshot();if(!state.plans.some((r:any)=>r.state==='reviewing'&&r.proposal)||!state.jobs.some((j:any)=>j.id.startsWith('goal-replan:')&&j.state==='pending'))throw Error('Interrupted review was not recoverable');writeFileSync(join(root,'review-restart.json'),JSON.stringify(state,null,2))}
+  const deadline=Date.now()+30*60000;let last=0,finished=false
+  while(Date.now()<deadline){
+   if(phase==='0'){await h.goals.advance();if(h.store.list<any>('goal-replan').some(r=>r.state==='pending')){finished=true;break}}
+   await h.tick();await new Promise(r=>setTimeout(r,100))
+   const goal=h.store.list<RouterGoal>('router-goal')[0]
+   if(interruptReview&&phase==='1'&&h.store.list<any>('goal-replan').some(r=>r.state==='reviewing'&&r.proposal)&&h.activity.list().some(c=>c.agentId?.endsWith(':review')&&c.state==='running')&&h.activity.list().some(c=>c.agentId?.endsWith(':review')&&c.name==='goal_evidence'&&c.state==='completed')){finished=true;break}
+   if(phase===String(phaseCount-2)&&h.store.list<any>('goal-replan').some(r=>r.state==='applied')){finished=true;break}
+   if(phase===finalPhase&&goal?.state==='completed'&&!h.activity.list().some(c=>c.state==='running')){finished=true;break}
+   if(goal?.state==='held')throw Error('Goal held: '+goal.reason)
+   if(Date.now()-last>10000){last=Date.now();console.log(JSON.stringify({phase,goal:goal?.state,nodes:goal?.nodes?.map(n=>({id:n.id,state:n.state})),plans:h.store.list<any>('goal-replan').map(r=>({state:r.state,error:r.error}))}));writeFileSync(join(root,'progress.json'),JSON.stringify(snapshot(),null,2))}
+  }
+  if(!finished)throw Error('Native acceptance timed out')
+  writeFileSync(join(root,'phase-'+phase+'.json'),JSON.stringify(snapshot(),null,2));console.log('Checkpoint '+phase+' saved')
+ }catch(error){writeFileSync(join(root,'failure-'+phase+'.json'),JSON.stringify({...snapshot(),error:String(error)},null,2));throw error}
+ finally{await h.close()}
+}

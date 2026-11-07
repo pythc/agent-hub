@@ -20,8 +20,10 @@ export class ExecutionActivity {
   return call.id
  }
  private prune(){
-  // Retain running operations even when many short calls finish around them.
-  const old=this.list().filter(c=>c.state!=='running').reverse().sort((a,b)=>(b.endedAt??b.startedAt)-(a.endedAt??a.startedAt)).slice(200)
+  // Open-task calls are acceptance evidence, not disposable display history.
+  // Unrelated Router/verifier activity must not change a retained failure snapshot.
+  const open=new Set(this.store.tickets.open().map(t=>t.id))
+  const old=this.list().filter(c=>c.state!=='running'&&(!c.ticketId||!open.has(c.ticketId))).reverse().sort((a,b)=>(b.endedAt??b.startedAt)-(a.endedAt??a.startedAt)).slice(200)
   for(const item of old)this.store.db.prepare("DELETE FROM records WHERE kind='execution-call' AND id=?").run(item.id)
  }
  update(id:string,values:Pick<ExecutionCall,'backend'|'model'>){
