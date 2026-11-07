@@ -33,6 +33,10 @@ export interface ModelRequest {
   onTool?:(name:string,args:unknown,callId:string)=>Promise<{contentItems:ToolContent[];success:boolean}>
   workerMcp?:{command:string;args:string[]}
   managed?:boolean
+  /** Host-owned migration of legacy native context; never replaces the thread. */
+  compactBeforeTurn?:boolean
+  skipContextCompaction?:boolean
+  onContextReady?:()=>void
   privateState?:string
   onCapabilities?:(value:{mcpServers:string[];disabledPlugins:string[];managed:boolean;backend?:BackendDescription})=>void
   onActive?: (control:NativeControl)=>void

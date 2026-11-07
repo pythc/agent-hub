@@ -88,6 +88,23 @@ export const followupSpecs:ToolSpec[]=[
 ]
 interface Notice {triggerId:string;discussion:string;actor:string;owners:string[];read:boolean}
 
+/** Execution stays concurrent; only a terminal report waits for the Router's
+ * already-queued human-stop decision. Otherwise a fast Worker can commit
+ * dropped before the Router revokes the mandate, making the task resumable. */
+export async function awaitRouterFollowups(host:Runtime,ticketId:string,signal:AbortSignal){
+ const deadline=Date.now()+host.config.turnTimeoutMs
+ for(;;){
+  signal.throwIfAborted()
+  const pending=host.store.list<Notice>('router-followup-notice').filter(n=>!n.read&&n.owners.includes(ticketId))
+  if(!pending.length)return
+  if(Date.now()>=deadline||pending.some(n=>!['pending','running'].includes(String(host.store.db.prepare('SELECT state FROM jobs WHERE id=?').get('router-followup:'+n.triggerId)?.state))))throw Error('Router follow-up decision is unresolved; terminal Worker report retained in transcript')
+  await new Promise<void>(resolve=>{
+   const done=()=>{clearTimeout(timer);signal.removeEventListener('abort',done);resolve()}
+   const timer=setTimeout(done,25);signal.addEventListener('abort',done,{once:true})
+  })
+ }
+}
+
 /** Follow-up stop decisions stay in the persistent Router, separate from new-work admission. */
 export class RouterFollowupBatch {
  readonly notices:Notice[]
