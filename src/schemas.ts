@@ -1,11 +1,24 @@
 import { z } from 'zod'
+export const direction = z.object({
+  implementation_requested:z.boolean(),
+  target_basis:z.enum(['specified','existing-standard','undetermined']),
+  requires_design_decision:z.boolean(),
+  evidence:z.string().min(1).max(700),
+}).strict()
 export const assessment = z.object({
   action: z.enum(['accept', 'ignore','attach','stop']), title: z.string(), scope: z.string(), reason: z.string(),
   rules: z.array(z.string()),
   targetTicketId:z.string().nullable().optional(),
   ruleAssessments:z.array(z.object({id:z.string(),matched:z.boolean(),reason:z.string().min(1)}).strict()).optional(),
+  direction:direction.optional(),
+  intent_evidence:z.string().max(2000).optional(),
 }).strict()
 export type Assessment = z.infer<typeof assessment>
+/** A rule match alone is not implementation intent. Missing legacy evidence fails closed. */
+export function implementationAllowed(decision:Assessment){
+ const d=decision.direction
+ return !!(d?.implementation_requested&&d.target_basis!=='undetermined'&&!d.requires_design_decision&&decision.intent_evidence?.trim())
+}
 export function validateRuleAssessment(decision:Assessment,rules:readonly {id:string}[]){
  const assessments=decision.ruleAssessments??[],ids=assessments.map(a=>a.id)
  if(ids.length!==rules.length||new Set(ids).size!==ids.length||rules.some(r=>!ids.includes(r.id)))throw Error('Assessment must cover each enabled rule exactly once')
@@ -17,6 +30,7 @@ export const assessmentSchema = {
   properties: { action: { type: 'string', enum: ['accept', 'ignore','attach','stop'] }, title: { type: 'string' }, scope: { type: 'string' }, reason: { type: 'string' }, rules: { type: 'array', items: { type: 'string' } },targetTicketId:{type:['string','null']},ruleAssessments:{type:'array',items:{type:'object',additionalProperties:false,properties:{id:{type:'string'},matched:{type:'boolean'},reason:{type:'string'}},required:['id','matched','reason']}} },
   required: ['action', 'title', 'scope', 'reason', 'rules','targetTicketId','ruleAssessments'],
 }
+export const proactiveAssessmentSchema={...assessmentSchema,properties:{...assessmentSchema.properties,direction:z.toJSONSchema(direction,{target:'draft-7'}),intent_evidence:{type:'string'}},required:[...assessmentSchema.required,'direction','intent_evidence']}
 export const report = z.object({
   state: z.enum(['ready', 'waiting', 'blocked', 'failed', 'dropped']),
   summary: z.string(), reply: z.string(), question: z.string().nullable(),

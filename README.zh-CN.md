@@ -127,6 +127,7 @@ Roppo **优先服务个人，仍在持续开发**，每个部署对应一个本�
 | [本地账号](docs/PERSONAL_ACCOUNT.md) | [MCP 客户端](docs/clients/README.md) |
 | [对话工作空间](docs/CHAT.md) | [核心语义与对齐](docs/PARITY.md) |
 | [浏览器与接管](docs/BROWSER.md) | [办公集成](docs/OFFICE.md) |
+| [主动 Router 与 token 成本](docs/PROACTIVE_ROUTER.md) · English | 主动判断、任务跟进、上下文与兼容性 |
 
 ## 一起建设
 

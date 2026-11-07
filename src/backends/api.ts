@@ -5,6 +5,7 @@ import type {ApiDefinition} from '../backend-config.ts'
 import type {BackendDescription,Model,ModelRequest,ModelResult,ToolContent} from '../model.ts'
 import {TransientModelError} from '../model.ts'
 import {readResponsesStream,readChatStream,readAnthropicStream} from './stream.ts'
+import {contextProjection,recall,recallSpec} from './context.ts'
 export {readResponsesStream} from './stream.ts'
 
 export interface ThreadStore {get<T>(kind:string,id:string):T|undefined;put(kind:string,id:string,value:unknown):void}
@@ -67,7 +68,9 @@ export class ApiModel implements Model {
  }
  private body(t:ApiThread,instructions:string,r:ModelRequest){
   const d=this.definition,tools=r.tools??[]
-  const finalInstructions=instructions+'\nReturn the final answer as exactly one JSON object matching this schema, without Markdown fences. Use tools before reporting completion when the task requires evidence.\n'+JSON.stringify(r.schema)
+  const context=tools.some(t=>t.name===recallSpec.name)?contextProjection(t,Math.min(128000,Math.floor(d.maxContextBytes/2))):{messages:t.messages,notice:''}
+  t={...t,messages:context.messages}
+  const finalInstructions=instructions+(context.notice?'\n'+context.notice:'')+'\nReturn the final answer as exactly one JSON object matching this schema, without Markdown fences. Use tools before reporting completion when the task requires evidence.\n'+JSON.stringify(r.schema)
   if(d.kind==='anthropic')return {...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,max_tokens:d.maxOutputTokens,system:finalInstructions,messages:t.messages,...(d.outputFormat==='json-schema'?{output_config:{...(d.parameters.output_config as object??{}),format:{type:'json_schema',schema:r.schema}}}:{}),...(tools.length?{tools:tools.map(s=>({name:s.name,description:s.description,input_schema:s.inputSchema}))}:{})}
   if(d.kind==='openai-responses')return {...d.parameters,model:t.model,max_output_tokens:d.maxOutputTokens,instructions:finalInstructions,input:t.messages,store:false,...(d.subscription||r.onOutput?{stream:true}:{}),include:['reasoning.encrypted_content'],...(tools.length?{tools:tools.map(s=>({type:'function',name:s.name,description:s.description,parameters:s.inputSchema,strict:false}))}:{}),...(d.outputFormat==='prompt'?{}:{text:{...(d.parameters.text as object??{}),format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',name:'agent_result',strict:true,schema:r.schema}}})}
   return {[d.chatTokenField]:d.maxOutputTokens,...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,messages:[{role:'system',content:finalInstructions},...t.messages],...(tools.length?{tools:tools.map(s=>({type:'function',function:{name:s.name,description:s.description,parameters:s.inputSchema,strict:false}}))}:{}),...(d.outputFormat==='prompt'?{}:{response_format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',json_schema:{name:'agent_result',strict:true,schema:r.schema}}})}
@@ -100,12 +103,14 @@ export class ApiModel implements Model {
  }
  async run(r:ModelRequest):Promise<ModelResult>{
   if(r.workerMcp)throw Error('API backends require explicit host tool definitions, not a native MCP bridge')
+  const canRecall=r.role==='router'&&r.managed&&(!r.options?.tools||r.options.tools.includes(recallSpec.name))
+  if(canRecall){if(r.tools?.some(t=>t.name===recallSpec.name))throw Error('backend_recall is reserved for retained API history');r={...r,tools:[...r.tools??[],recallSpec]}}
   const t:ApiThread=r.threadId?this.thread(r.threadId,r.cwd):{format:1,id:'api:'+this.id+':'+randomUUID(),backendId:this.id,kind:this.definition.kind,endpoint:this.definition.baseUrl.replace(/\/+$/,''),model:r.model??this.definition.model,cwd:resolve(r.cwd),messages:[],turns:[],effects:{}}
   if(this.active.has(t.id))throw Error('Backend thread already has an active writer')
   this.active.add(t.id)
   const controller=new AbortController(),signal=r.signal?AbortSignal.any([controller.signal,r.signal]):controller.signal
   const timer=setTimeout(()=>controller.abort(Error('Backend turn deadline exceeded')),this.turnTimeoutMs)
-  const turn={id:randomUUID(),status:'inProgress',items:[] as any[],model:t.model},queue:{text:string;onRead?:()=>void}[]=[]
+  const turn={id:randomUUID(),status:'inProgress',items:[] as any[],model:t.model,input:r.input,wireStart:0},queue:{text:string;onRead?:()=>void}[]=[]
   let instructions=r.instructions,repairs=0,toolCalls=0
   const persist=()=>this.store.put('backend-thread',t.id,t)
   const appendUser=(text:string)=>t.messages.push({role:'user',content:text})
@@ -114,7 +119,7 @@ export class ApiModel implements Model {
    // A process may have died after a side effect and before its receipt. Never replay it.
    if(t.pending?.length){const results=t.pending.map(call=>{const effect=t.effects[call.id]!;return effect?.state==='completed'?effect.result!:failure('Previous tool execution was interrupted and may have taken effect. Inspect retained jobs and external state before any explicit retry; it was not replayed.')});this.appendResults(t,t.pending,results);delete t.pending}
    for(const old of t.turns)if(old.status==='inProgress')old.status='interrupted'
-   t.turns.push(turn);appendUser(r.input);persist()
+   turn.wireStart=t.messages.length;t.turns.push(turn);appendUser(r.input);persist()
    r.onThread?.(t.id);r.onTurn?.(turn.id);r.onModel?.(t.model)
    r.onCapabilities?.({mcpServers:[],disabledPlugins:[],managed:true,backend:this.describe()})
    r.onActive?.({interrupt:async()=>{controller.abort(Error('Backend turn interrupted'))},steer:async(text,onRead)=>{signal.throwIfAborted();queue.push({text,onRead})},refresh:async text=>{signal.throwIfAborted();instructions=text}})
@@ -139,7 +144,7 @@ export class ApiModel implements Model {
      for(const call of accepted.calls){
       signal.throwIfAborted();const effect:Effect={call,digest:hash(call.name+'\n'+call.arguments),state:'started'};t.effects[call.id]=effect;persist()
       let result:ToolResult
-      try{const args=JSON.parse(call.arguments),validate=validators.get(call.name);if(!validate||!r.onTool)result=failure('Tool is not in this activation capability set');else if(!validate(args))result=failure('Invalid tool arguments: '+ajv.errorsText(validate.errors));else{r.onProgress?.('backend/tool/'+call.name);result=await r.onTool(call.name,args,call.id)}}
+      try{const args=JSON.parse(call.arguments),validate=validators.get(call.name);if(!validate||!r.onTool&&!(canRecall&&call.name===recallSpec.name))result=failure('Tool is not in this activation capability set');else if(!validate(args))result=failure('Invalid tool arguments: '+ajv.errorsText(validate.errors));else{r.onProgress?.('backend/tool/'+call.name);result=canRecall&&call.name===recallSpec.name?recall(t,args as Parameters<typeof recall>[1]):await r.onTool!(call.name,args,call.id)}}
       catch{result=failure('Host tool failed. Inspect task state and permissions before retrying; side effects may be uncertain.')}
       if(result.contentItems.some(c=>c.type==='inputImage')&&!this.definition.images)result=failure('This backend is configured without image support. Image bytes were not sent to the model.')
       for(const item of result.contentItems)if(item.type==='inputImage')image(item.imageUrl!)

@@ -261,3 +261,26 @@ it.skipIf(!['darwin','linux'].includes(process.platform)).each(kinds)('%s execut
  expect(host.work.list()[0]!.cwd.startsWith(join(config.stateDir,'work'))).toBe(true)
  expect(host.store.deliveries().some(d=>d.kind==='reply'&&d.text==='shell-api-marker'&&d.status==='sent')).toBe(true)
 })
+
+it.each(kinds)('%s assesses proactive messages, delegates and receives results in one persistent Router conversation',async kind=>{
+ let step=0
+ const decision={action:'accept',title:'Correct label',scope:'Correct the agreed typo',reason:'Agreed correction',rules:['typo'],targetTicketId:null,ruleAssessments:[{id:'typo',matched:true,reason:'Existing copy standard'}],direction:{implementation_requested:true,target_basis:'existing-standard',requires_design_decision:false,evidence:'Match the agreed existing label'},intent_evidence:'Correct the typo on the settings page to the agreed existing label'}
+ const wire=await server(body=>{
+  const instructions=body.instructions??body.system??body.messages?.[0]?.content??''
+  if(!instructions.startsWith('You are the persistent Router'))return output(kind,JSON.stringify({state:'ready',summary:'Fixture checked',reply:'Worker fixture evidence',question:null,askedBy:null,handbacks:[]}))
+  const turns=body.input??body.messages,latest=turns.findLast((m:any)=>m.role==='user'&&typeof m.content==='string')
+  if(latest?.content.includes('"kind":"worker_result"'))return output(kind,JSON.stringify({reply:'Router verified fixture evidence'}))
+  const actions=[{id:'context',name:'orchestrator_eval',args:{}},{id:'decision',name:'orchestrator_eval_decide',args:decision},{id:'assign',name:'worker_manage',args:{action:'assign',id:'one',revision:0,requestId:'once',text:decision.scope}}]
+  const call=actions[step++];return output(kind,JSON.stringify({reply:''}),call?[call]:[])
+ })
+ const root=mkdtempSync(join(tmpdir(),'router-api-parity-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),port:0,acceptMode:'auto',rules:[{id:'typo',instruction:'Fix agreed copy errors'}],backends:{fixture:{kind,baseUrl:wire.url,model:'fixture'}},execution:{router:{mode:'host',backend:'fixture'},management:{enabled:true},workers:[{id:'one',backend:'fixture'}]},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd:root,allowedActors:['alice']}]})
+ const host=new Runtime(config);hosts.push(host)
+ host.receive('local','alice',{id:'one',thread:'topic',text:'Correct the typo to match the existing label',addressed:false})
+ for(let i=0;i<400&&!host.store.deliveries().some(d=>d.text==='Router verified fixture evidence');i++){await host.tick();await new Promise(r=>setTimeout(r,5))}
+ expect(host.routerIngress.get('local:one')?.state).toBe('accepted');expect(host.store.tickets.list()).toHaveLength(1)
+ expect(host.store.deliveries().filter(d=>!d.channel.address.routerInbox).map(d=>d.text)).toEqual(['Router verified fixture evidence'])
+ const router=host.store.list<any>('router-session')[0],thread=host.store.get<any>('backend-thread',router.threadId)
+ expect(thread.turns).toHaveLength(2);expect(thread.turns[0].items.filter((i:any)=>i.type==='functionCall').map((i:any)=>i.name)).toEqual(['orchestrator_eval','orchestrator_eval_decide','worker_manage'])
+ expect(host.store.list('backend-thread')).toHaveLength(2)
+})

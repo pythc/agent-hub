@@ -127,6 +127,7 @@ Local-first means local workspace storage; model requests still go to your provi
 | [Local accounts](docs/PERSONAL_ACCOUNT.md) · 中文 | [MCP clients](docs/clients/README.md) · 中文 |
 | [Conversations](docs/CHAT.md) · 中文 | [Core semantics and parity](docs/PARITY.md) · 中文 |
 | [Browser and handoff](docs/BROWSER.md) · 中文 | [Office integrations](docs/OFFICE.md) · 中文 |
+| [Proactive Router and token costs](docs/PROACTIVE_ROUTER.md) | Admission, follow-ups, context and compatibility |
 
 ## Build with us
 

@@ -5,14 +5,15 @@ import {makePolicy,makeScope} from './policy.ts'
 import {bodyDigest} from './sources.ts'
 import type {GateResult,Mandate,Policy,Thread,Trigger} from './vendor/dsh-core/index.ts'
 import type {Assessment} from './schemas.ts'
-import {validateRuleAssessment} from './schemas.ts'
+import {validateRuleAssessment,implementationAllowed} from './schemas.ts'
 
 /** Admission to a conversation is separate from a Worker task's accept Decision. */
 export interface RouterAdmission {
  triggerId:string
  discussion:string
  policyVersion:string
- state:'pending'|'accepted'|'ignored'|'observed'|'unavailable'
+ revision?:number
+ state:'pending'|'accepted'|'ignored'|'observed'|'unavailable'|'cancelled'
  reason:string
  at:string
  anchor?:string
@@ -57,16 +58,16 @@ export class RouterIngress {
   if(!trigger.threads[0])throw Error('A Router event must belong to a thread')
   this.store.triggers.save(trigger)
   const discussion=this.discussion(trigger),policy=this.policy()
-  const anchor=this.store.list<RouterAdmission>('router-admission').reverse().find(r=>r.triggerId!==trigger.id&&r.discussion===discussion&&!r.anchor&&this.valid(r))
-  const gate=this.gate(trigger,anchor)
-  const base={triggerId:trigger.id,discussion,policyVersion:policy.version,at:new Date().toISOString()}
+  // A persistent conversation is context, not an ongoing grant to execute new chatter.
+  // Task-owned follow-ups are routed separately under their original mandate.
+  const gate=this.gate(trigger)
+  const base={triggerId:trigger.id,discussion,policyVersion:policy.version,revision:(this.get(trigger.id)?.revision??0)+1,at:new Date().toISOString()}
   if(!gate.admissible)return this.save({...base,state:'ignored',reason:gate.reason})
   const record:RouterAdmission={...base,state:gate.strength==='explicit'?'accepted':'pending',reason:gate.strength==='explicit'?'explicit':'ruleAssessmentRequired',
-   ...(gate.basis.via==='followup'&&anchor?{anchor:anchor.triggerId}:{}),
    mandate:{strength:gate.strength,policyVersion:policy.version,basis:gate.basis,actor:trigger.actor,scope:trigger.text}}
   this.save(record)
   if(record.state==='accepted')this.enqueue(record)
-  else this.store.enqueue('router-admit:'+bodyDigest([trigger.id,policy.version]),'router-admit',{triggerId:trigger.id,policyVersion:policy.version})
+  else this.store.enqueue('router-admit:'+bodyDigest([trigger.id,policy.version,record.revision]),'router-admit',{triggerId:trigger.id,policyVersion:policy.version,revision:record.revision})
   return record
  }
  private enqueue(record:RouterAdmission){this.store.enqueue('router:'+record.triggerId,'router',{discussion:record.discussion,triggerId:record.triggerId})}
@@ -78,19 +79,27 @@ export class RouterIngress {
  /** A policy change invalidates an in-flight semantic assessment, including a changed rule body. */
  refresh(id:string,version:string):RouterAdmission|undefined{
   const record=this.get(id)
+  if(this.store.get('router-cancelled',id))return
   if(record?.state!=='pending'||record.policyVersion!==version)return
   if(version!==this.policy().version){this.admit(this.store.triggers.get(id)!);return}
   return record
  }
- decide(id:string,version:string,decision:Assessment){
+ ignore(id:string,version:string,reason:string){
+  const record=this.refresh(id,version)
+  if(record)return this.save({...record,state:'ignored',reason})
+ }
+ cancel(id:string){const record=this.get(id);if(record)this.save({...record,state:'cancelled',reason:'Cancelled by user'})}
+ decide(id:string,version:string,decision:Assessment,enqueue=true){
   const record=this.refresh(id,version);if(!record)return
   validateRuleAssessment(decision,this.config.rules)
   const matched=decision.rules.length>0
   // Bot/inferred events cannot stop work; attaching is also execution and needs matching rules.
   if(decision.action==='ignore'||decision.action==='stop'||!matched)return this.save({...record,state:'ignored',reason:decision.action==='stop'?'stopNotExplicit':matched?decision.reason:'noMatchingRule',assessment:decision})
+  if(!implementationAllowed(decision))return this.save({...record,state:'ignored',reason:'implementationIntentUnsettled',assessment:decision})
   if(!this.policy().admitsInferred(decision.rules))return this.save({...record,state:'observed',reason:'observe',assessment:decision})
   const accepted:RouterAdmission={...record,state:'accepted',reason:decision.reason,assessment:decision,mandate:{...record.mandate!,scope:decision.scope,basis:{...record.mandate!.basis,rules:decision.rules}}}
-  this.save(accepted);this.enqueue(accepted)
+  this.save(accepted);if(enqueue)this.enqueue(accepted)
+  return accepted
  }
  unavailable(id:string,version:string,error:unknown){
   const record=this.refresh(id,version)
