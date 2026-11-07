@@ -45,9 +45,15 @@ export function returnRouterFollowup(host:Runtime,ticketId:string,id:string,reas
  reconsiderRouterFollowups(host,relay.triggerId)
 }
 
+function currentRelayAuthority(host:Runtime,relay:Relay){
+ const owner=host.store.get<Owner>('worker-assignment',relay.ticketId),trigger=host.store.triggers.get(relay.triggerId)
+ if(!owner||!trigger||owner.mode!=='host'||!owner.parentTrigger||owner.discussion!==relay.discussion||owner.source!==trigger.source||owner.actor!==trigger.actor.id)throw Error('Follow-up task ownership changed')
+ // Explicit continuations advance reply/cancellation lineage without changing the original mandate.
+ return host.routerIngress.authority(owner.parentTrigger,relay.discussion)
+}
 function holdsRelay(host:Runtime,relay:Relay){
  if(host.store.tickets.get(relay.ticketId)?.ended?.by==='human')return false
- try{host.routerIngress.authority(relay.parentTrigger,relay.discussion);return !!host.store.tickets.get(relay.ticketId)}catch{return false}
+ try{currentRelayAuthority(host,relay);return !!host.store.tickets.get(relay.ticketId)}catch{return false}
 }
 export function reconsiderRouterFollowups(host:Runtime,triggerId?:string){
  const relays=host.store.list<Relay>('router-followup')
@@ -85,7 +91,7 @@ export class RouterFollowupBatch {
  private authorize(relay:Relay){
   const trigger=this.host.store.triggers.get(relay.triggerId)!,ticket=this.host.store.tickets.get(relay.ticketId)
   if(!trigger.human||!ticket||this.host.store.get('router-cancelled',trigger.id)||!makeScope(this.host.config,this.host.sourceRegistry).scope(trigger).listened)throw Error('Follow-up authorization withdrawn')
-  this.host.routerIngress.authority(relay.parentTrigger,relay.discussion)
+  currentRelayAuthority(this.host,relay)
   const gate=this.host.routerIngress.policy().gate(trigger,{key:relay.discussion,ref:trigger.threads[0]!,createdAt:trigger.at,subscriptions:[ticket.id],correlated:[],pending:[],meta:{}},[ticket])
   if(!gate.admissible||gate.strength!=='explicit')throw Error('A human stop requires explicit follow-up authority')
   return trigger
@@ -104,9 +110,14 @@ export class RouterFollowupBatch {
   const input=stopInput.parse(value),relay=this.relay(input.triggerId,input.ticketId),trigger=this.authorize(relay)
   if(!trigger.text.includes(input.evidence.trim())||!input.evidence.trim())throw Error('Stop evidence must quote the human message')
   const key=bodyDigest([input.triggerId,input.ticketId])
-  if(this.host.store.get('router-followup-stopped',key))return {stopped:true,replayed:true}
+  if(this.host.store.get('router-followup-stopped',key)){
+   const ended=this.host.store.tickets.get(input.ticketId)?.ended
+   return ended?.by==='human'?{stopped:true,replayed:true}:{stopped:false,replayed:true,alreadyEnded:!!ended,ended}
+  }
   this.host.store.put('router-followup-stop-attempt',key,{triggerId:input.triggerId,ticketId:input.ticketId})
   await this.host.stop(input.ticketId)
+  const ended=this.host.store.tickets.get(input.ticketId)?.ended
+  if(ended?.by!=='human')return {stopped:false,alreadyEnded:!!ended,ended}
   this.host.store.put('router-followup-stopped',key,{triggerId:input.triggerId,ticketId:input.ticketId})
   return {stopped:true}
  }

@@ -6,9 +6,9 @@ import {randomUUID} from 'node:crypto'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import type {ModelRequest,Model} from '../src/model.ts'
-import {MessageSource} from '../src/sources.ts'
+import {MessageSource,bodyDigest} from '../src/sources.ts'
 import {RouterCandidates} from '../src/router-candidates.ts'
-import {returnRouterFollowup} from '../src/router-followups.ts'
+import {returnRouterFollowup,RouterFollowupBatch,reconsiderRouterFollowups} from '../src/router-followups.ts'
 
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
@@ -266,6 +266,48 @@ it.each([true,false])('releases stopped follow-up owners before or after handbac
  if(!stopFirst){expect(f.h.routerIngress.get('group:follow')?.state).toBe('ignored');await f.h.stop(two.ticketId);await f.h.tick()}
  expect(f.h.routerIngress.get('group:follow')?.state).toBe('pending');expect(f.h.routerIngress.get('group:follow')?.revision).toBe(2);expect(f.h.store.tickets.get(two.ticketId)?.ended?.by).toBe('human')
  await f.h.tick();expect(f.h.routerIngress.get('group:follow')?.revision).toBe(2)
+})
+
+it.each(['old','current'] as const)('checks current continuation ownership after %s admission is cancelled',async revoked=>{
+ const f=fixture(),one=await delegated(f,'one'),two=await delegated(f,'two','two')
+ send(f.h,'follow','A separate new project')
+ const relays=f.h.store.list<any>('router-followup'),first=relays.find(r=>r.ticketId===one.ticketId),second=relays.find(r=>r.ticketId===two.ticketId)
+ send(f.h,'continue','Continue the typo correction','alice',true)
+ await f.h.manager.call({action:'send',revision:0,requestId:'continue',ticketId:one.ticketId,text:'Continue only the typo correction'},{discussion:'group:topic',trigger:f.h.store.triggers.get('group:continue')!})
+ f.h.routerIngress.cancel(revoked==='old'?'group:root':'group:continue')
+ returnRouterFollowup(f.h,two.ticketId,second.id,'Outside this task')
+ if(revoked==='old'){
+  expect(f.h.routerIngress.get('group:follow')?.state).toBe('ignored')
+  returnRouterFollowup(f.h,one.ticketId,first.id,'Outside this task too')
+ }
+ expect(f.h.routerIngress.get('group:follow')?.state).toBe('pending')
+ reconsiderRouterFollowups(f.h);expect(f.h.routerIngress.get('group:follow')?.revision).toBe(2)
+ expect(f.h.store.tickets.get(one.ticketId)?.mandate.scope).toBe('Fix only the typo')
+})
+
+it('uses current continuation authority to honor an older reached stop request',async()=>{
+ const f=fixture(),task=await delegated(f,'one')
+ send(f.h,'stop','Please stop this typo task')
+ send(f.h,'continue','Continue the typo correction','alice',true)
+ await f.h.manager.call({action:'send',revision:0,requestId:'continue',ticketId:task.ticketId,text:'Continue only the typo correction'},{discussion:'group:topic',trigger:f.h.store.triggers.get('group:continue')!})
+ f.h.routerIngress.cancel('group:root')
+ const batch=new RouterFollowupBatch(f.h,f.h.store.jobs().find(j=>j.kind==='router-followup')!)
+ expect(await batch.tool('orchestrator_followup_stop',{triggerId:'group:stop',ticketId:task.ticketId,explicit_stop_requested:true,evidence:'Please stop this typo task'})).toEqual({stopped:true})
+ expect(f.h.store.tickets.get(task.ticketId)?.ended?.by).toBe('human')
+})
+
+it('reports the actual completed outcome when work finishes before a follow-up stop takes effect',async()=>{
+ const f=fixture(),task=await delegated(f,'one')
+ send(f.h,'stop','Please stop this typo task')
+ const batch=new RouterFollowupBatch(f.h,f.h.store.jobs().find(j=>j.kind==='router-followup')!)
+ f.h.engine.report(task.ticketId,{state:'ready',summary:'Finished before the stop'})
+ const ended=f.h.store.tickets.get(task.ticketId)!.ended
+ expect(await batch.tool('orchestrator_followup_stop',{triggerId:'group:stop',ticketId:task.ticketId,explicit_stop_requested:true,evidence:'Please stop this typo task'})).toEqual({stopped:false,alreadyEnded:true,ended})
+ expect(f.h.store.tickets.get(task.ticketId)?.ended).toEqual(ended)
+ expect(f.h.store.list('router-followup-stopped')).toHaveLength(0);expect(batch.replied).toBe(true)
+ // Old hosts could save an incorrect success before crashing; replay must not repeat that claim.
+ f.h.store.put('router-followup-stopped',bodyDigest(['group:stop',task.ticketId]),{triggerId:'group:stop',ticketId:task.ticketId})
+ expect(await batch.tool('orchestrator_followup_stop',{triggerId:'group:stop',ticketId:task.ticketId,explicit_stop_requested:true,evidence:'Please stop this typo task'})).toEqual({stopped:false,replayed:true,alreadyEnded:true,ended})
 })
 
 it('shows shared discussion task summaries for deduplication without granting another actor task control',async()=>{
