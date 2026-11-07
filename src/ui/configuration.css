@@ -1755,3 +1755,14 @@ pre {
 .entry-body > button {
   justify-self: start;
 }
+
+/* Decision providers share the workspace editor and its monochrome theme. */
+#decision-settings{margin-top:32px;padding:28px;border:1px solid var(--line);border-radius:16px;display:grid;gap:20px}
+#decision-settings h2,#decision-settings p{margin:0}
+#decision-settings .team-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+#decision-settings details{min-width:0}
+#decision-settings details[open]>summary{margin-bottom:20px}
+#decision-settings .stack{display:grid;gap:14px;justify-items:start}
+#decision-settings .stack>.control-field{width:100%}
+#decision-settings input[aria-invalid=true]{outline:2px solid var(--ink)}
+@media(max-width:640px){#decision-settings{padding:18px}#decision-settings .team-fields{grid-template-columns:1fr}}

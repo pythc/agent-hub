@@ -6,7 +6,7 @@ import {validateBackendSelection} from './backend-config.ts'
 import {normalizeWorkerCount} from './worker-pool.ts'
 import {sourceDeployment} from './connector-config.ts'
 
-const editableSchema = configSchema.pick({backends:true,execution:true,models:true,model:true,effort:true,concurrency:true,acceptMode:true,rules:true,prompts:true,sources:true,watchdog:true,work:true,delivery:true})
+const editableSchema = configSchema.pick({decision:true,backends:true,execution:true,models:true,model:true,effort:true,concurrency:true,acceptMode:true,rules:true,prompts:true,sources:true,watchdog:true,work:true,delivery:true})
 // Zod 4 optional/default fields materialize defaults even when omitted. A patch
 // must only touch supplied keys; test undefined before entering the full schema.
 type EditableShape = typeof editableSchema.shape

@@ -1,3 +1,4 @@
+import {decisionConfigSchema} from './decision-config.ts'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -302,6 +303,12 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       try{send(res,200,await onboarding.apply(input.id,rebuild))}finally{changing=false}
       return
     }
+    if(req.method==='POST'&&path==='/decision/probe'){
+      const input=z.object({config:decisionConfigSchema,text:z.string().min(1).max(4000)}).strict().parse(await body(req))
+      if(options.configurationPreview){send(res,403,{code:'preview_restricted'});return}
+      send(res,200,await runtime.decision.probe(input.config,input.text));return
+    }
+    if(req.method==='GET'&&path==='/decision/calls'){send(res,200,runtime.decision.records());return}
     if(req.method==='GET'&&path==='/configuration'){send(res,200,{...configurationSnapshot(runtime),preview:options.configurationPreview===true});return}
     if(req.method==='POST'&&path==='/merge-authorize'){
       const input=z.object({id:z.string(),source:z.string(),number:z.number().int().positive(),head:z.string().regex(/^[a-f0-9]{40}$/)}).strict().parse(await body(req))

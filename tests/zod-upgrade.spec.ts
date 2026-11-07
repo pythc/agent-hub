@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { z } from 'zod'
+import {decisionConfigSchema} from '../src/decision-config.ts'
 import { configSchema, type Config } from '../src/config.ts'
 import { patchSchema, Settings } from '../src/settings.ts'
 import { incomingSchema } from '../src/sources.ts'
@@ -17,7 +18,7 @@ import { Approvals } from '../src/approvals.ts'
 const baseline: { zod: string; cases: { name: string; input: any; expected: Config }[] } =
   JSON.parse(readFileSync(new URL('./fixtures/zod3-config.json', import.meta.url), 'utf8'))
 // Preserve the historical fixture byte-for-byte; account explicitly for the new feature defaults.
-const watchdogUpgrade = (config: Config): Config => ({...config,watchdog:Object.assign({enabled:true,reviewIntervalMs:600000,modelTimeoutMs:60000,maxReviewsPerHour:12,maxRecoveries:3},config.watchdog)})
+const watchdogUpgrade = (config: Config): Config => ({...config,decision:decisionConfigSchema.parse({}),watchdog:Object.assign({enabled:true,reviewIntervalMs:600000,modelTimeoutMs:60000,maxReviewsPerHour:12,maxRecoveries:3},config.watchdog)})
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 

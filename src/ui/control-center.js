@@ -260,6 +260,7 @@ function controlModels() {
       void checkEntryModel()
     }, 'button')
     const roles = []
+    if (S.base.config.decision?.provider?.kind === 'backend' && S.base.config.decision.provider.id === service.id) roles.push(L('Decision layer', '决策层'))
     if (architecture?.router?.backend === service.id) roles.push('Router')
     for (const [index, worker] of (architecture?.workers || []).entries())
       if (worker.backend === service.id) roles.push('Worker ' + (index + 1))
@@ -279,6 +280,7 @@ function controlModels() {
     opButton(L('New model connection', '新建模型连接'), controlNewModel, 'button primary', 'plus')),
     workspaceTable([L('Service', '服务名称'), L('Protocol', '协议'), L('Default model', '默认模型'),
       L('Used by', '使用角色'), L('Action', '操作')], rows)]
+  if (S.snap?.editableKeys?.includes('decision')) result.push(decisionSettings())
   if (entryModel.check || entryModel.saved) result.push(entryModelResult())
   return result
 }

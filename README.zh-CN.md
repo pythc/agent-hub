@@ -149,3 +149,5 @@ Roppo 原创代码采用 [Apache-2.0](LICENSE) 许可证。第三方组件保留
 项目使用了 [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagent-prototype)、[assistant-ui](https://github.com/assistant-ui/assistant-ui)、[agent-browser](https://github.com/vercel-labs/agent-browser)、React、Vite 和 MCP SDK。
 
 仓库与 CLI 继续使用 `agent-hub` 名称。
+
+可选[决策层](docs/DECISION-LAYER.md)：接入 Jev、模型 API 或本地模型，支持仅记录和向 Router 提供建议。

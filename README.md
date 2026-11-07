@@ -153,3 +153,4 @@ Built with [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagent-
 The repository and CLI retain the name `agent-hub`.
 
 Developer source packages: see [Plugins](docs/PLUGINS.md) for Feishu, Slack and Linear adapters and controlled upgrade/rollback.
+Optional [decision layer](docs/DECISION-LAYER.md): connect Jev, model APIs or a local model for intent classification, with record-only and advisory modes.

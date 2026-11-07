@@ -12,6 +12,7 @@ export const configurationScripts = [
   "entry-configure.js",
   "operator-workspace.js",
   "control-center.js",
+  "decision-settings.js",
   "affect-ui.js",
   "flow-motion.js",
   "execution-page.js",
