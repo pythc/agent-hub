@@ -39,6 +39,8 @@ import {ExecutionActivity} from './execution-activity.ts'
 import {RouterIngress} from './router-ingress.ts'
 import {RouterScopes,scopeCommandSchema,type ScopeContext} from './router-scope.ts'
 import {RouterMemory,memoryToolSpecs,type ContextManifest} from './router-memory.ts'
+import {AgentMemory} from './agent-memory.ts'
+import type {EmbedMemory} from './memory-vectors.ts'
 import {scopeBudget,ContextBudgetExceeded} from './context-budget.ts'
 import {RouterProactive,proactiveSpecs,type Intervention} from './router-proactive.ts'
 import {Knowledge,knowledgeSpecs} from './knowledge.ts'
@@ -87,6 +89,7 @@ export class Runtime {
   readonly routerIngress:RouterIngress
   readonly scopes:RouterScopes
   readonly memory:RouterMemory
+  readonly agentMemory:AgentMemory
   readonly proactive:RouterProactive
   readonly knowledge:Knowledge
   readonly continuity:RouterContinuity
@@ -113,7 +116,7 @@ export class Runtime {
   private lock: string
   private paused = false
   static async create(config:Config,options:{model?:Model;sources?:Source[];mergeApi?:GithubApi;clock?:()=>number;browserDriver?:BrowserDriver}={}){return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
-  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi;sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver } = {}) {
+  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi;sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory } = {}) {
     if(config.sourcePlugins.length&&!options.sourceRegistry)throw Error('Use Runtime.create to load configured source plugins')
     this.sourceRegistry=options.sourceRegistry??new SourceRegistry()
     validateBackendSelection(config)
@@ -154,6 +157,7 @@ export class Runtime {
     this.goals=new RouterGoals(this,options.clock)
     this.verification=new GoalVerification(this,options.clock)
     this.replanning=new GoalReplanning(this,options.clock)
+    try{this.agentMemory=new AgentMemory(this,options.memoryEmbed,options.clock)}catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.store.atomic(()=>{
       for(const a of this.store.list<{mode:string;parentTrigger?:string;discussion:string}>('worker-assignment'))if(a.mode==='host'&&a.parentTrigger)this.routerIngress.restoreLegacy(a.parentTrigger,a.discussion)
     })
@@ -456,6 +460,7 @@ export class Runtime {
     if(this.config.execution.router?.mode==='host'){
       if(existing&&!this.routerIngress.get(trigger.id))return {disposition:'duplicate',triggerId:trigger.id,thread:trigger.threads[0]?.id,related:this.related(trigger)}
       const result=this.routerIngress.receive(trigger)
+      if(trigger.human&&result.disposition!=='duplicate')try{const c=this.scopes.context(trigger,trigger.source+':'+trigger.threads[0]!.id);if(c&&this.routerIngress.authority(trigger.id).strength==='explicit'){if(this.agentMemory.enabled(c))this.memory.captureExplicit(c);this.agentMemory.observe(c)}}catch{this.store.audit({type:'memory.input_deferred',triggerId:trigger.id})}
       if(result.disposition!=='duplicate')relayRouterFollowups(this,trigger)
       return result
     }
@@ -574,6 +579,7 @@ export class Runtime {
         }).finally(() => { this.runningJobs.delete(job.id);if(serialRouter)this.routingDiscussions.delete(routerDiscussion!) })
         this.runningJobs.set(job.id, task)
       }
+      if(!this.paused)this.agentMemory.tick()
       await this.flush()
       if(!this.paused)await this.reviews.tick()
     } finally { this.ticking = false;tickFinished() }
@@ -664,11 +670,13 @@ export class Runtime {
     if(scoped&&!candidates&&!followups){
       for(const t of [trigger,...(batchInputs??[])])if(t.human&&this.routerIngress.authority(t.id).strength==='explicit'){
         const c=this.scopes.context(t,discussion)
-        if(c)try{this.memory.captureExplicit(c)}catch(error){this.store.audit({type:'explicit-memory-held',triggerId:t.id,error:String(error)})}
+        if(c)try{if(this.agentMemory.enabled(c))this.memory.captureExplicit(c);this.agentMemory.observe(c)}catch(error){this.store.audit({type:'explicit-memory-held',triggerId:t.id,error:String(error)})}
       }
       this.continuity.capture(scoped,[triggerId,...(batchInputs??[]).map(t=>t.id)])
     }
+    if(scoped)await this.agentMemory.prepare(scoped,trigger.text)
     const packet=scoped?this.memory.build(scoped,{...(messageId?{kind:'worker_result',messages:pendingMessages,mandate}:currentInput),tasks:scopedTasks,goals:this.goals.list(scoped),currentGoalId:this.goals.forInput(triggerId)?.id},backendIdentity):undefined
+    if(packet&&scoped)this.agentMemory.recordManifest(scoped,packet.manifest)
     if(packet&&batchId)this.memory.inherit(packet.manifest,this.proactive.batchManifest(batchId))
     if(packet)for(const task of scopedTasks){const owner=this.scopes.ownership(task.ticketId)!;if(!packet.manifest.taskOwners.some(ref=>ref.id===task.ticketId))packet.manifest.taskOwners.push({id:task.ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1});if(task.report?.at)readReports.set(task.ticketId,task.report.at)}
     if(candidates&&packet)candidates.bindContext(packet.manifest)
@@ -714,7 +722,7 @@ export class Runtime {
               return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(output)}]}
             }
             if(name==='router_manage'&&scoped)return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(this.proactive.command(args,scoped))}]}
-            if(name==='router_memory'&&scoped){const result=await this.memory.tool(scoped,args);if(packet&&result&&typeof result==='object'&&'items' in result){for(const fact of (result as any).items){if(!packet.manifest.facts.some(f=>f.id===fact.id))packet.manifest.facts.push({id:fact.id,revision:fact.revision})}this.store.put('context-manifest',packet.manifest.id,packet.manifest)}return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}}
+            if(name==='router_memory'&&scoped){const result=await this.agentMemory.tool(scoped,args);if(packet&&result&&typeof result==='object'&&'items' in result){for(const fact of (result as any).items){if(!packet.manifest.facts.some(f=>f.id===fact.id))packet.manifest.facts.push({id:fact.id,revision:fact.revision})}this.store.put('context-manifest',packet.manifest.id,packet.manifest)}return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}}
             if(name!=='worker_manage')throw Error('Unknown Router tool')
             const result=await this.manager.call(args,{discussion,trigger,scoped,manifest:packet?.manifest}),ticketId=(args as any).ticketId
             if(result.ticketId)this.proactive.noteTask(triggerId,result.ticketId)
@@ -753,6 +761,7 @@ export class Runtime {
         this.chat.reply(job.id,triggerId,output.reply)
         if(scoped&&packet&&!quiet&&!followups){
           this.continuity.finish(scoped,job.id,output.reply,[...authorityInputs],packet.manifest.id,knowledgeRefs)
+          this.agentMemory.recordDocuments(scoped,knowledgeRefs.filter(ref=>output.reply.includes(ref.documentId)),job.id)
           const saved=this.store.get<any>('router-session',sessionKey)
           this.store.put('router-session',sessionKey,{...saved,eventIds:this.continuity.events(scoped).map(e=>e.id),knowledge:[...(saved?.knowledge??[]),...knowledgeRefs]})
         }
@@ -1218,6 +1227,7 @@ export class Runtime {
     await this.browser.close()
     const merging=this.merger.close()
     await Promise.allSettled([...this.sources.values()].map(source=>source.close?.()))
+    await this.agentMemory.close()
     await this.work.close()
     await merging
     await Promise.allSettled([...this.runningJobs.values(),...this.polls.values()])

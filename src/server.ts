@@ -13,6 +13,7 @@ import {compose,composeCoordinator,promptStatus} from './prompts.ts'
 import {configurationSnapshot} from './configuration.ts'
 import {SettingsError,patchSchema} from './settings.ts'
 import {routerManagementPage} from './ui/router-management.ts'
+import {memoryWorkbenchPage} from './ui/memory-workbench.ts'
 import {routerProactivePage} from './ui/router-proactive.ts'
 import {configurationPage} from './ui/configuration.ts'
 import {Onboarding,OnboardingError} from './onboarding.ts'
@@ -91,9 +92,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const page=account.authorized(req)?chatPage():accountPage
       res.end(req.method==='HEAD'?undefined:page);return
     }
-    if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/', '/auth', '/account', '/usage', '/router-management', '/router-proactive'].includes(path)) {
+    if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/', '/auth', '/account', '/usage', '/router-management', '/memory-workbench', '/router-proactive'].includes(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
-      const page=path==='/usage'?configurationPage:path==='/auth'||path==='/account'||!account.authorized(req)?accountPage:path==='/router-management'?routerManagementPage:path==='/router-proactive'?routerProactivePage:chatPage()
+      const page=path==='/usage'?configurationPage:path==='/auth'||path==='/account'||!account.authorized(req)?accountPage:path==='/memory-workbench'?memoryWorkbenchPage:path==='/router-management'?routerManagementPage:path==='/router-proactive'?routerProactivePage:chatPage()
       res.end(req.method==='HEAD'?undefined:page)
       return
     }
@@ -165,6 +166,14 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/router-proactive'){send(res,200,runtime.proactive.command(await body(req)));return}
     if(req.method==='GET'&&path==='/router-cleanup'){send(res,200,{items:runtime.memory.cleanup.receipts()});return}
     if(req.method==='POST'&&path==='/router-scopes'){send(res,200,await runtime.scopeCommand(await body(req)));return}
+    if(req.method==='POST'&&path==='/agent-memory'){
+      const input=z.object({triggerId:z.string(),command:z.any()}).strict().parse(await body(req))
+      const trigger=runtime.store.triggers.get(input.triggerId);if(!trigger)throw Error('Known authorized input required')
+      runtime.routerIngress.authority(trigger.id)
+      const context=runtime.scopes.context(trigger,trigger.source+':'+trigger.threads[0]!.id);if(!context)throw Error('Configure Router scopes first')
+      if(runtime.scopes.binding(context.route.entryId).privateActor)throw Error('Private memory requires the actual member identity')
+      send(res,200,input.command?.action==='consolidate'?await runtime.agentMemory.consolidate(context):input.command?.action==='search'?await runtime.agentMemory.tool(context,{...input.command,action:'query'}):runtime.agentMemory.manage(context,input.command));return
+    }
     if(req.method==='POST'&&path==='/router-memory'){
       const input=z.object({triggerId:z.string(),query:z.unknown().optional(),command:z.unknown().optional(),suppressions:z.boolean().optional()}).strict().parse(await body(req))
       const trigger=runtime.store.triggers.get(input.triggerId);if(!trigger)throw Error('Known authorized input required')

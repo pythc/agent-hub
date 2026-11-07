@@ -23,7 +23,7 @@ router-input-set router-duty router-proactive-settings router-schedule router-sc
 router-journal router-commitment router-checkpoint journal-receipt router-goal goal-wake goal-receipt goal-delivery goal-verification goal-verification-attempt goal-repair goal-release goal-replan goal-plan-dispatch knowledge-document knowledge-version knowledge-chunk knowledge-receipt
 setup source-cursor source-envelope source-event-key source-health source-live source-observed thread-cursor thread-health tool-receipt transcript wecom-inbox
 work work-request worker-assignment worker-command worker-grant worker-migration worker-pool agent-configuration agent-input agent-progress restore-commit setup-commit
-management-scope entry-binding task-ownership task-routing task-channel tenant-epoch control-receipt router-route task-context context-manifest memory-evidence memory-event-first-seen memory-fact memory-version memory-share memory-generation memory-watermark memory-suppression memory-receipt memory-revocation-head memory-clock memory-query-version history-plan history-cleanup history-fence backend-deleted backend-delete-pending context-budget model-session model-tool-receipt context-rebuild context-handoff context-session-fence task-continuation source-change-receipt source-invalid-trigger source-entry-state source-member-state source-message-state source-message-observation source-freshness source-identity source-native-proof source-identity-mismatch identity-receipt identity-challenge identity-link maintenance-gap scope-migration reply-hold reply-review-receipt`.split(/\s+/))
+management-scope entry-binding task-ownership task-routing task-channel tenant-epoch control-receipt router-route task-context context-manifest memory-evidence memory-event-first-seen memory-fact memory-version memory-share memory-generation memory-watermark memory-suppression memory-receipt memory-revocation-head memory-clock memory-query-version history-plan history-cleanup history-fence backend-deleted backend-delete-pending context-budget model-session model-tool-receipt context-rebuild context-handoff context-session-fence task-continuation source-change-receipt source-invalid-trigger source-entry-state source-member-state source-message-state source-message-observation source-freshness source-identity source-native-proof source-identity-mismatch identity-receipt identity-challenge identity-link maintenance-gap scope-migration reply-hold reply-review-receipt memory-schema memory-policy memory-personal memory-observation memory-sequence memory-last-extract memory-extraction-session memory-vector memory-topic memory-document-use memory-use memory-maintenance memory-consolidation memory-call-count`.split(/\s+/))
 const specSchema=z.object({operationId:z.string().min(1).max(100),commands:z.array(scopeCommandSchema).default([])}).strict()
 export type MigrationSpec=z.infer<typeof specSchema>
 interface MigrationItem {kind:string;id:string;status:'mapped'|'held'|'conflict'|'unchanged';reason?:string;scopeId?:string;entryId?:string}
@@ -34,8 +34,8 @@ export function previewScopeMigration(config:Config,value:unknown):MigrationPlan
  const spec=specSchema.parse(value),path=join(config.stateDir,'state.sqlite'),db=new DatabaseSync(path,{readOnly:true})
  try{
   db.exec('BEGIN');const schema=Number(db.prepare('PRAGMA user_version').get()!.user_version)
-  if(![5,6].includes(schema))throw Error('Scope migration supports schema 5 and unscoped schema 6 only')
-  if(schema===6&&db.prepare("SELECT 1 FROM records WHERE kind='management-scope' LIMIT 1").get())throw Error('Database already has Router scopes; use explicit task and entry commands')
+  if(![5,6,7].includes(schema))throw Error('Scope migration supports schema 5 and unscoped schema 6 or 7 only')
+  if(schema>=6&&db.prepare("SELECT 1 FROM records WHERE kind='management-scope' LIMIT 1").get())throw Error('Database already has Router scopes; use explicit task and entry commands')
   if(db.prepare('PRAGMA integrity_check').get()!.integrity_check!=='ok')throw Error('Source database failed integrity check')
   const savedSettings=db.prepare("SELECT body FROM records WHERE kind='settings' AND id='current'").get()
   if(savedSettings&&stableDigest(configSchema.parse(JSON.parse(String(savedSettings.body)).config))!==stableDigest(config))throw Error('Export the current effective configuration before migration; saved runtime settings differ')
@@ -86,7 +86,7 @@ export async function applyScopeMigration(config:Config,spec:unknown,expected:st
  try{
   const target=join(config.stateDir,'state.sqlite'),existing=new DatabaseSync(target,{readOnly:true})
   let completed:any
-  try{if(Number(existing.prepare('PRAGMA user_version').get()!.user_version)===6){const r=existing.prepare("SELECT body FROM records WHERE kind='scope-migration' AND id='current'").get();completed=r&&JSON.parse(String(r.body))}}finally{existing.close()}
+  try{const version=Number(existing.prepare('PRAGMA user_version').get()!.user_version);if(version>7)throw Error('Database is newer than this program');if(version>=6){const r=existing.prepare("SELECT body FROM records WHERE kind='scope-migration' AND id='current'").get();completed=r&&JSON.parse(String(r.body))}}finally{existing.close()}
   if(completed){
    if(completed.operationId!==parsed.operationId||completed.specFingerprint!==stableDigest(parsed))throw Error('Database already migrated by another plan')
    const journal=existsSync(activation)?JSON.parse(readFileSync(activation,'utf8')):{}
@@ -113,7 +113,7 @@ export async function applyScopeMigration(config:Config,spec:unknown,expected:st
   try{await backupState(config,join(folder,'before'),{historyReader:options.historyReader??configuredHistoryReader(config,historyDb)})}finally{historyDb.close()}
   verifyBackup(join(folder,'before'));options.onPhase?.('M3')
   const source=new DatabaseSync(target,{readOnly:true});try{await backup(source,staged)}finally{source.close()};chmodSync(staged,0o600)
-  const staging=new DatabaseSync(staged);try{staging.exec('PRAGMA user_version=6')}finally{staging.close()}
+  const staging=new DatabaseSync(staged);try{staging.exec('PRAGMA user_version='+Math.max(plan.schema,6))}finally{staging.close()}
   const store=new Store(staged)
   let result:any
   try{

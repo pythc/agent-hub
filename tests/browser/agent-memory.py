@@ -1,0 +1,21 @@
+import json,os
+from pathlib import Path
+from playwright.sync_api import sync_playwright,expect
+root=Path(os.environ['MEMORY_BROWSER_DIR']);f=json.loads((root/'fixture.json').read_text());checks=[];errors=[]
+def check(s):checks.append(s);print('PASS '+s,flush=True)
+with sync_playwright() as p:
+ b=p.chromium.launch(headless=True);c=b.new_context(viewport={'width':1440,'height':1000},reduced_motion='reduce');name,value=f['cookie'].split('=',1);c.add_cookies([{'name':name,'value':value,'url':f['url']}]);page=c.new_page();page.on('pageerror',lambda e:errors.append(str(e)));page.on('console',lambda m:errors.append(m.text) if m.type=='error' else None);page.on('dialog',lambda d:d.accept())
+ page.goto(f['url']+'/memory-workbench');page.wait_for_load_state('networkidle');page.get_by_label('当前授权上下文',exact=True).select_option(f['triggerId']);expect(page.locator('#items article')).to_have_count(3);check('real authenticated HTTP data and candidate comparison')
+ card=page.locator('article[data-memory-id="'+f['pending']+'"]');expect(card).to_contain_text('技术报告先给结论');card.get_by_role('button',name='确认建议',exact=True).click();expect(page.locator('#items article')).to_have_count(2);check('confirmation atomically replaces original')
+ card=page.locator('article[data-memory-id="'+f['pending']+'"]');card.get_by_role('button',name='编辑',exact=True).click();card.get_by_label('编辑记忆内容',exact=True).fill('技术报告先列未验证项，再给结论');card.get_by_role('button',name='保存修改',exact=True).click();expect(card).to_contain_text('技术报告先列未验证项，再给结论');check('manual edit persists revision')
+ card.get_by_role('button',name='来源与历史',exact=True).click();expect(page.locator('#detail')).to_be_visible();expect(page.locator('#detail-content')).to_contain_text('原始来源验证标记');expect(page.locator('#detail-content')).to_contain_text('历史第');assert page.evaluate('window.memoryPwned') is None;check('source history safely renders markup as text');page.get_by_role('button',name='关闭详情',exact=True).click();expect(page.get_by_label('搜索记忆',exact=True)).to_be_focused()
+ page.get_by_label('搜索记忆',exact=True).fill('未验证项');expect(page.locator('#items article')).to_have_count(1);page.get_by_role('button',name='语义与关键词召回',exact=True).click();expect(page.locator('#status')).to_contain_text('关键词召回结果');page.get_by_label('搜索记忆',exact=True).fill('');check('search and keyboard focus')
+ card.get_by_role('button',name='归档',exact=True).click();expect(page.locator('#archives button')).to_have_count(1);page.locator('#archives').get_by_role('button',name='恢复归档',exact=True).click();expect(card).to_be_visible();check('archive and restore')
+ page.locator('article[data-memory-id="'+f['rejected']+'"]').get_by_role('button',name='拒绝建议',exact=True).click();expect(page.locator('#items article')).to_have_count(1);check('reject and suppression')
+ page.locator('select[name="writeMode"]').select_option('auto');page.get_by_role('button',name='保存学习设置',exact=True).click();expect(page.locator('#status')).to_have_text('学习设置已保存。');page.reload();page.wait_for_load_state('networkidle');page.get_by_label('当前授权上下文',exact=True).select_option(f['triggerId']);expect(page.locator('select[name="writeMode"]')).to_have_value('auto');check('settings persist across reload')
+ page.screenshot(path=str(root/'desktop.png'),full_page=True)
+ page.get_by_label('当前授权上下文',exact=True).select_option(f['other']);expect(page.locator('#items article')).to_have_count(0);expect(page.locator('#detail')).to_be_hidden();check('context switch removes other entry data');page.get_by_label('当前授权上下文',exact=True).select_option(f['triggerId']);expect(page.locator('#items article')).to_have_count(1)
+ page.set_viewport_size({'width':390,'height':844});assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth');page.screenshot(path=str(root/'mobile.png'),full_page=True);check('390px responsive layout and reduced motion')
+ page.get_by_role('button',name='清空此团队范围记忆',exact=True).click();expect(page.locator('#items article')).to_have_count(0);page.reload();page.wait_for_load_state('networkidle');expect(page.locator('#items article')).to_have_count(0);check('clear persists after reload')
+ assert not errors,errors;check('no page or console errors');b.close()
+(root/'evidence.json').write_text(json.dumps({'ok':True,'checks':checks,'errors':errors},ensure_ascii=False,indent=2))

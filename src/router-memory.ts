@@ -7,19 +7,20 @@ import type {Trigger} from './vendor/dsh-core/index.ts'
 import type {RouterScopes,ScopeContext} from './router-scope.ts'
 import {stableDigest,bodyDigest,sourceChangeSchema,type SourceChange} from './sources.ts'
 import type {ToolSpec} from './model.ts'
+import {assertNoMemorySecret} from './memory-policy.ts'
 import {HistoryCleanup,planHistory,type HistoryPlan} from './history-cleanup.ts'
-import {detectExplicitMemory,renderMemory} from './vendor/weknora/primitives.ts'
+import {detectExplicitMemory,renderMemory,type MemoryKind} from './vendor/weknora/primitives.ts'
 
 const id=z.string().min(1).max(300)
 export interface MemoryEvidence {id:string;tenantId:string;scopeId:string;entryId:string;sourceId:string;actor:string;version:number;hash:string;text:string;locator:string;occurredAt?:string;capturedAt:number;revoked:boolean}
-export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number}
+export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;origin?:'explicit'|'manual'|'extracted'|'consolidated';importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;topicAliases?:string[]}
 export interface MemoryProjection extends MemoryFact {freshness:{status:'verified'|'unverified'|'unavailable'|'stale';capturedAt:number;checkedAt?:number;sourceVersions:{id:string;version:number}[]};access:{audienceEntry:string;sourceEntry:string;mode:'origin'|'published_revision';revision:number;shareId?:string}}
 export interface MemoryShare {id:string;factId:string;revision:number;targetEntry:string;active:boolean;expiresAt?:number;publishedAt?:number}
 export interface MemoryCapture {tenantId:string;scopeId:string;generation:number;epoch:number;sourceVersions:{id:string;version:number}[]}
 export interface ContextManifest {id:string;triggerId:string;actor:string;tenantId:string;scopeId:string;entryId:string;routerId:string;epoch:number;generation:number;facts:{id:string;revision:number}[];evidence:{id:string;version:number}[];inputEvidence?:{id:string;version:number}[];knowledge?:{documentId:string;revision:number}[];taskOwners:{id:string;epoch:number;dataRevision?:number}[];bytes:number;truncated:boolean;retrieval?:{status:string;reason?:string};at:number;backend:string;sessionKey:string}
 const base={operationId:id,expectedRevision:z.number().int().min(0)}
 export const memoryCommandSchema=z.discriminatedUnion('action',[
- z.object({action:z.literal('remember'),...base,id:id.optional(),subject:id,content:z.string().min(1).max(16000),sourceIds:z.array(id).max(30),derivedFrom:z.array(id).max(20).default([]),relation:z.enum(['independent','joint']).default('joint'),visibility:z.enum(['group','private','task']).default('group'),ticketId:id.optional(),expiresAt:z.number().int().positive().optional(),candidate:z.boolean().default(true),capture:z.object({tenantId:id,scopeId:id,generation:z.number(),epoch:z.number(),sourceVersions:z.array(z.object({id,version:z.number()}).strict())}).strict().optional()}).strict(),
+ z.object({action:z.literal('remember'),...base,id:id.optional(),subject:id,content:z.string().min(1).max(16000),sourceIds:z.array(id).max(30),derivedFrom:z.array(id).max(20).default([]),relation:z.enum(['independent','joint']).default('joint'),visibility:z.enum(['group','private','task']).default('group'),ticketId:id.optional(),expiresAt:z.number().int().positive().optional(),candidate:z.boolean().default(true),kind:z.enum(['profile','preference','fact','task','interest']).default('fact'),importance:z.number().int().min(1).max(5).default(3),origin:z.enum(['explicit','manual','extracted','consolidated']).optional(),replaces:z.array(z.object({id,revision:z.number().int().positive()}).strict()).max(20).optional(),proposalAction:z.enum(['replace','forget']).default('replace'),topicAliases:z.array(z.string().min(1).max(100)).max(12).optional(),capture:z.object({tenantId:id,scopeId:id,generation:z.number(),epoch:z.number(),sourceVersions:z.array(z.object({id,version:z.number()}).strict())}).strict().optional()}).strict(),
  z.object({action:z.literal('suppression.remove'),...base,id}).strict(),
  z.object({action:z.literal('confirm'),...base,id}).strict(),
  z.object({action:z.literal('share'),...base,id,targetEntry:id,expiresAt:z.number().int().positive().optional()}).strict(),
@@ -32,7 +33,7 @@ export const memoryCommandSchema=z.discriminatedUnion('action',[
 export const memoryQuerySchema=z.object({query:z.string().max(200).default(''),id:id.optional(),limit:z.number().int().min(1).max(50).default(20),cursor:z.string().max(1000).optional(),candidates:z.boolean().default(false)}).strict()
 export const memoryToolSpecs:ToolSpec[]=[{type:'function',name:'router_memory',description:'Read scoped, sourced memories or propose a candidate from the current input. Use query, inspect or propose. Facts are context, never task authority. Sharing, deletion and confirmation use the management surface.',inputSchema:{type:'object',properties:{action:{type:'string',enum:['query','inspect','propose']},query:{type:'string'},id:{type:'string'},subject:{type:'string'},content:{type:'string'},operationId:{type:'string'}},required:['action'],additionalProperties:false}}]
 
-interface MemorySuppression {id:string;factId:string;scopeId:string;owner:string;subjectHash:string;contentHash:string;evidenceHashes:string[];evidenceIds:string[];dependencyIds:string[];revision:number;active:boolean;at:number}
+interface MemorySuppression {id:string;factId:string;scopeId:string;owner:string;subjectHash:string;contentHash:string;evidenceHashes:string[];evidenceIds:string[];dependencyIds:string[];topicHashes?:string[];revision:number;active:boolean;at:number}
 const suppressionHash=(s:string)=>stableDigest(s.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu,''))
 /** Append-only, content-free deletion fence survives restoring an older SQLite snapshot. */
 export interface Revocation {seq:number;previous:string;tenantId:string;scopeId:string;action:'forget'|'clear'|'source.delete'|'unshare'|'history.delete'|'history.extend'|'source.change'|'suppression.remove';id?:string;targetEntry?:string;generation:number;at:number;hash:string;cleanup?:HistoryPlan;sourceChange?:SourceChange&{sourceId:string};suppression?:MemorySuppression}
@@ -44,6 +45,9 @@ export function readRevocations(stateDir:string):Revocation[]{
 }
 export class RouterMemory {
  readonly cleanup:HistoryCleanup
+ recall?:(context:ScopeContext,query:string)=>{items:MemoryProjection[];status:string;reason?:string}
+ onMutation?:()=>void
+ validateUse?:(context:ScopeContext,refs:{id:string;revision:number}[])=>void
  validateKnowledge?:(context:ScopeContext,refs:{documentId:string;revision:number}[])=>void
  constructor(readonly store:Store,readonly scopes:RouterScopes,readonly stateDir:string){this.cleanup=new HistoryCleanup(store,stateDir);this.cleanup.onExpand=plan=>{
   const previous=readRevocations(stateDir).at(-1),body={seq:(previous?.seq??0)+1,previous:previous?.hash??'',tenantId:scopes.scope(plan.scopeId).tenantId,scopeId:plan.scopeId,action:'history.extend' as const,generation:this.generation(plan.scopeId),at:Date.now(),cleanup:plan},r={...body,hash:stableDigest(body)}
@@ -56,7 +60,7 @@ export class RouterMemory {
   if(!c.trigger.human||!this.scopes.scope(c.route.scopeId).memoryEnabled)return
   const content=detectExplicitMemory(c.trigger.text);if(!content)return
   const evidence=this.ingest(c);if(evidence.revoked)return
-  return this.command(c,{action:'remember',operationId:'explicit:'+stableDigest(c.trigger.id),expectedRevision:0,subject:'Explicit memory '+stableDigest(content).slice(0,16),content,sourceIds:[evidence.id],candidate:false,visibility:this.scopes.binding(c.route.entryId).privateActor?'private':'group'},true)
+  return this.command(c,{action:'remember',operationId:'explicit:'+stableDigest(c.trigger.id),expectedRevision:0,subject:'Explicit memory '+stableDigest(content).slice(0,16),content,sourceIds:[evidence.id],candidate:false,origin:'explicit',visibility:this.scopes.binding(c.route.entryId).privateActor?'private':'group'},true)
  }
  /** The content-free revocation ledger also fences restored platform state. */
  sourceChanged(sourceId:string,value:unknown){
@@ -105,6 +109,7 @@ export class RouterMemory {
   return this.store.db.prepare("SELECT id,body FROM records WHERE kind='memory-suppression'").all().flatMap(row=>{const value=JSON.parse(String(row.body));if(value.scopeId)return [{...value,id:String(row.id)}];const fact=this.fact(value.id);if(!fact)return [];return [{id:String(row.id),factId:fact.id,scopeId:fact.scopeId,owner:fact.owner,subjectHash:'',contentHash:'',evidenceIds:fact.sources.map(s=>s.id),evidenceHashes:fact.sources.map(s=>suppressionHash(this.evidence(s.id)?.text??'')),dependencyIds:fact.dependencies?.map(d=>d.id)??[],revision:value.revision??1,active:value.active!==false,at:value.at}]})
  }
  suppressions(c:ScopeContext){this.scopes.assertCurrent(c);const manager=this.scopes.canManage(c);return this.suppressionRecords().filter(r=>r.active!==false&&r.scopeId===c.route.scopeId&&(manager||r.owner===c.actor)).map(r=>({id:r.id,revision:r.revision,at:r.at,factId:r.factId}))}
+ topicSuppressed(scopeId:string,label:string){const hash=suppressionHash(label);return this.suppressionRecords().some(r=>r.active!==false&&r.scopeId===scopeId&&(r.contentHash===hash||r.subjectHash===suppressionHash('interest:'+label)||r.topicHashes?.includes(hash)))}
  evidence(id:string){return this.store.get<MemoryEvidence>('memory-evidence',id)}
  fact(id:string){return this.store.get<MemoryFact>('memory-fact',id)}
  private revision(actual:number,expected:number){if(actual!==expected)throw Error('Memory revision conflict')}
@@ -145,7 +150,7 @@ export class RouterMemory {
   if(seen.has(f.id))return false
   const next=new Set([...seen,f.id])
   if(f.dependencies?.some(d=>{const parent=this.fact(d.id);return !parent||parent.revision!==d.revision||!this.visible(parent,c,false,next)}))return false
-  if(f.tenantId!==c.route.tenantId||f.generation!==this.generation(f.scopeId)||f.expiresAt!==undefined&&f.expiresAt<=Date.now()||!['active',...(candidates?['candidate','disputed']:[])].includes(f.state)||!this.supported(f))return false
+  if(f.archived||f.tenantId!==c.route.tenantId||f.generation!==this.generation(f.scopeId)||f.expiresAt!==undefined&&f.expiresAt<=Date.now()||!['active',...(candidates?['candidate','disputed']:[])].includes(f.state)||!this.supported(f))return false
   if(f.visibility==='private'&&(f.owner!==c.actor||this.scopes.binding(c.route.entryId).privateActor!==c.actor))return false
   if(f.visibility==='task'){
    if(!f.ticketId)return false
@@ -197,7 +202,8 @@ export class RouterMemory {
   return this.store.atomic(()=>{
    const old=this.store.get<{fingerprint:string;result:any;fact?:{id:string;revision:number}}>('memory-receipt',key)
    if(old){if(old.fingerprint!==fingerprint)throw Error('operationId reused with different content');if(old.fact){const f=this.fact(old.fact.id);return f&&f.revision===old.fact.revision&&this.visible(f,c,true)?f:{...old.fact,outcome:'completed',available:false}}return old.result}
-   const result=this.apply(c,x,operator);this.invalidateDerived(['forget','clear','history.delete','source.delete'].includes(x.action))
+   let result=this.apply(c,x,operator);this.invalidateDerived(['forget','clear','history.delete','source.delete'].includes(x.action));this.onMutation?.()
+   if(result&&typeof result==='object'&&'content' in result&&'id' in result)result=this.fact(String(result.id))??result
    const fact=result&&typeof result==='object'&&'content' in result&&'id' in result&&'revision' in result?{id:result.id,revision:result.revision}:undefined
    this.store.put('memory-receipt',key,{fingerprint,...(fact?{fact}:{result})});return result
   })
@@ -226,6 +232,7 @@ export class RouterMemory {
    this.revision(e.version,x.expectedRevision);const r=this.revoke(c,{action:'source.delete',id:e.id,generation:this.generation(c.route.scopeId)});return {status:'stopped_using',localMemory:'verified',cleanupId:r.cleanup!.id,conversationHistory:'processing',external:'not_managed'}
   }
   if(x.action==='remember'){
+   assertNoMemorySecret(x.content);assertNoMemorySecret(x.subject)
    const capture=x.capture??this.capture(c,x.sourceIds);this.validCapture(c,capture)
    if(x.sourceIds.some(id=>!capture.sourceVersions.some(s=>s.id===id)))throw Error('Uncaptured extraction input')
    const parents=x.derivedFrom.map(id=>{const p=this.fact(id);if(!p||!this.visible(p,c))throw Error('Derived memory dependency unavailable');return p})
@@ -240,20 +247,35 @@ export class RouterMemory {
    if(x.visibility==='task'){if(!x.ticketId)throw Error('Task required');this.scopes.checkTask(x.ticketId,c,true)}
    if(!x.candidate&&!operator)throw Error('Automatic extraction can only propose a candidate')
    const sources=[...new Map([...capture.sourceVersions.filter(s=>x.sourceIds.includes(s.id)),...parents.flatMap(p=>p.sources)].map(s=>[s.id,s])).values()]
-   const blocked=this.suppressionRecords().find(r=>r.active!==false&&r.scopeId===c.route.scopeId&&(r.subjectHash===suppressionHash(x.subject)||r.contentHash===suppressionHash(x.content)||sources.some(s=>r.evidenceIds?.includes(s.id)||r.evidenceHashes?.includes(suppressionHash(this.evidence(s.id)?.text??'')))||parents.some(p=>r.factId===p.id||r.dependencyIds?.includes(p.id))))
+   const blocked=this.suppressionRecords().find(r=>r.active!==false&&r.scopeId===c.route.scopeId&&(r.subjectHash===suppressionHash(x.subject)||r.contentHash===suppressionHash(x.content)||r.topicHashes?.includes(suppressionHash(x.content))||sources.some(s=>r.evidenceIds?.includes(s.id)||r.evidenceHashes?.includes(suppressionHash(this.evidence(s.id)?.text??'')))||parents.some(p=>r.factId===p.id||r.dependencyIds?.includes(p.id))))
    if(blocked||(this.store.get<any>('memory-suppression',stableDigest([c.route.scopeId,c.actor,x.subject]))?.active!==false&&this.store.get('memory-suppression',stableDigest([c.route.scopeId,c.actor,x.subject]))))throw Error('Fact was forgotten; explicit suppression removal is required')
-   const fact:MemoryFact={id:old?.id??'memory-'+randomUUID(),revision:(old?.revision??0)+1,tenantId:c.route.tenantId,scopeId:c.route.scopeId,subject:x.subject,content:x.content,state:x.candidate?'candidate':'active',sources,dependencies:parents.map(p=>({id:p.id,revision:p.revision})),relation:x.relation,visibility:x.visibility,owner:old?.owner??c.actor,entryId:c.route.entryId,ticketId:x.ticketId,expiresAt:x.expiresAt,generation:capture.generation,createdAt:Date.now()}
-   if(old)this.store.put('memory-version',old.id+':'+old.revision,{...old,state:'superseded'})
+   const replaces=x.replaces??(old&&x.candidate?[{id:old.id,revision:old.revision}]:undefined)
+   if(replaces?.some(ref=>parents.some(p=>this.dependsOn(p,new Set([ref.id])))))throw Error('Replacement cannot depend on a target it supersedes')
+   if(replaces?.length&&!x.candidate)throw Error('Replacement proposals require confirmation')
+   for(const ref of replaces??[]){const target=this.fact(ref.id);if(!target||!this.visible(target,c)||target.scopeId!==c.route.scopeId||target.entryId!==c.route.entryId||target.owner!==c.actor&&!manager||target.revision!==ref.revision)throw Error('Replacement target changed or is outside authority')}
+   if(!operator&&x.origin&&x.origin!=='extracted'&&x.origin!=='consolidated')throw Error('Automatic memory cannot claim human origin')
+   const proposed=!!old&&x.candidate
+   const fact:MemoryFact={id:proposed?'memory-'+randomUUID():old?.id??'memory-'+randomUUID(),revision:proposed?1:(old?.revision??0)+1,tenantId:c.route.tenantId,scopeId:c.route.scopeId,subject:x.subject,content:x.content,state:x.candidate?'candidate':'active',sources,dependencies:parents.map(p=>({id:p.id,revision:p.revision})),relation:x.relation,visibility:x.visibility,owner:old?.owner??c.actor,entryId:c.route.entryId,ticketId:x.ticketId,expiresAt:x.expiresAt,generation:capture.generation,createdAt:Date.now(),kind:x.kind,importance:x.importance,origin:x.origin??(operator?'manual':'extracted'),protected:operator&&!x.candidate,replaces,proposalAction:x.proposalAction,topicAliases:x.topicAliases}
+   if(old&&!proposed)this.store.put('memory-version',old.id+':'+old.revision,{...old,state:'superseded'})
    this.save(fact);return fact
   }
   const fact=this.fact(x.id)
-  if(!fact||!this.visible(fact,c,true)||fact.scopeId!==c.route.scopeId)throw Error('Fact unavailable')
+  const forgettingOwned=!!fact&&x.action==='forget'&&fact.entryId===c.route.entryId&&fact.generation===this.generation(c.route.scopeId)
+  if(!fact||(!this.visible(fact,c,true)&&!forgettingOwned)||fact.scopeId!==c.route.scopeId)throw Error('Fact unavailable')
   if(fact.visibility==='private'?fact.owner!==c.actor:!manager&&fact.owner!==c.actor)throw Error('Fact change is outside authority')
   this.revision(fact.revision,x.expectedRevision)
   if(x.action==='confirm'){
    if(!operator&&!manager)throw Error('Confirmation requires an explicit authorized action')
    if(!['candidate','disputed'].includes(fact.state))throw Error('Fact is not awaiting confirmation')
-   const next={...fact,state:'active' as const,revision:fact.revision+1};this.store.put('memory-version',fact.id+':'+fact.revision,fact);this.save(next);return next
+   for(const ref of fact.replaces??[]){const target=this.fact(ref.id);if(!target||!this.visible(target,c)||target.revision!==ref.revision||target.owner!==c.actor&&!manager)throw Error('Replacement target changed; review a fresh proposal')}
+   if(this.dependsOn(fact,new Set((fact.replaces??[]).map(ref=>ref.id))))throw Error('Replacement cannot depend on a target it supersedes')
+   if(fact.proposalAction==='forget'){
+    if(fact.replaces?.length!==1)throw Error('Deletion proposal requires one target')
+    this.revoke(c,{action:'forget',id:fact.replaces[0]!.id,generation:this.generation(fact.scopeId)})
+    this.revoke(c,{action:'forget',id:fact.id,generation:this.generation(fact.scopeId)});return {id:fact.id,status:'stopped_using'}
+   }
+   for(const ref of fact.replaces??[]){const target=this.fact(ref.id)!;this.store.put('memory-version',target.id+':'+target.revision,target);this.save({...target,state:'superseded',revision:target.revision+1})}
+   const next={...fact,state:'active' as const,protected:true,revision:fact.revision+1};this.store.put('memory-version',fact.id+':'+fact.revision,fact);this.save(next);return next
   }
   if(x.action==='forget'){this.revoke(c,{action:'forget',id:fact.id,generation:this.generation(fact.scopeId)});return {status:'stopped_using',localMemory:'verified',conversationHistory:'retained',external:'not_managed'}}
   if(!manager||fact.visibility==='private')throw Error('Publishing requires the group data manager; private memory is not group knowledge')
@@ -266,6 +288,7 @@ export class RouterMemory {
   const share:MemoryShare={id:stableDigest([fact.id,target.id]),factId:fact.id,revision:fact.revision,targetEntry:target.id,active:true,expiresAt:x.expiresAt,publishedAt:Date.now()}
   this.store.put('memory-share',share.id,share);this.queryChanged(fact.tenantId);return share
  }
+ private dependsOn(fact:MemoryFact,targets:Set<string>,seen=new Set<string>()):boolean{if(targets.has(fact.id))return true;if(seen.has(fact.id))return false;seen.add(fact.id);return !!fact.dependencies?.some(ref=>{const parent=this.fact(ref.id);return !!parent&&this.dependsOn(parent,targets,seen)})}
  private invalidateDerived(wipe=false){
   let changed=true
   while(changed){changed=false;for(const f of this.store.list<MemoryFact>('memory-fact'))if(f.dependencies?.length&&['active','candidate','disputed'].includes(f.state)&&!this.supported(f)){this.store.put('memory-version',f.id+':'+f.revision,wipe?{...f,subject:'',content:'',state:'tombstoned'}:f);this.save({...f,...(wipe?{subject:'',content:''}:{}),state:'revoked',revision:f.revision+1});changed=true}}
@@ -277,7 +300,7 @@ export class RouterMemory {
   const at=Math.max(Date.now(),(this.store.get<number>('memory-clock','last')??0)+1)
   const cleanup=['history.delete','source.delete'].includes(input.action)?planHistory(this.store,this.stateDir,c.route.scopeId,'cleanup-'+randomUUID(),at,input.action==='source.delete'?input.id:undefined):undefined
   const forgotten=input.action==='forget'&&input.id?this.fact(input.id):undefined
-  const suppression:MemorySuppression|undefined=forgotten?{id:stableDigest(['suppression',forgotten.id]),factId:forgotten.id,scopeId:forgotten.scopeId,owner:forgotten.owner,subjectHash:suppressionHash(forgotten.subject),contentHash:suppressionHash(forgotten.content),evidenceIds:forgotten.sources.map(s=>s.id),evidenceHashes:forgotten.sources.map(s=>suppressionHash(this.evidence(s.id)?.text??'')),dependencyIds:forgotten.dependencies?.map(d=>d.id)??[],active:true,revision:1,at}:undefined
+  const suppression:MemorySuppression|undefined=forgotten?{id:stableDigest(['suppression',forgotten.id]),factId:forgotten.id,scopeId:forgotten.scopeId,owner:forgotten.owner,subjectHash:suppressionHash(forgotten.subject),contentHash:suppressionHash(forgotten.content),evidenceIds:forgotten.sources.map(s=>s.id),evidenceHashes:forgotten.sources.map(s=>suppressionHash(this.evidence(s.id)?.text??'')),dependencyIds:forgotten.dependencies?.map(d=>d.id)??[],...(forgotten.kind==='interest'?{topicHashes:[forgotten.content,...forgotten.topicAliases??[]].map(suppressionHash)}:{}),active:true,revision:1,at}:undefined
   const body={seq:(previous?.seq??0)+1,previous:previous?.hash??'',tenantId:c.route.tenantId,scopeId:c.route.scopeId,...input,at,...(suppression?{suppression}:{}),...(cleanup?{cleanup}:{})},r={...body,hash:stableDigest(body)}
   this.appendRevocation(r)
   this.applyRevocation(r)
@@ -310,8 +333,8 @@ export class RouterMemory {
    const wipe=r.action==='forget'&&fact.id===r.id||['clear','history.delete'].includes(r.action)&&fact.scopeId===r.scopeId&&fact.generation<r.generation
    const lost=r.action==='source.delete'&&fact.sources.some(s=>s.id===r.id)&&!this.supported(fact)
    if(wipe||lost){
-    this.save({...fact,subject:'',content:'',state:wipe?'tombstoned':'revoked',revision:fact.revision+1})
-    for(const v of this.store.list<MemoryFact>('memory-version'))if(v.id===fact.id)this.store.put('memory-version',v.id+':'+v.revision,{...v,subject:'',content:'',state:'tombstoned'})
+    this.save({...fact,subject:'',content:'',topicAliases:[],state:wipe?'tombstoned':'revoked',revision:fact.revision+1})
+    for(const v of this.store.list<MemoryFact>('memory-version'))if(v.id===fact.id)this.store.put('memory-version',v.id+':'+v.revision,{...v,subject:'',content:'',topicAliases:[],state:'tombstoned'})
     if(r.action==='forget'&&!r.suppression)this.store.put('memory-suppression',stableDigest([fact.scopeId,fact.owner,fact.subject]),{id:fact.id,at:r.at})
    }
   }
@@ -323,12 +346,12 @@ export class RouterMemory {
  build(c:ScopeContext,input:unknown,backend:string):{input:string;manifest:ContextManifest}{
   this.scopes.assertCurrent(c);const s=this.scopes.scope(c.route.scopeId),required=JSON.stringify(input)
   if(Buffer.byteLength(required)>s.contextBytes)throw Error('Current request exceeds context budget; shorten it before retrying')
-  const retrieval=this.query(c,{query:c.trigger.text.slice(0,200),limit:20}),items=retrieval.items
+  const retrieval=this.recall?.(c,c.trigger.text.slice(0,200))??this.query(c,{query:c.trigger.text.slice(0,200),limit:20}),items=retrieval.items
   // Explicitly referenced or recent facts remain discoverable when the whole request is not a useful search phrase.
-  const candidates=items.length?items:this.query(c,{limit:20}).items
+  const candidates=this.recall?items:items.length?items:this.query(c,{limit:20}).items
   const facts:typeof candidates=[];let rendered=JSON.stringify({...input as object,memory:{facts,status:'complete'}}),truncated=false
   for(const fact of candidates){const next=JSON.stringify({...input as object,memory:{facts:[...facts,fact],status:'complete'}});if(Buffer.byteLength(next)>s.contextBytes-1024){truncated=true;continue}facts.push(fact);rendered=next}
-  const outline=renderMemory(facts.map(f=>({id:f.id,kind:'fact',content:f.content})))
+  const outline=renderMemory(facts.map(f=>({id:f.id,kind:f.kind??'fact',content:f.content})))
   rendered=JSON.stringify({...input as object,memory:{facts,status:retrieval.status==='partial'?'partial':truncated?'truncated':'complete',...(retrieval.reason?{reason:retrieval.reason}:{})}})
   const withOutline=JSON.stringify({...JSON.parse(rendered),memory:{...JSON.parse(rendered).memory,outline}})
   if(Buffer.byteLength(withOutline)<=s.contextBytes)rendered=withOutline
@@ -374,6 +397,7 @@ export class RouterMemory {
   if(!trigger)throw Error('Context source unavailable')
   this.scopes.assertTrigger(trigger)
   const context:ScopeContext={trigger,actor:manifest.actor,route:{triggerId:trigger.id,discussion:trigger.source+':'+trigger.threads[0]!.id,entryId:manifest.entryId,tenantId:manifest.tenantId,scopeId:manifest.scopeId,routerId:manifest.routerId,epoch:manifest.epoch,bindingRevision:this.scopes.binding(manifest.entryId).revision}}
+  this.validateUse?.(context,manifest.facts)
   this.validateKnowledge?.(context,manifest.knowledge??[])
   for(const ref of manifest.inputEvidence??[]){
    const e=this.evidence(ref.id),entry=e&&this.scopes.binding(e.entryId)

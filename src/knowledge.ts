@@ -60,7 +60,7 @@ export class Knowledge {
     const ids=[...allowed.keys()]
     for(let i=0;i<ids.length;i+=400){const batch=ids.slice(i,i+400);scored.push(...store.db.prepare('SELECT id,-bm25(memory_search) AS score FROM memory_search WHERE id IN ('+batch.map(()=>'?').join(',')+') AND memory_search MATCH ?').all(...batch,terms.map(t=>'"'+t.replaceAll('"','""')+'"').join(' AND ')).map(row=>({id:String(row.id),score:Number(row.score)})))}
    }else scored=chunks.filter(ch=>terms.every(t=>(byId.get(ch.documentId)!.title+' '+ch.contextHeader+' '+ch.content).toLocaleLowerCase().includes(t))).map(ch=>({id:ch.id,score:1}))
-   const sorted=normalizeKeywordScores(scored).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id))
+   const sorted=normalizeKeywordScores(scored).map(hit=>({...hit,score:hit.score*this.host.agentMemory.affinity(c,allowed.get(hit.id)!.documentId,allowed.get(hit.id)!.revision)})).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id))
    return {items:sorted.slice(x.offset,x.offset+x.limit).map(hit=>{const ch=allowed.get(hit.id)!,d=byId.get(ch.documentId)!;return {documentId:d.id,revision:d.revision,title:d.title,kind:d.kind,slug:d.slug,start:ch.start,end:ch.end,contextHeader:ch.contextHeader,content:ch.content,snippet:extractSnippet(ch.content,terms[0]!),score:hit.score,stale:this.metadata(d).stale}}),total:sorted.length,nextOffset:x.offset+x.limit<sorted.length?x.offset+x.limit:null,method:'keyword',embedding:false}
   }
   if(x.action==='read'){

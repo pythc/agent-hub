@@ -282,3 +282,18 @@ it('rejects a document identifier already occupied by another record',()=>{
  expect(()=>f.put(context,'Document text',{id:'existing-task'})).toThrow('conflicts with an existing record')
  expect(f.h.store.get<any>('ticket','existing-task').title).toBe('Existing task')
 })
+it('lets the actual Worker broker recall authorized memory and binds its source revisions',async()=>{
+ let memoryId='',read=false
+ const f=fixture(async(r,input)=>{
+  if(r.role==='router'&&input.kind!=='worker_result'){await tool(r,'worker_manage',{action:'assign',id:'one',text:'Use the retained project note to answer the local question',revision:0,requestId:'memory-read'});return {reply:''}}
+  if(r.role==='worker'){
+   const output=await tool(r,'superagent_memory',{query:'worker memory marker 859'});expect(output.items.some((x:any)=>x.id===memoryId)).toBe(true);read=true
+   await expect(r.onTool!('superagent_memory',{action:'forget',id:memoryId},'write-memory')).rejects.toThrow()
+  }
+ })
+ const input=f.receive(),c=f.context(input),e=f.h.memory.ingest(c)
+ memoryId=(f.h.memory.command(c,{action:'remember',operationId:'memory-worker',expectedRevision:0,subject:'project',content:'worker memory marker 859',sourceIds:[e.id],candidate:false},true) as any).id
+ await until(f.h,()=>f.h.store.tickets.list().some(t=>t.ended));expect(read).toBe(true)
+ const manifest=f.h.store.get<any>('task-context',f.h.store.tickets.list()[0]!.id).manifest
+ expect(manifest.facts.some((ref:any)=>ref.id===memoryId)).toBe(true);expect(manifest.evidence.some((ref:any)=>ref.id===e.id)).toBe(true)
+})

@@ -113,7 +113,8 @@ export class ApiModel implements Model {
  }
  async run(r:ModelRequest):Promise<ModelResult>{
   if(r.workerMcp)throw Error('API backends require explicit host tool definitions, not a native MCP bridge')
-  const canRecall=r.role==='router'&&r.managed&&(!r.options?.tools||r.options.tools.includes(recallSpec.name))
+  if(r.ephemeral&&r.threadId)throw Error('Ephemeral backend calls cannot resume retained threads')
+  const canRecall=!r.ephemeral&&r.role==='router'&&r.managed&&(!r.options?.tools||r.options.tools.includes(recallSpec.name))
   if(canRecall){if(r.tools?.some(t=>t.name===recallSpec.name))throw Error('backend_recall is reserved for retained API history');r={...r,tools:[...r.tools??[],recallSpec]}}
   const t:ApiThread=r.threadId?this.thread(r.threadId,r.cwd):{format:1,id:'api:'+this.id+':'+randomUUID(),backendId:this.id,kind:this.definition.kind,endpoint:this.definition.baseUrl.replace(/\/+$/,''),model:r.model??this.definition.model,cwd:resolve(r.cwd),messages:[],turns:[],effects:{}}
   if(this.active.has(t.id))throw Error('Backend thread already has an active writer')
@@ -122,7 +123,7 @@ export class ApiModel implements Model {
   const timer=setTimeout(()=>controller.abort(Error('Backend turn deadline exceeded')),this.turnTimeoutMs)
   const turn={id:randomUUID(),status:'inProgress',items:[] as any[],model:t.model,input:r.input,wireStart:0},queue:{text:string;onRead?:()=>void}[]=[]
   let instructions=r.instructions,repairs=0,toolCalls=0
-  const persist=()=>this.store.put('backend-thread',t.id,t)
+  const persist=()=>{if(!r.ephemeral)this.store.put('backend-thread',t.id,t)}
   const appendUser=(text:string)=>t.messages.push({role:'user',content:text})
   try{
    signal.throwIfAborted()

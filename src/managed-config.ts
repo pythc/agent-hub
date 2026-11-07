@@ -35,7 +35,7 @@ export function recoverManagedFiles(state:string){
  if(existsSync(file)){
   const db=new DatabaseSync(file,{readOnly:true})
   try{
-   if(Number(db.prepare('PRAGMA user_version').get()!.user_version)>6)throw Error('Database is newer than this program')
+   if(Number(db.prepare('PRAGMA user_version').get()!.user_version)>7)throw Error('Database is newer than this program')
    const table=db.prepare("SELECT name FROM sqlite_master WHERE name='records'").get()
    committed=!!table&&!!db.prepare('SELECT id FROM records WHERE kind=? AND id=?').get(journal.restore?'restore-commit':'onboarding-deployment',journal.id)
   }finally{db.close()}

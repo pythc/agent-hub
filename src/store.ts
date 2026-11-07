@@ -24,7 +24,7 @@ export class Store implements Repositories {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version)
-    if (version > 6) {
+    if (version > 7) {
       this.db.close()
       throw new Error('Database is newer than this program. Use the matching version.')
     }
@@ -42,7 +42,7 @@ export class Store implements Repositories {
         attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT);
       CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, at TEXT NOT NULL, body TEXT NOT NULL);
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(id UNINDEXED, body, tokenize='trigram');
-      PRAGMA user_version=6;
+      PRAGMA user_version=${Math.max(version,6)};
     `)
   }
   atomic<T>(work: () => T): T {

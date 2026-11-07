@@ -310,3 +310,10 @@ it.each(kinds)('%s assesses proactive messages, delegates and receives results i
  expect(thread.turns).toHaveLength(2);expect(thread.turns[0].items.filter((i:any)=>i.type==='functionCall').map((i:any)=>i.name)).toEqual(['orchestrator_eval','orchestrator_eval_decide','worker_manage'])
  expect(host.store.list('backend-thread')).toHaveLength(2)
 })
+it.each(kinds)('%s keeps ephemeral memory runs tool-free and does not retain their payload',async kind=>{
+ const f=await server(()=>output(kind,'{"answer":"done"}')),store=memory(),model=new ApiModel('test',definition(kind,f.url),store,10000)
+ const result=await model.run(request({role:'router',ephemeral:true,tools:[],input:'synthetic sensitive memory input'}))
+ expect(store.get('backend-thread',result.threadId)).toBeUndefined()
+ expect(JSON.stringify(f.requests[0].body.tools??[])).not.toContain('backend_recall')
+ await expect(model.run(request({ephemeral:true,threadId:result.threadId}))).rejects.toThrow('cannot resume')
+})

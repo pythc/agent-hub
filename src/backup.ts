@@ -53,7 +53,7 @@ export async function backupState(config:Config,destination:string,options:{hist
 }
 export function verifyBackup(directory:string){
  const manifest=JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8'))
- if(manifest.format!==1||![1,2,3,4,5,6].includes(manifest.schema))throw Error('Unsupported backup format or schema')
+ if(manifest.format!==1||![1,2,3,4,5,6,7].includes(manifest.schema))throw Error('Unsupported backup format or schema')
  const path=join(directory,'state.sqlite')
  if(hash(path)!==manifest.sha256)throw Error('Backup checksum mismatch')
  const db=new DatabaseSync(path,{readOnly:true})
