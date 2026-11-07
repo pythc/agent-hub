@@ -1,0 +1,89 @@
+/* Model connections and decision setup share the workspace's neutral palette. */
+.operator-workspace .models-page { max-width: 1120px; margin-inline: auto; }
+.operator-workspace .models-page .page-heading { margin-bottom: 28px; }
+.operator-workspace .model-service-list { list-style: none; margin: 0; padding: 0; border-block: 1px solid var(--line); }
+.operator-workspace .model-service-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; align-items: center; gap: 24px; padding: 24px 0; }
+.operator-workspace .model-service-row + .model-service-row { border-top: 1px solid var(--line); }
+.operator-workspace .model-service-identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.operator-workspace .model-service-identity > div { min-width: 0; }
+.operator-workspace .model-service-mark { display: grid; place-items: center; width: 44px; height: 44px; flex-shrink: 0; border-radius: 10px; background: var(--surface-selected); }
+.operator-workspace .model-service-mark svg { width: 22px; height: 22px; }
+.operator-workspace .model-service-row h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.operator-workspace .model-service-meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.operator-workspace .model-service-assignment { display: grid; gap: 8px; min-width: 0; }
+.operator-workspace .model-service-model { font-size: 14px; overflow-wrap: anywhere; }
+.operator-workspace .model-service-roles { display: flex; flex-wrap: wrap; gap: 6px; }
+.operator-workspace .model-service-roles span { color: var(--body); background: var(--surface-selected); border-radius: 4px; padding: 2px 7px; font-size: 12px; }
+.operator-workspace .model-service-row .actions { margin: 0; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.operator-workspace .decision-settings { margin-top: 40px; min-width: 0; }
+.operator-workspace .decision-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+.operator-workspace .decision-heading h2 { margin: 0; font-size: 24px; line-height: 1.4; letter-spacing: -.02em; font-weight: 650; }
+.operator-workspace .decision-heading p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.operator-workspace .decision-saved-mode { flex-shrink: 0; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 12px; }
+.operator-workspace .decision-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.operator-workspace .decision-config { padding: 28px; min-width: 0; }
+.operator-workspace .decision-settings .team-fields { gap: 20px; }
+.operator-workspace .decision-settings .team-fields .field { border: 0; }
+.operator-workspace .decision-settings .team-fields :is(input, select, textarea) { font-size: 14px; border-color: var(--border-strong); }
+.operator-workspace .decision-settings .team-fields label { font-size: 14px; font-weight: 550; }
+.operator-workspace .decision-mode { min-width: 0; padding: 0; border: 0; margin: 28px 0 0; }
+.operator-workspace .decision-mode legend { padding: 0; font-size: 14px; font-weight: 550; margin-bottom: 10px; }
+.operator-workspace .decision-mode-options { display: flex; gap: 4px; padding: 4px; background: var(--surface-selected); border-radius: 8px; }
+.operator-workspace .decision-mode-options label { position: relative; flex: 1; min-width: 0; cursor: pointer; }
+.operator-workspace .decision-mode-options input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.operator-workspace .decision-mode-options span { display: grid; place-items: center; padding: 10px 8px; height: 100%; min-height: 40px; text-align: center; line-height: 1.25; font-size: 13px; font-weight: 550; color: var(--muted); border-radius: 6px; transition: background-color 160ms ease-out, color 160ms ease-out; }
+.operator-workspace .decision-mode-options input:checked + span { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px var(--shadow-soft); }
+.operator-workspace .decision-mode-options input:focus-visible + span { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.operator-workspace .decision-mode-hint { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 12px 0 0; }
+.operator-workspace .decision-advanced { margin-top: 24px; padding: 20px 0 0; border-top: 1px solid var(--line); min-width: 0; }
+.operator-workspace .decision-settings summary { font-size: 14px; font-weight: 550; cursor: pointer; color: var(--body); }
+.operator-workspace .decision-settings details[open] > summary { margin-bottom: 24px; }
+.operator-workspace .decision-settings .decision-limits { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; }
+.operator-workspace .decision-test-pane { padding: 28px; min-width: 0; background: var(--surface-soft); border-left: 1px solid var(--line); }
+.operator-workspace .decision-test-pane h3 { font-size: 16px; font-weight: 600; margin: 0 0 16px; }
+.operator-workspace .decision-test-pane textarea { display: block; width: 100%; min-height: 130px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--ink); padding: 14px 16px; font: inherit; font-size: 14px; line-height: 1.7; resize: vertical; }
+.operator-workspace .decision-examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.operator-workspace .decision-examples .button { min-height: 32px; font-size: 12px; padding: 5px 10px; border-color: var(--line); background: transparent; color: var(--body); }
+.operator-workspace .decision-examples .button:hover { background: var(--surface-hover); }
+.operator-workspace .decision-test-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.operator-workspace .decision-test-actions > span { color: var(--muted); font-size: 13px; }
+.operator-workspace #decision-test { min-height: 40px; padding: 10px 16px; font-size: 13px; }
+.operator-workspace .decision-result { min-width: 0; min-height: 100px; border-top: 1px solid var(--line); margin-top: 24px; padding-top: 24px; overflow-wrap: anywhere; }
+.operator-workspace .decision-result-empty { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.operator-workspace .decision-result[aria-busy=true] .decision-result-empty::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 8px; border: 1px solid var(--line); border-top-color: var(--ink); border-radius: 50%; animation: decision-wait 900ms linear infinite; }
+.operator-workspace .decision-outcomes { display: flex; flex-wrap: wrap; gap: 16px; }
+.operator-workspace .decision-outcome { display: flex; align-items: baseline; gap: 10px; }
+.operator-workspace .decision-outcome strong { color: var(--ink); font-size: 24px; font-weight: 600; line-height: 1.3; }
+.operator-workspace .decision-outcome span { color: var(--muted); font-size: 12px; }
+.operator-workspace .decision-metrics { display: flex; flex-wrap: wrap; gap: 24px; margin: 20px 0 0; }
+.operator-workspace .decision-metrics dt { color: var(--muted); font-size: 12px; }
+.operator-workspace .decision-metrics dd { margin: 4px 0 0; color: var(--ink); font-size: 14px; font-variant-numeric: tabular-nums; }
+.operator-workspace .decision-result.has-error strong { color: var(--status-danger); font-size: 14px; }
+.operator-workspace .decision-result.has-error p { margin: 8px 0 0; font-size: 14px; line-height: 1.6; color: var(--body); }
+.operator-workspace .decision-history { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+@keyframes decision-wait { to { transform: rotate(360deg); } }
+@media (max-width: 1100px) {
+  .operator-workspace .model-service-row { grid-template-columns: minmax(0, 1fr) auto; gap: 12px 24px; }
+  .operator-workspace .model-service-assignment { grid-column: 1; padding-left: 60px; }
+  .operator-workspace .model-service-row .actions { grid-column: 2; grid-row: 1 / 3; }
+  .operator-workspace .decision-config, .operator-workspace .decision-test-pane { padding: 24px; }
+}
+@media (max-width: 800px) {
+  .operator-workspace .decision-body { grid-template-columns: minmax(0, 1fr); }
+  .operator-workspace .decision-test-pane { border-left: 0; border-top: 1px solid var(--line); }
+  .operator-workspace .decision-heading { margin-bottom: 20px; }
+}
+@media (max-width: 560px) {
+  .operator-workspace .models-page .page-heading { gap: 20px; }
+  .operator-workspace .model-service-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .operator-workspace .model-service-row .actions { grid-row: auto; grid-column: 1; justify-content: flex-start; padding-left: 60px; }
+  .operator-workspace .decision-heading { flex-wrap: wrap; gap: 12px; }
+  .operator-workspace .decision-config, .operator-workspace .decision-test-pane { padding: 20px; }
+  .operator-workspace .decision-settings .decision-limits { grid-template-columns: 1fr; }
+  .operator-workspace .decision-settings .team-fields :is(input, select, textarea), .operator-workspace .decision-test-pane textarea { font-size: 16px; }
+  .operator-workspace .decision-examples .button { min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .operator-workspace .decision-mode-options span { transition: none; }
+  .operator-workspace .decision-result[aria-busy=true] .decision-result-empty::before { animation: none; }
+}

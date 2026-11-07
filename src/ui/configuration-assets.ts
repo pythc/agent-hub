@@ -38,4 +38,5 @@ export const configurationStyles = [
   "workspace-motion.css",
   "workflow-story.css",
   "integrations.css",
+  "models-page.css",
 ];
