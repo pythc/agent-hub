@@ -64,11 +64,25 @@ export class GhApi implements GithubApi {
   }
 }
 export class GithubSource extends MessageSource {
+  static authorizeRead(config:SourceConfig,ticket:import('../vendor/dsh-core/index.ts').Ticket,resource:string){
+    const source=config.id,threads=[...ticket.channels.filter(c=>c.source===source).map(c=>c.thread),...(ticket.follows??[]).filter(f=>f.thread.startsWith(source+':')).map(f=>f.thread.slice(source.length+1))]
+    const match=/^(?:github\/)?(?:issues|pulls)\/(\d+)/.exec(resource)
+    if(match&&!threads.some(t=>t.split('#').at(-1)===match[1]))throw Error('GitHub conversation is outside this worker')
+  }
+  override get verificationCommand(){return this.config.github?.command??'/agent'}
+  replay(_scope:string|undefined,since:string){return {key:this.config.id,since}}
+  references(thread:string){return this.validThread(thread)?['https://github.com/'+this.repo+'/pull/'+thread.split('#').at(-1)]:[]}
   private readonly api:GithubApi
   private account?:string
   constructor(config:SourceConfig,api?:GithubApi){super(config);if(!config.repository)throw Error('GitHub repository required');this.api=api??(config.github?.transport==='gh'?new GhApi(config.github.gh):new GithubHttpApi(config.github?.gh,config.github?.tokenEnv))}
   private get repo(){return this.config.repository!}
-  async identity(){const user=await this.api.request('GET','user');this.account=user.login;return {id:user.login,type:user.type==='Bot'?'bot':'user'}}
+  async identity(){const user=await this.api.request('GET','user');this.account=user.login;if(!user.login)throw Error('GitHub identity readback unavailable');return {id:user.login,type:user.type==='Bot'?'bot':'user',verified:true}}
+  async isPullRequest(trigger:Trigger):Promise<boolean>{
+    const thread=trigger.threads.find(t=>t.source===this.config.id)?.id
+    if(!thread||!this.validThread(thread))return false
+    const issue=await this.api.request('GET','repos/'+this.repo+'/issues/'+Number(thread.split('#').at(-1)))
+    return !!issue.pull_request
+  }
   async members(){return (await this.pages('repos/'+this.repo+'/collaborators')).map(u=>({id:u.login,name:u.name,bot:u.type==='Bot'}))}
   private addressed(text:string){return text.includes(this.config.github?.command??'/agent')||!!this.account&&new RegExp('(^|[^a-zA-Z0-9_])@'+this.account+'(?![a-zA-Z0-9_-])','i').test(text)}
   validThread(thread:string){const number=Number(thread.split('#').at(-1));return Number.isSafeInteger(number)&&number>0&&thread===this.thread(number)}
@@ -121,23 +135,23 @@ export class GithubSource extends MessageSource {
       }
     }
     for(const thread of ctx.store.threads.list().filter(t=>t.ref.source===this.config.id&&t.subscriptions.length)){
+      const tickets=thread.subscriptions.map(id=>ctx.store.tickets.get(id))
+      const activity=[thread.lastAt??thread.createdAt,...tickets.map(ticket=>ticket?.ended?.at??'')].map(Date.parse).filter(Number.isFinite)
+      // Match the prototype: retain polling for live work or two weeks after the latest message/completion.
+      if(!tickets.some(ticket=>ticket&&!ticket.ended)&&Date.now()-Math.max(...activity)>=14*24*3600000)continue
       const cursorKey=this.config.id+':'+thread.ref.id,threadSince=ctx.store.get<{since:string}>('thread-cursor',cursorKey)?.since??since
       let success=false
       try{
       const number=Number(thread.ref.id.split('#').at(-1))
       const issue=await this.api.request('GET','repos/'+this.repo+'/issues/'+number,undefined,ctx.signal)
-      if(issue.state==='closed'){
-        const pull=issue.pull_request?await this.api.request('GET','repos/'+this.repo+'/pulls/'+number,undefined,ctx.signal):undefined
-        success=true;ctx.closed(thread.ref.id,pull?.merged_at?'merged':'closed',issue.closed_at??boundary)
-        continue
-      }
+      const pull=issue.pull_request?await this.api.request('GET','repos/'+this.repo+'/pulls/'+number,undefined,ctx.signal):undefined
+      if(issue.state==='closed')ctx.closed(thread.ref.id,pull?.merged_at?'merged':'closed',issue.closed_at??boundary)
       if(issue.pull_request){
-        const pull=await this.api.request('GET','repos/'+this.repo+'/pulls/'+number,undefined,ctx.signal)
         for(const suffix of ['comments','reviews']){
           const items=await this.pages('repos/'+this.repo+'/pulls/'+number+'/'+suffix,undefined,ctx.signal)
           for(const item of items){const text=suffix==='reviews'?[item.state,item.body??''].filter(Boolean).join('\n'):item.body??'';if((item.submitted_at??item.updated_at??'')>=threadSince&&text&&!text.includes('<!-- superagent:'))ctx.receive(this.event(item,number,'review-'+suffix,text))}
         }
-        const checks=await this.pages('repos/'+this.repo+'/commits/'+pull.head.sha+'/check-runs','check_runs',ctx.signal)
+        const checks=issue.state==='closed'?[]:await this.pages('repos/'+this.repo+'/commits/'+pull.head.sha+'/check-runs','check_runs',ctx.signal)
         for(const check of checks){
           if(check.status!=='completed')continue
           const trigger=this.event({id:check.id,updated_at:check.completed_at,user:{login:'github-ci',type:'Bot'}},number,'ci',JSON.stringify({sha:pull.head.sha,name:check.name,conclusion:check.conclusion,url:check.html_url}))

@@ -43,6 +43,7 @@ function icon(name) {
   return svg
 }
 const editable = [
+  'backends',
   'execution',
   'models',
   'model',

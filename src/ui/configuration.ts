@@ -14,6 +14,7 @@ const client = [
   'entry-configure.js',
   'operator-workspace.js',
   'control-center.js',
+  'agent-options.js',
   'affect-ui.js',
   'flow-motion.js',
   'execution-page.js',

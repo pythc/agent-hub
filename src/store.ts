@@ -10,23 +10,30 @@ export interface Run {
   phase: 'idle' | 'starting' | 'running' | 'background' | 'interrupted' | 'uncertain' | 'human' | 'delivering' | 'merging'
   turnId?: string; prepared?:boolean; waitingForWriter?:boolean; error?: string; result?: string
   toolsVersion?:number;toolsDigest?:string;model?:string;backendId?:string;backendKind?:string
+  agentOptions?:import('./backend-config.ts').AgentOptions;migration?:string
+  rebuild?:string
   workerId?:string;interactiveReserve?:boolean
 }
 
 /** All engine mutations and the work they schedule share one SQLite transaction. */
 export class Store implements Repositories {
   readonly db: DatabaseSync
+  bodyFilter?:(kind:string,id:string,value:any)=>any
   private depth = 0
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
-    chmodSync(path, 0o600)
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000')
     const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version)
-    if (version > 5) {
+    if (version > 6) {
       this.db.close()
       throw new Error('Database is newer than this program. Use the matching version.')
     }
+    if (version > 0 && version < 6) {
+      this.db.close()
+      throw new Error('Router scope migration required. Stop the host and run scope-migration preview/apply before opening this database.')
+    }
+    chmodSync(path, 0o600)
+    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON')
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, body TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
@@ -34,7 +41,8 @@ export class Store implements Repositories {
       CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
         attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT);
       CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, at TEXT NOT NULL, body TEXT NOT NULL);
-      PRAGMA user_version=5;
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(id UNINDEXED, body, tokenize='trigram');
+      PRAGMA user_version=6;
     `)
   }
   atomic<T>(work: () => T): T {
@@ -59,7 +67,7 @@ export class Store implements Repositories {
   prunePages(){this.db.prepare("DELETE FROM records WHERE kind='resource-page' AND id IN (SELECT id FROM records WHERE kind='resource-page' AND CAST(json_extract(body,'$.expires') AS INTEGER)<? LIMIT 1000)").run(Date.now())}
   put(kind: string, id: string, value: unknown): void {
     this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body')
-      .run(kind, id, JSON.stringify(value))
+      .run(kind, id, JSON.stringify(this.bodyFilter?.(kind,id,value)??value))
   }
   list<T>(kind: string): T[] {
     return this.db.prepare('SELECT body FROM records WHERE kind=? ORDER BY rowid').all(kind).map(row => JSON.parse(String(row.body)) as T)
@@ -89,7 +97,8 @@ export class Store implements Repositories {
     byThread: (id: string) => this.list<Decision>('decision').filter(d => d.threadKey === id),
   }
   enqueue(id: string, kind: string, payload: unknown): void {
-    this.db.prepare('INSERT OR IGNORE INTO jobs(id,kind,payload) VALUES(?,?,?)').run(id, kind, JSON.stringify(payload))
+    const filtered=this.bodyFilter?.('job',id,payload)??payload
+    this.db.prepare('INSERT OR IGNORE INTO jobs(id,kind,payload,state) VALUES(?,?,?,?)').run(id, kind, JSON.stringify(filtered),filtered===payload?'pending':'blocked')
   }
   jobs(): Job[] {
     return this.db.prepare("SELECT * FROM jobs WHERE state='pending' AND next_at<=? ORDER BY rowid").all(Date.now())
@@ -103,8 +112,12 @@ export class Store implements Repositories {
   }
   recoverDeliveries():void {this.db.prepare("UPDATE outbox SET status='uncertain',error='Host stopped during delivery; reconcile destination before retry' WHERE status='sending'").run()}
   deliveryStarted(id:string):boolean{return this.db.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending'").run(id).changes===1}
+  routePendingDelivery(id:string,channel:OutboundMessage['channel']):void{
+    const row=this.db.prepare("SELECT body FROM outbox WHERE id=? AND status='pending'").get(id)
+    if(row)this.db.prepare("UPDATE outbox SET body=? WHERE id=? AND status='pending'").run(JSON.stringify({...JSON.parse(String(row.body)),channel}),id)
+  }
   readonly outbox = {
-    send: (message: OutboundMessage) => { this.db.prepare('INSERT OR IGNORE INTO outbox(id,body) VALUES(?,?)').run(message.id, JSON.stringify(message)) },
+    send: (message: OutboundMessage) => { const filtered=this.bodyFilter?.('outbox',message.id,message)??message;this.db.prepare('INSERT OR IGNORE INTO outbox(id,body,status) VALUES(?,?,?)').run(message.id, JSON.stringify(filtered),filtered===message?'pending':'dropped') },
     status: (id: string) => {
       const r = this.db.prepare('SELECT status FROM outbox WHERE id=?').get(id)
       return r?.status === 'sent' ? 'sent' as const : r?.status === 'dropped' ? 'dropped' as const : r ? 'pending' as const : undefined
@@ -123,6 +136,6 @@ export class Store implements Repositories {
     this.db.prepare('UPDATE outbox SET status=?,attempts=?,next_at=?,error=? WHERE id=?')
       .run(uncertain ? 'uncertain' : 'pending', attempts, Date.now() + Math.min(300_000, 1000 * 2 ** Math.min(attempts, 9)), error, id)
   }
-  audit(body: unknown): void { this.db.prepare('INSERT INTO audit(at,body) VALUES(?,?)').run(new Date().toISOString(), JSON.stringify(body)) }
+  audit(body: unknown): void { this.db.prepare('INSERT INTO audit(at,body) VALUES(?,?)').run(new Date().toISOString(), JSON.stringify(this.bodyFilter?.('audit','',body)??body)) }
   close(): void { this.db.close() }
 }

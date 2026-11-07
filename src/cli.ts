@@ -10,6 +10,8 @@ import {backupState,verifyBackup,restoreState} from './backup.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {initOffice} from './office.ts'
 import {preparePersonalSetup,rememberPersonalPort} from './personal-setup.ts'
+import {previewScopeMigration,applyScopeMigration,rollbackScopeMigration} from './scope-migration.ts'
+import {runCodexRouter} from './codex-router.ts'
 
 const [command, ...args] = process.argv.slice(2)
 async function main() {
@@ -38,8 +40,23 @@ async function main() {
     else if(action==='install')console.log(JSON.stringify(installClient(options)))
     else throw Error('Use clients list, config, install or restore')
   }
-  else if(command==='check'){if(!args[0])throw Error('Config required');const host=new Runtime(loadConfig(args[0]));try{const result=await host.setup.check();console.log(JSON.stringify(result,null,2));if(result.status!=='ok')process.exitCode=3}finally{await host.close()}}
+  else if(command==='router'){
+    const [url,tokenFile,...rest]=args
+    const value=(flag:string)=>{const i=rest.indexOf(flag);return i<0?undefined:rest[i+1]}
+    const prompt=value('--prompt');if(!url||!tokenFile||!prompt)throw Error('Use router <url> <token-file> --prompt <message> [--resume <Router session UUID>] [--json]')
+    process.exitCode=await runCodexRouter({url,tokenFile,prompt,resume:value('--resume'),json:rest.includes('--json')})
+  }
+  else if(command==='check'){if(!args[0])throw Error('Config required');const host=await Runtime.create(loadConfig(args[0]));try{const result=await host.setup.check();console.log(JSON.stringify(result,null,2));if(result.status!=='ok')process.exitCode=3}finally{await host.close()}}
   else if(command==='worker-mcp'){if(!args[0]||!args[1])throw Error('Worker host and grant file required');await startWorkerMcp(args[0],args[1])}
+  else if(command==='scope-migration'){
+    const [action,path,specFile,expected]=args;if(!path||!specFile)throw Error('Use scope-migration preview|apply <config.json> <plan.json> [preview fingerprint]')
+    const config=loadConfig(path)
+    if(action==='rollback'){console.log(JSON.stringify(await rollbackScopeMigration(config,specFile),null,2));return}
+    const spec=JSON.parse(readFileSync(specFile,'utf8'))
+    if(action==='preview')console.log(JSON.stringify(previewScopeMigration(config,spec),null,2))
+    else if(action==='apply'&&expected)console.log(JSON.stringify(await applyScopeMigration(config,spec,expected),null,2))
+    else throw Error('Apply requires the reviewed preview fingerprint')
+  }
   else if(command==='backup'||command==='restore'){
     if(!args[0]||!args[1])throw Error('Config file and backup directory required')
     console.log(JSON.stringify(await (command==='backup'?backupState:restoreState)(loadConfig(args[0]),args[1]),null,2))
@@ -56,7 +73,7 @@ async function main() {
         if(response.ok){console.log(JSON.stringify({...await response.json() as object,reused:true}));return}
       }catch{}
     }
-    const host = new Runtime(personal?.config??loadConfig(args[0]!))
+    const host = await Runtime.create(personal?.config??loadConfig(args[0]!))
     try {
       const result = await serve(host)
       if(personal)rememberPersonalPort(personal.file,Number(new URL(result.url).port))
@@ -98,6 +115,6 @@ async function main() {
     })
     console.log(JSON.stringify(await response.json(), null, 2))
     if (!response.ok) process.exitCode = 1
-  } else console.log('Commands: setup [private-directory], serve <config>, open <url> <token-file>, mcp <url> <token-file>, request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
+  } else console.log('Commands: setup [private-directory], serve <config>, open <url> <token-file>, mcp <url> <token-file>, router <url> <token-file> --prompt <message> [--resume <UUID>] [--json], request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
 }
 main().catch(error => { console.error(String(error)); process.exitCode = 1 })

@@ -1,9 +1,24 @@
 import type {ExecutionContext} from './execution-activity.ts'
-export interface NativeControl { steer(text:string):Promise<void>; interrupt():Promise<void>;refresh?(instructions:string):Promise<void> }
+import type {AgentOptions} from './backend-config.ts'
+export interface NativeControl {
+  /** onRead acknowledges a durable source input only once it enters model history. */
+  steer(text:string,onRead?:()=>void):Promise<void>
+  interrupt():Promise<void>
+  refresh?(instructions:string):Promise<void>
+}
+/** A temporary provider/transport failure, distinct from cancellation or invalid output. */
+export class TransientModelError extends Error {}
 export interface NativeRequest { id:string; method:string; params:any }
 export interface ToolSpec {type:'function';name:string;description:string;inputSchema:Record<string,unknown>}
 export interface ToolContent {type:'inputText'|'inputImage';text?:string;imageUrl?:string}
 export interface ModelRequest {
+  contextBudget?:import('./context-budget.ts').ContextBudget
+  contextId?:string
+  onBudget?:(receipt:import('./context-budget.ts').BudgetReceipt)=>void
+  retainToolResult?:(callId:string,result:unknown)=>string
+  options?:AgentOptions
+  principal?:{source:string;actor:string}
+  onConfiguration?:(value:{requested:AgentOptions;sent:Record<string,unknown>;confirmed?:Record<string,unknown>})=>void
   activity?:ExecutionContext
   cwd: string; instructions: string; input: string; schema: Record<string, unknown>
   role?: 'router'|'worker'|'subagent'; backendId?:string; onBackend?:(id:string)=>void
@@ -25,4 +40,4 @@ export interface ModelRequest {
 }
 export interface ModelResult { threadId: string; turnId: string; text: string }
 export interface BackendDescription { id:string;kind:string;nativeTakeover:boolean;images:boolean;resume:boolean;tools:boolean;steering:boolean;promptRefresh:boolean;model?:string }
-export interface Model { describe?(threadId?:string,role?:'router'|'worker'|'subagent'):BackendDescription; run(request: ModelRequest): Promise<ModelResult>; expose?(threadId:string,cwd:string):Promise<void>;history?(threadId:string,cwd:string):Promise<any>;catalog?(provider?:string):Promise<any> }
+export interface Model { describe?(threadId?:string,role?:'router'|'worker'|'subagent'):BackendDescription; run(request: ModelRequest): Promise<ModelResult>; expose?(threadId:string,cwd:string):Promise<void>;history?(threadId:string,cwd:string):Promise<any>;purge?(threadId:string,cwd:string):Promise<{local:'verified';provider:'not_managed'}>;catalog?(provider?:string):Promise<any> }

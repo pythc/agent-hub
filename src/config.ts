@@ -3,12 +3,17 @@ import { resolve, dirname } from 'node:path'
 import { z } from 'zod'
 import {builtins} from './prompts.ts'
 import {backendsSchema,executionSchema,validateBackendSelection} from './backend-config.ts'
+import {sourcePluginsSchema,sourceCapabilitiesSchema,toolConnectionsSchema} from './connector-config.ts'
 
 const sourceSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
+  label:z.string().min(1).max(100).optional(),
   kind: z.string().regex(/^[a-z][a-z0-9_-]*$/),
   allowedActors: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
+  capabilities:sourceCapabilitiesSchema,
+  options:z.record(z.unknown()).default({}),
+  observed:z.boolean().optional(),
   allowedBots: z.array(z.string()).default([]),
   admission: z.record(z.object({
     listedUnaddressed: z.enum(['inferred','ignore']).default('inferred'),
@@ -19,7 +24,7 @@ const sourceSchema = z.object({
   listenScopes: z.array(z.string()).optional(),
   pollSeconds: z.number().min(1).default(60),
   github: z.object({ command: z.string().default('/agent'), receiveAll: z.boolean().default(false), gh: z.string().default('gh'),transport:z.enum(['http','gh']).default('http'),tokenEnv:z.string().optional() }).strict().optional(),
-  feishu: z.object({ cli: z.string().optional(), appIdEnv: z.string().optional(), appSecretEnv: z.string().optional(), verificationTokenEnv: z.string().optional(), chats: z.array(z.string()).min(1), mentionId: z.string().optional(), liveEvents:z.boolean().default(false),otherChats:z.enum(['ignore','mentions']).default('ignore'),directMessages:z.boolean().default(false), command:z.string().default('/agent') }).strict().optional(),
+  feishu: z.object({ cli: z.string().optional(), appIdEnv: z.string().optional(), appSecretEnv: z.string().optional(), verificationTokenEnv: z.string().optional(), chats: z.array(z.string()).min(1), mentionId: z.string().optional(), liveEvents:z.boolean().default(false),lifecycleEvents:z.boolean().default(true),historyCheckSeconds:z.number().int().min(5).max(86400).default(60),historyCheckLimit:z.number().int().min(1).max(100).default(20),otherChats:z.enum(['ignore','mentions']).default('ignore'),directMessages:z.boolean().default(false), command:z.string().default('/agent') }).strict().optional(),
   wecom:z.object({
     botIdEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),secretEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
     wsUrl:z.string().url().default('wss://openws.work.weixin.qq.com').refine(s=>{const u=new URL(s);return !u.username&&!u.password&&!u.search&&!u.hash&&(u.protocol==='wss:'||u.protocol==='ws:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname))},'Use WSS or loopback WS with no URL credentials'),
@@ -45,6 +50,8 @@ export const configSchema = z.object({
   codex: z.string().default('codex'),
   backends:backendsSchema,
   execution:executionSchema,
+  sourcePlugins:sourcePluginsSchema,
+  toolConnections:toolConnectionsSchema,
   model: z.string().optional(),
   models:z.object({router:z.string().optional(),worker:z.string().optional(),subagent:z.string().optional()}).strict().default({}),
   effort: z.enum(['low', 'medium', 'high', 'xhigh']).default('high'),
@@ -76,6 +83,8 @@ export function loadConfig(path: string): Config {
   const config = configSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
   validateBackendSelection(config)
   config.stateDir = resolve(base, config.stateDir)
+  for(const plugin of config.sourcePlugins)plugin.module=resolve(base,plugin.module)
+  for(const connection of Object.values(config.toolConnections))if(connection.transport.kind==='stdio'&&connection.transport.cwd)connection.transport.cwd=resolve(base,connection.transport.cwd)
   const ids = new Set<string>()
   for (const source of config.sources) {
     if (ids.has(source.id)) throw new Error('Duplicate source id: ' + source.id)

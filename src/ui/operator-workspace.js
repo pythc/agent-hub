@@ -320,6 +320,7 @@ function renderOperatorWorkspace(){
   }
   const host=add(el('div','host-mini'),el('span','status-dot'),add(el('div'),el('strong','',L('Management host','管理宿主')),el('span','',location.host)),icon('monitor'))
   const guideLink = opButton(L('Usage guide','使用指引'),()=>opNavigate('usage'),'utility-link','book')
+  const routerScopeLink=el('a','operator-nav-link',L('Router and memory','Router 与记忆'));routerScopeLink.href='/router-management';nav.append(routerScopeLink)
   const settingsLink = opButton(L('Advanced settings','高级设置'),()=>opNavigate('advanced'),'utility-link','advanced')
   if (entryState.page === 'advanced') settingsLink.setAttribute('aria-current','page')
   if (entryState.page === 'usage') guideLink.setAttribute('aria-current','page')

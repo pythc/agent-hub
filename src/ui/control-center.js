@@ -1,4 +1,4 @@
-function controlConnections(){return Object.entries({codex:{kind:'codex'},...(S.base?.config.backends||{})}).map(([id,b])=>({id,kind:b.kind,model:b.kind==='codex'?S.base?.config.model:b.model,label:b.label||(b.kind==='codex'?'Codex':new URL(b.baseUrl).hostname+' · '+b.model)}))}
+function controlConnections(){return Object.entries({codex:{kind:'codex'},...(S.draft?.backends||{})}).map(([id,b])=>({id,kind:b.kind,model:b.model??(b.kind==='codex'?S.base?.config.model:undefined),label:b.label||(b.kind==='codex'?'Codex':new URL(b.baseUrl).hostname+' · '+b.model)}))}
 function controlField(id,label,value,onChange,options=null,placeholder=''){
  const input=el(options?'select':'input');input.id=id
  if(options)for(const [v,name]of options)input.add(new Option(name,v))
@@ -13,8 +13,9 @@ function executionDraft() {
   const route = config.execution || S.base.config.execution
   const backend = route.backend ?? S.base.config.execution.backend
   return {
-    router: route.roles?.router ?? backend,
-    routerModel: config.models?.router || '',
+    router: route.router?.backend ?? route.roles?.router ?? backend,
+    routerOptions: clone(route.router || {}),
+    routerModel: route.router?.model || config.models?.router || '',
     workers: clone(route.workers?.length ? route.workers : Array.from(
       { length: Math.min(10, Math.max(1, config.concurrency || 1)) },
       (_, index) => ({
@@ -37,7 +38,7 @@ function editExecution(draft) {
   if (draft.routerModel.trim()) models.router = draft.routerModel.trim()
   else delete models.router
   for (const [key, next] of Object.entries({
-    execution: { ...execution, roles, workers }, models, concurrency: workers.length
+    execution: { ...execution, roles, workers,router:{...draft.routerOptions,backend:draft.router,...(draft.routerModel.trim()?{model:draft.routerModel.trim()}:{model:undefined})} }, models, concurrency: workers.length
   })) {
     if (same(config[key], next)) continue
     clearRelated(key)
@@ -233,7 +234,7 @@ function controlNewModel() {
 }
 function controlModels() {
   if (entryState.page === 'model-new') {
-    const settings = entryModelSettings()
+    const settings = agentConnectionEditor()
     settings.open = true
     settings.classList.add('operator-model-form')
     return [
@@ -262,7 +263,7 @@ function controlModels() {
       'openai-chat': 'OpenAI Chat Completions', anthropic: 'Anthropic Messages'})[service.kind] || service.kind
     return [el('strong', '', service.label), el('span', '', protocol),
       el('span', '', service.model || L('Service default', '服务默认模型')),
-      el('span', '', roles.join(', ') || L('Unassigned', '未分配')), check]
+      el('span', '', roles.join(', ') || L('Unassigned', '未分配')), add(el('div'),check,opButton(L('Edit','编辑'),()=>{const d=S.base.config.backends[service.id]??{kind:'codex'};Object.assign(connectionEditor,{id:service.id,kind:d.kind==='codex'?'cli':d.subscription?'subscription':'api',json:JSON.stringify(d,null,2),notice:''});opNavigate('model-new')},'button'))]
   })
   const result = [opHeading(L('Model services', '模型服务'), null,
     opButton(L('New model service', '新建模型服务'), controlNewModel, 'button primary', 'plus')),

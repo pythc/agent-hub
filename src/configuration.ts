@@ -9,7 +9,8 @@ export function configurationSnapshot(runtime:Runtime){
  return {
   current:runtime.settings.current(),history:runtime.settings.history(),
   editableKeys:Object.keys(patchSchema.shape),
-  restartRequiredKeys:['backends','stateDir','port','codex','turnTimeoutMs','sources.deployment'],
+  restartRequiredKeys:['stateDir','port','codex','turnTimeoutMs','sources.deployment','sourcePlugins','toolConnections'],
+  adapterCatalog:runtime.sourceRegistry.catalog(),toolConnections:runtime.toolConnections.configured(),
   sourceEditableKeys:['allowedActors','allowedBots','enabled','admission','listenScopes','pollSeconds','memberSync'],
   backendCatalog:Object.entries(definitions).map(([id,definition])=>({
    id,kind:definition.kind,nativeTakeover:definition.kind==='codex',
@@ -17,7 +18,7 @@ export function configurationSnapshot(runtime:Runtime){
    ...(definition.kind==='codex'?{}:{model:definition.model,endpoint:definition.baseUrl}),
    remoteVerified:false,
   })),
-  sourceCapabilities:[...runtime.sources.values()].map(source=>({source:source.config.id,kind:source.config.kind,enabled:source.config.enabled,memberDirectory:!!source.members})),
+  sourceCapabilities:[...runtime.sources.values()].map(source=>({source:source.config.id,kind:source.config.kind,enabled:source.config.enabled,...source.config.capabilities,memberDirectory:!!source.members})),
   liveSources:runtime.store.list('source-live'),
  }
 }

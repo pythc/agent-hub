@@ -134,6 +134,11 @@ function executionUpdateCallDialog(){
  const detail=el('div','execution-call-inspector'),name=selected.kind==='tool'?L(...(executionToolLabels[selected.name]||[selected.name,selected.name])):selected.kind==='router'?'Router':selected.kind==='subagent'?L('Subagent','子智能体'):'Worker'
  const metadata=el('dl');for(const [label,value]of [[L('State','状态'),executionCallState(selected)],[L('Duration','耗时'),executionDuration(selected)],[L('Software','软件入口'),entryName(selected.entryId)],[L('Actual service','实际服务'),selected.backend],[L('Actual model','实际模型'),selected.model]])if(value)metadata.append(el('dt','',label),el('dd','',value))
  detail.append(el('h3','',name),metadata)
+ if(selected.configurationResource){
+  const receipts=executionView.configurationReceipts??(executionView.configurationReceipts={})
+  if(receipts[selected.id])detail.append(el('h4','',L('Configuration sent to the backend','实际发送的配置')),raw(receipts[selected.id]))
+  else detail.append(affectButton(L('Inspect effective configuration','查看生效配置'),()=>{void entryRun('configuration-receipt',async()=>{receipts[selected.id]=await api('/read',{resource:selected.configurationResource});executionUpdateCallDialog()})},{variant:'secondary'}))
+ }
  if(selected.kind==='tool')detail.append(el('p','control-hint',L('Arguments and output remain in the task resources.','参数和输出保留在任务资源中。')))
  if(selected.ticketId)detail.append(affectButton(L('Open task','查看任务'),()=>{executionView.inspect=null;void openOperatorTask(selected.ticketId)},{variant:'secondary'}))
  body.replaceChildren(list,detail)

@@ -9,7 +9,11 @@ import type { Trigger, OutboundMessage } from '../vendor/dsh-core/index.ts'
 
 export type FeishuRequest=(method:string,path:string,body?:unknown,signal?:AbortSignal)=>Promise<any>
 export class FeishuSource extends MessageSource {
-  private live?:ChildProcessWithoutNullStreams
+  override get verificationCommand(){return this.config.feishu?.command??'/agent'}
+  replay(scope:string|undefined,since:string){if(!this.config.feishu!.chats.includes(scope??''))throw Error('Chat not configured');return {key:this.config.id+':'+scope,since:String(Math.floor(Date.parse(since)/1000))}}
+  async check(){if((this.config.feishu!.otherChats==='mentions'||this.config.feishu!.directMessages)&&!this.config.feishu!.liveEvents)throw Error('Enable Feishu liveEvents for mentions from other chats')}
+  private live=new Map<string,ChildProcessWithoutNullStreams>()
+  private sourceContext?:SourceContext
   private closing=false
   private pendingEvents=Promise.resolve()
   private discovered=new Set<string>()
@@ -37,7 +41,20 @@ export class FeishuSource extends MessageSource {
   private permitted(chat:string){return this.config.feishu!.chats.includes(chat)||this.discovered.has(chat)}
   validThread(thread:string){const i=thread.indexOf(':');return i>0&&this.permitted(thread.slice(0,i))&&/^om_[A-Za-z0-9_-]+$/.test(thread.slice(i+1))}
   async identity(){
-    const bot=await this.api('GET','bot/v3/info');return {id:bot.bot?.open_id??bot.open_id??this.config.feishu!.mentionId,type:'bot'}
+    const bot=await this.api('GET','bot/v3/info'),id=bot.bot?.open_id??bot.open_id
+    if(this.config.feishu!.mentionId&&id!==this.config.feishu!.mentionId)throw Error('Bot identity does not match mentionId')
+    if(typeof id!=='string'||!/^ou_[A-Za-z0-9_-]+$/.test(id))throw Error('Bot identity readback is unavailable')
+    return {id,type:'bot',verified:true}
+  }
+  private async verifiedAccount(ctx?:SourceContext){
+    const expected=ctx?.store.get<any>('source-identity',this.config.id)
+    if(!expected)return
+    let identity:{id:string;type:string;verified:boolean}
+    try{identity=await this.identity()}catch(error){if(!String(error).includes('Bot identity does not match mentionId'))throw error;identity={id:'configured-mention-mismatch',type:'bot',verified:false}}
+    if(identity.id!==expected.principal){
+      for(const chat of this.config.feishu!.chats){const key='account-mismatch:'+expected.principal+':'+identity.id+':'+chat;const at=ctx!.store.get<number>('source-identity-mismatch',key)??Date.now();ctx!.store.put('source-identity-mismatch',key,at);ctx!.change?.({id:key,kind:'entry.unavailable',scope:chat,at})}
+      throw Error('Verified connection account changed; use a separately bound source')
+    }
   }
   async members(scope?:string){
     const chat=scope??this.config.feishu!.chats[0]!
@@ -53,31 +70,89 @@ export class FeishuSource extends MessageSource {
     throw Error('Member directory pagination limit reached')
   }
   async receiveEvent(event:any,ctx:SourceContext){
+    this.sourceContext=ctx
+    if(event.header?.event_type){await this.verifiedAccount(ctx);this.lifecycleEvent(event,ctx);return}
     if(event.type!=='im.message.receive_v1'||!/^oc_[A-Za-z0-9_-]+$/.test(event.chat_id??'')||!/^om_[A-Za-z0-9_-]+$/.test(event.message_id??''))return
     const configured=this.config.feishu!.chats.includes(event.chat_id),mentioned=(event.mentions??[]).some((m:any)=>m.id===this.config.feishu!.mentionId)
     if(!configured&&!(this.config.feishu!.otherChats==='mentions'&&mentioned)&&!(this.config.feishu!.directMessages&&event.chat_type==='p2p'))return
     // Read the original for identical ids/content across live events and polling.
     if(!configured)this.discovered.add(event.chat_id)
-    try{const item=await this.one(event.message_id);if(item.chat_id!==event.chat_id)throw Error('Event chat mismatch');const trigger=this.fromMessage(item,event.chat_id);if(trigger){trigger.meta.chatType=event.chat_type;if(event.chat_type==='p2p'&&this.config.feishu!.directMessages)trigger.addressed='direct';ctx.receive(trigger)}}
+    try{const item=await this.one(event.message_id);if(item.chat_id!==event.chat_id)throw Error('Event chat mismatch');const trigger=this.acceptItem(item,event.chat_id,ctx);if(trigger){trigger.meta.chatType=event.chat_type;if(event.chat_type==='p2p'&&this.config.feishu!.directMessages)trigger.addressed='direct';ctx.receive(trigger)}}
     catch(error){if(!configured)this.discovered.delete(event.chat_id);throw error}
   }
-  start(ctx:SourceContext){
-    for(const trigger of ctx.store.list<Trigger>('trigger'))if(trigger.source===this.config.id&&typeof trigger.meta.chat==='string'&&(this.config.feishu!.otherChats==='mentions'&&trigger.addressed||this.config.feishu!.directMessages&&trigger.meta.chatType==='p2p'))this.discovered.add(trigger.meta.chat)
-    if(this.live||this.closing||!this.config.feishu!.liveEvents||!this.config.feishu!.cli)return
-    const child=this.live=spawn(this.config.feishu!.cli,['event','consume','im.message.receive_v1','--as','bot'],{stdio:['pipe','pipe','pipe'],shell:false})
-    let ready=false
-    createInterface({input:child.stderr}).on('line',line=>{
-      if(line.startsWith('[event] ready event_key=im.message.receive_v1')){ready=true;ctx.store.put('source-live',this.config.id,{status:'ready',at:Date.now()})}
-      else if(line.includes('WARN')||line.startsWith('{'))ctx.store.put('source-live',this.config.id,{status:'warning',at:Date.now(),error:line.slice(0,300)})
-    })
-    createInterface({input:child.stdout}).on('line',line=>{
-      this.pendingEvents=this.pendingEvents.then(async()=>{if(!ready)throw Error('Event arrived before ready marker');await this.receiveEvent(JSON.parse(line),ctx)}).catch(error=>{ctx.store.put('source-live',this.config.id,{status:'error',at:Date.now(),error:String(error).slice(0,300)})})
-    })
-    const timer=setTimeout(()=>{if(!ready){child.stdin.end();child.kill('SIGTERM')}},20000)
-    child.on('error',error=>ctx.store.put('source-live',this.config.id,{status:'error',at:Date.now(),error:String(error).slice(0,300)}))
-    child.on('close',code=>{clearTimeout(timer);this.live=undefined;if(!this.closing)ctx.store.put('source-live',this.config.id,{status:'disconnected',at:Date.now(),code})})
+  private lifecycleEvent(value:any,ctx:SourceContext){
+    if(!ctx.change||this.config.feishu!.lifecycleEvents===false)return
+    const header=value.header,event=value.event,key=header?.event_type
+    if(!header?.event_id||!event||!this.config.feishu!.chats.includes(event.chat_id))return
+    const at=Number(header.create_time);if(!Number.isSafeInteger(at)||at<0)throw Error('Lifecycle timestamp is unavailable')
+    const base={id:header.event_id,scope:event.chat_id,at}
+    if(key==='im.chat.disbanded_v1'||key==='im.chat.member.bot.deleted_v1')ctx.change({...base,kind:'entry.unavailable'})
+    else if(key==='im.chat.member.bot.added_v1')ctx.change({...base,kind:'entry.available'})
+    else if(['im.chat.member.user.added_v1','im.chat.member.user.deleted_v1'].includes(key)){
+      const actors=(event.users??[]).map((u:any)=>u.user_id?.open_id).filter((id:any)=>typeof id==='string'&&/^ou_[A-Za-z0-9_-]+$/.test(id))
+      if(actors.length)ctx.change({...base,kind:key.endsWith('added_v1')?'member.added':'member.removed',actorIds:actors})
+      else throw Error('Member lifecycle event lacks verified open IDs')
+    }else if(key==='im.chat.updated_v1'){
+      const after=event.after_change??{},permissions=Object.keys(after).filter(k=>/permission|restricted|visibility|owner_id|group_message_type|membership/.test(k))
+      if(permissions.length)ctx.change({...base,kind:'entry.permissions_changed'})
+      if(typeof after.name==='string')ctx.store.put('entry-label',this.config.id+':'+event.chat_id,{sourceId:this.config.id,nativeId:event.chat_id,name:after.name})
+    }
   }
-  async close(){this.closing=true;const child=this.live;if(child)await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Feishu event consumer did not stop within 10 seconds')),10000);child.once('close',()=>{clearTimeout(timer);resolve()});child.stdin.end();child.kill('SIGTERM')});await this.pendingEvents}
+  start(ctx:SourceContext){
+    this.sourceContext=ctx
+    for(const trigger of ctx.store.list<Trigger>('trigger'))if(trigger.source===this.config.id&&typeof trigger.meta.chat==='string'&&(this.config.feishu!.otherChats==='mentions'&&trigger.addressed||this.config.feishu!.directMessages&&trigger.meta.chatType==='p2p'))this.discovered.add(trigger.meta.chat)
+    if(this.closing||!this.config.feishu!.liveEvents||!this.config.feishu!.cli)return
+    const keys=['im.message.receive_v1',...(ctx.change&&this.config.feishu!.lifecycleEvents!==false?['im.chat.updated_v1','im.chat.disbanded_v1','im.chat.member.bot.deleted_v1','im.chat.member.bot.added_v1','im.chat.member.user.deleted_v1','im.chat.member.user.added_v1']:[])]
+    for(const key of keys){
+      if(this.live.has(key))continue
+      const health=key==='im.message.receive_v1'?this.config.id:this.config.id+':'+key,child=spawn(this.config.feishu!.cli,['event','consume',key,'--as','bot'],{stdio:['pipe','pipe','pipe'],shell:false})
+      this.live.set(key,child);let ready=false,stderr=''
+      child.stderr.on('data',chunk=>{stderr=(stderr+String(chunk)).slice(-65536)})
+      createInterface({input:child.stderr}).on('line',line=>{
+        if(line.startsWith('[event] ready event_key='+key)){ready=true;ctx.store.put('source-live',health,{status:'ready',event:key,at:Date.now()})}
+        else if(line.includes('WARN')||line.startsWith('{'))ctx.store.put('source-live',health,{status:'warning',event:key,at:Date.now(),error:line.slice(0,300)})
+      })
+      createInterface({input:child.stdout}).on('line',line=>{this.pendingEvents=this.pendingEvents.then(async()=>{if(!ready)throw Error('Event arrived before ready marker');await this.receiveEvent(JSON.parse(line),ctx)}).catch(error=>{ctx.store.put('source-live',health,{status:'error',event:key,at:Date.now(),error:String(error).slice(0,300)})})})
+      const timer=setTimeout(()=>{if(!ready){child.stdin.end();child.kill('SIGTERM')}},20000)
+      child.on('error',error=>ctx.store.put('source-live',health,{status:'error',event:key,at:Date.now(),error:String(error).slice(0,300)}))
+      child.on('close',code=>{
+        clearTimeout(timer);this.live.delete(key)
+        if(this.closing)return
+        const previous=ctx.store.get<any>('source-live',health)
+        let diagnostic:Record<string,string>|undefined
+        try{const e=JSON.parse(stderr.slice(stderr.indexOf('{'),stderr.lastIndexOf('}')+1)).error;if(e)diagnostic=Object.fromEntries(['type','subtype','message','hint'].filter(k=>typeof e[k]==='string').map(k=>[k,e[k].slice(0,2000)]))}catch{}
+        ctx.store.put('source-live',health,{...previous,status:code===0?'disconnected':'error',event:key,at:Date.now(),code,...(diagnostic?{diagnostic,error:diagnostic.message}:{}),readyObserved:ready})
+      })
+    }
+  }
+  async close(){this.closing=true;await Promise.all([...this.live.values()].map(child=>new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Feishu event consumer did not stop within 10 seconds')),10000);child.once('close',()=>{clearTimeout(timer);resolve()});child.stdin.end();child.kill('SIGTERM')})));await this.pendingEvents}
+  private text(item:any):string|undefined{
+    const raw=item.body?.content??item.content??'{}'
+    try{const content=typeof raw==='string'&&raw.startsWith('{')?JSON.parse(raw):{text:String(raw)};return content.text??JSON.stringify(content)}catch{return}
+  }
+  private observe(item:any,chat:string,ctx:SourceContext){
+    if(!ctx.change||this.config.feishu!.lifecycleEvents===false)return false
+    const key=this.config.id+':'+item.message_id,old=ctx.store.get<any>('source-message-observation',key),known=ctx.store.list<Trigger>('trigger').filter(t=>t.source===this.config.id&&t.meta.messageId===item.message_id&&t.meta.chat===chat)
+    const text=this.text(item);if(text===undefined&&!item.deleted)return false
+    const hash=bodyDigest(text??''),previousHash=old?.hash??(known[0]?bodyDigest(known[0].text):undefined)
+    const revised=!!old?.revised||previousHash!==undefined&&(hash!==previousHash||!!item.deleted!==!!old?.deleted)
+    const version=Number(item.update_time??item.create_time),at=Number.isSafeInteger(version)&&version>=0?version:Date.now()
+    if(old?.version>at)return true
+    if(known.length&&(previousHash!==hash||!!item.deleted!==!!old?.deleted))ctx.change({id:'message:'+item.message_id+':'+at+':'+hash+':'+!!item.deleted,kind:item.deleted?'message.deleted':'message.updated',scope:chat,messageId:item.message_id,contentHash:hash,at})
+    ctx.store.put('source-message-observation',key,{sourceId:this.config.id,scope:chat,messageId:item.message_id,hash,deleted:!!item.deleted,revised,version:at,checkedAt:Date.now()})
+    return revised
+  }
+  private acceptItem(item:any,chat:string,ctx:SourceContext){return this.observe(item,chat,ctx)?undefined:this.fromMessage(item,chat)}
+  private async refreshKnown(ctx:SourceContext){
+    if(!ctx.change||this.config.feishu!.lifecycleEvents===false)return
+    const messages=[...new Map(ctx.store.list<Trigger>('trigger').filter(t=>t.source===this.config.id&&typeof t.meta.messageId==='string'&&this.config.feishu!.chats.includes(String(t.meta.chat))).map(t=>[t.meta.messageId as string,t])).values()]
+    const checked=(t:Trigger)=>ctx.store.get<any>('source-message-observation',this.config.id+':'+t.meta.messageId)?.checkedAt??0
+    for(const t of messages.filter(t=>Date.now()-checked(t)>(this.config.feishu!.historyCheckSeconds??60)*1000).sort((a,b)=>checked(a)-checked(b)).slice(0,this.config.feishu!.historyCheckLimit??20)){
+      const key=this.config.id+':'+t.meta.messageId
+      try{const item=await this.one(t.meta.messageId as string);this.observe(item,String(t.meta.chat),ctx);ctx.store.put('source-freshness',key,{sourceId:this.config.id,triggerId:t.id,status:'verified',checkedAt:Date.now()})}
+      catch(error){ctx.store.put('source-freshness',key,{sourceId:this.config.id,triggerId:t.id,status:'unavailable',checkedAt:Date.now(),error:String(error).slice(0,300)});const old=ctx.store.get<any>('source-message-observation',key)??{};ctx.store.put('source-message-observation',key,{...old,checkedAt:Date.now()})}
+    }
+  }
   idempotencyKey(trigger:Trigger){return trigger.meta.messageId?this.config.id+':message:'+trigger.meta.messageId+':'+bodyDigest(trigger.text):trigger.id}
   private fromMessage(item:any,chat:string):Trigger|undefined{
     if(item.deleted)return
@@ -96,6 +171,8 @@ export class FeishuSource extends MessageSource {
     return trigger
   }
   async poll(ctx:SourceContext):Promise<void>{
+    this.sourceContext=ctx
+    await this.verifiedAccount(ctx)
     for(const chat of this.config.feishu!.chats){
       const healthKey=this.config.id+':chat:'+chat
       try{
@@ -107,7 +184,7 @@ export class FeishuSource extends MessageSource {
       do{
         if(seen.has(page)||seen.size>=200)throw Error('Chat pagination did not advance');seen.add(page)
         const data=await this.api('GET','im/v1/messages?container_id_type=chat&container_id='+encodeURIComponent(chat)+'&start_time='+since+'&end_time='+boundary+'&sort_type=ByCreateTimeAsc&page_size=50'+(page?'&page_token='+encodeURIComponent(page):''),undefined,ctx.signal)
-        for(const item of data.items??[]){const trigger=this.fromMessage(item,chat);if(trigger)ctx.receive(trigger)}
+        for(const item of data.items??[]){const trigger=this.acceptItem(item,chat,ctx);if(trigger)ctx.receive(trigger)}
         page=data.has_more?data.page_token:''
       }while(page)
       ctx.store.put('source-cursor',key,{since:String(Number(boundary)-2)});ctx.store.put('thread-health',healthKey,{source:this.config.id,chat,at:Date.now(),consecutiveFailures:0})
@@ -123,19 +200,26 @@ export class FeishuSource extends MessageSource {
         do{
           if(seen.has(page)||seen.size>=200)throw Error('Thread pagination did not advance');seen.add(page)
           const data=await this.threadPage(root,page,50,ctx.signal)
-          for(const item of data.items??[]){const trigger=this.fromMessage({...item,root_id:root},chat);if(trigger)ctx.receive(trigger)}
+          for(const item of data.items??[]){const trigger=this.acceptItem({...item,root_id:root},chat,ctx);if(trigger)ctx.receive(trigger)}
           page=data.has_more?data.page_token:''
         }while(page)
         ctx.store.put('thread-health',healthKey,{source:this.config.id,thread:thread.key,at:Date.now(),consecutiveFailures:0})
         }catch(error){const previous=ctx.store.get<any>('thread-health',healthKey);ctx.store.put('thread-health',healthKey,{source:this.config.id,thread:thread.key,at:Date.now(),consecutiveFailures:(previous?.consecutiveFailures??0)+1,error:String(error).slice(0,300)})}
       }
     }
+    await this.refreshKnown(ctx)
   }
   private async one(messageId:string){
     if(!/^om_[A-Za-z0-9_-]+$/.test(messageId))throw Error('Invalid Feishu message id')
+    await this.verifiedAccount(this.sourceContext)
     const data=await this.api('GET','im/v1/messages/'+encodeURIComponent(messageId))
     const item=(data.items??data.messages??[]).find((x:any)=>x.message_id===messageId)
     if(!item||!this.permitted(item.chat_id))throw Error('Message is outside configured chats or unavailable')
+    if(this.sourceContext){
+      this.observe(item,item.chat_id,this.sourceContext)
+      const latest=this.sourceContext.store.get<any>('source-message-state',bodyDigest([this.config.id,item.chat_id,messageId]))
+      if(latest&&(latest.deleted&&!item.deleted||latest.contentHash&&latest.contentHash!==bodyDigest(this.text(item)??'')))throw Error('Message readback is older than the verified source revision')
+    }
     return item
   }
   private async threadPage(root:string,cursor:string,pageSize:number,signal?:AbortSignal){

@@ -1,10 +1,14 @@
 # AgentHub 0.10.0 · 智能助手中心
 
-一个可选择 OpenAI Responses、Chat Completions、Anthropic Messages 或原生 Codex 的通用后台协作宿主。用户从普通对话提出请求，在原话题继续跟进；内部 Ticket 负责持久化，不要求用户填工单。文档、分析、非 Git 工作目录、代码 worktree 和自定义来源都受支持。
+面向个人与组织的多 Agent 管理宿主。在持久 Router 模式下，用户向 Router 提出请求，Router 分派、检查并汇总 Worker 的执行结果，用户在原话题继续跟进。宿主持久化任务、授权、恢复与交付状态，不要求用户填写内部工单。后端可选择 API、支持的订阅授权或原生 Codex CLI。
+
+应用接入通过适配器注册；事件入口、消息回复、资源读取、MCP 工具连接与模型后端分别配置。现有飞书、企业微信和 GitHub 适配器保留。见 [通用接入与插件开发](docs/INTEGRATIONS.md)，以及 [独立 Router / Worker 配置](docs/AGENT_CAPABILITIES_2026-11-06.md)。原有 assessment 模式保留兼容；仅由 Router 对外汇总需启用 `execution.router.mode: "host"`，CLI 前台 Router 使用 `"client"`。
 
 沿用官方 `deepseek-ai/dsh-superagent-prototype` 的领域核心，独立实现多后端执行、来源、资源、控制台及生命周期。见 [51 项原型对照](docs/PARITY.md)、[客户端验收](docs/clients/ACCEPTANCE.md) 与 [0.7.0 验收](docs/ACCEPTANCE_0.7.md)。对照表分别记录实现和验收层级，不把协议测试当成所有客户端的产品实测。
 
 ## 本机使用
+
+Host Router 的常驻职责、消息聚合、原任务续接、介入决策和定时任务见 [主动管理第一批](docs/ROUTER_PROACTIVE_2026-11-07.md)。配置入口是「Router 与记忆」→「职责与定时任务」，按管理范围启用。
 
 需要 Node 22.19+。首次部署不需要手写 JSON、来源 ID 或复制令牌：
 
@@ -146,7 +150,7 @@ CLI 配置生成器为 Codex 输出 TOML；新版配置页调用官方 `codex mc
 
 ## 验证与范围
 
-`npm run check` 执行 TypeScript 检查及 347 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。
+`npm run check` 执行 TypeScript 检查及 469 项测试，其中 113 项来自原型核心。15 个原型核心源码保持下载基线哈希一致，清单在 `docs/upstream-core-sha256.json`。持久 Router 的统一准入、规则事件、Worker 汇总和升级边界见 [本轮实现与验证](docs/ROUTER_INGRESS_2026-11-06.md)。
 
 三个 API 后端已通过隔离 HTTP 与真实 Runtime 的工具、子代理、重启后接续测试，测试使用不存在的 Codex 路径。真实商业 API 模型调用尚未验收，详见 [后端验收](docs/BACKEND_ACCEPTANCE.md)。
 
@@ -159,3 +163,5 @@ CLI 配置生成器为 Codex 输出 TOML；新版配置页调用官方 `codex mc
 0.10.0 的接入页、首次模型配置、真实客户端和原会话回复验收见 [完整记录](docs/ACCEPTANCE_0.10.md)。数据库仍为 schema 5，已演练 0.9.0 → 0.10.0 → 恢复 → 再升级；它不会撤销已经发送到平台的消息。
 
 新版操作员前端已接入真实宿主：固定导航、待处理事项、任务记录、可搜索软件目录、模型服务和原会话详情。接入与浏览器验收见 [前端整合记录](docs/UI_INTEGRATION_2026-11-05.md)。
+
+长期目标支持结构化验收、独立证据核验、同任务自动返工、依赖图调度与故障分类恢复。Worker 的 `ready` 先作为候选交付，所有验收通过且交付处理完毕后才完成目标；额度耗尽或效果不确定时保留未完成状态。实现、真实任务记录和适用边界见 [目标验收与恢复](docs/GOAL_ACCEPTANCE_2026-11-07.md)。

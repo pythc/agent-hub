@@ -1,7 +1,9 @@
+import {exportHistoryIndex,verifyHistoryIndex,type HistoryReader} from './history-backup.ts'
 import {DatabaseSync,backup} from 'node:sqlite'
 import {mkdirSync,writeFileSync,readFileSync,existsSync,copyFileSync,unlinkSync,chmodSync,openSync,closeSync,renameSync} from 'node:fs'
 import {join,resolve} from 'node:path'
 import {createHash,randomUUID} from 'node:crypto'
+import {readRevocations} from './router-memory.ts'
 import {configSchema,type Config} from './config.ts'
 import {managedFiles,recoverManagedFiles,prepareManagedFiles,validateManagedSnapshot,atomicPrivateFile} from './managed-config.ts'
 const hash=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex')
@@ -28,7 +30,7 @@ function backupManaged(directory:string,manifest:any){
  return result
 }
 /** SQLite's backup API snapshots WAL and committed records without copying live database files. */
-export async function backupState(config:Config,destination:string){
+export async function backupState(config:Config,destination:string,options:{historyReader?:HistoryReader}={}){
  const directory=resolve(destination)
  if(existsSync(directory))throw Error('Backup destination already exists')
  mkdirSync(directory,{recursive:true,mode:0o700})
@@ -39,24 +41,30 @@ export async function backupState(config:Config,destination:string){
  try{schema=Number(db.prepare('PRAGMA user_version').get()!.user_version);await backup(db,target)}finally{db.close()}
  chmodSync(target,0o600)
  const after=captureManaged(config.stateDir);if(JSON.stringify(managed)!==JSON.stringify(after))throw Error('Setup changed during backup; retry backup')
- const snapshot=new DatabaseSync(target,{readOnly:true});let effective:Config|undefined
- try{effective=checkManaged(snapshot,managed,config)}finally{snapshot.close()}
+ const snapshot=new DatabaseSync(target,{readOnly:true});let effective:Config|undefined,history:Awaited<ReturnType<typeof exportHistoryIndex>>
+ try{effective=checkManaged(snapshot,managed,config);history=await exportHistoryIndex(snapshot,directory,options.historyReader)}finally{snapshot.close()}
  const hashes:Record<string,string>={}
  for(const name of ['connections','secrets'] as const)if(managed[name]!==undefined){atomicPrivateFile(join(directory,'setup',name==='connections'?'connections.json':'credentials.json'),managed[name]!);hashes[name]=digest(managed[name]!)}
- const manifest={format:1,application:'0.10.0',schema,at:new Date().toISOString(),sha256:hash(target),...(Object.keys(hashes).length?{managed:hashes}:{})}
+ const ledger=readRevocations(config.stateDir);if(ledger.length)atomicPrivateFile(join(directory,'memory-revocations.jsonl'),ledger.map(r=>JSON.stringify(r)).join('\n')+'\n')
+ const manifest={format:1,history,application:'0.10.0',...(ledger.length?{revocations:hash(join(directory,'memory-revocations.jsonl'))}:{}),schema,at:new Date().toISOString(),sha256:hash(target),...(Object.keys(hashes).length?{managed:hashes}:{})}
  writeFileSync(join(directory,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{mode:0o600})
  writeFileSync(join(directory,'config.json'),JSON.stringify(effective??config,null,2)+'\n',{mode:0o600})
  return {directory,...manifest}
 }
 export function verifyBackup(directory:string){
  const manifest=JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8'))
- if(manifest.format!==1||![1,2,3,4,5].includes(manifest.schema))throw Error('Unsupported backup format or schema')
+ if(manifest.format!==1||![1,2,3,4,5,6].includes(manifest.schema))throw Error('Unsupported backup format or schema')
  const path=join(directory,'state.sqlite')
  if(hash(path)!==manifest.sha256)throw Error('Backup checksum mismatch')
  const db=new DatabaseSync(path,{readOnly:true})
  try{
   if(Number(db.prepare('PRAGMA user_version').get()!.user_version)!==manifest.schema||db.prepare('PRAGMA integrity_check').get()!.integrity_check!=='ok')throw Error('Backup failed SQLite verification')
   checkManaged(db,backupManaged(directory,manifest))
+  if(manifest.history)verifyHistoryIndex(directory,manifest.history)
+  const head=db.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get()
+  if(manifest.revocations&&hash(join(directory,'memory-revocations.jsonl'))!==manifest.revocations)throw Error('Revocation ledger checksum mismatch')
+  const ledger=readRevocations(directory),required=head&&JSON.parse(String(head.body))
+  if(required&&!ledger.some(r=>r.seq===required.seq&&r.hash===required.hash))throw Error('Backup is missing its revocation ledger')
  }finally{db.close()}
  return manifest
 }
@@ -77,6 +85,26 @@ export async function restoreState(config:Config,directory:string){
  try{
   const verified=verifyBackup(directory)
   recoverManagedFiles(config.stateDir)
+  const currentPath=join(config.stateDir,'state.sqlite')
+  const ledger=readRevocations(config.stateDir),incoming=readRevocations(directory)
+  if(ledger.some((r,i)=>incoming[i]&&incoming[i]!.hash!==r.hash))throw Error('Revocation histories conflict; offline reconciliation required')
+  if(existsSync(currentPath)){
+   const live=new DatabaseSync(currentPath,{readOnly:true}),old=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
+   try{
+    if(Number(live.prepare('PRAGMA user_version').get()!.user_version)>=6&&verified.schema<6)throw Error('Online downgrade cannot represent Router scopes; use forward repair or a reviewed offline rollback')
+    const head=live.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get(),required=head&&JSON.parse(String(head.body))
+    if(required&&!ledger.some(r=>r.seq===required.seq&&r.hash===required.hash))throw Error('Latest revocation ledger is missing')
+    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('ticket','run','model-session','task-ownership','entry-binding')").all()){
+     const previous=old.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(String(row.kind),String(row.id))
+     if(!previous||previous.body!==row.body)throw Error('Task, native thread or ownership advanced after backup; reconcile before restore')
+    }
+    for(const row of live.prepare("SELECT id,body,status FROM outbox WHERE status IN ('sent','sending','uncertain')").all()){
+     const previous=old.prepare('SELECT body,status FROM outbox WHERE id=?').get(String(row.id))
+     if(!previous||previous.body!==row.body||previous.status!==row.status)throw Error('External effects advanced after backup; reconcile before restore')
+    }
+   }finally{live.close();old.close()}
+  }
+  if(incoming.length>ledger.length)atomicPrivateFile(join(config.stateDir,'memory-revocations.jsonl'),incoming.map(r=>JSON.stringify(r)).join('\n')+'\n')
   const previous=join(config.stateDir,'backups','before-restore-'+Date.now())
   if(existsSync(join(config.stateDir,'state.sqlite')))await backupState(config,previous)
   const target=join(config.stateDir,'state.sqlite')

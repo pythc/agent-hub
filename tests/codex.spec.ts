@@ -2,10 +2,32 @@ import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {it,expect,afterEach} from 'vitest'
-import {CodexModel} from '../src/codex.ts'
+import {CodexModel,nativeProtocolHistory} from '../src/codex.ts'
 const roots:string[]=[]
 const originalEnvFile=process.env.AGENTHUB_ENV_FILE
 afterEach(()=>{for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true});if(originalEnvFile===undefined)delete process.env.AGENTHUB_ENV_FILE;else process.env.AGENTHUB_ENV_FILE=originalEnvFile})
+it('budgets native response items and system tools without counting duplicate telemetry',()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-budget-'));roots.push(root);const path=join(root,'history.jsonl')
+ writeFileSync(path,[{type:'session_meta',payload:{base_instructions:{text:'base'},dynamic_tools:[{name:'host_tool'}]}},{type:'response_item',payload:{type:'additional_tools',tools:[{name:'native_tool',description:'native definition'}]}},{type:'response_item',payload:{type:'message',role:'user',content:[{type:'input_text',text:'current request'}]}},{type:'event_msg',payload:{type:'user_message',text:'duplicate telemetry'}},{type:'world_state',payload:{text:'duplicate world'}}].map(x=>JSON.stringify(x)).join('\n')+'\n')
+ const h=JSON.stringify(nativeProtocolHistory(path));expect(h).toContain('base');expect(h).toContain('native definition');expect(h).toContain('current request');expect(h).not.toContain('duplicate')
+})
+it('verifies native deletion and treats retry after successful deletion as idempotent',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-delete-'));roots.push(root);const binary=join(root,'codex'),history=join(root,'rollout.jsonl');writeFileSync(history,'owned history')
+ writeFileSync(binary,'#!'+process.execPath+`\nconst fs=require('node:fs');const file=${JSON.stringify(history)};require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.id)return;const send=result=>console.log(JSON.stringify({id:m.id,result}));if(m.method==='thread/read'){if(fs.existsSync(file))return send({thread:{id:'owned',path:file}});return console.log(JSON.stringify({id:m.id,error:{code:-32600,message:'thread not loaded: owned'}}))}if(m.method==='thread/delete'){if(!fs.existsSync(file))return console.log(JSON.stringify({id:m.id,error:{code:-32600,message:'no rollout found for thread id owned'}}));fs.unlinkSync(file)}send({})})\n`,{mode:0o700})
+ const m=new CodexModel({codex:binary,effort:'medium',turnTimeoutMs:5000})
+ expect(await m.purge('owned',root)).toEqual({local:'verified',provider:'not_managed'})
+ expect(await m.purge('owned',root)).toEqual({local:'verified',provider:'not_managed'})
+})
+it('confirms a steered source input from native history, not the RPC acknowledgement',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-inbox-'));roots.push(root)
+ const binary=join(root,'codex');let consumed=0,acknowledgedBeforeRead=false
+ writeFileSync(binary,'#!'+process.execPath+`\nconst send=x=>console.log(JSON.stringify(x));require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.id)return;const result=m.method==='thread/start'?{thread:{id:'native-inbox'}}:m.method==='turn/start'?{turn:{id:'turn-inbox'}}:{};send({id:m.id,result});if(m.method==='turn/steer'){setTimeout(()=>{const item={type:'userMessage',content:m.params.input};for(const method of ['item/started','item/completed'])send({method,params:{threadId:'native-inbox',item}});send({method:'item/completed',params:{threadId:'native-inbox',item:{type:'agentMessage',text:'corrected'}}});send({method:'turn/completed',params:{threadId:'native-inbox',turn:{id:'turn-inbox',status:'completed'}}})},30)}})\n`,{mode:0o700})
+ const model=new CodexModel({codex:binary,effort:'high',turnTimeoutMs:10000})
+ const result=await model.run({cwd:root,instructions:'test',input:'start',schema:{},onActive:control=>{
+  void control.steer('source input',()=>{consumed++}).then(()=>{acknowledgedBeforeRead=consumed===0})
+ }})
+ expect(acknowledgedBeforeRead).toBe(true);expect(consumed).toBe(1);expect(result.text).toBe('corrected')
+})
 it('waits for a native writer to release, resuming the same thread without forking',async()=>{
  const root=mkdtempSync(join(tmpdir(),'native-protocol-'));roots.push(root)
  const binary=join(root,'codex'),log=join(root,'rpc.jsonl')

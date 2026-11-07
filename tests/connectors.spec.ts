@@ -1,4 +1,4 @@
-import { mkdtempSync,rmSync } from 'node:fs'
+import { mkdtempSync,rmSync,writeFileSync,chmodSync } from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach,it,expect} from 'vitest'
@@ -15,6 +15,44 @@ function context(){
  const ctx:SourceContext={store,receive:e=>events.push(e),bind:()=>{},closed:()=>{}}
  return {ctx,events}
 }
+it('preserves structured lifecycle subscription failures after the native consumer exits',async()=>{
+ const {ctx}=context(),root=mkdtempSync(join(tmpdir(),'event-consumer-'));roots.push(root)
+ const cli=join(root,'consumer')
+ // The contract is CLI stderr/exit handling; avoid starting seven JS runtimes just to print JSON.
+ const diagnostic={ok:false,error:{type:'validation',subtype:'failed_precondition',message:'Event type is not subscribed',hint:'Enable the event in the application console'}}
+ writeFileSync(cli,"#!/bin/sh\nprintf '%s\\n' '"+JSON.stringify(diagnostic,null,2)+"' >&2\nexit 2\n");chmodSync(cli,0o700)
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:root,feishu:{cli,chats:['oc_test'],liveEvents:true}}]}).sources[0]!,source=new FeishuSource(config)
+ try{
+  source.start({...ctx,change:()=>{}})
+  const end=Date.now()+3000
+  while(Date.now()<end){const health=ctx.store.list<any>('source-live');if(health.length===7&&health.every(h=>h.code===2))break;await new Promise(r=>setTimeout(r,10))}
+  const health=ctx.store.list<any>('source-live');expect(health).toHaveLength(7)
+  for(const h of health)expect(h).toMatchObject({status:'error',code:2,readyObserved:false,diagnostic:{type:'validation',subtype:'failed_precondition',message:'Event type is not subscribed'}})
+ }finally{await source.close()}
+})
+it.each(['closed','merged'])('still receives inline human follow-ups after a PR is %s',async outcome=>{
+ const {ctx,events}=context(),paths:string[]=[],closes:string[]=[]
+ const config=configSchema.parse({sources:[{id:'github',kind:'github',cwd:'.',repository:'owner/repo'}]}).sources[0]!
+ ctx.store.threads.save({key:'github:owner/repo#7',ref:{source:'github',id:'owner/repo#7'},subscriptions:['ticket'],correlated:[],pending:[],createdAt:new Date().toISOString(),meta:{}})
+ ctx.closed=(_thread,state)=>{closes.push(state)}
+ let failed=false
+ const source=new GithubSource(config,{async request(_method,path){
+  paths.push(path)
+  if(path==='user')return {login:'agent'}
+  if(path.includes('issues?')||path.includes('issues/comments'))return []
+  if(path.endsWith('/issues/7'))return {number:7,state:'closed',pull_request:{},closed_at:new Date(Date.now()-10000).toISOString()}
+  if(path.endsWith('/pulls/7'))return {head:{sha:'a'},merged_at:outcome==='merged'?new Date(Date.now()-10000).toISOString():null}
+  if(path.includes('/comments?')){if(failed)throw Error('Temporary read failure');return [{id:42,body:'Please explain this merged line',updated_at:new Date().toISOString(),user:{login:'alice',type:'User'}}]}
+  return []
+ }})
+ await source.poll(ctx)
+ expect(events.map(e=>e.text)).toEqual(['Please explain this merged line'])
+ expect(closes).toEqual([outcome]);expect(paths.some(p=>p.includes('check-runs'))).toBe(false)
+ const before=ctx.store.get('thread-cursor','github:owner/repo#7');failed=true
+ await source.poll(ctx)
+ expect(ctx.store.get('thread-cursor','github:owner/repo#7')).toEqual(before)
+ expect(ctx.store.get<any>('thread-health','github:owner/repo#7').consecutiveFailures).toBe(1)
+})
 it('polls GitHub, preserves source identities, ignores own markers and maintains a durable cursor',async()=>{
  const {ctx,events}=context()
  const config=configSchema.parse({sources:[{id:'github',kind:'github',allowedActors:['alice'],cwd:'.',repository:'owner/repo'}]}).sources[0]!
@@ -31,6 +69,26 @@ it('polls GitHub, preserves source identities, ignores own markers and maintains
  await source.poll(ctx)
  expect(events[2].id).toBe(first)
  expect(ctx.store.get('source-cursor','github')).toBeDefined()
+})
+it('polls live subscriptions and the two-week horizon after the later of message or ticket completion',async()=>{
+ const {ctx}=context(),reads:number[]=[]
+ const now=Date.now(),at=(days:number)=>new Date(now-days*86400000).toISOString()
+ const config=configSchema.parse({sources:[{id:'github',kind:'github',cwd:'.',repository:'owner/repo'}]}).sources[0]!
+ const states=[{last:30,end:30},{last:30,end:13},{last:13,end:30},{last:30,end:null}]
+ for(const [index,state] of states.entries()){
+  const id='ticket-'+index
+  ctx.store.put('ticket',id,{id,...(state.end===null?{}:{ended:{at:at(state.end)}})})
+  ctx.store.threads.save({key:'github:owner/repo#'+(index+1),ref:{source:'github',id:'owner/repo#'+(index+1)},subscriptions:[id],createdAt:at(30),lastAt:at(state.last),correlated:[],pending:[],meta:{}})
+ }
+ const source=new GithubSource(config,{async request(_method,path){
+  if(path==='user')return {login:'agent'}
+  const match=/\/issues\/(\d+)$/.exec(path)
+  if(match){reads.push(Number(match[1]));return {state:'closed',closed_at:at(30)}}
+  return []
+ }})
+ await source.poll(ctx)
+ expect(reads).toEqual([2,3,4])
+ expect(ctx.store.threads.get('github:owner/repo#1')!.subscriptions).toEqual(['ticket-0'])
 })
 it('does not repeat an already published GitHub reply',async()=>{
  const config=configSchema.parse({sources:[{id:'github',kind:'github',allowedActors:['alice'],cwd:'.',repository:'owner/repo'}]}).sources[0]!
@@ -102,7 +160,7 @@ it('refuses credential-bearing HTTP requests to a different origin',async()=>{
 
 it('retains approval reviews with empty bodies and serves paginated source resources',async()=>{
  const {ctx,events}=context(),config=configSchema.parse({sources:[{id:'github',kind:'github',allowedActors:['alice'],cwd:'.',repository:'owner/repo'}]}).sources[0]!
- ctx.store.threads.save({key:'github:owner/repo#7',ref:{source:'github',id:'owner/repo#7'},subscriptions:['ticket'],correlated:[],pending:[],createdAt:'now',meta:{}})
+ ctx.store.threads.save({key:'github:owner/repo#7',ref:{source:'github',id:'owner/repo#7'},subscriptions:['ticket'],correlated:[],pending:[],createdAt:new Date().toISOString(),meta:{}})
  const source=new GithubSource(config,{async request(method,path){
   if(path.includes('issues?')||path.includes('issues/comments'))return []
   if(path.endsWith('/issues/7'))return {number:7,state:'open',pull_request:{}}
@@ -198,4 +256,45 @@ it('retains explicitly enabled direct-message resource access across source rest
  expect(events[0].addressed).toBe('direct');ctx.store.triggers.save(events[0])
  const second=new FeishuSource(config,request);second.start(ctx)
  expect(await second.read({resource:'message',trigger:events[0],pageSize:20})).toMatchObject({status:'available'})
+})
+
+it('F14 checks known Feishu edits and recalls before replay, without turning revised text into another task',async()=>{
+ const {ctx,events}=context(),changes:any[]=[];ctx.change=e=>changes.push(e)
+ ctx.receive=e=>{ctx.store.triggers.save(e);events.push(e)}
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',allowedActors:['ou_person'],cwd:'.',feishu:{cli:'test-lark',chats:['oc_test'],mentionId:'ou_bot'}}]}).sources[0]!
+ let item:any={message_id:'om_test',chat_id:'oc_test',create_time:'1000',update_time:'1000',sender:{id:'ou_person',sender_type:'user'},body:{content:'{"text":"first body"}'}}
+ const source=new FeishuSource(config,async()=>({items:[item]}));await source.poll(ctx)
+ expect(events).toHaveLength(1)
+ item={...item,update_time:'2000',body:{content:'{"text":"edited body"}'}};await source.poll(ctx);await source.poll(ctx)
+ expect(events).toHaveLength(1);expect(changes.filter(c=>c.kind==='message.updated')).toHaveLength(1)
+ item={...item,deleted:true,update_time:'3000'};await source.poll(ctx)
+ expect(changes.at(-1)).toMatchObject({kind:'message.deleted',messageId:'om_test',scope:'oc_test'})
+ expect(events).toHaveLength(1)
+})
+it('R14 uses Feishu V2 membership fields and treats a group rename only as a label',async()=>{
+ const {ctx}=context(),changes:any[]=[];ctx.change=e=>changes.push(e)
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'test-lark',chats:['oc_test'],mentionId:'ou_bot'}}]}).sources[0]!,source=new FeishuSource(config,async()=>({}))
+ const event=(type:string,data:any)=>({schema:'2.0',header:{event_id:type,event_type:type,create_time:'1000'},event:{chat_id:'oc_test',...data}})
+ await source.receiveEvent(event('im.chat.updated_v1',{after_change:{name:'Renamed'}}),ctx);expect(changes).toHaveLength(0)
+ expect(ctx.store.get<any>('entry-label','f:oc_test').name).toBe('Renamed')
+ await source.receiveEvent(event('im.chat.member.user.deleted_v1',{users:[{user_id:{open_id:'ou_person'}}]}),ctx)
+ await source.receiveEvent(event('im.chat.member.bot.deleted_v1',{}),ctx)
+ expect(changes.map(c=>c.kind)).toEqual(['member.removed','entry.unavailable'])
+ await expect(source.receiveEvent(event('im.chat.member.user.added_v1',{users:[]}),ctx)).rejects.toThrow('open IDs')
+})
+it('R05 rejects a configured bot ID when native identity readback is absent',async()=>{
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'test-lark',chats:['oc_test'],mentionId:'ou_bot'}}]}).sources[0]!
+ await expect(new FeishuSource(config,async()=>({})).identity()).rejects.toThrow()
+ expect(await new FeishuSource(config,async()=>({bot:{open_id:'ou_bot'}})).identity()).toMatchObject({id:'ou_bot',verified:true})
+})
+it('R05 refuses a source read when a verified connection switches accounts',async()=>{
+ const {ctx,events}=context(),changes:any[]=[];ctx.change=e=>changes.push(e)
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'test-lark',chats:['oc_test']}}]}).sources[0]!
+ ctx.store.put('source-identity','f',{sourceId:'f',principal:'ou_original'})
+ let bot='ou_original'
+ const source=new FeishuSource(config,async(_method,path)=>path==='bot/v3/info'?{bot:{open_id:bot}}:{items:[]})
+ await source.poll(ctx);bot='ou_other'
+ await expect(source.poll(ctx)).rejects.toThrow('account changed')
+ expect(changes[0]).toMatchObject({kind:'entry.unavailable',scope:'oc_test'});expect(events).toHaveLength(0)
+ await expect(source.poll(ctx)).rejects.toThrow('account changed');expect(changes[1]).toEqual(changes[0])
 })

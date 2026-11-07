@@ -38,7 +38,7 @@ it('returns an authenticated configuration inventory without testing providers o
   const page=await fetch(f.host.url+'/configure');expect(page.status).toBe(200);expect(page.headers.get('content-type')).toContain('text/html');expect(page.headers.get('content-security-policy')).toContain("connect-src 'self'")
   const script=/<script>([\s\S]*?)<\/script>/.exec(await page.text())?.[1];expect(script).toBeTruthy();expect(()=>new Script(script!)).not.toThrow()
   const response=await fetch(f.host.url+'/configuration',{headers:f.headers}),data=await response.json()
-  expect(response.status).toBe(200);expect(data.editableKeys).toContain('execution');expect(data.editableKeys).not.toContain('backends')
+  expect(response.status).toBe(200);expect(data.editableKeys).toContain('execution');expect(data.editableKeys).toContain('backends')
   expect(data.restartRequiredKeys).toContain('sources.deployment');expect(data.sourceEditableKeys).toContain('allowedActors')
   expect(data.backendCatalog).toEqual(expect.arrayContaining([expect.objectContaining({id:'responses',kind:'openai-responses',remoteVerified:false}),expect.objectContaining({id:'codex',nativeTakeover:true})]))
   expect(JSON.stringify(data)).not.toContain('synthetic-do-not-expose-provider-key');expect(data.current.config.backends.responses.apiKeyEnv).toBe('AGENTHUB_CONFIGURATION_TEST_KEY')
