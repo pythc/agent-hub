@@ -254,6 +254,43 @@ it('retains insufficient verification after bounded retries instead of releasing
  expect([...f.attempts.values()]).toEqual([1])
 })
 
+it('retries an incomplete evidence read before repairing or replanning the work',async()=>{
+ let tries=0
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'full evidence');return ready()},async(r,input)=>{
+  tries++
+  const evidence=input.evidence.filter((e:any)=>tries!==1||e.kind!=='execution')
+  for(const e of evidence)await r.onTool!('goal_evidence',{id:e.id},e.id)
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:tries===1?'insufficient':'passed',explanation:tries===1?'Execution records were not inspected':'All evidence inspected',evidenceIds:evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+ })
+ const original=f.start({maxRepairs:0,criteria:[{id:'sum',description:'Inspect the artifact and execution',files:['result.json']}]})
+ await until(f,()=>f.goal().state==='completed')
+ expect(tries).toBe(3);expect(f.rounds().find(r=>r.nodeId)?.attempts).toBe(2)
+ expect([...f.attempts.values()]).toEqual([1]);expect(f.h.store.list('goal-repair')).toHaveLength(0);expect(f.goal().contract).toEqual(original.contract)
+})
+
+it('does not retry genuine insufficient evidence after all available evidence was read',async()=>{
+ let tries=0
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'inconclusive');return ready()},async(r,input)=>{
+  tries++;for(const e of input.evidence)await r.onTool!('goal_evidence',{id:e.id},e.id)
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'insufficient',explanation:'The inspected artifact does not establish the claim',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+ })
+ f.start({maxRepairs:0,criteria:[{id:'sum',description:'Evidence proves the claim',files:['result.json']}]})
+ await until(f,()=>f.goal().state==='held')
+ expect(tries).toBe(1);expect(f.rounds()[0]).toMatchObject({state:'insufficient',attempts:1});expect(f.h.store.list('goal-release')).toHaveLength(0)
+})
+
+it('does not hide a failed criterion when another has unread evidence',async()=>{
+ let tries=0
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'wrong');return ready()},async(r,input)=>{
+  tries++;const evidence=input.evidence.filter((e:any)=>e.kind!=='execution')
+  for(const e of evidence)await r.onTool!('goal_evidence',{id:e.id},e.id)
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:c.id==='first'?'failed':'insufficient',explanation:'The result is incorrect or evidence was not read',evidenceIds:evidence.filter((e:any)=>e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+ })
+ f.start({maxRepairs:0,criteria:[{id:'first',description:'First claim',files:['result.json']},{id:'second',description:'Second claim',files:['result.json']}],nodes:[{id:'build',title:'Build',instruction:'Produce result',workerId:'one',criterionIds:['first','second']}]})
+ await until(f,()=>f.goal().state==='held')
+ expect(tries).toBe(1);expect(f.rounds()[0]).toMatchObject({state:'failed',attempts:1});expect(f.h.store.list('goal-release')).toHaveLength(0)
+})
+
 it('resumes an interrupted read-only verification after restart without spending another attempt',async()=>{
  let tries=0,interrupted=false
  const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{

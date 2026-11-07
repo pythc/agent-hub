@@ -174,12 +174,13 @@ export class GoalVerification {
      checks.push({...ch,method:'agent'})
     }
     save({threadId:result.threadId})
-    // An incomplete transport response is not evidence that the work itself
-    // failed. Retry the independent review within the existing protocol limit;
-    // exhaustion returns to the normal insufficient-evidence path.
+    // An incomplete transport or unread available evidence is not evidence
+    // that the work itself failed. Retry only the independent review within
+    // the protocol limit; exhaustion retains the insufficient verdict.
     const unresolved=checks.filter(ch=>ch.verdict!=='passed')
-    if(unresolved.length&&unresolved.every(ch=>ch.verdict==='insufficient'&&/truncat|截断/i.test(ch.explanation))){
-     save({checks,state:'errored',error:'Verification protocol: verifier reported truncated evidence output',finishedAt:this.now()});return
+    const incomplete=(ch:VerificationCheck)=>/truncat|截断/i.test(ch.explanation)||snapshot.evidence.some(e=>!e.missing&&['file','document','execution'].includes(e.kind)&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId))&&!read.has(e.id))
+    if(unresolved.length&&unresolved.every(ch=>ch.verdict==='insufficient'&&incomplete(ch))){
+     save({checks,state:'errored',error:'Verification protocol: evidence output was truncated or available evidence was not fully read',finishedAt:this.now()});return
     }
    }
    const latest=this.host.goals.get(g.id)
