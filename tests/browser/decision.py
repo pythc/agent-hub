@@ -13,7 +13,7 @@ with sync_playwright() as p:
     expect(page.locator('#decision-mode')).to_have_value('off')
     page.locator('#decision-provider').select_option('backend:cpu');page.locator('#decision-mode').select_option('advisory')
     page.get_by_role('button',name='Test current draft',exact=True).click();expect(page.locator('#decision-test-result')).to_contain_text('ms',timeout=15000)
-    page.locator('#savebar .primary').click();expect(page.locator('#savebar')).to_be_hidden();page.reload();page.wait_for_load_state('networkidle')
+    page.locator('#savebar .primary').click();expect(page.locator('#savebar')).to_be_hidden(timeout=20000);page.reload();page.wait_for_load_state('networkidle')
     expect(page.locator('#decision-mode')).to_have_value('advisory');expect(page.locator('#decision-provider')).to_have_value('backend:cpu')
     checks.append('Real probe HTTP request, persistent decision settings, shared API reference')
     section=page.locator('#decision-settings');section.scroll_into_view_if_needed();page.screenshot(path=str(output/'decision-light.png'),full_page=True)
@@ -25,6 +25,28 @@ with sync_playwright() as p:
     page.locator('#decision-provider').select_option('openai-chat');page.locator('#decision-baseUrl').fill(info['provider']);page.locator('#decision-model').fill('cpu-judge')
     page.get_by_role('button',name='Test current draft',exact=True).click();expect(page.locator('#decision-test-result')).to_contain_text('ms',timeout=15000)
     checks.append('Protocol presets, custom endpoint, JSON and limit validation')
+    # Hold one synthetic HTTP reply to exercise re-rendering during a pending probe.
+    held=[]
+    page.route('**/decision/probe',lambda route:held.append(route))
+    page.locator('#decision-test').click()
+    page.get_by_role('button',name='Switch to Chinese',exact=True).click()
+    expect(page.locator('#decision-test')).to_be_disabled()
+    assert held
+    held.pop().fulfill(status=200,content_type='application/json',body=json.dumps({'status':'ok','decisions':[{'id':'sample','action':'REVIEW'}],'latencyMs':1}))
+    expect(page.locator('#decision-test-result')).to_contain_text('REVIEW')
+    expect(page.locator('#decision-test')).to_be_enabled()
+    page.unroute('**/decision/probe')
+    page.get_by_role('button',name='切换为英文',exact=True).click()
+    expect(page.locator('#decision-test-result')).to_contain_text('REVIEW')
+    advanced=section.locator('details').first
+    if advanced.get_attribute('open') is None: advanced.locator('summary').click()
+    page.locator('#decision-effort').select_option('low')
+    page.locator('#decision-provider').select_option('anthropic')
+    page.locator('#decision-provider').select_option('openai-chat')
+    advanced=section.locator('details').first
+    if advanced.get_attribute('open') is None: advanced.locator('summary').click()
+    expect(page.locator('#decision-effort')).to_have_value('')
+    checks.append('Pending probe survives language re-render; Anthropic switch clears incompatible effort')
     page.set_viewport_size({'width':390,'height':844});section.scroll_into_view_if_needed();page.screenshot(path=str(output/'decision-mobile.png'),full_page=True)
     assert not page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'horizontal overflow'
     page.locator('#decision-mode').focus();expect(page.locator('#decision-mode')).to_be_focused()
