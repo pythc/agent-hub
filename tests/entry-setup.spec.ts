@@ -97,7 +97,12 @@ it('distinguishes saved, received, permission required, execution and actual ada
  expect(v.instructions.en).toMatch(/^This is a connection check/);expect(v.instructions.en).not.toContain('agent_request')
  expect(v.verified).toBe(false);expect(v.stages.every((s:any)=>s.status==='pending')).toBe(true)
  const source=f.host.runtime.sources.get(plan.body.sourceId)!,send=(id:string)=>{const trigger=source.trigger({id,thread:'single:synthetic-user',text:v.instruction,addressed:true},'synthetic-user');trigger.meta={chat:'synthetic-user'};return f.host.runtime.ingest(trigger)}
- send('before-allow');const pending=(await f.request('/entry-setup/verification/'+v.id)).body;expect(pending.stages[0].status).toBe('ok');expect(pending.stages[1].status).toBe('required');expect(pending.observedSender.actor).toBe('synthetic-user')
+ const before=send('before-allow') as {triggerId:string};const pending=(await f.request('/entry-setup/verification/'+v.id)).body;expect(pending.stages[0].status).toBe('ok');expect(pending.stages[1].status).toBe('required');expect(pending.observedSender.actor).toBe('synthetic-user')
+ // Receipt alone is not a policy decision. Settle the original disallowed
+ // message before changing the policy, rather than racing the host timer.
+ const rejected=()=>f.host.runtime.store.list<any>('decision').some(d=>d.kind==='ignore'&&d.triggerIds.includes(before.triggerId))
+ for(let n=0;n<150&&!rejected();n++){await f.host.runtime.tick();if(!rejected())await new Promise(r=>setTimeout(r,10))}
+ expect(rejected()).toBe(true)
  expect((await f.request('/entry-setup/allow',{revision:1,sourceId:plan.body.sourceId,actor:'not-observed'})).status).toBe(400)
  expect((await f.request('/entry-setup/allow',{revision:1,sourceId:plan.body.sourceId,actor:'synthetic-user'})).status).toBe(200)
  expect(f.host.runtime.store.tickets.list()).toHaveLength(0);send('after-allow')
