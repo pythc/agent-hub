@@ -6,7 +6,7 @@ const apiBase=z.string().url().superRefine((s,ctx)=>{
  const u=new URL(s),local=['localhost','127.0.0.1','[::1]'].includes(u.hostname)
  if(!['https:','http:'].includes(u.protocol)||u.protocol==='http:'&&!local||u.username||u.password||u.search||u.hash)ctx.addIssue({code:'custom',message:'Backend requires HTTPS, or loopback HTTP, with no URL credentials/query/fragment'})
 })
-export const parametersSchema=z.record(z.unknown()).superRefine((p,ctx)=>{
+export const parametersSchema=z.record(z.string(),z.unknown()).superRefine((p,ctx)=>{
  const reserved=['model','messages','input','instructions','system','tools','tool_choice','stream','store','previous_response_id','conversation','include','response_format','n','max_tokens','max_completion_tokens','max_output_tokens']
  if(Object.keys(p).some(k=>reserved.includes(k)))ctx.addIssue({code:'custom',message:'Provider parameters cannot replace managed model, history, tools or output configuration'})
  for(const key of ['output_config','text'])if(key in p){const value=p[key];if(!value||typeof value!=='object'||Array.isArray(value)||'format'in value)ctx.addIssue({code:'custom',message:key+' accepts provider options but its format is managed by AgentHub'})}
@@ -21,7 +21,7 @@ export const agentOptionsSchema=z.object({
  browser:browserOptionsSchema.optional(),
 }).strict()
 export type AgentOptions=z.infer<typeof agentOptionsSchema>
-const parameters=parametersSchema.default({})
+const parameters=parametersSchema.prefault({})
 export const backendDefinition=z.discriminatedUnion('kind',[
  z.object({kind:z.literal('codex'),label:z.string().trim().min(1).max(100).optional(),command:z.string().min(1).optional(),
   args:z.array(z.string()).optional(),env:z.record(envName,envName).optional(),model:z.string().min(1).optional(),defaults:agentOptionsSchema.optional(),
@@ -42,13 +42,13 @@ export const backendDefinition=z.discriminatedUnion('kind',[
 ])
 export type BackendDefinition=z.infer<typeof backendDefinition>
 export type ApiDefinition=Exclude<BackendDefinition,{kind:'codex'}>
-export const backendsSchema=z.record(name,backendDefinition).default({})
+export const backendsSchema=z.record(name,backendDefinition).prefault({})
 export const workerProfileSchema=agentOptionsSchema.extend({id:name,label:z.string().trim().min(1).max(100).optional(),backend:name,model:z.string().trim().min(1).max(300).optional(),state:z.enum(['enabled','paused','retiring']).optional()}).strict()
 export type WorkerProfile=z.infer<typeof workerProfileSchema>
-export const executionSchema=z.object({backend:name.default('codex'),roles:z.object({router:name.optional(),worker:name.optional(),subagent:name.optional()}).strict().default({}),
+export const executionSchema=z.object({backend:name.default('codex'),roles:z.object({router:name.optional(),worker:name.optional(),subagent:name.optional()}).strict().prefault({}),
  router:agentOptionsSchema.extend({backend:name.optional(),model:z.string().min(1).optional(),mode:z.enum(['assessment','host','client']).optional()}).optional(),
  management:z.object({enabled:z.boolean().default(false),maxWorkers:z.number().int().min(1).max(10).default(10),backends:z.array(name).optional()}).strict().optional(),
- workers:z.array(workerProfileSchema).min(1).max(10).optional()}).strict().default({})
+ workers:z.array(workerProfileSchema).min(1).max(10).optional()}).strict().prefault({})
 export function validateBackendSelection(c:{execution:z.infer<typeof executionSchema>;backends:Record<string,BackendDefinition>;toolConnections?:Record<string,unknown>}){
  if(c.backends.codex&&c.backends.codex.kind!=='codex')throw Error('The backend ID codex is reserved for native Codex conversations')
  for(const id of [c.execution.backend,c.execution.router?.backend,...Object.values(c.execution.roles),...(c.execution.workers??[]).map(w=>w.backend),...(c.execution.management?.backends??[])])if(id&&id!=='codex'&&!c.backends[id])throw Error('Unknown execution backend: '+id)

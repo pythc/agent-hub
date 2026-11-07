@@ -6,7 +6,14 @@ import {validateBackendSelection} from './backend-config.ts'
 import {normalizeWorkerCount} from './worker-pool.ts'
 import {sourceDeployment} from './connector-config.ts'
 
-export const patchSchema = configSchema.pick({backends:true,execution:true,models:true,model:true,effort:true,concurrency:true,acceptMode:true,rules:true,prompts:true,sources:true,watchdog:true,work:true,delivery:true}).partial()
+const editableSchema = configSchema.pick({backends:true,execution:true,models:true,model:true,effort:true,concurrency:true,acceptMode:true,rules:true,prompts:true,sources:true,watchdog:true,work:true,delivery:true})
+// Zod 4 optional/default fields materialize defaults even when omitted. A patch
+// must only touch supplied keys; test undefined before entering the full schema.
+type EditableShape = typeof editableSchema.shape
+const patchShape = Object.fromEntries(Object.entries(editableSchema.shape).map(([key,schema])=>[key,z.union([z.undefined(),schema]).optional()])) as {
+  [K in keyof EditableShape]: z.ZodOptional<z.ZodUnion<[z.ZodUndefined,EditableShape[K]]>>
+}
+export const patchSchema = z.object(patchShape).strict()
 export interface SettingsVersion { revision:number; at:string; config:Config }
 export class SettingsError extends Error {
  constructor(readonly code:'settings_conflict'|'restart_required',message:string,readonly status=400){super(message)}

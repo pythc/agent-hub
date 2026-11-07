@@ -37,7 +37,7 @@ export const browserConfigSchema = z
       .optional(),
   })
   .strict()
-  .default({});
+  .prefault({});
 export const browserOptionsSchema = z
   .object({
     enabled: z.boolean().optional(),
