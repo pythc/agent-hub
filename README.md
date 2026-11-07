@@ -101,7 +101,7 @@ npx agent-browser install
 
 Create a profile from the conversation's browser tab, sign in, and choose which Workers may reuse that login state. Taking over pauses Worker control until you hand it back.
 
-The password vault is separate from your everyday Chrome password manager. Isolated sessions using the same website account still share that account's server-side data. See the [browser guide](docs/BROWSER.md) (中文).
+The password vault is separate from your everyday Chrome password manager. Isolated sessions using the same website account still share that account's server-side data. See the [browser guide](docs/BROWSER.en.md).
 
 </details>
 
@@ -140,7 +140,7 @@ Local-first means local workspace storage; model requests still go to your provi
 | [Conversations](docs/CHAT.md) · 中文 | [Core semantics and parity](docs/PARITY.md) · 中文 |
 | [Agent board](plugins/agent-board/README.md) | [Workspace view plugins](docs/WORKSPACE_VIEWS.md) |
 | [Plugin marketplace](docs/PLUGIN-MARKETPLACE.md) | [Marketplace design](docs/PLUGIN-MARKETPLACE-DESIGN.md) |
-| [Browser and handoff](docs/BROWSER.md) · 中文 | [Office integrations](docs/OFFICE.md) · 中文 |
+| [Browser and handoff](docs/BROWSER.en.md) | [Office integrations](docs/OFFICE.md) · 中文 |
 | [Proactive Router and token costs](docs/PROACTIVE_ROUTER.md) | Admission, follow-ups, context and compatibility |
 | [Long-running goals and acceptance](docs/GOAL_ACCEPTANCE_2026-11-07.md) · 中文 | [Failure-driven replanning](docs/GOAL_REPLANNING_2026-11-07.md) · 中文 |
 | [Scoped memory and continuity](docs/EMBEDDED_KNOWLEDGE_AND_CONTINUITY_2026-11-07.md) · 中文 | Embedded document library and sourced context |
