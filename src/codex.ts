@@ -4,6 +4,7 @@ import {existsSync,readFileSync} from 'node:fs'
 import {checkBudget,protocolBytes,receiptReference,ContextBudgetExceeded} from './context-budget.ts'
 import type { Config } from './config.ts'
 import {hostPrivateFiles} from './private-files.ts'
+import {codexToolBridge} from './codex-tools.ts'
 
 import type {Model,ModelRequest,ModelResult,ToolContent} from './model.ts'
 export type {Model,ModelRequest,ModelResult,NativeControl,NativeRequest,ToolSpec,ToolContent} from './model.ts'
@@ -72,6 +73,7 @@ export class CodexModel implements Model {
     finally{clearTimeout(timer);await client.close()}
   }
   async run(request: ModelRequest): Promise<ModelResult> {
+    let bridge:Awaited<ReturnType<typeof codexToolBridge>>|undefined
     // Disable configured servers in the per-thread managed config below. A
     // startup override for a missing server creates an invalid partial entry.
     let protocolPath:string|undefined,budgetError:ContextBudgetExceeded|undefined
@@ -122,6 +124,10 @@ export class CodexModel implements Model {
         const effective=(await client.call('config/read',{includeLayers:false,cwd:request.cwd})).config
         const mcp=Object.fromEntries(Object.keys(effective.mcp_servers??{}).map(name=>[name,{enabled:false}]))
         if(request.workerMcp)mcp['superagent-worker']={...request.workerMcp,enabled:true,default_tools_approval_mode:'approve'} as any
+        if(request.role==='router'&&request.threadId&&request.tools?.length&&request.onTool){
+          bridge=await codexToolBridge(request.tools,request.onTool,request.signal)
+          mcp[bridge.name]=bridge.config as any
+        }
         const filesystem:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[request.cwd]:request.sandbox==='workspace-write'?'write':'read'}
         if(request.privateState)filesystem[request.privateState]='deny'
         for(const path of hostPrivateFiles())filesystem[path]='deny'
@@ -132,7 +138,7 @@ export class CodexModel implements Model {
         ...(request.contextBudget&&!request.threadId?{experimentalRawEvents:true,historyMode:'legacy'}:{}),
         cwd: request.cwd, approvalPolicy: request.onHumanRequest||request.operator?'on-request':'never', ...(request.managed?{permissions:'superagent-managed'}:{sandbox:request.sandbox??'read-only'}),
         ...((request.model||(!request.threadId?this.config.model:undefined))?{model:request.model||this.config.model}:{}),
-        developerInstructions: request.instructions,
+        developerInstructions: request.instructions+(bridge?'\nFor this activation use the roppo-router MCP tools: they expose the current tools and schemas. Older native dynamic tools may remain in history; do not substitute those for this activation’s MCP tools.':''),
         ...((isolated||Object.keys(configOptions).length)?{config:{...configOptions,...isolated}}:{}),
       }
       const result = request.threadId
@@ -147,7 +153,8 @@ export class CodexModel implements Model {
       if(request.managed){
         const status=await client.call('mcpServerStatus/list',{threadId,limit:100})
         const active=(status.data??[]).filter((server:any)=>Object.keys(server.tools??{}).length).map((s:any)=>s.name)
-        if(active.some((name:string)=>name!=='superagent-worker'))throw Error('Unexpected MCP capability in managed worker: '+active.join(', '))
+        if(active.some((name:string)=>name!=='superagent-worker'&&name!==bridge?.name))throw Error('Unexpected MCP capability in managed worker: '+active.join(', '))
+        if(bridge&&!active.includes(bridge.name))throw Error('Current Router tools are unavailable in the resumed Codex thread')
         request.onCapabilities?.({mcpServers:active,disabledPlugins:Object.keys((isolated as any).plugins??{}),managed:true})
       }
       if (request.title) await client.call('thread/name/set', { threadId, name: request.title })
@@ -185,7 +192,7 @@ export class CodexModel implements Model {
         // does not keep an idle writer lease. Human takeover explicitly exposes them.
         try{await Promise.race([client.call('thread/archive',{threadId:client.threadId}),new Promise((_,reject)=>setTimeout(()=>reject(Error('Archive deadline')),2000))])}catch{}
       }
-      await client.close()
+      try{await client.close()}finally{await bridge?.close()}
     }
   }
 }
