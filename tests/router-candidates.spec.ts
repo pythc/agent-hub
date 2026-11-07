@@ -1,4 +1,5 @@
-import {afterEach,expect,it} from 'vitest'
+import {decisionConfigSchema} from '../src/decision-config.ts'
+import {afterEach,expect,it,vi} from 'vitest'
 import {mkdtempSync,rmSync,writeFileSync,symlinkSync,mkdirSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -11,7 +12,7 @@ import {RouterCandidates} from '../src/router-candidates.ts'
 import {returnRouterFollowup,RouterFollowupBatch,reconsiderRouterFollowups} from '../src/router-followups.ts'
 
 const roots:string[]=[],hosts:Runtime[]=[]
-afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
+afterEach(async()=>{vi.unstubAllGlobals();for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
 const accepted={action:'accept',title:'Fix typo',scope:'Correct the documented typo',reason:'Settled small correction',rules:['typo'],targetTicketId:null,ruleAssessments:[{id:'typo',matched:true,reason:'Agreed correction to existing copy'}],direction:{implementation_requested:true,target_basis:'existing-standard',requires_design_decision:false,evidence:'Correct this typo to match the existing label'},intent_evidence:'Change the erroneous label in settings to match the agreed existing spelling'}
 const workerReport={state:'ready',summary:'Checked fixture',reply:'',question:null,handbacks:[]}
 function fixture(run?:(r:ModelRequest,h:Runtime)=>Promise<unknown>,mode:'auto'|'observe'|'off'='auto'){
@@ -394,4 +395,32 @@ it('keeps messages arriving during the stop-decision wait for the next Worker tu
  await settle(f.h,()=>workerTurns===2&&!!f.h.store.tickets.get(taskId)?.ended)
  expect(f.h.store.tickets.list()).toHaveLength(1)
  expect(f.h.store.tickets.get(taskId)?.undelivered).toEqual([])
+})
+
+
+it.each(['shadow','advisory'] as const)('auxiliary %s cannot accept work and retains the persistent Router',async mode=>{
+ const f=fixture(async r=>{const card=JSON.parse(r.input);expect(!!card.auxiliaryDecision).toBe(mode==='advisory');if(mode==='advisory')expect(card.auxiliaryDecision.decisions[0].action).toBe('INTERVENE');await tool(r,'orchestrator_route',{reason:'No settled implementation intent'});return {reply:''}})
+ f.config.decision=decisionConfigSchema.parse({mode,provider:{kind:'openai-chat',baseUrl:'http://localhost:8888/v1',model:'fixture'}})
+ vi.stubGlobal('fetch',vi.fn(async()=>Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({decisions:[{id:'group:hint',action:'INTERVENE'}]})}}]})))
+ send(f.h,'hint','Maybe the design could change');await settle(f.h,()=>finished(f.h));await f.h.decision.close()
+ expect(f.calls).toHaveLength(1);expect(f.h.store.tickets.list()).toHaveLength(0);expect(f.h.store.deliveries()).toHaveLength(0);expect(f.h.decision.records()[0]?.status).toBe('ok')
+})
+it('shadow requests do not delay Router and advisory failure falls through',async()=>{
+ let release!:(r:Response)=>void
+ const f=fixture(async r=>{expect(JSON.parse(r.input).auxiliaryDecision).toBeUndefined();await tool(r,'orchestrator_route',{reason:'Unrelated'});return {reply:''}})
+ f.config.decision=decisionConfigSchema.parse({mode:'shadow',provider:{kind:'openai-chat',baseUrl:'http://localhost:8888/v1',model:'fixture'}})
+ vi.stubGlobal('fetch',vi.fn(()=>new Promise<Response>(r=>release=r)))
+ send(f.h,'shadow');await settle(f.h,()=>finished(f.h));expect(f.calls).toHaveLength(1)
+ release(Response.json({choices:[]}));await f.h.decision.close()
+ f.config.decision={...f.config.decision,mode:'advisory'}
+ send(f.h,'fallback');await settle(f.h,()=>finished(f.h,2));expect(f.calls).toHaveLength(2)
+})
+it('a wrong auxiliary STOP cannot stop a negated or quoted follow-up',async()=>{
+ const f=fixture(async r=>{if(r.role==='worker')return {...workerReport,state:'waiting'};const card=JSON.parse(r.input);if(card.kind==='task_followups'){expect(card.auxiliaryDecision.decisions[0].action).toBe('STOP');return {reply:''}}return {reply:''}})
+ const task=await delegated(f,'aux-followup')
+ f.config.decision=decisionConfigSchema.parse({mode:'advisory',provider:{kind:'openai-chat',baseUrl:'http://localhost:8888/v1',model:'fixture'}})
+ vi.stubGlobal('fetch',vi.fn(async()=>Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({decisions:[{id:'group:negated',action:'STOP'}]})}}]})))
+ send(f.h,'negated','不要停止，日志中的 “stop” 是引用。继续处理。')
+ await settle(f.h,()=>!!f.h.store.get<any>('router-followup-notice','group:negated')?.read)
+ expect(f.h.store.tickets.get(task.ticketId)?.ended?.by).not.toBe('human');expect(f.h.store.list('router-followup-stop-attempt')).toHaveLength(0)
 })

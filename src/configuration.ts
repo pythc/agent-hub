@@ -7,6 +7,7 @@ export function configurationSnapshot(runtime:Runtime){
  const config=runtime.config
  const definitions:Record<string,BackendDefinition>={codex:{kind:'codex'},...config.backends}
  return {
+  decisionCalls:runtime.decision.records(),
   current:runtime.settings.current(),history:runtime.settings.history(),
   editableKeys:Object.keys(patchSchema.shape),
   restartRequiredKeys:['stateDir','port','codex','turnTimeoutMs','sources.deployment','sourcePlugins','toolConnections'],

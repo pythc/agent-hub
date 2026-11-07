@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { z } from 'zod'
+import {decisionConfigSchema} from '../src/decision-config.ts'
 import { configSchema, type Config } from '../src/config.ts'
 import { patchSchema, Settings } from '../src/settings.ts'
 import { incomingSchema } from '../src/sources.ts'
@@ -20,8 +21,10 @@ const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 it.each(baseline.cases)('preserves the $name Zod 3 configuration and serialized round trip', ({ input, expected }) => {
-  expect(configSchema.parse(input)).toEqual(expected)
-  expect(configSchema.parse(JSON.parse(JSON.stringify(expected)))).toEqual(expected)
+  const upgraded={...expected,decision:decisionConfigSchema.parse({})}
+  expect(upgraded.decision.mode).toBe('off')
+  expect(configSchema.parse(input)).toEqual(upgraded)
+  expect(configSchema.parse(JSON.parse(JSON.stringify(expected)))).toEqual(upgraded)
 })
 
 it('keeps omitted patches absent and supplied empty objects/defaults intentional', () => {
@@ -49,8 +52,9 @@ it('preserves persisted settings, sparse saves, backup/restore and transaction f
     store.put('settings', 'current', { revision: 7, at: '2026-11-07T00:00:00.000Z', config: original })
     store.put('settings-backends', 'managed', true)
     const settings = new Settings(store, configSchema.parse(structuredClone(original)))
-    expect(settings.current().config).toEqual(original)
-    expect(settings.save(7, { effort: 'low' }).config).toEqual({ ...original, effort: 'low' })
+    const upgraded={...original,decision:decisionConfigSchema.parse({})}
+    expect(settings.current().config).toEqual(upgraded)
+    expect(settings.save(7, { effort: 'low' }).config).toEqual({ ...upgraded, effort: 'low' })
     const after = structuredClone(settings.current())
     expect(() => settings.save(7, { concurrency: 2 })).toThrow('conflict')
     expect(() => settings.save(8, { work: { unknown: true } })).toThrow()

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import {builtins} from './prompts.ts'
 import {backendsSchema,executionSchema,validateBackendSelection} from './backend-config.ts'
 import {sourcePluginsSchema,sourceCapabilitiesSchema,toolConnectionsSchema} from './connector-config.ts'
+import {decisionConfigSchema} from './decision-config.ts'
 import {browserConfigSchema} from './browser-contract.ts'
 
 const sourceSchema = z.object({
@@ -50,6 +51,7 @@ export const configSchema = z.object({
   codex: z.string().default('codex'),
   backends:backendsSchema,
   execution:executionSchema,
+  decision:decisionConfigSchema,
   sourcePlugins:sourcePluginsSchema,
   toolConnections:toolConnectionsSchema,
   browser:browserConfigSchema,

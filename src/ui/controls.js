@@ -45,6 +45,7 @@ function icon(name) {
   return svg
 }
 const editable = [
+  'decision',
   'backends',
   'execution',
   'models',
@@ -217,6 +218,7 @@ function matchesShape(value, kind) {
 // Keep malformed JSON in its editor without letting it break another section's native controls.
 function validateShape(key, value) {
   const kind = {
+    decision: 'object',
     execution: 'object',
     models: 'object',
     model: 'string',

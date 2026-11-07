@@ -1,4 +1,5 @@
 import {z} from 'zod'
+import type {DecisionConfig} from './decision-config.ts'
 import {browserOptionsSchema} from './browser-contract.ts'
 const envName=z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
 const name=z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)
@@ -49,7 +50,9 @@ export const executionSchema=z.object({backend:name.default('codex'),roles:z.obj
  router:agentOptionsSchema.extend({backend:name.optional(),model:z.string().min(1).optional(),mode:z.enum(['assessment','host','client']).optional()}).optional(),
  management:z.object({enabled:z.boolean().default(false),maxWorkers:z.number().int().min(1).max(10).default(10),backends:z.array(name).optional()}).strict().optional(),
  workers:z.array(workerProfileSchema).min(1).max(10).optional()}).strict().prefault({})
-export function validateBackendSelection(c:{execution:z.infer<typeof executionSchema>;backends:Record<string,BackendDefinition>;toolConnections?:Record<string,unknown>}){
+export function validateBackendSelection(c:{execution:z.infer<typeof executionSchema>;backends:Record<string,BackendDefinition>;toolConnections?:Record<string,unknown>;decision?:DecisionConfig}){
+ const provider=c.decision?.provider
+ if(provider?.kind==='backend'){const d=c.backends[provider.id];if(!d||d.kind==='codex'||d.subscription)throw Error('Decision provider must reference an API backend without an agent subscription')}
  if(c.backends.codex&&c.backends.codex.kind!=='codex')throw Error('The backend ID codex is reserved for native Codex conversations')
  for(const id of [c.execution.backend,c.execution.router?.backend,...Object.values(c.execution.roles),...(c.execution.workers??[]).map(w=>w.backend),...(c.execution.management?.backends??[])])if(id&&id!=='codex'&&!c.backends[id])throw Error('Unknown execution backend: '+id)
  for(const d of Object.values(c.backends))if(d.kind!=='codex'&&d.subscription&&(d.kind!=='openai-responses'||d.baseUrl.replace(/\/+$/,'')!=='https://api.openai.com/v1'||d.apiKeyEnv))throw Error('ChatGPT subscription requires the public Responses API and its own OAuth account')
