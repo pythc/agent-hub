@@ -35,7 +35,7 @@ import {SubscriptionAccounts} from './backends/subscription.ts'
 import {ExecutionActivity} from './execution-activity.ts'
 import {RouterIngress} from './router-ingress.ts'
 import {RouterCandidates,candidateSpecs} from './router-candidates.ts'
-import {relayRouterFollowups,returnRouterFollowup,reconsiderRouterFollowups,RouterFollowupBatch,followupSpecs} from './router-followups.ts'
+import {relayRouterFollowups,returnRouterFollowup,reconsiderRouterFollowups,awaitRouterFollowups,RouterFollowupBatch,followupSpecs} from './router-followups.ts'
 import {BrowserManager} from './browser-manager.ts'
 import type {BrowserDriver} from './browser-driver.ts'
 
@@ -512,7 +512,7 @@ export class Runtime {
     const readMessages=new Set<string>(pendingMessages.map(m=>m.id)),readReports=new Map<string,string>()
     const schema={type:'object',properties:{reply:{type:'string'}},required:['reply'],additionalProperties:false}
     try{
-      const result=await this.runModel({role:'router',...this.chat.binding(triggerId),activity:{sourceId:source.id,triggerId},cwd:source.cwd,threadId:previous?.threadId,signal:controller.signal,schema,managed:true,privateState:this.config.stateDir,archiveOnComplete:true,sandbox:'read-only',
+      const result=await this.runModel({role:'router',...this.chat.binding(triggerId),activity:{sourceId:source.id,triggerId},cwd:source.cwd,threadId:previous?.threadId,signal:controller.signal,schema,managed:true,skipContextCompaction:!!followups,privateState:this.config.stateDir,archiveOnComplete:true,sandbox:'read-only',
         instructions:composeCoordinator(this.config,{source:source.id,cwd:source.cwd,discussion}),
         input:JSON.stringify(followups?followups.card():candidates?candidates.card():messageId?{kind:'worker_result',messages:pendingMessages,mandate}:{kind:trigger.human?'user_message':'event',trigger,mandate,assessment:this.routerIngress.get(triggerId)?.assessment}),tools:followups?followupSpecs:candidates?[...candidateSpecs,...managementSpecs]:managementSpecs,
         onTool:async(name,args)=>{try{
@@ -670,11 +670,16 @@ export class Runtime {
       })
       live.accepting=false
       await live.delivery
-      const current = this.store.tickets.get(ticket.id)
+      let current = this.store.tickets.get(ticket.id)
       if (controller.signal.aborted || !current || current.ended || latestAssignment(current)?.id !== assignmentId) return
       const output = report.parse(JSON.parse(result.text))
       if(delegated?.mode==='client'&&output.handbacks.length)throw Error('Client-delegated Workers must return scope questions to their Router')
       this.store.put('transcript',result.turnId,{ticketId:ticket.id,threadId:result.threadId,turnId:result.turnId,text:result.text,at:Date.now(),revision:promptRevision})
+      if(delegated?.mode==='host'&&['ready','dropped'].includes(output.state)){
+        await awaitRouterFollowups(this,ticket.id,controller.signal)
+        current=this.store.tickets.get(ticket.id)
+        if(controller.signal.aborted||!current||current.ended||latestAssignment(current)?.id!==assignmentId)return
+      }
       const extraInputs=current.undelivered.filter(id=>!inputs.some(i=>i.id===id)).length>0
       const handoff=['blocked','failed','dropped'].includes(output.state)||!extraInputs&&(output.state==='ready'||!!output.question)
       if(handoff)await this.work.handoff(ticket.id,assignmentId)

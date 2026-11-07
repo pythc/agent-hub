@@ -2,7 +2,7 @@ import type {Config} from '../config.ts'
 import {validateBackendSelection,type BackendDefinition,type AgentOptions} from '../backend-config.ts'
 import {mergeOptions,apiOptions} from '../agent-options.ts'
 import {SubscriptionAccounts} from './subscription.ts'
-import {CodexModel} from '../codex.ts'
+import {CodexModel,nativeContextProfile} from '../codex.ts'
 import type {BackendDescription,Model,ModelRequest,ModelResult} from '../model.ts'
 import {ApiModel,type ThreadStore} from './api.ts'
 interface Binding {id:string;kind:string;endpoint?:string;identity?:string}
@@ -42,8 +42,11 @@ export class BackendRegistry implements Model {
   if(r.threadId&&this.writers.has(r.threadId))throw Error('Backend thread already has an active writer')
   let locked=r.threadId;if(locked)this.writers.add(locked)
   const binding=this.binding(id)
+  const legacyContext=definition.kind==='codex'&&r.managed&&!!r.threadId&&this.store.get<{version:number}>('native-context',r.threadId)?.version!==nativeContextProfile
+  const compact=legacyContext&&!r.skipContextCompaction
+  let nativeThread=r.threadId
   r.onBackend?.(id)
-  try{return await this.model(id,options).run({...r,options,instructions:r.instructions+(options.prompt?'\nAgent instructions:\n'+options.prompt:''),model:r.model??(!r.threadId&&role==='router'?this.config.execution.router?.model:undefined),onThread:threadId=>{if(!locked){locked=threadId;this.writers.add(threadId)}this.store.put('backend-binding',threadId,binding);r.onThread?.(threadId)}})}
+  try{return await this.model(id,options).run({...r,options,compactBeforeTurn:!!compact,onContextReady:()=>{if(definition.kind==='codex'&&r.managed&&nativeThread&&(!legacyContext||compact))this.store.put('native-context',nativeThread,{version:nativeContextProfile,at:Date.now(),compacted:!!compact});r.onContextReady?.()},instructions:r.instructions+(options.prompt?'\nAgent instructions:\n'+options.prompt:''),model:r.model??(!r.threadId&&role==='router'?this.config.execution.router?.model:undefined),onThread:threadId=>{nativeThread=threadId;if(!locked){locked=threadId;this.writers.add(threadId)}this.store.put('backend-binding',threadId,binding);r.onThread?.(threadId)}})}
   finally{if(locked)this.writers.delete(locked)}
  }
  async history(threadId:string,cwd:string){return this.model(this.forThread(threadId)).history!(threadId,cwd)}

@@ -316,3 +316,82 @@ it('shows shared discussion task summaries for deduplication without granting an
  taskId=(await delegated(f,'shared')).ticketId;send(f.h,'bob','Yes, fix that same typo','bob')
  await settle(f.h,()=>finished(f.h));expect(f.h.store.tickets.list()).toHaveLength(1)
 })
+
+it.each([true,false])('keeps a fast terminal Worker report behind the pending Router stop decision (%s)',async stopping=>{
+ let taskId='',releaseWorker!:()=>void,releaseRouter!:()=>void,routerWaiting=false
+ const workerGate=new Promise<void>(r=>releaseWorker=r),routerGate=new Promise<void>(r=>releaseRouter=r)
+ const f=fixture(async r=>{
+  if(r.role==='worker'){await workerGate;return {...workerReport,state:'dropped',summary:'Worker finished before Router'}}
+  const input=JSON.parse(r.input)
+  if(input.kind==='proactive_candidates'){
+   await tool(r,'orchestrator_eval_decide',accepted)
+   taskId=body(await tool(r,'worker_manage',{action:'assign',revision:0,requestId:'race',id:'one',text:accepted.scope})).ticketId
+  }else if(input.kind==='task_followups'){
+   routerWaiting=true;await routerGate
+   if(stopping)expect(body(await tool(r,'orchestrator_followup_stop',{triggerId:'group:follow',ticketId:taskId,explicit_stop_requested:true,evidence:'Please stop '+taskId}))).toEqual({stopped:true})
+  }
+  return {reply:''}
+ })
+ send(f.h,'1');await settle(f.h,()=>!!taskId&&f.calls.some(c=>c.role==='worker')&&finished(f.h))
+ send(f.h,'follow',stopping?'Please stop '+taskId:'Just a spelling detail')
+ await settle(f.h,()=>routerWaiting);releaseWorker()
+ await settle(f.h,()=>f.h.store.list<any>('transcript').some(t=>t.ticketId===taskId))
+ expect(f.h.store.tickets.get(taskId)?.ended).toBeUndefined()
+ releaseRouter()
+ await settle(f.h,()=>!!f.h.store.tickets.get(taskId)?.ended)
+ expect(f.h.store.tickets.get(taskId)?.ended).toMatchObject(stopping?{by:'human',outcome:'stopped'}:{by:'executor',outcome:'dropped'})
+ if(stopping){
+  const assignments=f.h.store.tickets.get(taskId)!.assignments.length
+  send(f.h,'later','Keep the old task stopped')
+  expect(f.h.store.tickets.get(taskId)!.assignments).toHaveLength(assignments)
+  expect(f.h.store.list<any>('router-followup').some(r=>r.triggerId==='group:later')).toBe(false)
+ }
+})
+
+it('retains a terminal report without ending the task when Router stop classification fails',async()=>{
+ let taskId='',releaseWorker!:()=>void
+ const workerGate=new Promise<void>(r=>releaseWorker=r)
+ const f=fixture(async r=>{
+  if(r.role==='worker'){await workerGate;return {...workerReport,state:'dropped'}}
+  if(JSON.parse(r.input).kind==='task_followups')throw Error('Provider unavailable')
+  if(JSON.parse(r.input).kind==='proactive_candidates'){
+   await tool(r,'orchestrator_eval_decide',accepted)
+   taskId=body(await tool(r,'worker_manage',{action:'assign',revision:0,requestId:'failed-stop',id:'one',text:accepted.scope})).ticketId
+  }
+  return {reply:''}
+ })
+ send(f.h,'1');await settle(f.h,()=>!!taskId&&f.calls.some(c=>c.role==='worker')&&finished(f.h))
+ send(f.h,'stop','Please stop '+taskId);releaseWorker()
+ await settle(f.h,()=>f.h.store.get<any>('run',taskId)?.phase==='uncertain')
+ expect(f.h.store.tickets.get(taskId)?.ended).toBeUndefined()
+ expect(f.h.store.list<any>('transcript').some(t=>t.ticketId===taskId)).toBe(true)
+ expect(f.h.store.get<any>('run',taskId).error).toContain('decision is unresolved')
+})
+
+it('keeps messages arriving during the stop-decision wait for the next Worker turn',async()=>{
+ let taskId='',workerTurns=0,routerWaiting=false,releaseWorker!:()=>void,releaseRouter!:()=>void
+ const workerGate=new Promise<void>(r=>releaseWorker=r),routerGate=new Promise<void>(r=>releaseRouter=r)
+ const f=fixture(async r=>{
+  if(r.role==='worker'){
+   if(++workerTurns===1){
+    r.onActive?.({interrupt:async()=>{},steer:async(_text,onRead)=>onRead?.()})
+    await workerGate
+   }else expect(JSON.parse(r.input).inputs.some((i:any)=>i.event?.meta?.externalTriggerId==='group:second')).toBe(true)
+   return workerReport
+  }
+  const input=JSON.parse(r.input)
+  if(input.kind==='proactive_candidates'){
+   await tool(r,'orchestrator_eval_decide',accepted)
+   taskId=body(await tool(r,'worker_manage',{action:'assign',revision:0,requestId:'late-message',id:'one',text:accepted.scope})).ticketId
+  }else if(input.kind==='task_followups'&&!routerWaiting){routerWaiting=true;await routerGate}
+  return {reply:''}
+ })
+ send(f.h,'1');await settle(f.h,()=>workerTurns===1&&finished(f.h))
+ send(f.h,'first','Clarification in the same task')
+ await settle(f.h,()=>routerWaiting&&f.h.store.tickets.get(taskId)!.inputs.some(i=>i.kind==='trigger'&&i.readAt))
+ releaseWorker();await settle(f.h,()=>f.h.store.list<any>('transcript').some(t=>t.ticketId===taskId))
+ send(f.h,'second','One more clarification in the same task');releaseRouter()
+ await settle(f.h,()=>workerTurns===2&&!!f.h.store.tickets.get(taskId)?.ended)
+ expect(f.h.store.tickets.list()).toHaveLength(1)
+ expect(f.h.store.tickets.get(taskId)?.undelivered).toEqual([])
+})
