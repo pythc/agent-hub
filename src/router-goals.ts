@@ -126,6 +126,16 @@ export class RouterGoals {
   const run=this.host.store.get<Run>('run',ticketId)
   return !run||run.phase==='idle'&&!this.host.activity.list().some(a=>a.ticketId===ticketId&&a.state==='running')&&!this.host.work.list(ticketId).some(w=>['starting','running'].includes(w.state))&&!this.host.toolConnections.receipts(ticketId).some(r=>r.state!=='complete')&&!this.host.store.deliveries().some(d=>d.ticketId===ticketId&&!['sent','dropped'].includes(d.status))
  }
+ recoverFromWatchdog(g:RouterGoal,ticketId:string,recoveryId:string,reason:string){
+  const c=this.context(g),n=g.nodes?.find(n=>n.ticketId===ticketId),task=this.host.store.tickets.get(ticketId)
+  this.host.scopes.checkTask(ticketId,c,true)
+  if(!g.managed||!['active','waiting'].includes(g.state)||!n||!task||task.ended||!this.effectsSettled(ticketId))throw Error('Watchdog recovery requires authorized settled work')
+  if(this.host.store.get('goal-delivery',ticketId))throw Error('Retained deliverable must go through independent acceptance')
+  const summary='Watchdog detected a stalled execution strategy. Inspect retained workspace and effects before changing implementation. Original objective, authorization and acceptance remain immutable. Evidence: '+recoveryId+'; '+reason
+  this.host.engine.report(ticketId,{state:'failed',summary})
+  n.state='held';n.reason=summary;n.failure={kind:'quality',reason:summary}
+  this.save(g)
+ }
  private save(g:RouterGoal){this.host.store.put('router-goal',g.id,g)}
  private repair(g:RouterGoal,n:GoalNode,round:Pick<VerificationRound,'id'|'checks'>){
   const c=this.context(g),task=this.host.store.tickets.get(n.ticketId!)!

@@ -2,6 +2,7 @@ import {clientIds,clientConfig,installClient,restoreClient,type ClientId} from '
 import { readFileSync } from 'node:fs'
 import { loadConfig } from './config.ts'
 import { supervise, watch } from './supervisor.ts'
+import {runWatchdog} from './watchdog-daemon.ts'
 import { Runtime } from './runtime.ts'
 import { serve } from './server.ts'
 import { startMcp } from './mcp.ts'
@@ -67,6 +68,7 @@ async function main() {
   }
   else if(command==='verify-backup'){if(!args[0])throw Error('Backup directory required');console.log(JSON.stringify(verifyBackup(args[0]),null,2))}
   else if(command==='supervise'){if(!args[0])throw Error('Config file required');await supervise(args[0])}
+  else if(command==='watchdog'){if(!args[0])throw Error('Config file required');await runWatchdog(args[0],args.includes('--once'))}
   else if(command==='watch'){if(!args[0]||!args[1])throw Error('Host URL and token file required');await watch(args[0],args[1],args.includes('--once'))}
   else if (command === 'serve'||command==='setup') {
     const launch=parseLauncherArgs(args,1),file=launch.values[0]
@@ -120,6 +122,6 @@ async function main() {
     })
     console.log(JSON.stringify(await response.json(), null, 2))
     if (!response.ok) process.exitCode = 1
-  } else console.log('Commands: setup [private-directory] [--no-open] (default), serve <config>, open <url> <token-file> [--no-open], mcp <url> <token-file>, router <url> <token-file> --prompt <message> [--resume <UUID>] [--json], request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
+  } else console.log('Commands: setup [private-directory] [--no-open] (default), serve <config>, supervise <config>, watchdog <config> [--once], watch <url> <token-file> [--once], open <url> <token-file> [--no-open], mcp <url> <token-file>, router <url> <token-file> --prompt <message> [--resume <UUID>] [--json], request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
 }
 main().catch(error => { console.error(String(error)); process.exitCode = 1 })

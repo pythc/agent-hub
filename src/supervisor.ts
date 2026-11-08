@@ -1,19 +1,39 @@
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import {loadConfig} from './config.ts'
+import {setTimeout as delay} from 'node:timers/promises'
 
 /** Process supervision is outside the agent's model loop. Crash recovery preserves uncertain executions. */
 export async function supervise(configFile:string):Promise<void>{
-  let stopping=false,failures=0,child:ReturnType<typeof spawn>|undefined
-  const stop=()=>{stopping=true;child?.kill('SIGTERM')}
-  process.once('SIGINT',stop);process.once('SIGTERM',stop)
-  while(!stopping){
-    const started=Date.now()
-    child=spawn(process.execPath,[...process.execArgv,process.argv[1]!,'serve',configFile],{stdio:'inherit',shell:false})
-    await new Promise<void>((resolve,reject)=>{child!.once('error',reject);child!.once('exit',()=>resolve())})
-    if(stopping)break
-    failures=Date.now()-started>60000?0:failures+1
-    await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1000*2**Math.min(failures,5))))
+  const config=loadConfig(configFile),stopSignal=new AbortController()
+  let stopping=false,child:ReturnType<typeof spawn>|undefined,watcher:ReturnType<typeof spawn>|undefined,restarting=false,childStarted=0,watchdogEnabled=config.watchdog.enabled
+  const terminate=(process:ReturnType<typeof spawn>|undefined)=>{
+    if(!process||process.exitCode!==null||process.signalCode)return
+    process.kill('SIGTERM')
+    const timer=setTimeout(()=>{if(process.exitCode===null&&!process.signalCode)process.kill('SIGKILL')},15000)
+    timer.unref();process.once('exit',()=>clearTimeout(timer))
   }
+  const stop=()=>{stopping=true;stopSignal.abort();terminate(watcher);terminate(child)}
+  process.once('SIGINT',stop);process.once('SIGTERM',stop)
+  const loop=async(role:'serve'|'watchdog')=>{
+    let failures=0
+    while(!stopping){
+      const started=Date.now(),p=spawn(process.execPath,[...process.execArgv,process.argv[1]!,role,configFile],{stdio:role==='watchdog'?['inherit','inherit','inherit','ipc']:'inherit',shell:false})
+      if(role==='serve'){child=p;restarting=false;childStarted=started}else{
+        watcher=p
+        p.on('message',(message:any)=>{
+          if(message?.kind==='watchdog.setting'&&typeof message.enabled==='boolean')watchdogEnabled=message.enabled
+          if(message?.kind==='watchdog.host_unresponsive'&&watchdogEnabled&&!stopping&&!restarting&&child&&Date.now()-childStarted>=Math.max(30000,config.watchdog.staleMs)){restarting=true;terminate(child)}
+        })
+      }
+      await new Promise<void>((resolve,reject)=>{p.once('error',reject);p.once('exit',()=>resolve())})
+      if(stopping)break
+      failures=Date.now()-started>60000?0:failures+1
+      await delay(Math.min(30000,1000*2**Math.min(failures,5)),undefined,{signal:stopSignal.signal}).catch(()=>{})
+    }
+  }
+  try{await Promise.all([loop('serve'),loop('watchdog')])}
+  finally{stop();process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop)}
 }
 export async function watch(url:string,tokenFile:string,once=false):Promise<void>{
   const token=readFileSync(tokenFile,'utf8').trim()

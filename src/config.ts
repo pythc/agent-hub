@@ -5,6 +5,7 @@ import {builtins} from './prompts.ts'
 import {backendsSchema,executionSchema,validateBackendSelection} from './backend-config.ts'
 import {sourcePluginsSchema,sourceCapabilitiesSchema,toolConnectionsSchema} from './connector-config.ts'
 import {browserConfigSchema} from './browser-contract.ts'
+import {watchdogConfigSchema} from './watchdog-contract.ts'
 
 const sourceSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
@@ -61,7 +62,7 @@ export const configSchema = z.object({
   turnTimeoutMs: z.number().int().min(1000).default(600_000),
   work:z.object({sandboxDriver:z.enum(['codex','seatbelt','bubblewrap','disabled']).default('codex'),backgroundTimeoutMs:z.number().int().min(100).default(1800000),maxAgents:z.number().int().min(1).max(32).default(8),maxDepth:z.number().int().min(1).max(8).default(3),maxOutputBytes:z.number().int().min(1024).max(16000000).default(1000000),autoRecover:z.boolean().default(true),network:z.boolean().default(true)}).strict().prefault({}),
   delivery:z.object({workerPublish:z.boolean().default(false),authorization:z.enum(['per-head','policy']).default('per-head'),maxDraftLines:z.number().int().min(1).default(100000),commitName:z.string().min(1).default('Super-agent'),commitEmail:z.string().email().default('superagent@localhost.invalid'),automatedReviewers:z.array(z.string()).default([]),maxReviewRounds:z.number().int().min(1).max(10).default(3),autoMerge:z.boolean().default(false),mergeGh:z.string().optional(),requiredReviewers:z.array(z.string()).default([]),maxChangedLines:z.number().int().min(1).default(200),requireChecks:z.boolean().default(true),method:z.enum(['squash','merge','rebase']).default('squash')}).strict().prefault({}),
-  watchdog: z.object({ staleMs: z.number().min(1000).default(600000), intervalMs: z.number().min(1000).default(30000) }).strict().prefault({}),
+  watchdog: watchdogConfigSchema,
   prompts: z.object({ shared:z.string().default(''), router:z.string().default(''), worker:z.string().default(''), delivery:z.string().default(''),
     team:z.object({communication:z.string().default(''),scope:z.string().default(''),delivery:z.string().default('')}).strict().prefault({}),
     skills:z.record(z.string().regex(/^[a-z][a-z0-9-]*$/),z.string()).prefault({}),

@@ -1,3 +1,4 @@
+import {HostWatchdog} from './watchdog-host.ts'
 import {recordMaintenanceReplay} from './maintenance-replay.ts'
 import {SourceIdentities} from './source-identity.ts'
 import {taskView,allowNewTaskInputs,type TaskContinuation} from './task-context.ts'
@@ -68,6 +69,10 @@ interface LiveInputs {
 import {ChatSessions,chatToolDetails} from './chat.ts'
 
 export class Runtime {
+  readonly watchdog:HostWatchdog
+  get isPaused(){return this.paused}
+  executionActive(id:string){return this.controllers.has(id)}
+  interruptForWatchdog(id:string){this.controllers.get(id)?.abort(Error('Watchdog recovery requested'))}
   readonly chat:ChatSessions
   readonly store: Store
   readonly engine: Engine
@@ -157,6 +162,7 @@ export class Runtime {
     this.goals=new RouterGoals(this,options.clock)
     this.verification=new GoalVerification(this,options.clock)
     this.replanning=new GoalReplanning(this,options.clock)
+    this.watchdog=new HostWatchdog(this,options.clock)
     try{this.agentMemory=new AgentMemory(this,options.memoryEmbed,options.clock,options.memoryRerank)}catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.store.atomic(()=>{
       for(const a of this.store.list<{mode:string;parentTrigger?:string;discussion:string}>('worker-assignment'))if(a.mode==='host'&&a.parentTrigger)this.routerIngress.restoreLegacy(a.parentTrigger,a.discussion)
@@ -203,7 +209,7 @@ export class Runtime {
       if (run.phase === 'running' || run.phase === 'starting' || run.phase === 'background' || run.phase==='interrupted' || run.phase === 'uncertain' || run.phase === 'delivering' || run.phase==='merging') {
         this.store.put('run', run.ticketId, { ...run, phase: 'uncertain', error: 'Host stopped during execution; inspect native history and workspace before retry' })
         const ticket = this.store.tickets.get(run.ticketId)
-        const recover=config.work.autoRecover&&['running','starting','background','interrupted'].includes(run.phase)&&ticket&&!ticket.ended
+        const recover=!this.watchdog.recovering(run.ticketId)&&config.work.autoRecover&&['running','starting','background','interrupted'].includes(run.phase)&&ticket&&!ticket.ended
         if (ticket && !ticket.ended && runningAssignment(ticket)) {
           if(recover)this.engine.report(ticket.id,{state:'blocked',summary:'Execution interrupted; resuming with retained history',question:null})
           else this.reportWork(ticket.id, { state: 'blocked', summary: 'Execution interrupted; reconciliation required', question: ticket.attention?.question??'Inspect the native thread and workspace, then retry or take over.',...(ticket.attention?.triggerId?{askedBy:ticket.attention.triggerId}:{}) })
@@ -528,6 +534,7 @@ export class Runtime {
       if(!this.paused)void this.merger.tick().catch(error=>this.store.audit({type:'merge.error',message:String(error)}))
       this.pollSources()
       if(!this.paused)this.proactive.tick()
+      await this.watchdog.advance()
       if(!this.paused){await this.goals.advance();this.goals.tick()}
       this.engine.evaluateDue()
       reconsiderRouterFollowups(this)
@@ -535,6 +542,7 @@ export class Runtime {
       const interactive=(job:Job)=>job.kind==='followup'||job.kind==='router-followup'||(job.kind==='execute'&&!!this.store.tickets.get((job.payload as any).ticketId)?.inputs.some(i=>i.kind==='trigger'&&i.human&&this.store.tickets.get((job.payload as any).ticketId)!.undelivered.includes(i.id)))
       for (const job of this.store.jobs().sort((a,b)=>Number(interactive(b))-Number(interactive(a)))) {
         const payload = job.payload as any
+        if(['start','execute'].includes(job.kind)&&this.watchdog.recovering(payload.ticketId))continue
         if(payload.ticketId&&!['cancel','cleanup'].includes(job.kind)&&!this.scopes.taskRunnable(payload.ticketId)){this.store.jobState(job.id,'blocked','Task ownership requires reconciliation');continue}
         if(job.kind==='cleanup'){
           await this.work.endAssignment(payload.ticketId,payload.assignmentId)

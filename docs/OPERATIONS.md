@@ -21,6 +21,10 @@ For command options, run `./start.sh help`. Host diagnostics and reopening an ac
 ./start.sh open http://127.0.0.1:PORT /path/to/state/access-token --no-open
 ```
 
+## Independent monitoring
+
+For independent host and task monitoring, use `./start.sh supervise /path/to/config.json` after stopping the existing host. It runs separate host and Watchdog children. A separately managed `serve` process can use `./start.sh watchdog /path/to/config.json`, but that observer cannot restart a host it does not own. See [Watchdog operation, authority and recovery](WATCHDOG.md). Plain `setup`/`serve` does not start the independent observer.
+
 ## Before an upgrade
 
 1. Record the current Git commit, Node version, configuration path, and state directory.

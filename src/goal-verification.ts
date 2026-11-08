@@ -1,6 +1,7 @@
 import {constants,closeSync,fstatSync,lstatSync,openSync,readSync,realpathSync} from 'node:fs'
 import {isAbsolute,join,relative,resolve,sep} from 'node:path'
 import {z} from 'zod'
+import type {WatchdogRecovery} from './watchdog-contract.ts'
 import type {Runtime} from './runtime.ts'
 import type {RouterGoal} from './router-goals.ts'
 import type {GoalCriterion,GoalNode} from './goal-contract.ts'
@@ -32,6 +33,22 @@ function readArtifact(cwd:string,path:string):{content:string;missing?:boolean} 
 export class GoalVerification {
  constructor(private host:Runtime,private now:()=>number=Date.now){}
  criteria(g:RouterGoal,node?:GoalNode):GoalCriterion[]{return node?node.criterionIds.length?g.criteria.filter(c=>node.criterionIds.includes(c.id)):[{id:'__step__:'+node.id,description:'Verify this intermediate contribution toward '+node.supports?.join(', ')+': '+node.instruction,files:node.outputs??[],documents:[]}]:g.criteria}
+ /** Observation only: a live artifact check never releases a goal or replaces acceptance. */
+ observe(g:RouterGoal,node:GoalNode){
+  const context=this.host.goals.context(g),ticketId=node.ticketId!,run=this.host.store.get<Run>('run',ticketId)
+  this.host.scopes.checkTask(ticketId,context,true)
+  const criteria=this.criteria(g,node),evidence:Evidence[]=[]
+  for(const path of new Set(criteria.flatMap(c=>[...c.files,...(c.check?[c.check.path]:[])]))){
+   const data=run?readArtifact(run.cwd,path):{content:'',missing:true}
+   evidence.push({id:'artifact-'+stableDigest([ticketId,path]),kind:'file',ticketId,key:path,criterionIds:criteria.map(c=>c.id),...data,hash:stableDigest(data)})
+  }
+  for(const id of new Set(criteria.flatMap(c=>c.documents))){
+   const doc=this.host.knowledge.command({action:'read',id,limit:100},context)
+   if(doc.nextOffset!==null)throw Error('Watchdog document evidence exceeds observation budget')
+   evidence.push({id:'document-'+stableDigest([ticketId,id]),kind:'document',ticketId,key:id,criterionIds:criteria.map(c=>c.id),content:doc.content,hash:stableDigest(doc.content),revision:doc.revision})
+  }
+  return {artifacts:evidence.map(({content,...meta})=>({...meta,bytes:Buffer.byteLength(content)})),checks:criteria.filter(c=>c.check).map(c=>this.program(c,{evidence}))}
+ }
  capture(ticketId:string,report:WorkerReport,reply?:string):boolean {
   if(report.state!=='ready')return false
   const g=this.host.goals.forTask(ticketId);if(!g)return false
@@ -58,7 +75,7 @@ export class GoalVerification {
  }
  failureEvidence(g:RouterGoal):Evidence[]{
   const c=this.host.goals.context(g),items:Evidence[]=[];let bytes=0
-  const add=(value:Omit<Evidence,'id'|'hash'>)=>{const hash=stableDigest(value),item={...value,id:'evidence-'+hash,hash};bytes+=Buffer.byteLength(JSON.stringify(item));if(bytes>512*1024)throw Error('Replanning evidence exceeds 512 KiB');items.push(item)}
+  const add=(value:Omit<Evidence,'id'|'hash'>,referenceId?:string)=>{const hash=stableDigest(value),item={...value,id:referenceId??'evidence-'+hash,hash};bytes+=Buffer.byteLength(JSON.stringify(item));if(bytes>512*1024)throw Error('Replanning evidence exceeds 512 KiB');if(items.some(e=>e.id===item.id))throw Error('Duplicate failure evidence reference');items.push(item)}
   for(const n of g.nodes??[]){
    if(!n.ticketId)continue
    this.host.scopes.checkTask(n.ticketId,c,true)
@@ -69,6 +86,11 @@ export class GoalVerification {
    const criteria=this.criteria(g,n),criterionIds=criteria.map(c=>c.id),round=n.roundId?this.host.store.get<VerificationRound>('goal-verification',n.roundId):undefined
    add({kind:'report',ticketId:n.ticketId,key:n.id,criterionIds,content:JSON.stringify({nodeId:n.id,report:task.assignments.at(-1)?.report,assignmentId:task.assignments.at(-1)?.id,inputRevision:this.host.scopes.ownership(n.ticketId)?.dataRevision,failedRound:round?{id:round.id,state:round.state,checks:round.checks,error:round.error}:undefined})})
    add({kind:'execution',ticketId:n.ticketId,key:'host-execution',criterionIds,content:this.execution(n.ticketId)})
+   // Reports cite this exact ID. Keep the immutable observation in the host cleanup domain
+   // and expose it through the same paged evidence tool as every other failure artifact.
+   for(const r of this.host.store.list<WatchdogRecovery>('watchdog-recovery').filter(r=>r.goalId===g.id&&r.ticketId===n.ticketId&&r.state!=='stale')){
+    add({kind:'report',ticketId:n.ticketId,key:'watchdog-observation',criterionIds,content:JSON.stringify({id:r.id,assignmentId:r.assignmentId,contractHash:r.contractHash,at:r.at,judgment:r.judgment,observation:r.observation??null})},r.id)
+   }
    for(const path of new Set(criteria.flatMap(c=>[...c.files,...(c.check?[c.check.path]:[])]))){if(!run)throw Error('Replanning workspace is unavailable');add({kind:'file',ticketId:n.ticketId,key:path,criterionIds,...readArtifact(run.cwd,path)})}
    for(const id of new Set(criteria.flatMap(c=>c.documents))){const doc=this.host.knowledge.command({action:'read',id,limit:100},c);if(doc.nextOffset!==null)throw Error('Replanning document requires smaller evidence');add({kind:'document',ticketId:n.ticketId,key:id,criterionIds,content:doc.content,revision:doc.revision})}
   }
@@ -124,7 +146,7 @@ export class GoalVerification {
   this.host.store.atomic(()=>{this.host.store.put('goal-verification',id,round);this.host.store.enqueue('goal-verify:'+id,'goal-verify',{roundId:id,goalId:g.id,triggerId:g.triggerId,discussion:g.discussion})})
   return round
  }
- private program(cr:GoalCriterion,snapshot:Snapshot):VerificationCheck {
+ private program(cr:GoalCriterion,snapshot:Pick<Snapshot,'evidence'>):VerificationCheck {
   const check=cr.check!,items=snapshot.evidence.filter(e=>e.kind==='file'&&e.key===check.path&&e.criterionIds.includes(cr.id))
   let passed=items.length>0,reason='Declared artifact matches the deterministic check'
   for(const e of items){

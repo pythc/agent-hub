@@ -47,6 +47,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   let token: string
   try { token = readFileSync(tokenPath, 'utf8').trim() }
   catch { token = randomBytes(32).toString('hex'); writeFileSync(tokenPath, token, { mode: 0o600, flag: 'wx' }) }
+  const watchdogTokenPath=join(runtime.config.stateDir,'watchdog-access-token')
+  let watchdogToken:string
+  try{watchdogToken=readFileSync(watchdogTokenPath,'utf8').trim()}catch{watchdogToken=randomBytes(32).toString('hex');writeFileSync(watchdogTokenPath,watchdogToken,{mode:0o600,flag:'wx'})}
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
     if(error instanceof ChatError||error instanceof BrowserError){send(response,error.status,{error:error.message,code:error.code});return}
@@ -156,6 +159,17 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const input = z.object({ actor: z.string().min(1).max(300), human: z.boolean(), event: incomingSchema }).strict().parse(await body(req))
       send(res, 202, runtime.receive(id, input.actor, input.event, input.human))
       return
+    }
+    if(path==='/watchdog/snapshot'||path==='/watchdog/recover'||path==='/watchdog/heartbeat'){
+      if(!authorized(req,watchdogToken)){send(res,401,{error:'Dedicated watchdog credential required'});return}
+      if(req.method==='GET'&&path==='/watchdog/snapshot'){send(res,200,runtime.watchdog.snapshot(true));return}
+      if(req.method==='POST'&&path==='/watchdog/recover'){send(res,200,runtime.watchdog.accept(await body(req)));return}
+      if(req.method==='POST'&&path==='/watchdog/heartbeat'){
+        const value=z.object({at:z.number(),instanceId:z.string(),observed:z.number().int().nonnegative(),unavailable:z.number().int().nonnegative(),reviews:z.number().int().nonnegative(),pending:z.number().int().nonnegative()}).strict().parse(await body(req))
+        if(value.instanceId!==runtime.watchdog.instanceId)throw Error('Watchdog heartbeat belongs to an old host')
+        runtime.store.put('health','watchdog',{...value,receivedAt:Date.now()});send(res,200,{ok:true});return
+      }
+      send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
     if(req.method==='GET'&&path==='/router-management/catalog'){
