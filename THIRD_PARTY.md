@@ -34,3 +34,7 @@ versions and integrity hashes are retained in package-lock.json.
 
 The product screenshots in `docs/images/` were captured from Roppo using an
 isolated local fixture. They are not screenshots copied from another product.
+
+## Product demonstration
+
+The optional `demos/roppo-concept-video` project uses Remotion 4.0.541. Its license is preserved in [docs/licenses/remotion-LICENSE.md](docs/licenses/remotion-LICENSE.md); the repository Apache-2.0 license does not relicense Remotion. React and other packages retain their installed notices and are pinned in the demo lockfile. Feishu branding identifies a staged integration and does not imply endorsement.

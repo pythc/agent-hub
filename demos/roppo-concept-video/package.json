@@ -1,0 +1,36 @@
+{
+  "name": "roppo-concept-video",
+  "version": "1.0.0",
+  "description": "Editable Roppo product concept demonstration with simulated app integrations",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pythc/agent-hub.git",
+    "directory": "demos/roppo-concept-video"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
+  "private": true,
+  "dependencies": {
+    "@remotion/cli": "4.0.541",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.541"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/web": "0.0.166",
+    "prettier": "^3.8.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "dev": "remotion studio",
+    "build": "remotion bundle",
+    "upgrade": "remotion upgrade",
+    "lint": "tsc --noEmit"
+  },
+  "allowScripts": {
+    "esbuild": false
+  }
+}
