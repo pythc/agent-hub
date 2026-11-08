@@ -18,6 +18,14 @@
 
 基于 [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagent-prototype) 的领域核心构建。使用自己的模型接入方式，独立配置每个 Agent，把工作空间保留在自己的机器上。
 
+## 产品演示
+
+[![Roppo decision-layer walkthrough](docs/images/roppo-decision-flow.png)](docs/media/roppo-concept-1080p.mp4)
+
+2 分 39 秒，展示模型配置、群聊接入、额外决策层和可见的团队协作。界面与活动为编排演示，不代表真实生产执行。
+
+[1080p MP4](docs/media/roppo-concept-1080p.mp4) · [可编辑源码](demos/roppo-concept-video/README.md)
+
 ## 快速开始
 
 需要 **Node.js 22.19+**、Git，以及一种受支持的模型连接。

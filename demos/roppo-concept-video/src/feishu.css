@@ -1,0 +1,590 @@
+.feishu {
+  width: 1440px;
+  height: 810px;
+  display: flex;
+  gap: 7px;
+  padding: 7px 7px 7px 0;
+  color: #30343c;
+  background: linear-gradient(135deg, #d4e3f5 0%, #d8e3f6 60%, #d3d6e2 100%);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.feishu svg {
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.feishu-rail {
+  width: 71px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: #747e89;
+}
+.fs-window-buttons {
+  display: flex;
+  gap: 6px;
+  height: 35px;
+  align-items: center;
+}
+.fs-window-buttons i {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ff5f57;
+  border: 1px solid #e64a46;
+}
+.fs-window-buttons i:nth-child(2) {
+  background: #ffbd2e;
+  border-color: #e6a817;
+}
+.fs-window-buttons i:nth-child(3) {
+  background: #28c840;
+  border-color: #22ad36;
+}
+.fs-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 15px;
+  flex-shrink: 0;
+  position: relative;
+}
+.fs-self-avatar {
+  width: 35px;
+  height: 35px;
+  font-family: Georgia, serif;
+  font-weight: 600;
+  color: #423321;
+  margin: 5px 0 15px;
+}
+.fs-rail-action {
+  width: 36px;
+  height: 36px;
+  background: #ffffffb0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin-bottom: 15px;
+}
+.fs-nav {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 1px;
+}
+.fs-nav-item {
+  height: 54px;
+  margin: 0 4px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex-direction: column;
+  font-size: 11px;
+  color: #5f6875;
+}
+.fs-nav-item.active {
+  background: #ffffffd9;
+  color: #27354a;
+}
+.fs-nav-item > span:first-child {
+  height: 24px;
+  display: grid;
+  place-items: center;
+}
+.fs-message-symbol {
+  width: 27px;
+  position: relative;
+}
+.fs-message-symbol i {
+  position: absolute;
+  width: 17px;
+  height: 14px;
+  top: 3px;
+  left: 2px;
+  border-radius: 7px 7px 7px 2px;
+  background: #3580fa;
+}
+.fs-message-symbol i:nth-child(2) {
+  background: #27c6bf;
+  width: 12px;
+  height: 11px;
+  top: 10px;
+  left: 14px;
+  border-radius: 6px 6px 2px 6px;
+}
+.fs-message-symbol b,
+.fs-channel-avatar > b {
+  position: absolute;
+  right: -4px;
+  top: -5px;
+  border-radius: 50%;
+  background: #ff5252;
+  color: white;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 17px;
+  min-width: 17px;
+  text-align: center;
+  border: 1px solid #fff;
+}
+.fs-rail-footer {
+  position: relative;
+  margin-top: auto;
+  margin-bottom: 12px;
+  width: 31px;
+  height: 29px;
+  border-radius: 7px;
+  background: #c7d0e2;
+  display: grid;
+  place-items: center;
+}
+.fs-rail-footer i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff5353;
+  position: absolute;
+  right: -1px;
+  top: -2px;
+}
+.feishu-list {
+  width: 350px;
+  flex-shrink: 0;
+  background: #fcfcfd;
+  border-radius: 9px;
+  overflow: hidden;
+  position: relative;
+}
+.fs-list-title {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 18px;
+  font-size: 20px;
+}
+.fs-list-title strong {
+  font-weight: 600;
+}
+.fs-pinned {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 14px 14px;
+}
+.fs-pinned > div {
+  width: 47px;
+  text-align: center;
+}
+.fs-pin-icon {
+  width: 40px;
+  height: 40px;
+  border: 1.4px solid;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  white-space: pre-line;
+  font-size: 12px;
+  line-height: 14px;
+  margin: 0 auto 5px;
+}
+.fs-pin-icon.filled {
+  color: white !important;
+}
+.fs-pinned > div > span {
+  color: #838a96;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.fs-pin-icon.fs-doubao {
+  border: 0;
+  background: conic-gradient(
+    from -35deg,
+    #21baff,
+    #3870ff,
+    #f3fbff,
+    #76d8ff,
+    #2371f0,
+    #21baff
+  );
+  box-shadow: inset -5px -3px 7px #2066d477;
+  position: relative;
+}
+.fs-doubao:after {
+  content: "";
+  position: absolute;
+  inset: 8px 5px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, white, #fff9);
+  rotate: -30deg;
+}
+.fs-channels {
+  padding: 2px 8px;
+}
+.feishu-channel {
+  height: 68px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 10px 9px;
+  margin: 1px 0;
+}
+.feishu-channel.active {
+  background: #e5edfc;
+}
+.fs-channel-avatar {
+  position: relative;
+  flex-shrink: 0;
+}
+.fs-channel-copy {
+  flex: 1;
+  min-width: 0;
+}
+.fs-channel-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.fs-channel-title strong {
+  font-size: 16px;
+  font-weight: 400;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fs-channel-title time {
+  margin-left: auto;
+  color: #989fab;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.fs-channel-title em {
+  font-style: normal;
+  color: #bd8c12;
+  background: #fff5d9;
+  border-radius: 3px;
+  font-size: 10px;
+  padding: 0 3px;
+  flex-shrink: 0;
+}
+.fs-channel-copy p {
+  font-size: 13px;
+  color: #989faa;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin: 5px 0 0;
+  display: block;
+}
+.fs-channel-copy p svg {
+  margin-right: 5px;
+  color: #bac2ce;
+}
+.fs-list-scrollbar {
+  position: absolute;
+  right: 0;
+  top: 141px;
+  width: 7px;
+  height: 360px;
+  background: #bebfc2;
+  border-radius: 5px;
+}
+.feishu-main {
+  min-width: 0;
+  flex: 1;
+  background: #fcfcfd;
+  border-radius: 9px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.feishu-header {
+  height: 78px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #dddfe3;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.fs-header-name strong {
+  font-weight: 600;
+  font-size: 19px;
+  display: block;
+}
+.fs-header-name strong span {
+  font-size: 12px;
+  font-weight: 400;
+  color: #8c95a1;
+  margin-left: 3px;
+}
+.fs-header-name small {
+  color: #9ba3ae;
+  font-size: 12px;
+  display: block;
+  margin-top: 3px;
+}
+.fs-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  color: #747d89;
+  margin-left: auto;
+}
+.feishu-messages {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 20px 21px 5px;
+}
+.fs-message-flow {
+  position: relative;
+}
+.chat-date {
+  text-align: center;
+  color: #9aa2ae;
+  font-size: 12px;
+  padding: 8px 0 16px;
+}
+.feishu-message {
+  display: flex;
+  gap: 12px;
+  margin: 0 0 22px;
+  align-items: flex-start;
+}
+.feishu-message > .fs-avatar {
+  width: 35px;
+  height: 35px;
+  font-size: 12px;
+}
+.fs-bot-avatar {
+  border: 1px solid #e5e7eb;
+}
+.person-message {
+  max-width: 88%;
+  position: relative;
+  min-width: 0;
+}
+.person-name {
+  font-size: 11px;
+  color: #8d96a3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -3px 0 5px;
+}
+.person-name > span {
+  font-size: 10px;
+  border: 1px solid #dce1e7;
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 16px;
+  background: #fff;
+}
+.feishu-bubble {
+  border-radius: 9px;
+  background: #ededee;
+  padding: 11px 15px;
+  font-size: 16px;
+  line-height: 1.6;
+  width: fit-content;
+}
+.feishu-message.outgoing {
+  flex-direction: row-reverse;
+}
+.feishu-bubble.sent {
+  background: #d3e3ff;
+  border-bottom-right-radius: 2px;
+}
+.fs-read {
+  color: #08b39f;
+  position: absolute;
+  left: -21px;
+  bottom: 1px;
+  height: 17px;
+}
+.fs-project-message {
+  margin-top: -72px;
+  margin-bottom: 10px;
+}
+.fs-project-message .feishu-bubble {
+  padding: 10px;
+}
+.fs-link-card {
+  border-radius: 7px;
+  background: white;
+  width: 448px;
+  padding: 13px;
+}
+.fs-link-host {
+  font-size: 16px;
+  color: #303640;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.fs-link-host > span:last-child {
+  margin-left: auto;
+  color: #818998;
+}
+.fs-github-mark {
+  font-size: 22px;
+}
+.fs-link-content {
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+}
+.fs-repo-cover {
+  width: 102px;
+  height: 87px;
+  border: 1px solid #eceef2;
+  border-radius: 4px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.fs-repo-cover strong {
+  font-size: 14px;
+  line-height: 15px;
+}
+.fs-repo-cover span {
+  font-size: 6px;
+  color: #8b94a0;
+}
+.fs-repo-cover i {
+  height: 4px;
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  background: linear-gradient(90deg, #3a83da 80%, #efdc43 80%);
+}
+.fs-link-content > div:last-child strong {
+  display: block;
+  font-weight: 500;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.fs-link-content p {
+  margin: 5px 0 0;
+  font-size: 14px;
+  color: #7b818d;
+  line-height: 1.5;
+}
+.fs-result-message .feishu-bubble {
+  background: #ededee;
+}
+.fs-result-message .feishu-bubble > strong {
+  font-weight: 550;
+}
+.fs-result-message p {
+  margin: 9px 0 0;
+}
+.message-attachment {
+  border: 1px solid #e1e4e9;
+  border-radius: 7px;
+  padding: 12px 14px;
+  margin-top: 12px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 410px;
+}
+.message-attachment strong {
+  font-size: 15px;
+  font-weight: 500;
+}
+.message-attachment > svg:first-child {
+  color: #5878a8;
+}
+.message-attachment > svg:last-child {
+  margin-left: auto;
+  color: #949caa;
+}
+.attachment-meta {
+  font-size: 11px;
+  color: #969ea9;
+  margin-top: 3px;
+}
+.feishu-composer {
+  display: flex;
+  align-items: center;
+  min-height: 54px;
+  flex-shrink: 0;
+  border: 1px solid #c4c8d0;
+  border-radius: 9px;
+  padding: 0 12px 0 14px;
+  margin: 12px 20px 22px;
+  background: white;
+}
+.feishu-composer.is-typing {
+  border-color: #9fb3dc;
+}
+.feishu-input {
+  min-width: 0;
+  flex: 1;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.feishu-input > span {
+  color: #a5a9af;
+}
+.fs-compose-tools {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: #787f8b;
+  margin-left: 12px;
+}
+.fs-format {
+  font-size: 19px;
+}
+.fs-at {
+  font-size: 24px;
+  line-height: 24px;
+}
+.fs-caret {
+  display: inline-block;
+  height: 19px;
+  border-right: 1.5px solid #454c56;
+  vertical-align: -3px;
+  margin-left: 2px;
+}
+.feishu-send {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 31px;
+  color: #bdc1c8;
+  margin-left: 5px;
+  border-left: 1px solid #eef0f3;
+  padding-left: 5px;
+}
+.feishu-send svg {
+  fill: currentColor;
+  stroke-width: 1;
+}
+.feishu-send.ready {
+  color: #3370ff;
+}

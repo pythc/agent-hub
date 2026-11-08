@@ -18,6 +18,14 @@
 
 Built on the domain core of [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagent-prototype). Bring your own model access, configure each agent, and keep your workspace on your own machine.
 
+## Product walkthrough
+
+[![Roppo decision-layer walkthrough](docs/images/roppo-decision-flow.png)](docs/media/roppo-concept-1080p.mp4)
+
+A 2:39 concept walkthrough of model setup, group-chat intake, the optional decision layer, and visible teamwork. The interface and activity are staged; this is not a production run.
+
+[1080p MP4](docs/media/roppo-concept-1080p.mp4) · [Editable source](demos/roppo-concept-video/README.md)
+
 ## Quick start
 
 You need **Node.js 22.19+**, Git, and a supported model connection.
