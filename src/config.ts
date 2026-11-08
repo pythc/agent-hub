@@ -1,3 +1,4 @@
+import {backendPackageReferences} from './backends/plugin-contract.ts'
 import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { z } from 'zod'
@@ -51,6 +52,7 @@ export const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(4319),
   codex: z.string().default('codex'),
   backends:backendsSchema,
+  backendPlugins:backendPackageReferences,
   execution:executionSchema,
   sourcePlugins:sourcePluginsSchema,
   toolConnections:toolConnectionsSchema,
@@ -86,6 +88,8 @@ export function loadConfig(path: string): Config {
   const config = configSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
   validateBackendSelection(config)
   config.stateDir = resolve(base, config.stateDir)
+  for(const plugin of config.backendPlugins)plugin.directory=resolve(base,plugin.directory)
+  for(const backend of Object.values(config.backends))if(backend.kind==='plugin'){backend.readPaths=backend.readPaths.map(p=>resolve(base,p));backend.writePaths=backend.writePaths.map(p=>resolve(base,p))}
   for(const plugin of config.sourcePlugins){if('module'in plugin)plugin.module=resolve(base,plugin.module);else{plugin.directory=resolve(base,plugin.directory);plugin.readPaths=plugin.readPaths.map(path=>resolve(base,path))}}
   for(const connection of Object.values(config.toolConnections))if(connection.transport.kind==='stdio'&&connection.transport.cwd)connection.transport.cwd=resolve(base,connection.transport.cwd)
   const ids = new Set<string>()

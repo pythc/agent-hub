@@ -1,3 +1,5 @@
+import {backendPackages} from './backends/plugin-package.ts'
+import {isApiBackend} from './backend-config.ts'
 import {randomBytes,randomUUID,createHash} from 'node:crypto'
 import {join} from 'node:path'
 import {execFile} from 'node:child_process'
@@ -51,7 +53,7 @@ export class EntrySetup {
    return {...item,status:verification?.verified&&configured?'verified':sources.some(s=>s.enabled&&(!s.allowedCount||['credentials-required','configuration-error','connection-error'].includes(s.liveStatus)))?'attention':configured?'configured':'not-configured',sources,...(client?{client:{...client,serverName:this.clientName}}:{}),...(verification?{verification}:{}),usage:this.usage(item.id)}
   }))
   const backendId=host.config.execution.roles.worker??host.config.execution.backend,d=host.config.backends[backendId]??{kind:'codex' as const}
-  return {revision:host.settings.current().revision,preview:this.preview,host:{platform:process.platform,localOnly:true,clientInstallLocation:'host',label:'AgentHub host computer'},backend:{id:backendId,kind:d.kind,label:('label'in d&&d.label)||(d.kind==='codex'?'Codex':d.model),configured:d.kind==='codex'?executable(d.command??host.config.codex):!d.apiKeyEnv||!!process.env[d.apiKeyEnv],remoteVerified:false},entries,connections:this.deployment.info().connections,attention:[...status.approvals.filter((a:any)=>a.status==='pending').map((a:any)=>({kind:'approval',id:a.id,label:'Approval needed',count:1})),...status.tickets.filter((t:any)=>t.stage.stage==='person').map((t:any)=>({kind:'work',id:t.id,label:t.attention?.question??t.title,count:1})),...status.deliveries.filter((d:any)=>d.status==='uncertain').map((d:any)=>({kind:'delivery',id:d.id,label:'Check an uncertain delivery',count:1}))]}
+  return {revision:host.settings.current().revision,preview:this.preview,host:{platform:process.platform,localOnly:true,clientInstallLocation:'host',label:'AgentHub host computer'},backend:{id:backendId,kind:d.kind,label:('label'in d&&d.label)||(d.kind==='codex'?'Codex':d.model),configured:d.kind==='codex'?executable(d.command??host.config.codex):d.kind==='plugin'?backendPackages(host.config).has(d.plugin)&&Object.values(d.env).every(name=>process.env[name]!==undefined):!d.apiKeyEnv||!!process.env[d.apiKeyEnv],remoteVerified:false},entries,connections:this.deployment.info().connections,attention:[...status.approvals.filter((a:any)=>a.status==='pending').map((a:any)=>({kind:'approval',id:a.id,label:'Approval needed',count:1})),...status.tickets.filter((t:any)=>t.stage.stage==='person').map((t:any)=>({kind:'work',id:t.id,label:t.attention?.question??t.title,count:1})),...status.deliveries.filter((d:any)=>d.status==='uncertain').map((d:any)=>({kind:'delivery',id:d.id,label:'Check an uncertain delivery',count:1}))]}
  }
  async probe(id:string,credentials?:{appId?:string;appSecret?:string}){
   entryId.parse(id);const host=this.host(),checks:Check[]=[],choices:{id:string;label:string}[]=[]

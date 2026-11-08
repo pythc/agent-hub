@@ -137,7 +137,7 @@ it.each(['anthropic','openai-responses'] as const)('keeps native effort defaults
  f.config.backends=backendsSchema.parse({codex:{kind,baseUrl:'https://example.test/v1',model:'provider-model',parameters}})
  const t=f.h.watchdog.snapshot().targets[0]!
  expect(t.inference.options.effort).toBeUndefined();expect(t.inference.model).toBeUndefined()
- if(t.inference.backend.kind==='codex')throw Error('Expected the current API backend')
+ if(t.inference.backend.kind==='codex'||t.inference.backend.kind==='plugin')throw Error('Expected the current API backend')
  expect(apiOptions(t.inference.backend,t.inference.options).parameters).toEqual(parameters)
 })
 it('detects no progress despite fresh activity and persists observations across monitor restart',async()=>{

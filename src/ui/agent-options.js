@@ -48,11 +48,11 @@ function agentConnectionEditor(){
   form.append(opButton(L('Sign out','退出此账号'),async()=>{await entryRun('subscription-logout',async()=>{const result=await api('/subscription/logout',{account:connectionEditor.account});connectionEditor.notice=result.revoked?L('Signed out and revoked','已退出并撤销授权'):L('Signed out locally; remote revocation unconfirmed','已在本地退出；远端撤销未确认');render()})},'button'))
  }
  const label=el('label','',L('Connection configuration (JSON)','连接配置（JSON）')),input=el('textarea');input.id='connection-json';label.htmlFor=input.id;input.value=connectionEditor.json;input.rows=14;input.oninput=()=>{connectionEditor.json=input.value;syncSubscriptionEditor()}
- form.append(label,input,el('p','hint',connectionEditor.kind==='cli'?L('Codex app-server adapter. Authentication and quota follow this CLI profile. Other CLI adapters are not yet supported.','Codex app-server 适配器。认证与额度沿用此 CLI 配置；其他 CLI 适配器尚未支持。'):L('Credentials use local environment references or official sign-in. Saved configuration does not prove a successful model call.','凭据使用本地环境变量引用或官方登录。配置保存不代表模型调用已验证。')))
+ form.append(label,input,el('p','hint',connectionEditor.kind==='cli'?L('Codex app-server adapter. Authentication and quota follow this CLI profile. Additional adapters use reviewed execution plugin packages and a controlled restart.','Codex app-server 适配器。认证与额度沿用此 CLI 配置；其他 CLI 适配器通过审核后的执行插件包接入，需受控重启。'):L('Credentials use local environment references or official sign-in. Saved configuration does not prove a successful model call.','凭据使用本地环境变量引用或官方登录。配置保存不代表模型调用已验证。')))
  form.append(opButton(L('Save connection','保存连接'),async()=>{await entryRun('connection-save',async()=>{
   if(!/^[a-z][a-z0-9_-]{0,63}$/.test(connectionEditor.id))throw Error('Invalid connection name')
   const d=JSON.parse(connectionEditor.json)
-  if(connectionEditor.kind==='cli'&&d.kind!=='codex'||connectionEditor.kind==='subscription'&&!d.subscription||connectionEditor.kind==='api'&&(d.kind==='codex'||d.subscription))throw Error('Connection method and configuration differ')
+  if(connectionEditor.kind==='cli'&&!['codex','plugin'].includes(d.kind)||connectionEditor.kind==='subscription'&&!d.subscription||connectionEditor.kind==='api'&&(['codex','plugin'].includes(d.kind)||d.subscription))throw Error('Connection method and configuration differ')
   const result=await api('/settings',{revision:S.base.revision,patch:{backends:{...S.base.config.backends,[connectionEditor.id]:d}}})
   connectionEditor.notice=L('Saved; configure Router / Workers to use it.','已保存；可在 Router / Workers 中选择。')
   resetDraft(result);S.snap=await snapshot();await readEntries();render()

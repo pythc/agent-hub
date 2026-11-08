@@ -1,8 +1,10 @@
+import {ProcessBackend,pluginIdentity} from './plugin-process.ts'
+import {backendPackages} from './plugin-package.ts'
 import type {Config} from '../config.ts'
 import {validateBackendSelection,type BackendDefinition,type AgentOptions} from '../backend-config.ts'
 import {mergeOptions,apiOptions} from '../agent-options.ts'
 import {SubscriptionAccounts} from './subscription.ts'
-import {CodexModel,nativeContextProfile} from '../codex.ts'
+import {CodexModel,nativeContextProfile} from '../../plugins/backend-codex/model.ts'
 import type {BackendDescription,Model,ModelRequest,ModelResult} from '../model.ts'
 import {ApiModel,type ThreadStore} from './api.ts'
 interface Binding {id:string;kind:string;endpoint?:string;identity?:string}
@@ -16,17 +18,18 @@ export class BackendRegistry implements Model {
   if(!d)throw Error('Backend '+id+' is no longer configured; existing threads cannot migrate implicitly')
   return d
  }
- private binding(id:string):Binding{const d=this.definition(id);return {id,kind:d.kind,identity:JSON.stringify(d.kind==='codex'?{command:d.command??this.config.codex,args:d.args??[],env:d.env??{}}:{account:d.subscription?.account,owner:d.subscription?.owner,apiKeyEnv:d.apiKeyEnv,headerEnv:d.headerEnv??{}}),...(d.kind!=='codex'?{endpoint:d.baseUrl.replace(/\/+$/,'')}:{})}}
+ private binding(id:string):Binding{const d=this.definition(id);if(d.kind==='plugin'){const pkg=backendPackages(this.config).get(d.plugin);if(!pkg)throw Error('Unknown execution backend plugin');return {id,kind:d.kind,identity:pluginIdentity(d,pkg)}}return {id,kind:d.kind,identity:JSON.stringify(d.kind==='codex'?{command:d.command??this.config.codex,args:d.args??[],env:d.env??{}}:{account:d.subscription?.account,owner:d.subscription?.owner,apiKeyEnv:d.apiKeyEnv,headerEnv:d.headerEnv??{}}),...(d.kind!=='codex'?{endpoint:d.baseUrl.replace(/\/+$/,'')}:{})}}
  private forThread(threadId:string,deleting=false):string{
   if(!deleting&&this.store.get('context-session-fence',threadId))throw Error('Context permissions changed; this history is quarantined')
   if(!deleting&&(this.store.get('backend-deleted',threadId)||this.store.get('backend-delete-pending',threadId)))throw Error('Backend history deletion fence is active; explicit fresh context required')
   const saved=this.store.get<Binding>('backend-binding',threadId)
   if(saved){if(saved.kind!==this.binding(saved.id).kind||saved.endpoint!==this.binding(saved.id).endpoint||saved.identity!==undefined&&saved.identity!==this.binding(saved.id).identity)throw Error('Thread backend identity or endpoint changed; explicit migration is required');return saved.id}
-  if(threadId.startsWith('api:'))throw Error('API thread has no backend binding')
+  if(threadId.startsWith('api:')||threadId.startsWith('plugin:'))throw Error('Thread has no backend binding')
   return 'codex' // Pre-registry native Codex conversations retain their original executor.
  }
  private model(id:string,options:AgentOptions={}):Model{
   const d=this.definition(id)
+  if(d.kind==='plugin'){const pkg=backendPackages(this.config).get(d.plugin);if(!pkg)throw Error('Unknown execution backend plugin');return new ProcessBackend(id,d,pkg,this.config,this.store)}
   if(d.kind==='codex')return new CodexModel({...this.config,model:d.model??this.config.model,codex:d.command??this.config.codex,turnTimeoutMs:options.timeoutMs??this.config.turnTimeoutMs},d.args??[],d.env)
   const definition=apiOptions(d,options)
   return new ApiModel(id,definition,this.store,options.timeoutMs??this.config.turnTimeoutMs,d.subscription?()=>new SubscriptionAccounts(this.config.stateDir).credential(d.subscription!.account):undefined)
@@ -37,7 +40,7 @@ export class BackendRegistry implements Model {
   const id=r.threadId?this.forThread(r.threadId):r.backendId??this.selected(r.role??(r.ephemeral?'router':'worker'))
   const definition=structuredClone(this.definition(id)),role=r.role??(r.ephemeral?'router':'worker')
   const options=mergeOptions(definition.defaults,r.options??(role==='router'?this.config.execution.router:undefined))
-  if(definition.kind!=='codex'&&definition.subscription){
+  if(definition.kind!=='codex'&&definition.kind!=='plugin'&&definition.subscription){
    const sub=definition.subscription
    if(!sub.backgroundAuthorized||!r.principal||r.principal.source!==sub.owner.source||r.principal.actor!==sub.owner.actor)throw Error('Subscription requires its owner and authorized background activity')
   }
@@ -51,6 +54,7 @@ export class BackendRegistry implements Model {
   try{return await this.model(id,options).run({...r,options,compactBeforeTurn:!!compact,onContextReady:()=>{if(definition.kind==='codex'&&r.managed&&nativeThread&&(!legacyContext||compact))this.store.put('native-context',nativeThread,{version:nativeContextProfile,at:Date.now(),compacted:!!compact});r.onContextReady?.()},instructions:r.instructions+(options.prompt?'\nAgent instructions:\n'+options.prompt:''),model:r.model??(!r.threadId&&role==='router'?this.config.execution.router?.model:undefined),onThread:threadId=>{nativeThread=threadId;if(!locked){locked=threadId;this.writers.add(threadId)}this.store.put('backend-binding',threadId,binding);r.onThread?.(threadId)}})}
   finally{if(locked)this.writers.delete(locked)}
  }
+ async probe(id:string){const model=this.model(id);if(!(model instanceof ProcessBackend))throw Error('Probe requires an execution backend package');return model.probe()}
  async history(threadId:string,cwd:string){return this.model(this.forThread(threadId)).history!(threadId,cwd)}
  async purge(threadId:string,cwd:string){if(this.writers.has(threadId))throw Error('Thread writer must stop before deletion');const model=this.model(this.forThread(threadId,true));if(!model.purge)throw Error('Backend cannot verify local history deletion');const result=await model.purge(threadId,cwd);this.store.put('backend-deleted',threadId,{threadId,at:Date.now()});return result}
  async expose(threadId:string,cwd:string){const model=this.model(this.forThread(threadId));if(!model.describe?.().nativeTakeover)throw Error('This backend has no native desktop chat; inspect its history in the AgentHub resource panel');await model.expose!(threadId,cwd)}

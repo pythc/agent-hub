@@ -1,3 +1,4 @@
+import {activateBackendPackages} from './backends/plugin-package.ts'
 import {HostWatchdog} from './watchdog-host.ts'
 import {recordMaintenanceReplay} from './maintenance-replay.ts'
 import {SourceIdentities} from './source-identity.ts'
@@ -158,6 +159,7 @@ export class Runtime {
           this.sources.set(source.id,adapter)
         }
         activatePluginPackages(this.store,config,this.sourceRegistry.packages,previous)
+        activateBackendPackages(this.store,config)
         return {settings,model}
       })
       this.settings=initial.settings;this.model=initial.model

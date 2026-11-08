@@ -1,3 +1,4 @@
+import {BackendRegistry} from './backends/registry.ts'
 import {randomUUID} from 'node:crypto'
 import {existsSync,mkdirSync,realpathSync,statSync,accessSync,constants} from 'node:fs'
 import {isAbsolute,join,relative,resolve,sep,dirname,basename} from 'node:path'
@@ -31,7 +32,7 @@ export function setupWorkspace(config:Config,input?:string){
  if(existsSync(workspace))try{accessSync(workspace,constants.R_OK|constants.X_OK)}catch{throw new OnboardingError('workspace_invalid','This folder cannot be read. Choose another folder.')}
  return workspace
 }
-const connectionLabel=(definition:BackendDefinition)=>definition.label??(definition.kind==='codex'?'Codex':new URL(definition.baseUrl).hostname+' · '+definition.model)
+const connectionLabel=(definition:BackendDefinition)=>definition.label??(definition.kind==='codex'?'Codex':definition.kind==='plugin'?definition.plugin:new URL(definition.baseUrl).hostname+' · '+definition.model)
 
 /** A minimal first-run flow; machine details remain behind the advanced console. */
 export class Onboarding {
@@ -91,6 +92,8 @@ export class Onboarding {
   if(definition.kind==='codex'){
    const command=definition.command??host.config.codex
    for(const [name,args]of [['installation',['--version']],['sign-in',['login','status']]] as const){try{await exec(command,[...(definition.args??[]),...args],{env:cliEnvironment(definition.env),timeout:10000,maxBuffer:64000,encoding:'utf8'});checks.push({id:name,status:'ok',code:name==='installation'?'codex_installed':'codex_signed_in'})}catch{checks.push({id:name,status:'required',code:name==='installation'?'codex_not_installed':'codex_sign_in_required'})}}
+  }else if(definition.kind==='plugin'){
+   try{const result=await new BackendRegistry(plan.next,host.store).probe(plan.connection.id);checks.push({id:'connection',status:result.available&&result.authenticated===true?'ok':'required',code:result.available&&result.authenticated===true?'backend_authenticated':'backend_sign_in_required'})}catch{checks.push({id:'connection',status:'required',code:'backend_unavailable'})}
   }else{
    try{
     const records=new Map<string,unknown>(),memory={get:<T>(kind:string,key:string)=>records.get(kind+':'+key) as T|undefined,put:(kind:string,key:string,value:unknown)=>{records.set(kind+':'+key,value)}}

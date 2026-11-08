@@ -153,3 +153,5 @@ Built with [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagent-
 The repository and CLI retain the name `agent-hub`.
 
 Developer source packages: see [Plugins](docs/PLUGINS.md) for Feishu, Slack and Linear adapters and controlled upgrade/rollback.
+
+Execution CLI plugin SDK, capability admission and versioned recovery: [Execution plugins](docs/EXECUTION_PLUGINS.md).

@@ -1,0 +1,8 @@
+{
+  "id": "zcode-cli", "label": "ZCode CLI (experimental headless)", "version": "0.1.0", "stateVersion": 1,
+  "configSchema": {"type": "object", "properties": {"command": {"type": "string", "minLength": 1}, "args": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false},
+  "parametersSchema": {"type": "object", "additionalProperties": false},
+  "capabilities": {"resume": false, "tools": false, "managed": false, "contextBudget": false, "steering": false, "promptRefresh": false, "images": false, "nativeTakeover": false, "history": false, "purge": false, "modelCatalog": false},
+  "network": true,
+  "environment": ["ELECTRON_RUN_AS_NODE", "ZCODE_DATA_BASE_DIR", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "ZCODE_HTTP_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+}
