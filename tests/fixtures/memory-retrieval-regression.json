@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "purpose": "Original twelve examples: development regression only, never held-out acceptance.",
+  "records": [
+    {
+      "key": "database",
+      "subject": "数据存储",
+      "content": "生产订单持久化到 PostgreSQL 关系型数据库。",
+      "queries": [
+        "线上交易记录存放在什么系统里？"
+      ]
+    },
+    {
+      "key": "deployment",
+      "subject": "部署策略",
+      "content": "应用部署采用蓝绿发布，先启动新环境再切换流量。",
+      "queries": [
+        "升级时如何做到用户请求不中断？"
+      ]
+    },
+    {
+      "key": "backup",
+      "subject": "灾难恢复",
+      "content": "每天凌晨三点把数据库快照备份到异地。",
+      "queries": [
+        "故障以后靠什么恢复丢失的数据？"
+      ]
+    },
+    {
+      "key": "queue",
+      "subject": "任务队列",
+      "content": "异步任务通过 Redis 队列处理。",
+      "queries": [
+        "后台作业由哪种中间件排队？"
+      ]
+    },
+    {
+      "key": "api",
+      "subject": "接口文档",
+      "content": "项目接口说明使用 OpenAPI 格式编写。",
+      "queries": [
+        "HTTP API 的契约用哪套规范表示？"
+      ]
+    },
+    {
+      "key": "report",
+      "subject": "报告顺序",
+      "content": "技术汇报先列结论，再补充证明和限制条件。",
+      "queries": [
+        "说明结果时我希望先说什么？"
+      ]
+    },
+    {
+      "key": "language",
+      "subject": "开发语言",
+      "content": "后端服务主要使用 Go 语言编写。",
+      "queries": [
+        "服务器程序用哪种编程语言实现？"
+      ]
+    },
+    {
+      "key": "acceptance",
+      "subject": "验收流程",
+      "content": "正式发布前必须由独立验证器核对验收标准。",
+      "queries": [
+        "上线之前由谁检查工作是否达标？"
+      ]
+    },
+    {
+      "key": "timezone",
+      "subject": "团队时区",
+      "content": "团队开会统一采用北京时间。",
+      "queries": [
+        "会议日程按哪个时区安排？"
+      ]
+    },
+    {
+      "key": "vegetarian",
+      "subject": "饮食偏好",
+      "content": "我是素食者，不吃肉类和鱼。",
+      "queries": [
+        "聚餐选菜需要避开什么食材？"
+      ]
+    },
+    {
+      "key": "travel",
+      "subject": "差旅习惯",
+      "content": "短途出差优先乘坐高铁。",
+      "queries": [
+        "附近城市的商务旅行喜欢什么交通方式？"
+      ]
+    },
+    {
+      "key": "design",
+      "subject": "界面风格",
+      "content": "管理后台默认采用暗色主题。",
+      "queries": [
+        "控制面板的默认外观是深色还是浅色？"
+      ]
+    }
+  ],
+  "negativeQueries": [
+    "火星表面平均温度是多少？",
+    "唐代诗人李白出生在哪一年？",
+    "怎么制作草莓蛋糕？",
+    "量子纠缠的贝尔不等式是什么？"
+  ]
+}

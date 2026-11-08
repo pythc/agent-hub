@@ -116,7 +116,7 @@ export class Runtime {
   private lock: string
   private paused = false
   static async create(config:Config,options:{model?:Model;sources?:Source[];mergeApi?:GithubApi;clock?:()=>number;browserDriver?:BrowserDriver}={}){return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
-  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi;sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory } = {}) {
+  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi;sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory;memoryRerank?:import('./memory-rerank.ts').RerankMemory } = {}) {
     if(config.sourcePlugins.length&&!options.sourceRegistry)throw Error('Use Runtime.create to load configured source plugins')
     this.sourceRegistry=options.sourceRegistry??new SourceRegistry()
     validateBackendSelection(config)
@@ -157,7 +157,7 @@ export class Runtime {
     this.goals=new RouterGoals(this,options.clock)
     this.verification=new GoalVerification(this,options.clock)
     this.replanning=new GoalReplanning(this,options.clock)
-    try{this.agentMemory=new AgentMemory(this,options.memoryEmbed,options.clock)}catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
+    try{this.agentMemory=new AgentMemory(this,options.memoryEmbed,options.clock,options.memoryRerank)}catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.store.atomic(()=>{
       for(const a of this.store.list<{mode:string;parentTrigger?:string;discussion:string}>('worker-assignment'))if(a.mode==='host'&&a.parentTrigger)this.routerIngress.restoreLegacy(a.parentTrigger,a.discussion)
     })

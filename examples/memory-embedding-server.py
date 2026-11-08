@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 parser = argparse.ArgumentParser()
 parser.add_argument("--snapshot", required=True)
 parser.add_argument("--engine", choices=["model2vec", "transformers"], default="model2vec")
+parser.add_argument("--reranker-snapshot")
 args = parser.parse_args()
 if args.engine == "model2vec":
     from model2vec import StaticModel
@@ -36,6 +37,19 @@ else:
             return torch.nn.functional.normalize(model(**tokens)[0][:, 0], p=2, dim=1)[0].tolist()
 
 dimensions = len(encode("启动检查"))
+if args.reranker_snapshot:
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    torch.set_num_threads(2)
+    rerank_tokenizer = AutoTokenizer.from_pretrained(args.reranker_snapshot, local_files_only=True)
+    rerank_model = AutoModelForSequenceClassification.from_pretrained(args.reranker_snapshot, local_files_only=True).eval()
+
+    def rerank(query, documents):
+        with torch.inference_mode():
+            tokens = rerank_tokenizer([[query, doc] for doc in documents], padding=True,
+                                     truncation=True, max_length=512, return_tensors="pt")
+            return torch.sigmoid(rerank_model(**tokens).logits.view(-1).float()).tolist()
+
 lock = threading.Lock()
 calls = []
 faults = {}
@@ -70,23 +84,35 @@ class Handler(BaseHTTPRequestHandler):
                 faults.clear()
                 faults.update(body)
             return self.reply(200, {"ok": True})
-        if self.path != "/embeddings":
+        is_rerank = self.path == "/rerank" and args.reranker_snapshot
+        if self.path != "/embeddings" and not is_rerank:
             return self.reply(404, {})
-        text = body["input"]
+        text = body["query"] if is_rerank else body["input"]
         started = time.monotonic()
         with lock:
-            fault = dict(faults.get(text, {}))
-            call = {"input": text, "state": "started", "model": body["model"]}
+            fault = dict(faults.get(self.path + ':' + text, faults.get(text, {})))
+            call = {"input": text, "state": "started", "model": body["model"], "path": self.path}
+            if is_rerank:
+                call["documents"] = body["documents"]
             calls.append(call)
         if fault.get("fail"):
             with lock:
                 call.update(state="failed")
             return self.reply(503, {"error": "injected_unavailable"})
-        vector = encode(text)
+        if is_rerank:
+            scores = rerank(text, body["documents"])
+            result = {"results": [{"index": i, "relevance_score": score} for i, score in enumerate(scores)]}
+        else:
+            vector = encode(text)
+            result = {"data": [{"index": 0, "embedding": vector}]}
         with lock:
-            call.update(state="inferred", dimensions=len(vector))
+            call.update(state="inferred")
+            if is_rerank:
+                call["scores"] = scores
+            else:
+                call["dimensions"] = len(vector)
         time.sleep(fault.get("delayMs", 0) / 1000)
-        self.reply(200, {"data": [{"index": 0, "embedding": vector}]})
+        self.reply(200, result)
         with lock:
             call.update(state="returned", elapsedMs=round((time.monotonic() - started) * 1000))
 
@@ -99,7 +125,8 @@ signal.signal(signal.SIGTERM, stop)
 print(json.dumps({"url": f"http://127.0.0.1:{server.server_port}", "snapshot": args.snapshot,
                   "library": args.engine, "version": importlib.metadata.version(args.engine),
                   "python": sys.version.split()[0], "dimensions": dimensions,
-                  "torch": importlib.metadata.version("torch") if args.engine == "transformers" else None}), flush=True)
+                  "torch": importlib.metadata.version("torch") if args.engine == "transformers" else None,
+                  "rerankerSnapshot": args.reranker_snapshot}), flush=True)
 try:
     server.serve_forever()
 finally:

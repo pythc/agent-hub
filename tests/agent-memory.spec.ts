@@ -8,14 +8,15 @@ import {configSchema} from '../src/config.ts'
 import type {ModelRequest} from '../src/model.ts'
 import type {MemoryFact} from '../src/router-memory.ts'
 import type {EmbedMemory} from '../src/memory-vectors.ts'
+import type {RerankMemory} from '../src/memory-rerank.ts'
 const hosts:Runtime[]=[],roots:string[]=[]
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
-function fixture(output?:(input:any,request:ModelRequest)=>unknown|Promise<unknown>,embed?:EmbedMemory){
+function fixture(output?:(input:any,request:ModelRequest)=>unknown|Promise<unknown>,embed?:EmbedMemory,rerank?:RerankMemory){
  const root=mkdtempSync(join(tmpdir(),'agent-memory-'));roots.push(root);let now=Date.now(),seq=0,h!:Runtime
  const calls:ModelRequest[]=[]
  const config=configSchema.parse({stateDir:join(root,'state'),acceptMode:'auto',port:0,work:{sandboxDriver:'disabled'},execution:{router:{mode:'host'},management:{enabled:true},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice','bob']}]})
  const model={async run(r:ModelRequest){calls.push(r);const input=JSON.parse(r.input),text=JSON.stringify(await output?.(input,r)??{memories:[],topics:[]});return {threadId:'memory-'+calls.length,turnId:'turn-'+calls.length,text}}}
- const open=()=>{h=new Runtime(config,{model,clock:()=>now,memoryEmbed:embed});hosts.push(h)};open()
+ const open=()=>{h=new Runtime(config,{model,clock:()=>now,memoryEmbed:embed,memoryRerank:rerank});hosts.push(h)};open()
  h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Memory test',managers:[JSON.stringify(['local','alice'])],workerIds:['one'],sourceIds:['local'],backendIds:['codex']}})
  for(const name of ['g1','g2'])h.scopes.command({action:'entry.bind',operationId:name,expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'account',nativeId:name,history:'group'})
  const send=(text='Setup',thread='session',actor='alice',group='g1')=>{const result=h.receive('local',actor,{id:'input-'+(++seq),scope:group,thread,text,addressed:true}) as any;return context(result.triggerId)}
@@ -112,6 +113,65 @@ it('rejects an embedding that completes after clear',async()=>{
  const c=f.send(),fact=f.remember(c,'vector source');const pending=f.h.agentMemory.index(c,new AbortController().signal)
  f.h.memory.command(c,{action:'clear',operationId:'clear',expectedRevision:0},true);release([1,0]);await expect(pending).rejects.toThrow()
  expect(f.h.store.list('memory-vector')).toHaveLength(0);expect(f.h.memory.fact(fact.id)?.state).toBe('tombstoned')
+})
+const reranker={url:'http://test.invalid/rerank',model:'test'}
+it('recovers low-cosine candidates by reranking and rejects a higher-scoring lexical distractor',async()=>{
+ let sent:string[]=[]
+ const f=fixture(undefined,async text=>text==='semantic question'?[1,0]:text.includes('correct')?[.4,Math.sqrt(.84)]:[.9,Math.sqrt(.19)],async(_q,docs)=>{sent=docs;return docs.map((doc,index)=>({index,score:doc.includes('correct')?.9:.01}))})
+ f.configure({embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker});const c=f.send()
+ const correct=f.remember(c,'correct answer'),wrong=f.remember(c,'semantic question is unrelated background')
+ await f.h.agentMemory.index(c,new AbortController().signal)
+ const result=await f.h.agentMemory.search(c,'semantic question');expect(sent).toHaveLength(2);expect(result.mode).toBe('reranked');expect(result.items.map(f=>f.id)).toEqual([correct.id]);expect(result.items.some(f=>f.id===wrong.id)).toBe(false)
+})
+it('sends only current authorized active candidates to the reranker and refreshes the cache after mutation',async()=>{
+ const calls:string[][]=[]
+ const f=fixture(undefined,async()=>[1,0],async(_q,docs)=>{calls.push(docs);return docs.map((_doc,index)=>({index,score:.9}))}),alice=f.send(),bob=f.send('Bob','bob','bob'),other=f.send('Other','other','alice','g2')
+ const own=f.remember(alice,'visible own memory');f.remember(bob,'hidden personal marker',{kind:'preference'});f.remember(other,'other entry marker')
+ f.h.memory.command(alice,{action:'remember',operationId:'candidate',expectedRevision:0,subject:'candidate marker',content:'not confirmed',sourceIds:own.sources.map(s=>s.id)})
+ f.configure({embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker});await f.h.agentMemory.index(alice,new AbortController().signal)
+ await f.h.agentMemory.search(alice,'query');await f.h.agentMemory.search(alice,'query');expect(calls).toHaveLength(1);expect(calls[0]).toEqual(['work style visible own memory'])
+ f.h.memory.command(alice,{action:'remember',operationId:'edit',id:own.id,expectedRevision:own.revision,subject:own.subject,content:'visible updated memory',sourceIds:own.sources.map(s=>s.id),candidate:false},true)
+ await f.h.agentMemory.index(alice,new AbortController().signal);const result=await f.h.agentMemory.search(alice,'query');expect(calls).toHaveLength(2);expect(result.items[0]?.content).toBe('visible updated memory');expect(calls[1]?.join(' ')).not.toContain('visible own memory')
+})
+it('marks reranker failure as partial and never presents unfiltered dense candidates as verified relevance',async()=>{
+ const f=fixture(undefined,async text=>text==='question'?[1,0]:[.4,Math.sqrt(.84)],async()=>{throw Error('provider down')}),c=f.send();f.remember(c,'low cosine note')
+ f.configure({embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker});await f.h.agentMemory.index(c,new AbortController().signal)
+ expect(await f.h.agentMemory.search(c,'question')).toMatchObject({items:[],status:'partial',mode:'rerank_unavailable'})
+})
+it('rejects malformed reranker mappings even when an injected provider bypasses transport validation',async()=>{
+ const f=fixture(undefined,async()=>[1,0],async()=>[{index:99,score:.99}]),c=f.send();f.remember(c,'valid note');f.configure({embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker});await f.h.agentMemory.index(c,new AbortController().signal)
+ expect((await f.h.agentMemory.search(c,'query')).mode).toBe('rerank_unavailable')
+})
+it.each(['clear','pause','edit'] as const)('fences a reranker result completing after %s',async action=>{
+ let started=false,release!:()=>void
+ const f=fixture(undefined,async()=>[1,0],async(_q,docs)=>{started=true;return new Promise(resolve=>{release=()=>resolve(docs.map((_doc,index)=>({index,score:1})))})}),c=f.send(),fact=f.remember(c,'old rerank marker')
+ f.configure({embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker});await f.h.agentMemory.index(c,new AbortController().signal)
+ const pending=f.h.agentMemory.search(c,'query').catch(error=>String(error));for(let i=0;i<50&&!started;i++)await new Promise(r=>setTimeout(r,1));expect(started).toBe(true)
+ if(action==='clear')f.h.memory.command(c,{action:'clear',operationId:'rerank-clear',expectedRevision:0},true)
+ else if(action==='pause')f.h.agentMemory.manage(c,{action:'personal',enabled:false})
+ else f.h.memory.command(c,{action:'remember',operationId:'edit-inflight',id:fact.id,expectedRevision:fact.revision,subject:fact.subject,content:'new version',sourceIds:fact.sources.map(s=>s.id),candidate:false},true)
+ release();const result=await pending
+ if(typeof result!=='string'){expect(result.items.some(f=>f.content==='old rerank marker')).toBe(false);expect(result.status).not.toBe('complete')}
+})
+it('invalidates reranking when incomplete vector indexing finishes and after source revocation',async()=>{
+ let calls=0;const f=fixture(undefined,async()=>[1,0],async(_q,docs)=>{calls++;return docs.map((_doc,index)=>({index,score:.9}))}),c=f.send(),fact=f.remember(c,'indexed fact')
+ f.configure({embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker});expect((await f.h.agentMemory.search(c,'question')).items).toEqual([])
+ await f.h.agentMemory.index(c,new AbortController().signal);expect((await f.h.agentMemory.search(c,'question')).items[0]?.id).toBe(fact.id);expect(calls).toBe(1)
+ const source=f.h.memory.evidence(fact.sources[0]!.id)!;f.h.store.put('memory-evidence',source.id,{...source,revoked:true,version:source.version+1,text:''})
+ expect(f.h.agentMemory.recall(c,'question')).toMatchObject({items:[],status:'partial',reason:'rerank_stale'})
+})
+it('does not send sensitive queries or legacy secret facts to reranking',async()=>{
+ let calls=0;const f=fixture(undefined,async()=>[1,0],async(_q,docs)=>{calls++;expect(docs.join(' ')).not.toContain('password:');return docs.map((_doc,index)=>({index,score:.9}))}),c=f.send(),fact=f.remember(c,'old safe fact')
+ f.h.store.put('memory-fact',fact.id,{...fact,content:'password: synthetic-secret'});f.configure({reranker})
+ expect((await f.h.agentMemory.search(c,'password: synthetic-query')).status).toBe('partial');await f.h.agentMemory.search(c,'password');expect(calls).toBe(0)
+})
+it('aborts and drains reranking before closing the store',async()=>{
+ let started=false,aborted=false
+ const f=fixture(undefined,async()=>[1,0],async(_q,_docs,_config,signal)=>{started=true;return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>{aborted=true;reject(Error('aborted'))},{once:true}))}),c=f.send()
+ f.remember(c,'query fact');f.configure({reranker})
+ const pending=f.h.agentMemory.search(c,'query').then(()=> 'unexpected success',()=> 'cancelled')
+ await expect.poll(()=>started).toBe(true);await f.h.close();hosts.splice(hosts.indexOf(f.h),1)
+ expect(aborted).toBe(true);expect(await pending).toBe('cancelled');await expect(f.h.agentMemory.search(c,'query')).rejects.toThrow('closed')
 })
 it('archives excess unconfirmed proposals without evicting protected facts',()=>{
  const f=fixture();f.configure({maxItems:1});const c=f.send(),one=f.remember(c,'保留人工事实一'),two=f.remember(c,'保留人工事实二')

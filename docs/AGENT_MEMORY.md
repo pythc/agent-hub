@@ -40,6 +40,10 @@ flowchart LR
 
 实现入口为 `src/agent-memory.ts`、`src/memory-learning.ts`、`src/memory-policy.ts` 与 `src/memory-vectors.ts`；既有 `router-memory.ts` 继续负责来源、版本、发布及内容无关的撤销日志。Router 和 Worker 都通过受控查询路径使用记忆。暂停使用会保留存储；清空与遗忘不等于删除会话历史或供应商副本。
 
+可选 `reranker:{url,model,apiKeyEnv?,minScore,candidateLimit}` 接入 query-document 相关性重排，实现在 `src/memory-rerank.ts`。配置完整 rerank 接口地址，模型返回完整 indexed `[0,1]` 分数；门槛需依据独立业务校准集确定，默认 0.5 不代表所有模型都适用。候选默认 20、最多 40，重排超时 5 秒；失败明确为 partial 并使用基础召回。候选限于当前授权记忆；无 embedding 时只有词法候选。每日调用预算只覆盖抽取/整理，embedding、重排另计。关闭宿主会取消并等待查询。
+
+本轮两条漏召回修复、独立 88 问对照、延迟、剩余误差和回退步骤见 [检索验收记录](MEMORY_RETRIEVAL_VALIDATION_2026-11-08.md)。这些效果需要显式配置并启用重排，没有自动修改现有实例。回退至尚不认识 reranker 的版本前，必须先用新版移除该策略字段；已用隔离状态副本验证事实保留。
+
 升级时首次成功初始化记忆生命周期会把 SQLite `user_version` 提升到 **7**，记忆格式标记为 2。旧版宿主会拒绝打开 schema 7，避免把替换候选当作普通事实处理。升级前应在宿主停止后做既有 `backup`，保留完整 state、托管配置及撤销日志。需要回退时使用升级前备份和兼容程序；升级后的新任务、输入、外部效果或撤销记录不可通过简单覆盖丢弃。当前恢复流程保留原有推进／外部效果检查，未来 schema 会被拒绝。
 
 可复现测试：

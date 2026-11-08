@@ -6,18 +6,21 @@ import type {MemoryFact,MemoryProjection,MemoryCapture,ContextManifest} from './
 import {stableDigest} from './sources.ts'
 import {memoryPolicySchema,normalizeMemory,lexicalScore,cosine,assertNoMemorySecret,type MemoryPolicy} from './memory-policy.ts'
 import {embedMemory,validateMemoryVector,type EmbedMemory} from './memory-vectors.ts'
+import {rerankMemory,memoryCandidates,memoryRetrievalComplete,type RerankMemory} from './memory-rerank.ts'
 import {extractMemories,consolidateMemories} from './memory-learning.ts'
 
 export interface MemoryObservation {id:string;space:string;triggerId:string;discussion:string;scopeId:string;entryId:string;actor:string;session:string;sourceId:string;start?:number;end?:number;generation:number;epoch:number;policyRevision:number;sequence:number;state:'pending'|'running'|'done'|'held'|'stale';attempts:number;nextAt:number;lease?:string;error?:string}
 interface Vector {id:string;factId:string;revision:number;generation:number;scopeId:string;model:string;vector:number[]}
 interface Topic {id:string;space:string;scopeId:string;generation:number;label:string;aliases:string[];sources:{id:string;version:number}[];sessions:string[];proposalId?:string}
-interface QueryVector {vector?:number[];mode:string;at:number;epoch:number;generation:number;policyRevision:number}
+interface QueryVector {vector?:number[];mode:string;at:number;epoch:number;generation:number;policyRevision:number;signature?:string;reranked?:{id:string;revision:number;score:number}[]}
 export class AgentMemory {
  private queries=new Map<string,QueryVector>()
+ private queryLifetime=new AbortController()
+ private preparing=new Set<Promise<void>>()
  private active?:Promise<void>
  private controller?:AbortController
  private closed=false
- constructor(readonly host:Runtime,readonly embed:EmbedMemory=embedMemory,readonly now=Date.now){
+ constructor(readonly host:Runtime,readonly embed:EmbedMemory=embedMemory,readonly now=Date.now,readonly rerank:RerankMemory=rerankMemory){
   const schema=host.store.get<number>('memory-schema','current')??1
   if(schema>2)throw Error('Memory schema is newer than this host; use a compatible release')
   // Additive upgrade: legacy facts retain their IDs, state, audience and sources.
@@ -73,28 +76,62 @@ export class AgentMemory {
  private queryKey(c:ScopeContext,q:string){return stableDigest([this.space(c),q.slice(0,200),this.policyRevision(c)])}
  modelSelection(c:ScopeContext){const p=this.policy(c),scope=this.host.scopes.scope(c.route.scopeId),backend=p.extractBackend??scope.router?.backend??this.host.config.execution.router?.backend??this.host.config.execution.roles.router??this.host.config.execution.backend;if(!scope.backendIds.includes(backend))throw Error('Memory backend is outside scope');return {backendId:backend,model:p.extractModel??scope.router?.model??this.host.config.execution.router?.model}}
  private vectorModel(c:ScopeContext){const e=this.policy(c).embedding;return e?stableDigest([e.url,e.model]):''}
- async prepare(c:ScopeContext,query:string){
+ private rankingSignature(c:ScopeContext,items=this.authorized(c)){
+  const model=this.vectorModel(c)
+  return stableDigest(items.map(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return [f.id,f.revision,v?.revision,v?.generation,v?.vector.length]}).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))
+ }
+ private rankings(c:ScopeContext,query:string,items:MemoryProjection[],vector?:number[]){
+  const model=this.vectorModel(c)
+  const lexical=items.map(f=>({f,score:lexicalScore(query,f.subject+' '+f.content)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.f.id.localeCompare(b.f.id))
+  const dense=vector?items.flatMap(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return v&&v.revision===f.revision&&v.generation===f.generation&&v.vector.length===vector.length?[{f,score:cosine(vector,v.vector)}]:[]}).sort((a,b)=>b.score-a.score||a.f.id.localeCompare(b.f.id)):[]
+  return {lexical,dense}
+ }
+ prepare(c:ScopeContext,query:string){
+  if(this.closed)return Promise.reject(Error('Memory service closed'))
+  const pending=this.prepareQuery(c,query);this.preparing.add(pending)
+  const settled=()=>this.preparing.delete(pending);void pending.then(settled,settled)
+  return pending
+ }
+ private async prepareQuery(c:ScopeContext,query:string){
   if(!this.enabled(c))return
   const p=this.policy(c),key=this.queryKey(c,query),old=this.queries.get(key),generation=this.host.memory.generation(c.route.scopeId)
-  if(old&&old.epoch===c.route.epoch&&old.generation===generation&&this.now()-old.at<60000)return
+  if(old&&old.epoch===c.route.epoch&&old.generation===generation&&this.now()-old.at<60000&&(!p.reranker||old.signature===this.rankingSignature(c)))return
   const capture=this.host.memory.capture(c,[]),revision=this.policyRevision(c)
   let vector:number[]|undefined,mode=p.embedding?'embedding_unavailable':'lexical'
   let sensitive=false;try{assertNoMemorySecret(query)}catch{sensitive=true;mode='embedding_skipped_sensitive'}
-  if(p.embedding&&!sensitive)try{vector=validateMemoryVector(await this.embed(query.slice(0,200),p.embedding,AbortSignal.timeout(2000)));mode='hybrid'}catch{}
+  if(p.embedding&&!sensitive)try{vector=validateMemoryVector(await this.embed(query.slice(0,200),p.embedding,AbortSignal.any([this.queryLifetime.signal,AbortSignal.timeout(2000)])));mode='hybrid'}catch{}
+  this.queryLifetime.signal.throwIfAborted()
   this.host.scopes.assertCurrent(c)
   if(capture.generation!==this.host.memory.generation(c.route.scopeId)||revision!==this.policyRevision(c)||!this.enabled(c))return
+  const items=this.authorized(c),signature=this.rankingSignature(c,items)
+  let reranked:QueryVector['reranked']
+  if(p.reranker&&!sensitive){
+   const ranking=this.rankings(c,query,items,vector)
+   const candidates=memoryCandidates(ranking.dense.map(x=>x.f),ranking.lexical.map(x=>x.f),p.reranker.candidateLimit).filter(f=>{try{assertNoMemorySecret(f.subject+' '+f.content);return true}catch{return false}})
+   try{
+    const results=candidates.length?await this.rerank(query.slice(0,200),candidates.map(f=>f.subject+' '+f.content),p.reranker,AbortSignal.any([this.queryLifetime.signal,AbortSignal.timeout(5000)])):[]
+    // Injected implementations must obey the same full permutation and finite-score contract.
+    if(results.length!==candidates.length||new Set(results.map(r=>r.index)).size!==candidates.length||results.some(r=>!Number.isInteger(r.index)||!candidates[r.index]||!Number.isFinite(r.score)||r.score<0||r.score>1))throw Error('invalid_rerank_results')
+    reranked=results.filter(r=>r.score>=p.reranker!.minScore).map(r=>({id:candidates[r.index]!.id,revision:candidates[r.index]!.revision,score:r.score})).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id))
+    if(mode==='hybrid'||mode==='lexical')mode='reranked'
+   }catch{mode='rerank_unavailable'}
+   this.queryLifetime.signal.throwIfAborted();this.host.scopes.assertCurrent(c)
+   if(capture.generation!==this.host.memory.generation(c.route.scopeId)||revision!==this.policyRevision(c)||!this.enabled(c)||signature!==this.rankingSignature(c)){this.queries.delete(key);return}
+  }
   if(this.queries.size>=100)this.queries.delete(this.queries.keys().next().value!)
-  this.queries.set(key,{vector,mode,at:this.now(),epoch:c.route.epoch,generation,policyRevision:revision})
+  this.queries.set(key,{vector,mode,at:this.now(),epoch:c.route.epoch,generation,policyRevision:revision,signature,reranked})
  }
  similar(c:ScopeContext,a:MemoryFact,b:MemoryFact){const model=this.vectorModel(c),av=this.host.store.get<Vector>('memory-vector',stableDigest([a.id,model])),bv=this.host.store.get<Vector>('memory-vector',stableDigest([b.id,model]));return av?.revision===a.revision&&bv?.revision===b.revision&&av.generation===a.generation&&bv.generation===b.generation?cosine(av.vector,bv.vector):0}
  rank(c:ScopeContext,query:string,items=this.authorized(c)){
   const cached=this.queries.get(this.queryKey(c,query)),model=this.vectorModel(c)
   const q=cached&&cached.epoch===c.route.epoch&&cached.generation===this.host.memory.generation(c.route.scopeId)&&this.now()-cached.at<60000?cached:undefined
-  const lexical=items.map(f=>({f,score:lexicalScore(query,f.subject+' '+f.content)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.f.id.localeCompare(b.f.id))
-  const vectors=q?.vector?items.flatMap(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return v&&v.revision===f.revision&&v.generation===f.generation?[{f,score:cosine(q.vector!,v.vector)}]:[]}).filter(x=>x.score>=0.5).sort((a,b)=>b.score-a.score||a.f.id.localeCompare(b.f.id)):[]
+  const incomplete=q?.vector&&items.some(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return !v||v.revision!==f.revision||v.generation!==f.generation||v.vector.length!==q.vector!.length})
+  if(q?.reranked&&q.signature===this.rankingSignature(c))return {items:q.reranked.flatMap(ref=>{const f=items.find(f=>f.id===ref.id&&f.revision===ref.revision);return f?[f]:[]}),mode:incomplete?'embedding_index_incomplete':q.mode}
+  const {lexical,dense}=this.rankings(c,query,items,q?.vector),vectors=dense.filter(x=>x.score>=.5)
   const scores=new Map<string,number>()
   for(const ranking of [lexical,vectors])ranking.forEach((x,i)=>scores.set(x.f.id,(scores.get(x.f.id)??0)+1/(60+i)))
-  return {items:items.filter(f=>scores.has(f.id)).sort((a,b)=>scores.get(b.id)!-scores.get(a.id)!||a.id.localeCompare(b.id)),mode:q?.vector&&items.some(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return !v||v.revision!==f.revision||v.generation!==f.generation||v.vector.length!==q.vector!.length})?'embedding_index_incomplete':q?.mode??(model?'embedding_not_prepared':'lexical')}
+  const similarity=new Map(dense.map(x=>[x.f.id,x.score]))
+  return {items:items.filter(f=>scores.has(f.id)).sort((a,b)=>scores.get(b.id)!-scores.get(a.id)!||(similarity.get(b.id)??-1)-(similarity.get(a.id)??-1)||a.id.localeCompare(b.id)),mode:incomplete?'embedding_index_incomplete':q?.reranked?'rerank_stale':q?.mode??(this.policy(c).reranker?'rerank_not_prepared':model?'embedding_not_prepared':'lexical')}
  }
  recall(c:ScopeContext,query:string){
   if(!this.enabled(c))return {items:[],status:'unavailable',reason:'Memory disabled'}
@@ -103,9 +140,9 @@ export class AgentMemory {
   let standingBytes=0,relatedBytes=0
   for(const f of resident){const bytes=Buffer.byteLength(f.content);if(standingBytes+bytes<=3600){standingBytes+=bytes;selected.push(f)}}
   for(const f of ranked.items){if(selected.some(s=>s.id===f.id))continue;const bytes=Buffer.byteLength(f.content);if(relatedBytes+bytes>2400)continue;relatedBytes+=bytes;selected.push(f);if(selected.length>=resident.filter(f=>selected.includes(f)).length+5)break}
-  return {items:selected,status:ranked.mode.startsWith('embedding_')?'partial':'complete',reason:ranked.mode.startsWith('embedding_')?ranked.mode:undefined}
+  return {items:selected,status:memoryRetrievalComplete(ranked.mode)?'complete':'partial',reason:memoryRetrievalComplete(ranked.mode)?undefined:ranked.mode}
  }
- async search(c:ScopeContext,query:string,limit=20){await this.prepare(c,query);if(!this.enabled(c))return {items:[],status:'unavailable',reason:'Memory disabled'};const result=this.rank(c,query);const items=result.items.slice(0,Math.min(20,Math.max(1,limit)));this.recordUse(c,items,'search',result.mode);return {items,status:result.mode.startsWith('embedding_')?'partial':'complete',mode:result.mode}}
+ async search(c:ScopeContext,query:string,limit=20){await this.prepare(c,query);if(!this.enabled(c))return {items:[],status:'unavailable',reason:'Memory disabled'};const result=this.rank(c,query);const items=result.items.slice(0,Math.min(20,Math.max(1,limit)));this.recordUse(c,items,'search',result.mode);return {items,status:memoryRetrievalComplete(result.mode)?'complete':'partial',mode:result.mode}}
  async tool(c:ScopeContext,value:unknown){
   const x=z.object({action:z.enum(['query','inspect','propose']),query:z.string().max(200).optional(),id:z.string().max(300).optional(),subject:z.string().max(300).optional(),content:z.string().max(16000).optional(),operationId:z.string().max(300).optional()}).strict().parse(value)
   if(!this.enabled(c))return {items:[],status:'unavailable',reason:'Memory disabled'}
@@ -169,7 +206,7 @@ export class AgentMemory {
   this.active=this.process(c,row,this.controller.signal).catch(()=>{}).finally(()=>{this.active=undefined;this.controller=undefined})
  }
  async drain(){await this.active}
- async close(){this.closed=true;this.controller?.abort();await this.active}
+ async close(){this.closed=true;this.controller?.abort();this.queryLifetime.abort();await Promise.allSettled([...this.preparing,...(this.active?[this.active]:[])])}
  private maintain(){
   for(const fact of this.host.store.list<MemoryFact>('memory-fact')){
    if(fact.archived||fact.state!=='active')continue

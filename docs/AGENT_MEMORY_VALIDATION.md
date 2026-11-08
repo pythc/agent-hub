@@ -1,5 +1,7 @@
 # Agent memory validation — 2026-11-08
 
+后续漏召回修复和独立保留集对照见 [MEMORY_RETRIEVAL_VALIDATION_2026-11-08.md](MEMORY_RETRIEVAL_VALIDATION_2026-11-08.md)。下文保留此前验证时的结果，不用新结果覆盖历史证据。
+
 实现基于 `ff0abe894e85ad2b9d23f29b33e5f7131cde3341` 的独立分支 `codex/weknora-memory-20261108`。暂停的 Wiki 工作区未修改，未部署、合并或 push。本文件区分自动回归、真实模型、浏览器和生产验证。
 
 | 检查 | 结果与证据 |
