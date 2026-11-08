@@ -51,6 +51,24 @@ it('recovers a failed acceptance and automatic repair across a runtime restart w
  expect(f.h.store.tickets.list().map(t=>t.id)).toEqual([ticket]);expect(f.h.store.list('goal-repair')).toHaveLength(1)
  expect(f.rounds().filter(r=>r.state==='failed')).toHaveLength(1)
 })
+it.each(['repair-note','parent','foreign'])('rejects a %s handback without inventing an uncertain execution outcome or accepting the delivery',async reference=>{
+ const f=fixture((r,n)=>{
+  writeFileSync(join(r.cwd,'result.json'),JSON.stringify({total:n===1?0:42}))
+  if(n===1)return ready()
+  const input=JSON.parse(r.input),task=f.h.store.tickets.get(r.activity!.ticketId!)!
+  const id=reference==='repair-note'?input.inputs[0].id:reference==='parent'?task.origin.triggerId:'router-context:another-task'
+  return {...ready('Cannot finish the requested integration in this node'),handbacks:[{triggerId:id,reason:'Router must arrange an integration step'}]}
+ });const original=f.start()
+ await until(f,()=>f.goal().state==='held')
+ const task=f.h.store.tickets.list()[0]!,run=f.h.store.get<any>('run',task.id)
+ expect(run.phase).toBe('idle');expect(run.error).toBeUndefined()
+ expect(task.assignments.at(-1)?.report).toMatchObject({state:'blocked',summary:expect.stringContaining('Worker handback rejected')})
+ expect(task.undelivered).toHaveLength(0);expect(task.ended).toBeUndefined()
+ expect(f.goal().nodes![0]?.failure?.kind).toBe('quality');expect(f.goal().contract).toEqual(original.contract)
+ expect(f.h.store.list('router-handback')).toHaveLength(0);expect(f.h.store.list('goal-release')).toHaveLength(0)
+ expect(f.h.store.list<any>('transcript').some(t=>t.text.includes('Router must arrange an integration step'))).toBe(true)
+ await f.restart();expect(f.h.store.get<any>('run',task.id).phase).toBe('idle')
+})
 it('rechecks changed artifacts instead of accepting a verifier result for an older version',async()=>{
  let release!:()=>void,entered=false,first=true
  const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{
@@ -171,15 +189,27 @@ it('exposes host command receipts and launch restrictions to the independent fin
   const task=f.h.store.tickets.get(r.activity!.ticketId!)!,assignmentId=task.assignments.at(-1)!.id
   f.h.store.put('work',jobId,{id:jobId,ticketId:task.id,assignmentId,cwd:r.cwd,sandbox:'workspace-write',depth:0,kind:'shell',command,state:'completed',exitCode:0,notify:'collected',createdAt:1,endedAt:2})
   writeFileSync(join(f.h.work.directory,jobId+'.spec.json'),JSON.stringify({id:jobId,cwd:r.cwd,command,sandboxDriver:'seatbelt',sandbox:'workspace-write',network:false,privateState:'must-not-be-exposed'}))
+  writeFileSync(join(f.h.work.directory,jobId+'.output'),'calculation verified: 42\n')
   return ready()
  },async(r,input)=>{
   for(const e of input.evidence){const result=await r.onTool!('goal_evidence',{id:e.id},e.id);if(e.kind==='execution'){
    const envelope=JSON.parse((result as any).contentItems[0].text),ledger=JSON.parse(envelope.content)
    expect(ledger.jobs[0]).toMatchObject({command,exitCode:0,recordedPolicy:{network:false,sandboxDriver:'seatbelt'}})
+   expect(ledger.jobs[0].output).toMatchObject({text:'calculation verified: 42\n',complete:true,hash:expect.any(String)})
    expect(envelope.content).not.toContain('must-not-be-exposed');inspected=true
   }}
   return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Checked host receipts and artifact',evidenceIds:input.evidence.map((e:any)=>e.id)}))}
  });f.start();await until(f,()=>f.goal().state==='completed');expect(inspected).toBe(true)
+})
+it('marks truncated command output incomplete and never follows an output symlink',()=>{
+ const f=fixture(),id='12345678-1234-1234-1234-123456789abc'
+ f.h.store.put('work',id,{id,ticketId:'bounded-output',kind:'shell',state:'completed',createdAt:1})
+ const log=join(f.h.work.directory,id+'.output')
+ writeFileSync(log,'a'.repeat(8001));let ledger=JSON.parse((f.h.verification as any).execution('bounded-output'))
+ expect(ledger.jobs[0].output.complete).toBe(false);expect(ledger.jobs[0].output.text).toHaveLength(8000)
+ rmSync(log);const secret=join(f.root,'private');writeFileSync(secret,'DO-NOT-READ-OTHER-FILE');symlinkSync(secret,log)
+ ledger=JSON.parse((f.h.verification as any).execution('bounded-output'))
+ expect(ledger.jobs[0].output.complete).toBe(false);expect(JSON.stringify(ledger)).not.toContain('DO-NOT-READ-OTHER-FILE')
 })
 it('omits quarantined execution history from a rebuilt task evidence ledger',()=>{
  const f=fixture(),ticket='quarantined-task'
