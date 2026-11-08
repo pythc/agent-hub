@@ -58,7 +58,14 @@ export class RouterMemory {
   * continue to require confirmation. The original request is retained as evidence. */
  captureExplicit(c:ScopeContext){
   if(!c.trigger.human||!this.scopes.scope(c.route.scopeId).memoryEnabled)return
-  const content=detectExplicitMemory(c.trigger.text);if(!content)return
+  // A connector command is addressing syntax, not part of the memory directive.
+  // Strip only the configured leading command with a token boundary; quoted,
+  // embedded or lookalike commands must not become explicit memory writes.
+  const source=this.scopes.config.sources.find(s=>s.id===c.trigger.source)
+  const command=source?.kind==='feishu'?source.feishu?.command:undefined
+  let input=c.trigger.text.trim()
+  if(c.trigger.addressed&&command&&input.startsWith(command)&&/^\s/u.test(input.slice(command.length)))input=input.slice(command.length).trimStart()
+  const content=detectExplicitMemory(input);if(!content)return
   const evidence=this.ingest(c);if(evidence.revoked)return
   return this.command(c,{action:'remember',operationId:'explicit:'+stableDigest(c.trigger.id),expectedRevision:0,subject:'Explicit memory '+stableDigest(content).slice(0,16),content,sourceIds:[evidence.id],candidate:false,origin:'explicit',visibility:this.scopes.binding(c.route.entryId).privateActor?'private':'group'},true)
  }

@@ -26,6 +26,26 @@ function fixture(){
  const remember=(content='Budget 73',group='g1',extra:Record<string,unknown>={})=>{const c=context(group),e=memory.ingest(c);return memory.command(c,{action:'remember',operationId:'write-'+(++seq),expectedRevision:0,subject:'budget',content,sourceIds:[e.id],candidate:false,...extra},true) as MemoryFact}
  return {root,config,store,scopes,memory,source,context,remember}
 }
+it('captures configured Feishu command-prefixed explicit memory without changing source evidence',()=>{
+ const f=fixture(),source=f.config.sources[0]!
+ source.kind='feishu';source.feishu={command:'/router',chats:['g1']} as typeof source.feishu
+ const text='/router 请记住：杉树验收的交付摘要采用三段格式',c=f.context('g1','alice',text)
+ const fact=f.memory.captureExplicit(c) as MemoryFact
+ expect(fact.state).toBe('active');expect(fact.origin).toBe('explicit');expect(fact.protected).toBe(true)
+ expect(fact.content).toBe('杉树验收的交付摘要采用三段格式')
+ expect(f.memory.evidence(fact.sources[0]!.id)?.text).toBe(text)
+ expect(f.store.triggers.get(c.trigger.id)?.text).toBe(text)
+ expect(f.memory.captureExplicit(c)).toEqual(fact)
+})
+it('does not turn embedded, quoted, unaddressed or lookalike commands into explicit memories',()=>{
+ const f=fixture(),source=f.config.sources[0]!
+ source.kind='feishu';source.feishu={command:'/router',chats:['g1']} as typeof source.feishu
+ for(const text of ['/router-other 记住：不保存','/other 记住：不保存','转述 /router 记住：不保存','/router “记住：不保存”','/router 不要记住：不保存','/router记住：不保存'])expect(f.memory.captureExplicit(f.context('g1','alice',text))).toBeUndefined()
+ const c=f.context('g1','alice','/router 记住：不保存');c.trigger.addressed=undefined
+ expect(f.memory.captureExplicit(c)).toBeUndefined()
+ source.kind='local';expect(f.memory.captureExplicit(f.context('g1','alice','/router 记住：不保存'))).toBeUndefined()
+ expect(f.store.list('memory-fact')).toHaveLength(0)
+})
 it('F18 deletes managed history across records, effects, files, API protocol and indexes while preserving another tenant',async()=>{
  const f=fixture(),marker='BODY-DELETE-7319',c=f.context('g1','alice',marker),e=f.memory.ingest(c)
  f.memory.command(c,{action:'remember',operationId:'body',expectedRevision:0,subject:'removal',content:marker,sourceIds:[e.id],candidate:false},true)
