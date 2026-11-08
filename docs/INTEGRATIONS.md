@@ -166,3 +166,7 @@ npm test
 ```
 
 自动化包含真实 CLI 进程加载插件、HTTP 事件 / 回调、真实 MCP 子进程及 Streamable HTTP 服务；模型角色由协议夹具驱动。它验证宿主行为，不替代飞书 / 企微真实账号验收，也不代表组织多租户、员工授权或跨组织资源隔离已经完成。
+
+## Packaged source plugins
+
+For digest-pinned process-isolated v2 packages, reference Feishu/Slack setup, scoped resource tools and controlled code upgrade/rollback, see [PLUGINS.md](PLUGINS.md). The earlier trusted module interface remains the v1 compatibility path; its host-context APIs are not exposed to v2 children.

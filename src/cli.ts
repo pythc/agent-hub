@@ -1,3 +1,4 @@
+import {pluginCommand} from './plugin-cli.ts'
 import {clientIds,clientConfig,installClient,restoreClient,type ClientId} from './clients.ts'
 import { readFileSync } from 'node:fs'
 import { loadConfig } from './config.ts'
@@ -16,6 +17,7 @@ import {runCodexRouter} from './codex-router.ts'
 const [command, ...args] = process.argv.slice(2)
 async function main() {
   if(process.env.AGENTHUB_ENV_FILE)try{process.loadEnvFile(process.env.AGENTHUB_ENV_FILE)}catch{throw Error('Cannot load AGENTHUB_ENV_FILE; check its path and access permissions')}
+  if(command==='plugins'){console.log(JSON.stringify(await pluginCommand(args),null,2));return}
   if(command==='office'){
     const [action,platform,...options]=args
     const directory=options[0]&&!options[0].startsWith('--')?options[0]:undefined,rest=directory?options.slice(1):options

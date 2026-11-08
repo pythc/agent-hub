@@ -1,0 +1,140 @@
+{
+  "id": "agenthub-slack",
+  "kind": "slack",
+  "label": "Slack",
+  "version": "1.0.0",
+  "stateVersion": 1,
+  "scopesPath": "/options/channels",
+  "commandPath": "/options/command",
+  "cursorMode": "scope",
+  "cursorEncoding": "unix-seconds",
+  "methods": [
+    "start",
+    "poll",
+    "identity",
+    "members",
+    "read",
+    "context",
+    "deliver",
+    "probe",
+    "close"
+  ],
+  "stateKinds": [
+    "source-cursor",
+    "source-message-observation",
+    "plugin-state",
+    "source-live"
+  ],
+  "credentials": {
+    "TOKEN": "/options/tokenEnv",
+    "APP_TOKEN": "/options/appTokenEnv"
+  },
+  "network": true,
+  "tools": [
+    {
+      "name": "message_read",
+      "description": "Read an admitted Slack message using its task-authorized trigger ID.",
+      "resource": "message",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "thread_read",
+      "description": "Read the authorized Slack thread. Group history access is required.",
+      "resource": "thread",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "options"
+    ],
+    "properties": {
+      "options": {
+        "type": "object",
+        "required": [
+          "channels",
+          "teamId",
+          "tokenEnv"
+        ],
+        "properties": {
+          "channels": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[CGD][A-Z0-9]+$"
+            }
+          },
+          "teamId": {
+            "type": "string",
+            "pattern": "^T[A-Z0-9]+$"
+          },
+          "tokenEnv": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "apiBase": {
+            "type": "string"
+          },
+          "appTokenEnv": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "setup": {
+    "description": "Install a Slack app in the expected workspace. Grant chat:write, channels:history, groups:history, channels:read, groups:read and users:read as required, and invite it to the selected channels. tokenEnv names a host environment variable; never place the token in this file. Polling and thread replies use the Slack Web API. For complete live delivery including old-thread replies, enable Socket Mode, set appTokenEnv to an app-level token with connections:write, and subscribe to message.channels, message.groups, member_joined_channel, member_left_channel, channel_archive and channel_unarchive. Polling alone is a backfill path, not a complete realtime event feed.",
+    "fields": [
+      {
+        "name": "token-env",
+        "label": "Bot token environment variable",
+        "secret": true,
+        "required": true
+      },
+      {
+        "name": "team-id",
+        "label": "Expected workspace ID",
+        "required": true
+      },
+      {
+        "name": "channels",
+        "label": "Allowed channel IDs",
+        "required": true
+      }
+    ]
+  }
+}

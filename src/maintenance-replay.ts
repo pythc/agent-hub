@@ -1,14 +1,15 @@
 import type {Store} from './store.ts'
 import type {SourceConfig} from './config.ts'
 import {stableDigest} from './sources.ts'
+import {builtinSources,type SourceRegistry} from './source-plugins.ts'
 /** An advancing message cursor proves bounded message replay, not recovery of
  * unretained platform lifecycle events. Keep those gaps explicit. */
-export function recordMaintenanceReplay(store:Store,source:SourceConfig){
+export function recordMaintenanceReplay(store:Store,source:SourceConfig,registry:SourceRegistry=builtinSources){
  for(const gap of store.list<any>('maintenance-gap')){
   if(!gap.resumedAt)continue
   const item=gap.sources.find((s:any)=>s.sourceId===source.id)
   if(!item||item.mode!=='cursor_replay')continue
-  const keys=source.kind==='feishu'?(source.feishu?.chats??[]).map(id=>source.id+':'+id):[source.id]
+  const keys=registry.replayCursors(source)
   const unavailable=store.list<any>('thread-health').some(h=>h.source===source.id&&h.consecutiveFailures>0)
   const snapshots=keys.map(key=>({key,before:gap.cursors?.find((c:any)=>c.key===key)?.value,after:store.get<any>('source-cursor',key)}))
   const time=(v:any)=>{const since=v?.since;return typeof since==='string'&&/^\d+$/.test(since)?Number(since)*1000:Date.parse(since)}

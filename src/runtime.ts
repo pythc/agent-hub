@@ -14,6 +14,8 @@ import {TransientModelError} from './model.ts'
 import { Settings } from './settings.ts'
 import {compose,composeCoordinator,promptStatus,digest} from './prompts.ts'
 import {SourceRegistry} from './source-plugins.ts'
+import {activatePluginPackages} from './plugin-package.ts'
+import {ProcessSource} from './plugin-process.ts'
 import {ToolConnections} from './tool-connections.ts'
 import type {Model,ModelRequest,ModelResult} from './model.ts'
 import {BackendRegistry} from './backends/registry.ts'
@@ -129,13 +131,23 @@ export class Runtime {
     catch (error) { unlinkSync(this.lock); throw error }
     this.activity = new ExecutionActivity(this.store)
     this.approvals = new Approvals(this.store)
-    try{this.settings = new Settings(this.store,config);this.model = options.model ?? new BackendRegistry(config,this.store)}
-    catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
+    try{
+      const initial=this.store.atomic(()=>{
+        const previous=this.store.get<any>('settings','current')?.config as Config|undefined
+        const settings=new Settings(this.store,config),model=options.model??new BackendRegistry(config,this.store)
+        for(const source of config.sources){
+          const adapter=options.sources?.find(s=>s.config.id===source.id)??this.sourceRegistry.create(source)
+          if(adapter instanceof ProcessSource)adapter.attach(this.store,()=>this.config.sources.find(s=>s.id===source.id))
+          this.sources.set(source.id,adapter)
+        }
+        activatePluginPackages(this.store,config,this.sourceRegistry.packages,previous)
+        return {settings,model}
+      })
+      this.settings=initial.settings;this.model=initial.model
+    }catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.paused = this.store.get<boolean>('settings', 'paused') ?? false
-    try{for (const source of config.sources) this.sources.set(source.id, options.sources?.find(s => s.config.id === source.id) ?? this.sourceRegistry.create(source))}
-    catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.toolConnections=new ToolConnections(this)
-    this.scopes=new RouterScopes(this.store,config,id=>this.controllers.has(id)||[...this.controllers.keys()].some(k=>k.startsWith('router:')))
+    this.scopes=new RouterScopes(this.store,config,id=>this.controllers.has(id)||[...this.controllers.keys()].some(k=>k.startsWith('router:')),this.sourceRegistry)
     try{this.memory=new RouterMemory(this.store,this.scopes,config.stateDir)}catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.routerIngress=new RouterIngress(config,this.store,this.sourceRegistry,this.scopes)
     this.proactive=new RouterProactive(this,options.clock)
@@ -1078,7 +1090,7 @@ export class Runtime {
         await source.start?.(context)
         if(source.config.memberSync?.enabled)this.setup.applyMembers((await this.setup.previewMembers(source.config.id,source.config.memberSync.scope)).id)
         await source.poll?.(context)
-      }).then(()=>{recordMaintenanceReplay(this.store,source.config);this.store.put('source-health',source.config.id,{source:source.config.id,at:Date.now(),status:'ok',consecutiveFailures:0})})
+      }).then(()=>{recordMaintenanceReplay(this.store,source.config,this.sourceRegistry);this.store.put('source-health',source.config.id,{source:source.config.id,at:Date.now(),status:'ok',consecutiveFailures:0})})
         .catch(error=>{this.store.put('source-health',source.config.id,{source:source.config.id,at:Date.now(),status:(this.store.get<any>('source-health',source.config.id)?.consecutiveFailures??0)>=2?'error':'retrying',consecutiveFailures:(this.store.get<any>('source-health',source.config.id)?.consecutiveFailures??0)+1,error:String(error).slice(0,300)})})
         .finally(()=>{this.polls.delete(source.config.id);this.pollControllers.delete(source.config.id)})
       this.polls.set(source.config.id,poll)

@@ -83,7 +83,7 @@ export function loadConfig(path: string): Config {
   const config = configSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
   validateBackendSelection(config)
   config.stateDir = resolve(base, config.stateDir)
-  for(const plugin of config.sourcePlugins)plugin.module=resolve(base,plugin.module)
+  for(const plugin of config.sourcePlugins){if('module'in plugin)plugin.module=resolve(base,plugin.module);else{plugin.directory=resolve(base,plugin.directory);plugin.readPaths=plugin.readPaths.map(path=>resolve(base,path))}}
   for(const connection of Object.values(config.toolConnections))if(connection.transport.kind==='stdio'&&connection.transport.cwd)connection.transport.cwd=resolve(base,connection.transport.cwd)
   const ids = new Set<string>()
   for (const source of config.sources) {

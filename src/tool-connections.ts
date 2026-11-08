@@ -1,3 +1,4 @@
+import {ProcessSource} from './plugin-process.ts'
 import type {TaskContinuation} from './task-context.ts'
 import {Client} from '@modelcontextprotocol/sdk/client/index.js'
 import {StdioClientTransport,getDefaultEnvironment} from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -54,6 +55,7 @@ export class ToolConnections {
     entry.ready=(async()=>{
       const resolveEnv=(refs:Record<string,string>)=>Object.fromEntries(Object.entries(refs).map(([key,env])=>{const value=process.env[env];if(!value)throw Error('Missing tool credential environment variable '+env);return [key,value]}))
       const t=c.transport
+      if(t.kind==='plugin')throw Error('Native plugin tools do not use an MCP transport')
       const transport=t.kind==='stdio'?new StdioClientTransport({command:t.command,args:t.args,cwd:t.cwd,env:{...getDefaultEnvironment(),...resolveEnv(t.env)},stderr:'ignore',maxBufferSize:8_000_000}):new StreamableHTTPClientTransport(new URL(t.url),{requestInit:{headers:resolveEnv(t.headerEnv),redirect:'error'}})
       client.onclose=()=>{if(this.clients.get(id)===entry)this.clients.delete(id)}
       try{await client.connect(transport,{timeout:c.timeoutMs,signal:entry.controller.signal});if(this.closing)throw Error('Host is stopping');return client}
@@ -64,7 +66,13 @@ export class ToolConnections {
     return entry.ready
   }
   private async tools(owner:WorkOwner,id:string,signal?:AbortSignal):Promise<Tool[]>{
-    const config=this.allowed(owner,id),client=await abortable(this.connect(id),signal),result:Tool[]=[],seen=new Set<string>();let cursor:string|undefined
+    const config=this.allowed(owner,id)
+    if(config.transport.kind==='plugin'){
+      const source=this.host.sources.get(config.transport.sourceId)
+      if(!(source instanceof ProcessSource)||!this.host.config.sources.find(s=>s.id===source.config.id)?.enabled)throw Error('Plugin connection is unavailable')
+      return source.pkg.manifest.tools.filter(t=>config.allowedTools.includes(t.name)).map(t=>({name:t.name,description:t.description,inputSchema:t.inputSchema as Tool['inputSchema']}))
+    }
+    const client=await abortable(this.connect(id),signal),result:Tool[]=[],seen=new Set<string>();let cursor:string|undefined
     do{
       signal?.throwIfAborted();this.allowed(owner,id)
       const page=await client.listTools(cursor?{cursor}:{},{timeout:config.timeoutMs,signal})
@@ -84,6 +92,7 @@ export class ToolConnections {
   call(owner:WorkOwner,input:{connection:string;tool:string;arguments:Record<string,unknown>;requestId:string}):Promise<ToolResult>{
     const config=this.allowed(owner,input.connection)
     if(!config.allowedTools.includes(input.tool))throw Error('Tool is not allowed on this connection')
+    if(config.transport.kind==='plugin')this.pluginAuthorization(owner,input)
     if(JSON.stringify(input.arguments).length>100000)throw Error('Tool arguments exceed 100 KB')
     const id=bodyDigest([owner.ticketId,owner.agentId??'',input.requestId]),fingerprint=stableDigest([input.connection,config,input.tool,input.arguments])
     const inflight=this.calls.get(id)
@@ -104,22 +113,42 @@ export class ToolConnections {
     if(tool.execution?.taskSupport==='required')throw Error('This tool requires MCP task execution, which is not supported by this adapter')
     const validation=schemas.getValidator(tool.inputSchema)(input.arguments)
     if(!validation.valid)throw Error('Invalid tool arguments: '+validation.errorMessage)
-    const client=await this.connect(input.connection)
+    const client=config.transport.kind==='plugin'?undefined:await this.connect(input.connection)
     signal.throwIfAborted();this.allowed(owner,input.connection)
     const receipt:Receipt={id,ticketId:owner.ticketId,agentId:owner.agentId,connection:input.connection,tool:input.tool,fingerprint,state:'running'}
     this.host.store.put('tool-receipt',id,receipt)
     try{
-      const result=await client.callTool({name:input.tool,arguments:input.arguments},undefined,{signal,timeout:config.timeoutMs})
+      const result=client?await client.callTool({name:input.tool,arguments:input.arguments},undefined,{signal,timeout:config.timeoutMs}):await abortable(this.pluginRead(owner,input),signal)
       if(JSON.stringify(result).length>8_000_000)throw Error('Tool result exceeds the durable receipt limit')
       receipt.state='complete';receipt.result=result
     }catch{
-      receipt.state='uncertain';receipt.reason='No confirmed tool result. Inspect the destination; this requestId will not execute again.'
+      if(config.transport.kind==='plugin'){receipt.state='complete';receipt.result={isError:true,content:[{type:'text',text:'Plugin resource read failed; this requestId retains the failure.'}]}}
+      else {receipt.state='uncertain';receipt.reason='No confirmed tool result. Inspect the destination; this requestId will not execute again.'}
       if(this.clients.get(input.connection)?.client===client)this.clients.delete(input.connection)
-      await client.close().catch(()=>{})
+      await client?.close().catch(()=>{})
     }
     this.host.store.put('tool-receipt',id,receipt)
-    try{this.allowed(owner,input.connection)}catch{return {success:false,contentItems:[{type:'inputText',text:JSON.stringify({id:receipt.id,state:receipt.state,body:'withheld',reason:'Assignment capability ended'})}]}}
+    try{this.allowed(owner,input.connection);if(config.transport.kind==='plugin')this.pluginAuthorization(owner,input)}catch{return {success:false,contentItems:[{type:'inputText',text:JSON.stringify({id:receipt.id,state:receipt.state,body:'withheld',reason:'Assignment capability ended'})}]}}
     return this.result(receipt)
+  }
+  private pluginAuthorization(owner:WorkOwner,input:{connection:string;tool:string;arguments:Record<string,unknown>}){
+    const config=this.allowed(owner,input.connection)
+    if(config.transport.kind!=='plugin')throw Error('Not a plugin connection')
+    const source=this.host.sources.get(config.transport.sourceId)
+    if(!(source instanceof ProcessSource))throw Error('Plugin is unavailable')
+    const tool=source.pkg.manifest.tools.find(t=>t.name===input.tool),triggerId=input.arguments.triggerId
+    if(!tool||typeof triggerId!=='string'||this.host.store.triggers.get(triggerId)?.source!==source.config.id)throw Error('A trigger from this plugin connection is required')
+    const cursor=input.arguments.cursor
+    if(cursor!==undefined&&typeof cursor!=='string')throw Error('Invalid cursor')
+    // Use the same reached-trigger, source, task context and history checks as resource_read.
+    const resource=tool.resource+(cursor?'/'+encodeURIComponent(cursor):'')
+    this.host.resources.authorizeSourceRead({ticketId:owner.ticketId,agentId:owner.agentId},triggerId,resource)
+    return 'trigger-source/'+triggerId+'/'+resource
+  }
+  private async pluginRead(owner:WorkOwner,input:{connection:string;tool:string;arguments:Record<string,unknown>}){
+    const resource=this.pluginAuthorization(owner,input)
+    const result=await this.host.resources.read({resource},{ticketId:owner.ticketId,agentId:owner.agentId})
+    return {content:[{type:'text',text:JSON.stringify(result)}]}
   }
   private result(receipt:Receipt):ToolResult{
     if(receipt.state!=='complete')return {success:false,contentItems:[{type:'inputText',text:JSON.stringify({status:'uncertain',receipt:receipt.id,reason:receipt.reason})}]}

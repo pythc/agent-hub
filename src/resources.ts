@@ -64,7 +64,7 @@ export class Resources {
   const input=readSchema.parse(value),{resource,offset,limit,pageSize}=input
   if(principal.triggerId){
    const trigger=this.reached(principal,principal.triggerId);this.host.scopes.assertTrigger(trigger)
-   const allowed=['trigger/'+trigger.id,'feishu/'+trigger.id+'/message','wecom/'+trigger.id+'/message']
+   const allowed=['trigger/'+trigger.id,'trigger-source/'+trigger.id+'/message','feishu/'+trigger.id+'/message','wecom/'+trigger.id+'/message']
    if(resource==='catalog')return {resources:[...allowed,'feishu/'+trigger.id+'/image/<key>','feishu/'+trigger.id+'/file/<key>'],admission:true}
    if(!allowed.includes(resource)&&!['image','file'].some(kind=>resource.startsWith('feishu/'+trigger.id+'/'+kind+'/')))throw Error('Admission may only read its current source message and attachments')
   }
@@ -201,10 +201,7 @@ export class Resources {
    return source.read({resource:request,pageSize})
   }
   if(head==='trigger-source'){
-   const trigger=this.reached(p,parts[1]!),source=this.host.sources.get(trigger.source)
-   if(!source?.read||!source.config.enabled||!source.config.capabilities.resources)throw Error('Source does not provide enabled resource reads')
-   if(p.ticketId)this.sourcePermission(this.ticket(p),trigger.source,parts.slice(2).join('/'))
-   this.scopedSourceRead(p,parts.slice(2).join('/'),trigger)
+   const {trigger,source}=this.authorizeSourceRead(p,parts[1]!,parts.slice(2).join('/'))
    return source.read({resource:parts.slice(2).join('/'),trigger,pageSize})
   }
   if(head==='feishu'){
@@ -220,6 +217,14 @@ export class Resources {
    return source.read({resource:parts.slice(2).join('/'),trigger,pageSize})
   }
   throw Error('Unknown resource. Read catalog for the supported grammar')
+ }
+ authorizeSourceRead(p:Principal,triggerId:string,resource:string){
+   const trigger=this.reached(p,triggerId),source=this.host.sources.get(trigger.source)
+   if(!source?.read||!source.config.enabled||!source.config.capabilities.resources)throw Error('Source does not provide enabled resource reads')
+   if(!this.host.sourceRegistry.allowsScope(source.config,String(trigger.meta.scope??trigger.meta.chat)))throw Error('Source scope is unavailable')
+   if(p.ticketId)this.sourcePermission(this.ticket(p),trigger.source,resource)
+   this.scopedSourceRead(p,resource,trigger)
+   return {trigger,source:source as typeof source&{read:NonNullable<typeof source.read>}}
  }
  private visibleTrigger(p:Principal,t:Trigger){const own=this.ticket(p);return own.origin.triggerIds.includes(t.id)||own.inputs.some(i=>i.kind==='trigger'&&i.triggerId===t.id)}
  private scopedSourceRead(p:Principal,resource:string,trigger?:Trigger){
