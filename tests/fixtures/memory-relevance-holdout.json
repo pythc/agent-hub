@@ -1,0 +1,373 @@
+{
+  "version": 2,
+  "purpose": "New held-out acceptance, frozen before relevance verifier implementation and any model output. Same-subject missing-attribute negatives, synonyms, acronyms, negation, and 4 English positives; synthetic, not production. Never tune on results.",
+  "acceptance": {
+    "minimumTop1": 0.95,
+    "minimumRecall5": 0.95,
+    "minimumNegativeEmpty": 0.95
+  },
+  "records": [
+    {
+      "key": "badge",
+      "subject": "访客证归还",
+      "content": "访客离开研发园区时，把临时门禁卡交回北门前台。",
+      "queries": [
+        "外来人员结束访问后把通行卡交到哪里？",
+        "临时访客卡在离开园区时怎样处理？"
+      ]
+    },
+    {
+      "key": "otp",
+      "subject": "管理员登录",
+      "content": "管理控制台的第二步验证使用 TOTP 动态口令，不接受短信验证码。",
+      "queries": [
+        "控制台登录的二次认证采用哪种一次性口令？",
+        "管理员能用手机短信完成第二步登录验证吗？"
+      ]
+    },
+    {
+      "key": "sign",
+      "subject": "固件签名",
+      "content": "设备固件发布包必须通过 Ed25519 签名校验才能安装。",
+      "queries": [
+        "设备安装升级包前用哪种签名算法验真？",
+        "没有通过数字签名核对的固件包能否安装？"
+      ]
+    },
+    {
+      "key": "cert",
+      "subject": "证书轮换",
+      "content": "测试网关的 TLS 证书每九十天轮换，私钥不得随工单上传。",
+      "queries": [
+        "测试网关的传输加密证书多久换一次？",
+        "申请证书维护工单时可以附上私钥吗？"
+      ]
+    },
+    {
+      "key": "lock",
+      "subject": "无人值守锁屏",
+      "content": "办公电脑离开座位时立即锁屏，不能等待系统自动休眠。",
+      "queries": [
+        "临时离开工位时电脑应该立即进入什么状态？",
+        "离开电脑后等它自行休眠就足够了吗？"
+      ]
+    },
+    {
+      "key": "revoke",
+      "subject": "外包账号停用",
+      "content": "外包人员合同结束当天，由项目负责人发起账号停用申请。",
+      "queries": [
+        "外包合同到期时谁来申请禁用访问账号？",
+        "外包人员账号应在合同结束多久后申请关闭？"
+      ]
+    },
+    {
+      "key": "ticket",
+      "subject": "博物馆票务",
+      "content": "城市博物馆每周三对学生免门票，须出示有效学生证。",
+      "queries": [
+        "学生在哪一天可以免费参观城市博物馆？",
+        "学生享受博物馆免票需要出示什么证件？"
+      ]
+    },
+    {
+      "key": "flash",
+      "subject": "展厅摄影",
+      "content": "织物展厅可以拍照，但禁止使用闪光灯和三脚架。",
+      "queries": [
+        "拍摄织物藏品时能否打闪光灯？",
+        "参观织物展厅可以携带架设相机的支架吗？"
+      ]
+    },
+    {
+      "key": "audioGuide",
+      "subject": "导览设备",
+      "content": "语音导览器在大厅咨询台租借，闭馆前归还原处。",
+      "queries": [
+        "要借讲解耳机应该去博物馆什么位置？",
+        "语音讲解设备用完后应送回哪里？"
+      ]
+    },
+    {
+      "key": "locker",
+      "subject": "大件寄存",
+      "content": "大型双肩包必须存放在入口储物柜，小型随身包可带入展厅。",
+      "queries": [
+        "带着很大的背包参观前要先放在哪里？",
+        "小挎包必须寄存后才能进入展厅吗？"
+      ]
+    },
+    {
+      "key": "donation",
+      "subject": "藏品捐赠",
+      "content": "申请捐赠的藏品先提交照片与来源说明，鉴定前不邮寄实物。",
+      "queries": [
+        "想给馆方捐物品，最初需要提供哪些材料？",
+        "捐赠藏品未经鉴定时可以先把实物寄过去吗？"
+      ]
+    },
+    {
+      "key": "replica",
+      "subject": "复制品标识",
+      "content": "展览中的复制品会在说明牌上标注“复制件”，不以原件名义展示。",
+      "queries": [
+        "怎样从展品说明判断它是否为仿制品？",
+        "复制展品是否可以只写原作名称而不说明性质？"
+      ]
+    },
+    {
+      "key": "chair",
+      "subject": "座椅质检",
+      "content": "办公椅出厂前每把都要做承重测试，抽检不能替代逐把检测。",
+      "queries": [
+        "椅子发货前是逐件检查承载能力还是只抽样？",
+        "每一把办公椅出厂之前必须完成什么检测？"
+      ]
+    },
+    {
+      "key": "paint",
+      "subject": "涂层固化",
+      "content": "新喷涂零件须在恒温房静置十二小时，固化后才可装配。",
+      "queries": [
+        "喷完漆的部件至少等多长时间再安装？",
+        "新喷涂零件等待固化时应放在什么环境？"
+      ]
+    },
+    {
+      "key": "torque",
+      "subject": "螺栓紧固",
+      "content": "转台底座的四枚螺栓按对角顺序分两轮拧紧。",
+      "queries": [
+        "固定转台底座时螺丝应按怎样的先后次序操作？",
+        "底座的四个紧固件要一次拧到底还是分轮完成？"
+      ]
+    },
+    {
+      "key": "label",
+      "subject": "产品批次",
+      "content": "每批成品标签必须同时印生产日期和批次号，不能只印型号。",
+      "queries": [
+        "成品追溯标签除了型号还必须显示什么？",
+        "仅印产品型号的成品标签是否合格？"
+      ]
+    },
+    {
+      "key": "caliper",
+      "subject": "游标卡尺",
+      "content": "游标卡尺使用前合拢量爪检查零位，读数异常时停止测量。",
+      "queries": [
+        "开始量尺寸之前卡尺需要检查哪个位置？",
+        "卡尺零位读数不正常时可以继续测量吗？"
+      ]
+    },
+    {
+      "key": "sample",
+      "subject": "留样规则",
+      "content": "每批清洁剂保留两瓶封存样品，保存到保质期结束后六个月。",
+      "queries": [
+        "清洁剂每批次需要留存几瓶样品？",
+        "保质期过去以后留样还要保留多长时间？"
+      ]
+    },
+    {
+      "key": "robot",
+      "subject": "机器人停机",
+      "content": "仓储机器人遇到人员进入作业围栏时必须急停，复位前确认区域无人。",
+      "queries": [
+        "有人进入围栏内时机器人应立即采取什么动作？",
+        "让急停后的机器人继续工作前要确认什么？"
+      ]
+    },
+    {
+      "key": "sensor",
+      "subject": "测距传感器",
+      "content": "测距模块通过 I2C 总线连接主控，地址由板上的拨码开关设置。",
+      "queries": [
+        "距离测量模块采用什么双线总线和控制器通信？",
+        "测距设备的通信地址通过什么部件选择？"
+      ]
+    },
+    {
+      "key": "motor",
+      "subject": "电机试车",
+      "content": "首次电机试车先空载低速运行，再逐步增加负载。",
+      "queries": [
+        "新电机第一次运行时应带满载还是空载？",
+        "首次调试电机时速度和负载应怎样增加？"
+      ]
+    },
+    {
+      "key": "battery",
+      "subject": "电池存放",
+      "content": "备用锂电池存放时保持约一半电量，避免靠近热源。",
+      "queries": [
+        "长期收起备用电池时大约保留多少电量？",
+        "备用锂电池能放在发热设备旁边吗？"
+      ]
+    },
+    {
+      "key": "map",
+      "subject": "移动底图",
+      "content": "仓库移动机器人的地图采用占据栅格表示，障碍区域标记为不可通行。",
+      "queries": [
+        "仓库机器人用哪种网格形式描述行走环境？",
+        "地图上的障碍单元是否允许机器人穿越？"
+      ]
+    },
+    {
+      "key": "alarm",
+      "subject": "设备报警",
+      "content": "温控设备连续两次读数超限才发出报警，单次异常记录但不鸣响。",
+      "queries": [
+        "温控读数需要连续越界几次才响警报？",
+        "只有一次温度越界时系统会立即鸣叫吗？"
+      ]
+    },
+    {
+      "key": "deposit",
+      "subject": "酒店押金",
+      "content": "酒店退房时原路退还押金，现金入住的押金也以现金退还。",
+      "queries": [
+        "离店后押金会通过哪条支付渠道退回？",
+        "办理入住时交的现金押金怎样退？"
+      ]
+    },
+    {
+      "key": "meal",
+      "subject": "夜班餐食",
+      "content": "夜班人员的加餐放在一楼值班室，领取截止到凌晨一点。",
+      "queries": [
+        "上夜班的员工去哪里领取加餐？",
+        "夜间加餐最晚几点可以领取？"
+      ]
+    },
+    {
+      "key": "parcel",
+      "subject": "收件核验",
+      "content": "贵重包裹签收前先核对收件人姓名与封签完整性。",
+      "queries": [
+        "签收高价值快递前需要检查哪些信息？",
+        "贵重包裹在签字之前要不要检查封条？"
+      ]
+    },
+    {
+      "key": "umbrella",
+      "subject": "雨伞借还",
+      "content": "公共雨伞借用后七天内归还大厅伞架，不放在个人工位。",
+      "queries": [
+        "公共雨具借出以后多久内要送还？",
+        "归还借来的公共伞应放在什么位置？"
+      ]
+    },
+    {
+      "key": "shuttle",
+      "subject": "班车班次",
+      "content": "晚班通勤车只在工作日晚上十点从西门发车，周末不开行。",
+      "queries": [
+        "工作日下夜班的通勤车几点从哪里出发？",
+        "周六晚上有晚班通勤车吗？"
+      ]
+    },
+    {
+      "key": "repair",
+      "subject": "设备报修",
+      "content": "打印机报修时附故障代码和设备编号，提交到内部服务台。",
+      "queries": [
+        "打印设备坏了向内部服务台报修需要附哪两项标识？",
+        "打印机故障应该提交给哪个服务入口？"
+      ]
+    },
+    {
+      "key": "subtitlefmt",
+      "subject": "字幕交付格式",
+      "content": "字幕文件交付使用 UTF-8 编码的 SRT，时间轴精确到毫秒。",
+      "queries": [
+        "交付字幕时文件格式和文字编码分别是什么？",
+        "字幕时间戳需要精确到秒还是毫秒？"
+      ]
+    },
+    {
+      "key": "mesh",
+      "subject": "三维模型单位",
+      "content": "三维模型交付前将单位统一为米，并应用物体缩放变换。",
+      "queries": [
+        "交付三维资产时场景长度采用什么单位？",
+        "三维物体缩放参数应在交付前怎样处理？"
+      ]
+    },
+    {
+      "key": "font",
+      "subject": "字体授权",
+      "content": "商业海报只使用已购买商用授权的字体，不使用个人免费授权替代。",
+      "queries": [
+        "做商业宣传图时字体许可需要满足什么条件？",
+        "仅限个人免费的字库可以用在商业海报里吗？"
+      ]
+    },
+    {
+      "key": "datafmt",
+      "subject": "逐行记录格式",
+      "content": "传感器采集日志使用 JSON Lines，每行是一条独立 JSON 对象。",
+      "queries": [
+        "采样日志采用哪种逐行 JSON 记录格式？",
+        "传感器日志的一行应包含一条记录还是整个数组？"
+      ]
+    },
+    {
+      "key": "shipping",
+      "subject": "Shipping terms",
+      "content": "Prototype shipments use DAP terms; the recipient handles import duties and customs clearance.",
+      "queries": [
+        "Who handles customs clearance for prototype deliveries?",
+        "Which Incoterms rule is used for prototype shipping?"
+      ]
+    },
+    {
+      "key": "meeting",
+      "subject": "Meeting minutes",
+      "content": "Design review minutes record decisions and named owners; unresolved questions remain explicitly open.",
+      "queries": [
+        "What should review notes capture besides decisions?",
+        "Should unresolved design questions be marked as settled in meeting notes?"
+      ]
+    }
+  ],
+  "negativeQueries": [
+    "园区临时访客卡的押金是多少钱？",
+    "管理控制台管理员的用户名是什么？",
+    "设备固件的最新版本号是多少？",
+    "测试网关的域名是什么？",
+    "办公电脑的硬盘容量是多少？",
+    "外包项目的合同金额是多少？",
+    "城市博物馆停车场如何收费？",
+    "织物展厅几点关门？",
+    "租用语音导览器一天多少钱？",
+    "入口储物柜的密码是多少？",
+    "这件捐赠藏品值多少钱？",
+    "某件复制展品由哪位工匠制作？",
+    "办公椅的售价是多少？",
+    "喷涂零件采用哪个品牌的油漆？",
+    "转台底座螺栓的扭矩值是多少？",
+    "这批成品的具体批次号码是什么？",
+    "游标卡尺的购买价格是多少？",
+    "清洁剂的成分配方是什么？",
+    "仓储机器人的电池容量是多少？",
+    "测距模块的测量精度是多少？",
+    "试车电机的额定功率是多少？",
+    "备用锂电池是哪家公司生产的？",
+    "机器人地图的栅格边长是多少？",
+    "温控设备具体的温度上限是多少？",
+    "酒店押金到账需要几天？",
+    "夜班加餐今天有哪些菜？",
+    "贵重包裹的运单号码是什么？",
+    "公共雨伞一共剩下几把？",
+    "晚班通勤车终点站在哪个小区？",
+    "内部服务台负责人的手机号是多少？",
+    "字幕翻译的每分钟报价是多少？",
+    "三维模型允许的最大多边形数量是多少？",
+    "字体商用授权的费用是多少？",
+    "传感器日志保留多少天？",
+    "Which courier transports our prototype shipments?",
+    "Who owns the most recent unresolved design question?"
+  ]
+}

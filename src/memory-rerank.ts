@@ -25,4 +25,4 @@ export function memoryCandidates<T extends {id:string}>(dense:T[],lexical:T[],li
  }
  return result
 }
-export const memoryRetrievalComplete=(mode:string)=>['lexical','hybrid','reranked'].includes(mode)
+export const memoryRetrievalComplete=(mode:string)=>['lexical','hybrid','reranked','verified'].includes(mode)

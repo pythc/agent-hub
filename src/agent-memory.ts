@@ -8,11 +8,12 @@ import {memoryPolicySchema,normalizeMemory,lexicalScore,cosine,assertNoMemorySec
 import {embedMemory,validateMemoryVector,type EmbedMemory} from './memory-vectors.ts'
 import {rerankMemory,memoryCandidates,memoryRetrievalComplete,type RerankMemory} from './memory-rerank.ts'
 import {extractMemories,consolidateMemories} from './memory-learning.ts'
+import {verifyMemoryRelevance} from './memory-relevance.ts'
 
 export interface MemoryObservation {id:string;space:string;triggerId:string;discussion:string;scopeId:string;entryId:string;actor:string;session:string;sourceId:string;start?:number;end?:number;generation:number;epoch:number;policyRevision:number;sequence:number;state:'pending'|'running'|'done'|'held'|'stale';attempts:number;nextAt:number;lease?:string;error?:string}
 interface Vector {id:string;factId:string;revision:number;generation:number;scopeId:string;model:string;vector:number[]}
 interface Topic {id:string;space:string;scopeId:string;generation:number;label:string;aliases:string[];sources:{id:string;version:number}[];sessions:string[];proposalId?:string}
-interface QueryVector {vector?:number[];mode:string;at:number;epoch:number;generation:number;policyRevision:number;signature?:string;reranked?:{id:string;revision:number;score:number}[]}
+interface QueryVector {vector?:number[];mode:string;at:number;epoch:number;generation:number;policyRevision:number;signature?:string;verified?:boolean;reranked?:{id:string;revision:number;score:number}[]}
 export class AgentMemory {
  private queries=new Map<string,QueryVector>()
  private queryLifetime=new AbortController()
@@ -95,7 +96,7 @@ export class AgentMemory {
  private async prepareQuery(c:ScopeContext,query:string){
   if(!this.enabled(c))return
   const p=this.policy(c),key=this.queryKey(c,query),old=this.queries.get(key),generation=this.host.memory.generation(c.route.scopeId)
-  if(old&&old.epoch===c.route.epoch&&old.generation===generation&&this.now()-old.at<60000&&(!p.reranker||old.signature===this.rankingSignature(c)))return
+  if(old&&old.epoch===c.route.epoch&&old.generation===generation&&this.now()-old.at<60000&&(!(p.reranker||p.verifyRelevance)||old.signature===this.rankingSignature(c)))return
   const capture=this.host.memory.capture(c,[]),revision=this.policyRevision(c)
   let vector:number[]|undefined,mode=p.embedding?'embedding_unavailable':'lexical'
   let sensitive=false;try{assertNoMemorySecret(query)}catch{sensitive=true;mode='embedding_skipped_sensitive'}
@@ -104,28 +105,39 @@ export class AgentMemory {
   this.host.scopes.assertCurrent(c)
   if(capture.generation!==this.host.memory.generation(c.route.scopeId)||revision!==this.policyRevision(c)||!this.enabled(c))return
   const items=this.authorized(c),signature=this.rankingSignature(c,items)
-  let reranked:QueryVector['reranked']
-  if(p.reranker&&!sensitive){
+  let reranked:QueryVector['reranked'],verified=false
+  if((p.reranker||p.verifyRelevance)&&!sensitive){
    const ranking=this.rankings(c,query,items,vector)
-   const candidates=memoryCandidates(ranking.dense.map(x=>x.f),ranking.lexical.map(x=>x.f),p.reranker.candidateLimit).filter(f=>{try{assertNoMemorySecret(f.subject+' '+f.content);return true}catch{return false}})
-   try{
+   const candidates=memoryCandidates(ranking.dense.map(x=>x.f),ranking.lexical.map(x=>x.f),p.reranker?.candidateLimit??20).filter(f=>{try{assertNoMemorySecret(f.subject+' '+f.content);return true}catch{return false}})
+   let rerankSucceeded=false,scores=candidates.map((_f,index)=>({index,score:1/(index+1)}))
+   if(p.reranker)try{
     const results=candidates.length?await this.rerank(query.slice(0,200),candidates.map(f=>f.subject+' '+f.content),p.reranker,AbortSignal.any([this.queryLifetime.signal,AbortSignal.timeout(5000)])):[]
-    // Injected implementations must obey the same full permutation and finite-score contract.
     if(results.length!==candidates.length||new Set(results.map(r=>r.index)).size!==candidates.length||results.some(r=>!Number.isInteger(r.index)||!candidates[r.index]||!Number.isFinite(r.score)||r.score<0||r.score>1))throw Error('invalid_rerank_results')
-    reranked=results.filter(r=>r.score>=p.reranker!.minScore).map(r=>({id:candidates[r.index]!.id,revision:candidates[r.index]!.revision,score:r.score})).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id))
+    scores=results.sort((a,b)=>b.score-a.score||a.index-b.index);rerankSucceeded=true
     if(mode==='hybrid'||mode==='lexical')mode='reranked'
    }catch{mode='rerank_unavailable'}
+   // No data leaves for a second provider after a first await without checking authority again.
+   this.queryLifetime.signal.throwIfAborted();this.host.scopes.assertCurrent(c)
+   if(capture.generation!==this.host.memory.generation(c.route.scopeId)||revision!==this.policyRevision(c)||!this.enabled(c)||signature!==this.rankingSignature(c)){this.queries.delete(key);return}
+   if(p.verifyRelevance)try{
+    const ordered=scores.map(r=>candidates[r.index]!)
+    const accepted=await verifyMemoryRelevance(this,c,query.slice(0,200),ordered,this.queryLifetime.signal)
+    reranked=scores.flatMap((r,index)=>accepted.has(index)?[{id:ordered[index]!.id,revision:ordered[index]!.revision,score:r.score}]:[]);verified=true
+    if(['hybrid','lexical','reranked'].includes(mode))mode='verified'
+   }catch(error){mode=error instanceof Error&&error.message==='daily_model_budget'?'relevance_budget_exhausted':'relevance_unavailable'}
+   else if(rerankSucceeded)reranked=scores.filter(r=>r.score>=p.reranker!.minScore).map(r=>({id:candidates[r.index]!.id,revision:candidates[r.index]!.revision,score:r.score}))
    this.queryLifetime.signal.throwIfAborted();this.host.scopes.assertCurrent(c)
    if(capture.generation!==this.host.memory.generation(c.route.scopeId)||revision!==this.policyRevision(c)||!this.enabled(c)||signature!==this.rankingSignature(c)){this.queries.delete(key);return}
   }
   if(this.queries.size>=100)this.queries.delete(this.queries.keys().next().value!)
-  this.queries.set(key,{vector,mode,at:this.now(),epoch:c.route.epoch,generation,policyRevision:revision,signature,reranked})
+  this.queries.set(key,{vector,mode,at:this.now(),epoch:c.route.epoch,generation,policyRevision:revision,signature,reranked,verified})
  }
  similar(c:ScopeContext,a:MemoryFact,b:MemoryFact){const model=this.vectorModel(c),av=this.host.store.get<Vector>('memory-vector',stableDigest([a.id,model])),bv=this.host.store.get<Vector>('memory-vector',stableDigest([b.id,model]));return av?.revision===a.revision&&bv?.revision===b.revision&&av.generation===a.generation&&bv.generation===b.generation?cosine(av.vector,bv.vector):0}
  rank(c:ScopeContext,query:string,items=this.authorized(c)){
   const cached=this.queries.get(this.queryKey(c,query)),model=this.vectorModel(c)
   const q=cached&&cached.epoch===c.route.epoch&&cached.generation===this.host.memory.generation(c.route.scopeId)&&this.now()-cached.at<60000?cached:undefined
   const incomplete=q?.vector&&items.some(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return !v||v.revision!==f.revision||v.generation!==f.generation||v.vector.length!==q.vector!.length})
+  if(this.policy(c).verifyRelevance&&(!q?.verified||q.signature!==this.rankingSignature(c)))return {items:[] as MemoryProjection[],mode:q?.verified?'relevance_stale':q?.mode??'relevance_not_prepared'}
   if(q?.reranked&&q.signature===this.rankingSignature(c))return {items:q.reranked.flatMap(ref=>{const f=items.find(f=>f.id===ref.id&&f.revision===ref.revision);return f?[f]:[]}),mode:incomplete?'embedding_index_incomplete':q.mode}
   const {lexical,dense}=this.rankings(c,query,items,q?.vector),vectors=dense.filter(x=>x.score>=.5)
   const scores=new Map<string,number>()

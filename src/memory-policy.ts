@@ -11,6 +11,7 @@ export const memoryPolicySchema=z.object({
  interestThreshold:z.number().int().min(2).max(20).default(3),
  maxCallsPerDay:z.number().int().min(1).max(1000).default(100),
  retrievalConditioning:z.boolean().default(true),
+ verifyRelevance:z.boolean().optional(),
  embedding:z.object({url:z.url().refine(s=>['http:','https:'].includes(new URL(s).protocol),'HTTP endpoint required'),model:z.string().min(1),apiKeyEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional()}).strict().optional(),
  reranker:z.object({url:z.url().refine(s=>['http:','https:'].includes(new URL(s).protocol),'HTTP endpoint required'),model:z.string().min(1),apiKeyEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),minScore:z.number().min(0).max(1).default(.5),candidateLimit:z.number().int().min(2).max(40).default(20)}).strict().optional(),
 }).strict()

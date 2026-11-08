@@ -1,5 +1,7 @@
 # Memory recall repair and independent evaluation
 
+后续：本文保留重排版本的历史结果和限制。OpenAPI／护照问题的进一步修复、新 108 问独立集、预算变化及当前错误见 [召回证据验证记录](MEMORY_RELEVANCE_VALIDATION_2026-11-08.md)。
+
 本轮基线：`0977fcdcb9f22646993632a42298d6ac406d56f2`，分支 `codex/weknora-memory-20261108`。使用合成数据、隔离 SQLite 和本地真实模型。没有修改运行实例配置，没有部署、合并或 push，也未恢复暂停的 Wiki 工作。
 
 ## 两个原始漏召回的原因

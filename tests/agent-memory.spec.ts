@@ -173,6 +173,64 @@ it('aborts and drains reranking before closing the store',async()=>{
  await expect.poll(()=>started).toBe(true);await f.h.close();hosts.splice(hosts.indexOf(f.h),1)
  expect(aborted).toBe(true);expect(await pending).toBe('cancelled');await expect(f.h.agentMemory.search(c,'query')).rejects.toThrow('closed')
 })
+function relevant(input:any,predicate:(content:string)=>boolean=()=>true){return {reviewed:input.candidates.map((f:any)=>f.index),supported:input.candidates.filter((f:any)=>predicate(f.content)).map((f:any)=>({index:f.index,quote:f.content}))}}
+it('verifies source support independently of both low and high rerank scores',async()=>{
+ const f=fixture(input=>relevant(input,c=>c.includes('evidence')),async()=>[1,0],async(_q,docs)=>docs.map((doc,index)=>({index,score:doc.includes('evidence')?.000001:.99}))),c=f.send()
+ const fact=f.remember(c,'useful evidence'),wrong=f.remember(c,'unrelated text');f.configure({verifyRelevance:true,embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker:{...reranker,minScore:.999}})
+ await f.h.agentMemory.index(c,new AbortController().signal)
+ expect(await f.h.agentMemory.search(c,'query')).toMatchObject({items:[{id:fact.id}],mode:'verified',status:'complete'})
+ const input=JSON.parse(f.calls[0]!.input);expect(input.candidates.map((x:any)=>Object.keys(x))).toEqual([['index','subject','content'],['index','subject','content']]);expect(f.calls[0]).toMatchObject({tools:[],managed:true,sandbox:'read-only',ephemeral:true});expect(f.calls[0]!.instructions).not.toContain('OpenAPI');expect(f.h.memory.fact(wrong.id)?.state).toBe('active')
+ await f.h.agentMemory.search(c,'query');expect(f.calls).toHaveLength(1)
+ await f.restart();expect((await f.h.agentMemory.search(f.context(c.trigger.id),'query')).items[0]?.id).toBe(fact.id);expect(f.calls).toHaveLength(2)
+})
+it.each(['missing','duplicate','outside','invented_quote','empty_quote','duplicate_support'] as const)('fails closed for invalid relevance evidence: %s',async kind=>{
+ const f=fixture(input=>{const output=relevant(input),one=output.supported[0]!;if(kind==='missing')output.reviewed=[];if(kind==='duplicate')output.reviewed[1]=output.reviewed[0];if(kind==='outside')one.index=100;if(kind==='invented_quote')one.quote='not present in source';if(kind==='empty_quote')one.quote=' ';if(kind==='duplicate_support')output.supported[1]={...one};return output}),c=f.send()
+ f.remember(c,'query first fact');f.remember(c,'query second fact');f.configure({verifyRelevance:true})
+ expect(await f.h.agentMemory.search(c,'query')).toMatchObject({items:[],mode:'relevance_unavailable',status:'partial'})
+ expect(f.h.agentMemory.recall(c,'query')).toMatchObject({items:[],status:'partial'})
+})
+it('charges relevance against the model budget and never falls back to unverified matches',async()=>{
+ const f=fixture(input=>relevant(input)),c=f.send();f.remember(c,'query memory');f.configure({verifyRelevance:true,maxCallsPerDay:1})
+ expect((await f.h.agentMemory.search(c,'query')).status).toBe('complete');expect((await f.h.agentMemory.search(c,'query')).status).toBe('complete')
+ expect(await f.h.agentMemory.search(c,'memory')).toMatchObject({items:[],status:'partial',mode:'relevance_budget_exhausted'});expect(f.calls).toHaveLength(1)
+})
+it('bounds legacy long-note input before spending verifier budget',async()=>{
+ const f=fixture(input=>relevant(input)),c=f.send();for(let i=0;i<18;i++)f.remember(c,'query '+i+' '+ 'x'.repeat(15000))
+ f.configure({verifyRelevance:true});expect(await f.h.agentMemory.search(c,'query')).toMatchObject({items:[],mode:'relevance_unavailable',status:'partial'})
+ expect(f.calls).toHaveLength(0);expect(f.h.store.list('memory-call-count')).toHaveLength(0)
+})
+it('keeps inaccessible, candidate and sensitive notes out of the relevance request',async()=>{
+ const f=fixture(input=>relevant(input),async()=>[1,0]),c=f.send(),b=f.send('Bob','bob','bob'),other=f.send('Other','other','alice','g2')
+ f.remember(c,'query visible');f.remember(b,'query DENIED_ACTOR',{kind:'preference'});f.remember(other,'query DENIED_ENTRY');f.remember(c,'query DENIED_CANDIDATE',{candidate:true});const secret=f.remember(c,'query legacy');f.h.store.put('memory-fact',secret.id,{...secret,content:'password: synthetic-secret'})
+ f.configure({verifyRelevance:true,embedding:{url:'http://test.invalid/embeddings',model:'test'}});await f.h.agentMemory.index(c,new AbortController().signal);await f.h.agentMemory.search(c,'query')
+ expect(JSON.parse(f.calls[0]!.input).candidates.map((x:any)=>x.content)).toEqual(['query visible']);await f.h.agentMemory.search(c,'password: synthetic-query');expect(f.calls).toHaveLength(1)
+})
+it.each(['clear','edit','pause','revoke','policy'] as const)('rejects a relevance decision completing after %s',async action=>{
+ let release!:()=>void,started=false
+ const f=fixture(input=>new Promise(resolve=>{started=true;release=()=>resolve(relevant(input))})),c=f.send(),fact=f.remember(c,'query original')
+ f.configure({verifyRelevance:true});const pending=f.h.agentMemory.search(c,'query').catch(error=>String(error));await expect.poll(()=>started).toBe(true)
+ if(action==='clear')f.h.memory.command(c,{action:'clear',operationId:'clear-relevance',expectedRevision:0},true)
+ else if(action==='pause')f.h.agentMemory.manage(c,{action:'personal',enabled:false})
+ else if(action==='edit')f.h.memory.command(c,{action:'remember',operationId:'edit-relevance',id:fact.id,expectedRevision:fact.revision,subject:fact.subject,content:'changed content',sourceIds:fact.sources.map(s=>s.id),candidate:false},true)
+ else if(action==='revoke'){const source=f.h.memory.evidence(fact.sources[0]!.id)!;f.h.store.put('memory-evidence',source.id,{...source,version:source.version+1,revoked:true,text:''})}
+ else f.configure({maxCallsPerDay:99})
+ release();const result=await pending;if(typeof result!=='string'){expect(result.items).toEqual([]);expect(result.status).not.toBe('complete')}
+})
+it('rechecks candidate revisions between reranking and verifier egress',async()=>{
+ let release!:()=>void,started=false
+ const f=fixture(input=>relevant(input),async()=>[1,0],async(_q,docs)=>new Promise(resolve=>{started=true;release=()=>resolve(docs.map((_d,index)=>({index,score:.99})))})),c=f.send(),fact=f.remember(c,'query old')
+ f.configure({verifyRelevance:true,reranker});const pending=f.h.agentMemory.search(c,'query');await expect.poll(()=>started).toBe(true)
+ f.h.memory.command(c,{action:'forget',operationId:'forget-before-verification',id:fact.id,expectedRevision:fact.revision},true);release();await pending.catch(()=>{});expect(f.calls).toHaveLength(0)
+})
+it('aborts active semantic verification before closing SQLite',async()=>{
+ let started=false,aborted=false
+ const f=fixture((_input,r)=>new Promise((_resolve,reject)=>{started=true;r.signal!.addEventListener('abort',()=>{aborted=true;reject(Error('aborted'))},{once:true})})),c=f.send();f.remember(c,'query fact');f.configure({verifyRelevance:true})
+ const pending=f.h.agentMemory.search(c,'query').then(()=>false,()=>true);await expect.poll(()=>started).toBe(true);await f.h.close();hosts.splice(hosts.indexOf(f.h),1);expect(await pending).toBe(true);expect(aborted).toBe(true)
+})
+it('keeps successful reranking when query embedding is unavailable in the legacy policy',async()=>{
+ const f=fixture(undefined,async()=>{throw Error('embedding down')},async(_q,docs)=>docs.map((_d,index)=>({index,score:.9}))),c=f.send(),fact=f.remember(c,'query fact');f.configure({embedding:{url:'http://test.invalid/embeddings',model:'test'},reranker})
+ expect(await f.h.agentMemory.search(c,'query')).toMatchObject({items:[{id:fact.id}],mode:'embedding_unavailable',status:'partial'})
+})
 it('archives excess unconfirmed proposals without evicting protected facts',()=>{
  const f=fixture();f.configure({maxItems:1});const c=f.send(),one=f.remember(c,'保留人工事实一'),two=f.remember(c,'保留人工事实二')
  for(let i=0;i<3;i++)f.h.memory.command(c,{action:'remember',operationId:'candidate-'+i,expectedRevision:0,subject:'candidate '+i,content:'candidate '+i,sourceIds:one.sources.map(s=>s.id)})
