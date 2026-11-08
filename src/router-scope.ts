@@ -5,6 +5,7 @@ import type {Store,Run} from './store.ts'
 import type {Trigger} from './vendor/dsh-core/index.ts'
 import {stableDigest} from './sources.ts'
 import {executionSchema} from './backend-config.ts'
+import {builtinSources,type SourceRegistry} from './source-plugins.ts'
 
 const id=z.string().min(1).max(300)
 const scopeInput=z.object({id,tenantId:id,name:id,managers:z.array(id).min(1),workerIds:z.array(id),sourceIds:z.array(id),backendIds:z.array(id),dataEntryIds:z.array(id).default([]),router:executionSchema.unwrap().shape.router.optional(),memoryEnabled:z.boolean().default(true),contextBytes:z.number().int().min(4096).max(1000000).default(256000)}).strict()
@@ -27,7 +28,7 @@ export const scopeCommandSchema=z.discriminatedUnion('action',[
 export class RouterScopeAmbiguity extends Error {}
 /** Host control plane. No organization entities or mutable authority enter dsh-core. */
 export class RouterScopes {
- constructor(readonly store:Store,readonly config:Config,private busy:(ticketId:string)=>boolean=()=>false){}
+ constructor(readonly store:Store,readonly config:Config,private busy:(ticketId:string)=>boolean=()=>false,private registry:SourceRegistry=builtinSources){}
  enabled(){return this.store.list<ManagementScope>('management-scope').length>0}
  scope(id:string){const s=this.store.get<ManagementScope>('management-scope',id);if(!s)throw Error('Unknown management scope');return s}
  binding(id:string){const b=this.store.get<EntryBinding>('entry-binding',id);if(!b)throw Error('Unknown entry');return b}
@@ -36,7 +37,7 @@ export class RouterScopes {
  actor(t:Trigger){return JSON.stringify([t.actor.source,t.actor.id])}
  nativeId(t:Trigger){return String(t.meta.chat??t.meta.scope??t.threads[0]?.id??'')}
  entry(t:Trigger){return this.bindings().find(b=>b.sourceId===t.source&&b.nativeId===this.nativeId(t))}
- sourceActive(b:EntryBinding){const s=this.config.sources.find(s=>s.id===b.sourceId);return !!(b.active&&this.store.get<any>('source-entry-state',b.id)?.available!==false&&s?.enabled&&(!s.listenScopes||s.listenScopes.includes(b.nativeId))&&(!s.feishu||s.feishu.chats.includes(b.nativeId))&&(!s.wecom?.chats.length||s.wecom.chats.includes(b.nativeId)))}
+ sourceActive(b:EntryBinding){const s=this.config.sources.find(s=>s.id===b.sourceId);return !!(b.active&&this.store.get<any>('source-entry-state',b.id)?.available!==false&&s?.enabled&&this.registry.allowsScope(s,b.nativeId))}
  assertTrigger(t:Trigger){
   if(this.store.get('source-invalid-trigger',t.id))throw Error('Source content or membership changed; a fresh authorized input is required')
   if(!this.enabled())return
@@ -84,7 +85,7 @@ export class RouterScopes {
   if(x.action==='entry.bind'){
    const scope=this.scope(x.scopeId),source=this.config.sources.find(s=>s.id===x.sourceId)
    if(!source||!scope.sourceIds.includes(source.id))throw Error('Source is outside management scope')
-   if(source.feishu&&!source.feishu.chats.includes(x.nativeId)||source.wecom?.chats.length&&!source.wecom.chats.includes(x.nativeId)||source.listenScopes&&!source.listenScopes.includes(x.nativeId))throw Error('Entry is outside configured source')
+   if(!this.registry.allowsScope(source,x.nativeId))throw Error('Entry is outside configured source')
    const identity=this.store.get<any>('source-identity',source.id)
    if(source.kind!=='local'&&!identity)throw Error('Verify source account before binding')
    if(identity&&identity.namespace!==x.accountNamespace)throw Error('Entry namespace does not match verified connection identity')

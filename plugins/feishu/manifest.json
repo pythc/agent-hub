@@ -1,0 +1,135 @@
+{
+  "id": "agenthub-feishu",
+  "kind": "feishu",
+  "label": "Feishu / 飞书",
+  "version": "1.0.0",
+  "stateVersion": 1,
+  "scopesPath": "/feishu/chats",
+  "commandPath": "/feishu/command",
+  "cursorMode": "scope",
+  "cursorEncoding": "unix-seconds",
+  "methods": [
+    "start",
+    "poll",
+    "close",
+    "identity",
+    "members",
+    "read",
+    "context",
+    "deliver",
+    "probe"
+  ],
+  "stateKinds": [
+    "source-cursor",
+    "plugin-state",
+    "source-live",
+    "source-message-observation",
+    "source-freshness",
+    "thread-health",
+    "entry-label",
+    "source-identity-mismatch"
+  ],
+  "credentials": {
+    "APP_ID": "/feishu/appIdEnv",
+    "APP_SECRET": "/feishu/appSecretEnv"
+  },
+  "network": true,
+  "tools": [
+    {
+      "name": "message_read",
+      "description": "Read an admitted Feishu message using its task-authorized trigger ID.",
+      "resource": "message",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "thread_read",
+      "description": "Read the authorized Feishu thread. Group history access is required.",
+      "resource": "thread",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "feishu"
+    ],
+    "properties": {
+      "feishu": {
+        "type": "object",
+        "required": [
+          "chats",
+          "appIdEnv",
+          "appSecretEnv"
+        ],
+        "properties": {
+          "chats": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^oc_"
+            }
+          },
+          "cli": {
+            "type": "null"
+          },
+          "liveEvents": {
+            "const": false
+          },
+          "otherChats": {
+            "const": "ignore"
+          },
+          "directMessages": {
+            "const": false
+          }
+        }
+      }
+    }
+  },
+  "setup": {
+    "description": "Use a Feishu bot application with message read/reply and group member scopes. Set appIdEnv and appSecretEnv to host environment variable names. Select explicit chats. This package uses REST polling; the legacy CLI adapter remains available for live event streams.",
+    "fields": [
+      {
+        "name": "app-id-env",
+        "label": "App ID environment variable",
+        "required": true
+      },
+      {
+        "name": "app-secret-env",
+        "label": "App secret environment variable",
+        "secret": true,
+        "required": true
+      },
+      {
+        "name": "chats",
+        "label": "Allowed chat IDs",
+        "required": true
+      }
+    ]
+  }
+}

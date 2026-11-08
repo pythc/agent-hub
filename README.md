@@ -151,3 +151,5 @@ Roppo is licensed under [Apache-2.0](LICENSE). Third-party components retain the
 Built with [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagent-prototype), [assistant-ui](https://github.com/assistant-ui/assistant-ui), [agent-browser](https://github.com/vercel-labs/agent-browser), React, Vite, and the MCP SDK.
 
 The repository and CLI retain the name `agent-hub`.
+
+Developer source packages: see [Plugins](docs/PLUGINS.md) for Feishu, Slack and Linear adapters and controlled upgrade/rollback.

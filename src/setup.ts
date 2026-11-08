@@ -47,9 +47,11 @@ export class Setup {
  }
  async previewMembers(sourceId:string,scope?:string){
   const source=this.host.sources.get(sourceId);if(!source?.members)throw Error('Source has no member directory')
+  const revision=this.host.settings.current().revision
   const members=await source.members(scope),ids=[...new Set(members.filter(m=>!m.bot).map(m=>m.id))].sort()
+  if(this.host.settings.current().revision!==revision)throw Error('Settings changed during member query. Preview members again.')
   if(!ids.length)throw Error('Empty member directory; allowed list was retained')
-  const snapshot={id:randomUUID(),source:sourceId,scope,members,ids,revision:this.host.settings.current().revision,expires:Date.now()+600000}
+  const snapshot={id:randomUUID(),source:sourceId,scope,members,ids,revision,expires:Date.now()+600000}
   this.host.store.put('member-preview',snapshot.id,snapshot);return snapshot
  }
  applyMembers(id:string){

@@ -19,8 +19,14 @@ export const sourceChangeSchema=z.object({
  contentHash:z.string().regex(/^[a-f0-9]{64}$/).optional(),actorIds:z.array(z.string().min(1).max(300)).max(1000).optional(),
 }).strict().superRefine((v,c)=>{if(v.kind.startsWith('message.')&&!v.messageId)c.addIssue({code:'custom',message:'Message identity required'});if(v.kind==='message.updated'&&!v.contentHash)c.addIssue({code:'custom',message:'Verified content hash required'});if(v.kind.startsWith('member.')&&!v.actorIds?.length)c.addIssue({code:'custom',message:'Member identity required'})})
 export type SourceChange=z.infer<typeof sourceChangeSchema>
+export interface RecordQuery {sourceId?:string;ids?:string[];cursor?:string;limit?:number;scope?:string;messageIds?:string[];subscribed?:boolean}
+export interface RecordPage<T=any> {items:{id:string;value:T}[];next?:string}
 export interface SourceContext {
+  /** Source-scoped bounded history; list/get on the v2 store contains only local/control state. */
+  records?(kind:string,query?:RecordQuery):Promise<RecordPage>
   store: Store
+  /** Resolve only after pending plugin events have been committed by the host. */
+  checkpoint?():Promise<void>
   signal?:AbortSignal
   receive(trigger: Trigger): unknown
   change?(event:SourceChange):unknown

@@ -103,15 +103,16 @@ it('polls Feishu topics and replies with a stable idempotency uuid',async()=>{
  const calls:any[]=[]
  const source=new FeishuSource(config,async(method,path,body)=>{
   calls.push({method,path,body})
-  return method==='GET'?{items:[{message_id:'om_2',root_id:'om_1',create_time:'1',body:{content:JSON.stringify({text:'compare'})},sender:{id:'ou_alice',id_type:'open_id',sender_type:'user'},mentions:[{id:'bot'}]}],has_more:false}:{message_id:'reply'}
+  return method==='GET'?{items:[{message_id:'om_2',chat_id:'oc_test',root_id:'om_1',create_time:'1',body:{content:JSON.stringify({text:'compare'})},sender:{id:'ou_alice',id_type:'open_id',sender_type:'user'},mentions:[{id:'bot'}]}],has_more:false}:{message_id:'reply'}
  })
  await source.poll(ctx)
  expect(events[0].threads[0].id).toBe('oc_test:om_1')
  expect(events[0].addressed).toBe('direct')
  const message={id:'reply-key',kind:'reply' as const,text:'result',channel:events[0].channel}
  await source.deliver(message);await source.deliver(message)
- expect(calls[1].body.uuid).toBe(calls[2].body.uuid)
- expect(calls[1].body.reply_in_thread).toBe(true)
+ const posts=calls.filter(c=>c.method==='POST')
+ expect(posts[0].body.uuid).toBe(posts[1].body.uuid)
+ expect(posts[0].body.reply_in_thread).toBe(true)
 })
 
 it('normalizes typed CLI paths and converts real CLI message output',async()=>{
@@ -297,4 +298,23 @@ it('R05 refuses a source read when a verified connection switches accounts',asyn
  await expect(source.poll(ctx)).rejects.toThrow('account changed')
  expect(changes[0]).toMatchObject({kind:'entry.unavailable',scope:'oc_test'});expect(events).toHaveLength(0)
  await expect(source.poll(ctx)).rejects.toThrow('account changed');expect(changes[1]).toEqual(changes[0])
+})
+
+it('resumes Feishu history from its durable page and fixed time window after restart',async()=>{
+ const {ctx}=context(),requests:URL[]=[]
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{chats:['oc_test'],mentionId:'ou_bot',appIdEnv:'TEST_APP_ID',appSecretEnv:'TEST_APP_SECRET'}}]}).sources[0]!
+ const request=async(_method:string,path:string)=>{
+  if(path==='bot/v3/info')return {bot:{open_id:'ou_bot'}}
+  const url=new URL(path,'https://example.test/');requests.push(url)
+  return {items:[],has_more:true,page_token:'page-'+requests.length}
+ }
+ const first=new FeishuSource(config,request);await first.poll(ctx)
+ expect(requests).toHaveLength(5);const old=ctx.store.get<any>('source-cursor','f:oc_test').since,window=ctx.store.get<any>('plugin-state','f:history:oc_test')
+ expect(window.page).toBe('page-5');expect(window.since).toBe(old)
+ const second=new FeishuSource(config,async(_method,path)=>{
+  if(path==='bot/v3/info')return {bot:{open_id:'ou_bot'}}
+  const url=new URL(path,'https://example.test/');expect(url.searchParams.get('page_token')).toBe('page-5');expect(url.searchParams.get('start_time')).toBe(old);expect(url.searchParams.get('end_time')).toBe(window.boundary)
+  return {items:[],has_more:false}
+ })
+ await second.poll(ctx);expect(ctx.store.get('plugin-state','f:history:oc_test')).toBeNull();expect(ctx.store.get<any>('source-cursor','f:oc_test').since).toBe(String(Number(window.boundary)-2))
 })
