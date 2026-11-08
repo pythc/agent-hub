@@ -89,7 +89,8 @@ const consolidationSchema=z.object({merges:z.array(z.object({indices:z.array(z.n
 export async function consolidateMemories(engine:AgentMemory,c:ScopeContext,signal:AbortSignal){
  const {host}=engine;if(!engine.enabled(c))throw Error('Memory disabled')
  const space=engine.space(c),previous=host.store.get<any>('memory-consolidation',space)
- if(previous&&engine.now()-previous.at<60000)return {status:'rate_limited'}
+ if(previous?.status==='running')return {status:'busy'}
+ if(previous&&previous.status!=='interrupted'&&engine.now()-previous.at<60000)return {status:'rate_limited'}
  const candidates=engine.authorized(c).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
  const related=candidates.filter((f,i)=>candidates.some((other,j)=>i!==j&&f.kind===other.kind&&(lexicalScore(f.subject+' '+f.content,other.subject+' '+other.content)>.3||engine.similar(c,f,other)>=.88))).slice(0,20)
  const revision=engine.policyRevision(c),generation=host.memory.generation(c.route.scopeId)
@@ -104,10 +105,11 @@ export async function consolidateMemories(engine:AgentMemory,c:ScopeContext,sign
    if(members.some(f=>f.kind!==members[0]!.kind))throw Error('incompatible_merge_kinds')
    return {members,content:safeMemoryText(m.content)}
   })
-  const proposed=host.store.atomic(()=>merges.map(m=>{
+  return host.store.atomic(()=>{const proposed=merges.map(m=>{
    const sources=[...new Set(m.members.flatMap(f=>f.sources.map(s=>s.id)))];if(sources.length>30)throw Error('merge_evidence_limit')
    return host.memory.command(c,{action:'remember',operationId:'merge:'+stableDigest([m.members.map(f=>[f.id,f.revision]),m.content]),expectedRevision:0,subject:m.members[0]!.subject,content:m.content,sourceIds:sources,kind:m.members[0]!.kind??'fact',candidate:true,origin:'consolidated',replaces:m.members.map(f=>({id:f.id,revision:f.revision})),visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'})
-  }))
+  })
   const report={at:engine.now(),status:'completed',reviewed:candidates.length,proposed:proposed.length};host.store.put('memory-consolidation',space,report);return report
- }catch(error){host.store.put('memory-consolidation',space,{at:engine.now(),status:'failed',reason:signal.aborted?'interrupted':'consolidation_failed'});throw error}
+  })
+ }catch(error){host.store.put('memory-consolidation',space,{at:engine.now(),status:signal.aborted?'interrupted':'failed',reason:signal.aborted?'interrupted':'consolidation_failed'});throw error}
 }

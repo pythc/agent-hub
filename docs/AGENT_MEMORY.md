@@ -62,4 +62,21 @@ python3 tests/browser/agent-memory.py
 
 浏览器脚本需要已有 Playwright Python 环境和 Chromium。原生提取测试会在模型调用已开始后终止自己创建的独立测试进程组，再用新的进程恢复，随后验证确认、更新、跨会话使用及清空后重启。所有场景都使用隔离目录与合成内容。
 
-本轮验收详情与范围见 [AGENT_MEMORY_VALIDATION.md](AGENT_MEMORY_VALIDATION.md)。这不是外部 WeKnora 服务接入，也没有在本轮继续此前暂停的 Wiki 页面工作。真实 embedding 模型的语义质量和实际业务实例仍需配置后验收；HTTP 协议、权限、融合排序和降级边界已有隔离测试。
+本轮验收详情与范围见 [AGENT_MEMORY_VALIDATION.md](AGENT_MEMORY_VALIDATION.md)。这不是外部 WeKnora 服务接入，也没有在本轮继续此前暂停的 Wiki 页面工作。已用 Potion 和 BGE 的本地真实权重验证 embedding 索引、混合召回、重启、遗忘及降级；小规模合成样本仍有漏召回，实际业务语料和线上服务仍需独立验收。
+
+整理过程被中断后，启动恢复为 `interrupted`。自动模式会重新检查当前权限和记忆开关再调度；显式模式需要重新发起人工整理。恢复不会自动确认候选，也不会跳过每日模型预算。合并候选与完成回执在同一事务提交，关闭宿主会取消并等待人工／自动整理。
+
+补充复跑脚本（均使用新的隔离目录）：
+
+```sh
+MEMORY_CONSOLIDATION_DIR=/tmp/agenthub-consolidation-acceptance \
+  AGENTHUB_CODEX=/path/to/codex \
+  node --import tsx examples/agent-memory-consolidation.ts
+
+MEMORY_SEMANTIC_DIR=/tmp/agenthub-semantic-acceptance \
+  MEMORY_EMBEDDING_PYTHON=/path/to/isolated/python \
+  MEMORY_EMBEDDING_SNAPSHOT=/path/to/cached/potion/snapshot \
+  node --import tsx examples/agent-memory-semantic.ts
+```
+
+第二条默认需要 Model2Vec 0.10.0 与 Potion 权重。BGE 复跑时设置 `MEMORY_EMBEDDING_ENGINE=transformers`、`MEMORY_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5`，并选择装有 Transformers / PyTorch 的解释器与对应权重目录。适配器仅用于合成数据验收，绑定 loopback；其统计及故障注入接口没有鉴权，不应作为生产 embedding 服务。原生模型崩溃脚本使用 POSIX 进程组。

@@ -26,6 +26,11 @@ export class AgentMemory {
   host.memory.validateUse=(c,refs)=>{if(!refs.length)return;if(!this.enabled(c))throw Error('Memory use disabled');const allowed=this.authorized(c);if(refs.some(ref=>!allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))throw Error('Memory audience changed')}
   host.memory.onMutation=()=>{this.queries.clear();this.reconcile()}
   for(const row of this.observations())if(row.state==='running')this.saveObservation({...row,state:'pending',lease:undefined,nextAt:this.now()})
+  host.store.atomic(()=>{for(const row of host.store.db.prepare("SELECT id,body FROM records WHERE kind='memory-consolidation'").all()){
+   const report=JSON.parse(String(row.body));if(report.status!=='running')continue
+   host.store.put('memory-consolidation',String(row.id),{...report,status:'interrupted',reason:'host_restart'})
+   host.store.put('memory-maintenance',String(row.id),0)
+  }})
   this.reconcile()
  }
  space(c:ScopeContext){return stableDigest([c.route.tenantId,c.route.scopeId,c.route.entryId,c.actor])}
@@ -181,8 +186,8 @@ export class AgentMemory {
      await this.index(c,signal)
      if(!this.enabled(c))return
      for(const f of this.authorized(c))if(f.owner===c.actor&&f.kind==='task'&&!f.protected&&(f.lastUsedAt??f.createdAt)<this.now()-45*86400000&&(f.importance??3)>1)this.host.store.put('memory-fact',f.id,{...f,importance:1})
-     const reviewed=this.host.store.get<any>('memory-consolidation',space)?.at??0
-     if(this.policy(c).writeMode==='auto'&&this.now()-reviewed>=86400000&&this.authorized(c).filter(f=>f.owner===c.actor).length>=6)await consolidateMemories(this,c,signal)
+     const review=this.host.store.get<any>('memory-consolidation',space)
+     if(this.policy(c).writeMode==='auto'&&(review?.status==='interrupted'||this.now()-(review?.at??0)>=86400000)&&this.authorized(c).filter(f=>f.owner===c.actor).length>=6)await consolidateMemories(this,c,signal)
     })().catch(()=>{}).finally(()=>{this.active=undefined;this.controller=undefined})
     return
    }catch{}
@@ -247,7 +252,12 @@ export class AgentMemory {
  }
  async consolidate(c:ScopeContext,signal=AbortSignal.timeout(120000)){
   if(!this.host.scopes.canManage(c))throw Error('Memory consolidation requires scope manager')
-  return consolidateMemories(this,c,signal)
+  if(this.closed)throw Error('Memory is closed')
+  if(this.active)return {status:'busy'}
+  this.controller=new AbortController()
+  const run=consolidateMemories(this,c,AbortSignal.any([signal,this.controller.signal]))
+  this.active=run.then(()=>{},()=>{}).finally(()=>{this.active=undefined;this.controller=undefined})
+  return run
  }
  manage(c:ScopeContext,value:unknown){
   const x=z.object({action:z.enum(['inspect','configure','personal','retry','archive','unarchive','topics.forget']),expectedRevision:z.number().int().min(0).optional(),policy:memoryPolicySchema.optional(),enabled:z.boolean().optional(),id:z.string().optional()}).strict().parse(value)
