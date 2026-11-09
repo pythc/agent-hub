@@ -8,7 +8,7 @@ History cleanup previously redacted the plugin session's identity before calling
 
 The planner also discovers selected plugin session records directly, without requiring a duplicate model-session record. Original configuration, account, workspace and pinned-package checks still apply before native deletion. If the native file was deleted but its success response was lost, the adapter retries deletion idempotently; if the verified receipt survived but the cleanup checkpoint did not, restart completes from that receipt.
 
-An older version may already have erased the required mapping. Without verified original metadata, the host cannot safely associate remaining native files with a particular host session. Such cases remain pending rather than guessing an ID or reporting successful deletion. The running local deployment was inspected read-only before publication: it had no plugin session records or pending history cleanups affected by this legacy condition.
+An older version may already have erased the required mapping. Without verified original metadata, the host cannot safely associate remaining native files with a particular host session. Such cases remain pending rather than guessing an ID or reporting successful deletion. A missing native ID is rejected before invoking the adapter, even if the rest of the mapping survives; otherwise an adapter could falsely confirm deletion of an unrelated nonexistent file. The running local deployment was inspected read-only before publication: it had no plugin session records or pending history cleanups affected by this legacy condition.
 
 ## History identity
 
@@ -16,9 +16,9 @@ Plugin history must be an object with the requested native `id` and a `turns` ar
 
 ## Validation
 
-- `npm run check`: **81 test files / 1,178 tests passed**, including type checks and frontend build.
-- **13 new regression cases** cover history/export/transcript identity, malformed history, failed deletion before/after file removal, restart, interrupted cleanup checkpoint, invalid deletion receipts, account/configuration guards, package upgrade/rollback, record-only session discovery and already-erased legacy mappings.
-- Linux ARM64 in a networkless container with the actual Bubblewrap sandbox: **94 tests passed** across plugin history, execution plugins and memory cleanup. The container used the documented nested-sandbox test policy, no host mounts or business credentials.
+- `npm run check`: **81 test files / 1,179 tests passed**, including type checks and frontend build.
+- **14 new regression cases** cover history/export/transcript identity, malformed history, failed deletion before/after file removal, restart, interrupted cleanup checkpoint, invalid deletion receipts, account/configuration guards, package upgrade/rollback, record-only session discovery and fully/partially erased legacy mappings.
+- Linux ARM64 in a networkless container with the actual Bubblewrap sandbox: **95 tests passed** across plugin history, execution plugins and memory cleanup. The container used the documented nested-sandbox test policy, no host mounts or business credentials.
 - The two original reproductions were rerun with fixed-outcome assertions: export succeeded with host IDs; cleanup reached `verified`, erased the native file and removed the mapping only after deletion.
 - Manual review covered durable receipts, late callback redaction, repeated cleanup, account/workspace binding and pinned-package behavior.
 

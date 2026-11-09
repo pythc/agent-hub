@@ -148,13 +148,13 @@ it('uses the pinned package for history and purge across upgrade, and retains de
  await replayed.process(f.registry,async()=>true)
  expect(replayed.receipts()[0]?.status).toBe('completed');expect(readFileSync(f.counter,'utf8')).toBe('1')
 })
-it('does not invent a purge identity or report success for a legacy already-erased mapping',async()=>{
+it.each(['all','nativeId'])('does not invent a purge identity when legacy cleanup erased %s mapping fields',async missing=>{
  const f=await fixture(),cleanup=new HistoryCleanup(f.store,f.config.stateDir),broken={...f.record}
- for(const key of mapping)delete broken[key]
+ for(const key of missing==='all'?mapping:['nativeId'])delete broken[key]
  f.store.put('backend-plugin-thread',f.first.threadId,broken)
  cleanup.apply(planHistory(f.store,f.config.stateDir,'scope','legacy',Date.now()))
  await cleanup.process(f.registry,async()=>true)
  expect(cleanup.receipts()[0]).toMatchObject({status:'processing',phase:'native_history',nativeDone:[]})
- expect(cleanup.receipts()[0]?.error).toContain('identity changed')
+ expect(cleanup.receipts()[0]?.error).toContain(missing==='all'?'identity changed':'invalid_output')
  expect(existsSync(f.nativeFile)).toBe(true);expect(existsSync(f.counter)).toBe(false)
 })

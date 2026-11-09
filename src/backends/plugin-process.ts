@@ -89,6 +89,7 @@ export class ProcessBackend implements Model {
  async expose(threadId:string,cwd:string){await this.inspect('expose',threadId,cwd)}
  private async inspect(method:'history'|'purge'|'expose',threadId:string,cwd:string){
   const record=this.record(threadId),pkg=this.pinned(record)
+  if(!text.safeParse(record.nativeId).success)throw new BackendPluginError('invalid_output',this.id)
   if(canonical(cwd)!==record.cwd||!pkg.manifest.capabilities[method==='expose'?'nativeTakeover':method])throw new BackendPluginError('unsupported',this.id)
   const transport=await this.launch(pkg,record.cwd,undefined,record)
   try{
