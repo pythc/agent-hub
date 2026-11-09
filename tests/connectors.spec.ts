@@ -114,15 +114,51 @@ it('polls Feishu topics and replies with a stable idempotency uuid',async()=>{
  expect(calls[1].body.reply_in_thread).toBe(true)
 })
 
-it('normalizes typed CLI paths and converts real CLI message output',async()=>{
+it('uses native CLI list envelopes without flattening identity, content, timestamps or pagination',async()=>{
  const {larkRequest}=await import('../src/connectors/lark-cli.ts')
- const {writeFileSync}=await import('node:fs')
+ const {writeFileSync,readFileSync}=await import('node:fs')
  const root=mkdtempSync(join(tmpdir(),'lark-adapter-'));roots.push(root)
- const binary=join(root,'fixture-cli')
- writeFileSync(binary,'#!'+process.execPath+'\nconsole.log(JSON.stringify({ok:true,data:{messages:[{message_id:"m1",content:"/agent test"}],has_more:false}}))\n',{mode:0o700})
+ const binary=join(root,'fixture-cli'),argsFile=join(root,'args.json')
+ const item={message_id:'om_reply',root_id:'om_root',parent_id:'om_parent',create_time:'1794127483086',update_time:'1794127483087',body:{content:JSON.stringify({title:'Plan',content:[[{tag:'text',text:'/agent test'}]]})}}
+ writeFileSync(binary,'#!'+process.execPath+'\nrequire("node:fs").writeFileSync('+JSON.stringify(argsFile)+',JSON.stringify(process.argv.slice(2)));console.log('+JSON.stringify(JSON.stringify({ok:true,data:{items:[item],has_more:true,page_token:'next'}}))+')\n',{mode:0o700})
  const request=larkRequest(binary)
- const result=await request('GET','im/v1/messages?container_id=oc_test&start_time=1&end_time=2')
- expect(result.items[0].message_id).toBe('m1')
+ for(const type of ['chat','thread']){
+  const result=await request('GET','im/v1/messages?container_id_type='+type+'&container_id=container&start_time=1&end_time=2&page_token=prior%2Bpage&page_size=50')
+  expect(result).toEqual({items:[item],has_more:true,page_token:'next'})
+  const args=JSON.parse(readFileSync(argsFile,'utf8'));expect(args.slice(0,4)).toEqual(['api','GET','/open-apis/im/v1/messages','--params'])
+  expect(JSON.parse(args[4])).toEqual({container_id_type:type,container_id:'container',start_time:'1',end_time:'2',page_token:'prior+page',page_size:'50'})
+  expect(args.slice(5)).toEqual(['--as','bot','--json'])
+ }
+})
+it('keeps live and polled Feishu replies identical across restart and detects only actual edits',async()=>{
+ const {ctx,events}=context(),changes:any[]=[],paths:string[]=[]
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'fixture',chats:['oc_test'],mentionId:'ou_bot'}}]}).sources[0]!
+ const root={message_id:'om_root',chat_id:'oc_test',thread_id:'omt_native',create_time:'1794127483000',body:{content:'{"text":"root"}'},sender:{id:'ou_person',sender_type:'user'}}
+ const reply={...root,message_id:'om_reply',root_id:'om_root',parent_id:'om_parent',update_time:'1794127483086',body:{content:JSON.stringify({title:'Original',content:[[{tag:'text',text:'details'}]]})}}
+ const api=async(_method:string,path:string)=>{
+  paths.push(path)
+  if(path==='im/v1/messages/om_root')return {items:[root]}
+  if(path==='im/v1/messages/om_reply')return {items:[reply]}
+  if(path.includes('container_id_type=thread')){expect(path).toContain('container_id=omt_native');return {items:[reply],has_more:false}}
+  if(path.includes('container_id_type=chat'))return {items:[root],has_more:false}
+  throw Error('Unexpected path: '+path)
+ }
+ ctx.change=c=>{changes.push(c)}
+ ctx.receive=t=>{const old=ctx.store.triggers.get(t.id);if(old)expect({text:t.text,threads:t.threads,actor:t.actor,human:t.human}).toEqual({text:old.text,threads:old.threads,actor:old.actor,human:old.human});ctx.store.put('trigger',t.id,t);events.push(t)}
+ ctx.store.threads.save({key:'f:oc_test:om_root',ref:{source:'f',id:'oc_test:om_root'},subscriptions:['ticket'],correlated:[],pending:[],createdAt:new Date().toISOString(),meta:{}})
+ const source=new FeishuSource(config,api)
+ await source.receiveEvent({type:'im.message.receive_v1',chat_id:'oc_test',message_id:'om_reply',chat_type:'group'},ctx)
+ await source.poll(ctx)
+ await new FeishuSource(config,api).poll(ctx)
+ const replies=events.filter(t=>t.meta.messageId==='om_reply')
+ expect(replies).toHaveLength(3);expect(new Set(replies.map(t=>t.id)).size).toBe(1)
+ expect(replies[0].threads[0].id).toBe('oc_test:om_root');expect(replies[0].text).toBe(reply.body.content)
+ expect(changes).toEqual([]);expect(paths.some(p=>p.startsWith('typed/'))).toBe(false)
+ expect(ctx.store.get<any>('thread-health','f:chat:oc_test').consecutiveFailures).toBe(0)
+ reply.body.content=JSON.stringify({title:'Edited',content:[]});reply.update_time='1794127484086'
+ await source.poll(ctx)
+ expect(changes).toHaveLength(1);expect(changes[0]).toMatchObject({kind:'message.updated',messageId:'om_reply',at:1794127484086})
+ expect(events.filter(t=>t.meta.messageId==='om_reply')).toHaveLength(3)
 })
 it('reads a remotely verified bot identity even when the raw API envelope omits top-level bot fields',async()=>{
  const {larkRequest}=await import('../src/connectors/lark-cli.ts'),{writeFileSync}=await import('node:fs')

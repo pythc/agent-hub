@@ -223,7 +223,6 @@ export class FeishuSource extends MessageSource {
     return item
   }
   private async threadPage(root:string,cursor:string,pageSize:number,signal?:AbortSignal){
-    if(this.config.feishu!.cli)return this.api('GET','typed/threads/'+encodeURIComponent(root)+(cursor?'?page_token='+encodeURIComponent(cursor):''),undefined,signal)
     const source=await this.one(root),threadId=source.thread_id
     if(!threadId)return {items:[],has_more:false}
     return this.api('GET','im/v1/messages?container_id_type=thread&container_id='+encodeURIComponent(threadId)+'&page_size='+pageSize+(cursor?'&page_token='+encodeURIComponent(cursor):''),undefined,signal)

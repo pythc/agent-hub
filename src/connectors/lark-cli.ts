@@ -16,10 +16,10 @@ export function larkRequest(binary:string):FeishuRequest {
       // The verified identity command preserves it and checks the bot rather than a cached user login.
       args=['auth','status','--json','--verify']
     }else if(method==='GET'&&url.pathname==='/im/v1/messages'){
-      args=params.get('container_id_type')==='thread'?['im','+threads-messages-list','--thread',params.get('container_id')!,'--order',params.get('sort_type')==='ByCreateTimeDesc'?'desc':'asc','--page-size',params.get('page_size')??'50','--no-reactions']:['im','+chat-messages-list','--chat-id',params.get('container_id')!,'--order',params.get('sort_type')==='ByCreateTimeDesc'?'desc':'asc','--page-size',params.get('page_size')??'50','--no-reactions']
-      if(params.has('start_time'))args.push('--start',new Date(Number(params.get('start_time'))*1000).toISOString())
-      if(params.has('end_time'))args.push('--end',new Date(Number(params.get('end_time'))*1000).toISOString())
-      if(params.has('page_token'))args.push('--page-token',params.get('page_token')!)
+      // Ingestion must use the same canonical message envelope as live-event readback.
+      // Convenience commands flatten rich content, replace root/parent with reply_to,
+      // and format timestamps for display, breaking identity and edit detection.
+      args=['api','GET','/open-apis'+url.pathname,'--params',JSON.stringify(Object.fromEntries(params))]
     }else if(method==='GET'&&url.pathname.startsWith('/typed/threads/')){
       args=['im','+threads-messages-list','--thread',decodeURIComponent(url.pathname.split('/').at(-1)!),'--order','asc','--no-reactions','--page-size','50']
       if(params.has('page_token'))args.push('--page-token',params.get('page_token')!)
