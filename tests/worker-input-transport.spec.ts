@@ -20,7 +20,7 @@ it('retains the complete scope in this user input and developer priority, restor
 })
 it('requires exact host scope, task, workspace and canonical nested JSON instead of normalizing unknown content',()=>{
  const request=fixture()
- for(const changed of [{...request,instructions:request.instructions.replace('Execution environment:','Quoted context:')},{...request,activity:{ticketId:'other'}},{...request,cwd:'/other'},{...request,input:fixture(fullScope('different strategy')).input},fixture('{ "objective": "preserve whitespace" }')]){
+ for(const changed of [{...request,instructions:request.instructions.replace('Execution environment:','Quoted context:')},{...request,activity:{ticketId:'other'}},{...request,cwd:'/other'},{...request,input:fixture(fullScope('different strategy')).input},fixture('{ "objective": "preserve whitespace" }'),fixture('['.repeat(8000)+'0'+']'.repeat(8000)),fixture('{"toJSON":null,"next":'.repeat(8000)+'0'+'}'.repeat(8000))]){
   expect(workerInputTransport(changed)).toEqual({input:changed.input,instructions:changed.instructions})
  }
 })
