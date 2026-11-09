@@ -376,7 +376,7 @@ export class Runtime {
   validWork(owner:WorkOwner):boolean {
     const ticket=this.store.tickets.get(owner.ticketId),assignment=ticket&&latestAssignment(ticket)
     if(!this.scopes.taskRunnable(owner.ticketId))return false
-    if(!this.webhooks.executionAllowed(this.taskAuthority(owner.ticketId)?.parentTrigger))return false
+    if(!this.webhooks.taskExecutionAllowed(owner.ticketId))return false
     const context=this.store.get<{manifest:ContextManifest}>('task-context',owner.ticketId)
     if(context){try{this.memory.validate(context.manifest)}catch{return false}}
     if(this.closing||!ticket||ticket.ended||assignment?.id!==owner.assignmentId||assignment.state!=='running')return false
@@ -568,7 +568,7 @@ export class Runtime {
       const interactive=(job:Job)=>job.kind==='followup'||job.kind==='router-followup'||(job.kind==='execute'&&!!this.store.tickets.get((job.payload as any).ticketId)?.inputs.some(i=>i.kind==='trigger'&&i.human&&this.store.tickets.get((job.payload as any).ticketId)!.undelivered.includes(i.id)))
       for (const job of this.store.jobs().sort((a,b)=>Number(interactive(b))-Number(interactive(a)))) {
         const payload = job.payload as any
-        if(['start','execute'].includes(job.kind)&&!this.webhooks.executionAllowed(this.taskAuthority(payload.ticketId)?.parentTrigger))continue
+        if(['start','execute'].includes(job.kind)&&!this.webhooks.taskExecutionAllowed(payload.ticketId))continue
         if(['start','execute'].includes(job.kind)&&this.watchdog.recovering(payload.ticketId))continue
         if(payload.ticketId&&!['cancel','cleanup'].includes(job.kind)&&!this.scopes.taskRunnable(payload.ticketId)){this.store.jobState(job.id,'blocked','Task ownership requires reconciliation');continue}
         if(job.kind==='cleanup'){

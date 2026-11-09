@@ -67,7 +67,9 @@ export class Webhooks {
  grant(id:string){const g=this.host.store.get<WebhookGrant>('webhook-grant',id);if(!g)throw new WebhookError(404,'unknown_endpoint');return g}
  private policyHash(c:ScopeContext,v2=false){
   const config=this.host.config,scope=this.host.scopes.scope(c.route.scopeId)
-  return stableDigest({scope,source:config.sources.find(s=>s.id===c.trigger.source),execution:config.execution,work:config.work,backends:config.backends,tools:config.toolConnections,browser:config.browser,delivery:config.delivery,plugins:config.sourcePlugins,...(v2?{normalizers:config.sources.filter(s=>this.host.sources.get(s.id) instanceof ProcessSource)}:{})})
+  // Legacy hosts had no backend packages. Keep their empty-package hash stable;
+  // any configured package pins its immutable digest, including network/capabilities.
+  return stableDigest({scope,source:config.sources.find(s=>s.id===c.trigger.source),execution:config.execution,work:config.work,backends:config.backends,...(config.backendPlugins.length?{backendPlugins:config.backendPlugins}:{}),tools:config.toolConnections,browser:config.browser,delivery:config.delivery,plugins:config.sourcePlugins,...(v2?{normalizers:config.sources.filter(s=>this.host.sources.get(s.id) instanceof ProcessSource)}:{})})
  }
  approved(g:WebhookGrant){
   if(!g.active||g.expiresAt<=this.now())throw new WebhookError(403,'automation_grant_revoked_or_expired')
@@ -200,8 +202,13 @@ export class Webhooks {
   if(!triggerId||!this.ownsTrigger(triggerId))return true
   try{this.authority(triggerId);const input=this.host.store.get<AutomationInput>('webhook-input',triggerId)!,receipt=this.receipt(input.receiptId),goal=receipt?.goalId&&this.host.goals.get(receipt.goalId);return !!goal&&['active','waiting'].includes(goal.state)}catch{return false}
  }
+ taskExecutionAllowed(ticketId:string){
+  // Human followups may move the reply route; the original automation still owns execution.
+  const inputId=this.host.store.tickets.get(ticketId)?.mandate.basis.scope?.automationInputId
+  return inputId===undefined||typeof inputId==='string'&&this.executionAllowed(inputId)
+ }
  fence(){
-  for(const run of this.host.store.list<{ticketId:string;phase:string}>('run'))if(['starting','running','background'].includes(run.phase)&&!this.executionAllowed(this.host.taskAuthority(run.ticketId)?.parentTrigger))this.host.interruptForAutomation(run.ticketId)
+  for(const run of this.host.store.list<{ticketId:string;phase:string}>('run'))if(['starting','running','background'].includes(run.phase)&&!this.taskExecutionAllowed(run.ticketId))this.host.interruptForAutomation(run.ticketId)
   for(const [id,send] of this.sends){try{const g=this.grant(this.delivery(id)!.grant_id);this.approved(g);if(g.deliveryPaused||this.host.isPaused)throw Error('Delivery paused')}catch{send.controller.abort(Error('Delivery authorization stopped'))}}
  }
  permissions(id:string){const input=this.host.store.get<AutomationInput>('webhook-input',id);if(!input)return;const grant=this.grant(input.grantId),workerIds=[...new Set(grant.template.nodes.map(n=>n.workerId))];return {workerIds,backendIds:[...new Set(workerProfiles(this.host.config).filter(w=>workerIds.includes(w.id)).map(w=>w.backend))]}}

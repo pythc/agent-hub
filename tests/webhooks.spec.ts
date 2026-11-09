@@ -14,25 +14,27 @@ import {callbackURL,publicAddress,secretFromEnv,signWebhook,verifyWebhook} from 
 import {backupState,verifyBackup,restoreState} from '../src/backup.ts'
 import {prepareManagedFiles,recoverManagedFiles,managedFiles} from '../src/managed-config.ts'
 import {existsSync} from 'node:fs'
+import {buildBackendPackage,type BackendPackage} from '../src/backends/plugin-package.ts'
+import {upgradeWebhooks} from '../src/webhook-upgrade.ts'
 
 const cleanups:(()=>Promise<void>)[]=[]
 afterEach(async()=>{for(const cleanup of cleanups.splice(0).reverse())await cleanup()})
 async function receiver(handler:(req:IncomingMessage,res:ServerResponse)=>void){const server=createServer(handler);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+(server.address() as any).port;cleanups.push(async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))});return url}
-function fixture(url='https://example.com/callback',failFirst=false){
+function fixture(url='https://example.com/callback',failFirst=false,onWorker?:(request:Parameters<Model['run']>[0])=>Promise<void>,backendPackage?:BackendPackage){
  const root=mkdtempSync(join(tmpdir(),'webhook-test-')),suffix=randomBytes(5).toString('hex'),inEnv='WH_IN_'+suffix,outEnv='WH_OUT_'+suffix
  process.env[inEnv]='whsec_'+randomBytes(32).toString('base64');process.env[outEnv]='whsec_'+randomBytes(32).toString('base64')
  let now=Date.now(),count=0,workerCalls=0,h:Runtime,closed=false
- const config=configSchema.parse({stateDir:join(root,'state'),webhooks:{port:0,loopbackCallbackOrigins:url.startsWith('http:')?[new URL(url).origin]:[]},work:{sandboxDriver:'disabled'},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,sandbox:'workspace-write',workspace:{mode:'source'},allowedActors:['alice']}]})
+ const backend=backendPackage?'external':'codex',config=configSchema.parse({stateDir:join(root,'state'),...(backendPackage?{backendPlugins:[{directory:backendPackage.directory,digest:backendPackage.digest}],backends:{external:{kind:'plugin',plugin:backendPackage.manifest.id}}}:{}),webhooks:{port:0,loopbackCallbackOrigins:url.startsWith('http:')?[new URL(url).origin]:[]},work:{sandboxDriver:'disabled'},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend}]},sources:[{id:'local',kind:'local',cwd:root,sandbox:'workspace-write',workspace:{mode:'source'},allowedActors:['alice']}]})
  const model:Model={async run(r){const input=JSON.parse(r.input);let output:any={reply:''}
   if(input.kind==='goal_verification'){
    for(const e of input.evidence)await r.onTool!('goal_evidence',{id:e.id},'read-'+e.id)
    output={checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Checked all retained evidence',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
-  }else if(r.role==='worker'){workerCalls++;writeFileSync(join(r.cwd,'result.json'),JSON.stringify({total:failFirst&&workerCalls===1?41:42}));output={state:'ready',summary:'All correct, total 42',reply:'All correct',question:null,askedBy:null,handbacks:[]}}
+  }else if(r.role==='worker'){workerCalls++;await onWorker?.(r);writeFileSync(join(r.cwd,'result.json'),JSON.stringify({total:failFirst&&workerCalls===1?41:42}));output={state:'ready',summary:'All correct, total 42',reply:'All correct',question:null,askedBy:null,handbacks:[]}}
   const threadId=r.threadId??'thread-'+(++count),turnId='turn-'+(++count);r.onThread?.(threadId);r.onTurn?.(turnId);return {threadId,turnId,text:JSON.stringify(output)}
  }}
  const open=()=>{h=new Runtime(config,{model,clock:()=>now});closed=false};open()
  cleanups.push(async()=>{if(!closed)await h.close();rmSync(root,{recursive:true,force:true});delete process.env[inEnv];delete process.env[outEnv]})
- h!.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'test',name:'Team',managers:[JSON.stringify(['local','alice'])],workerIds:['one'],sourceIds:['local'],backendIds:['codex']}})
+ h!.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'test',name:'Team',managers:[JSON.stringify(['local','alice'])],workerIds:['one'],sourceIds:['local'],backendIds:[backend]}})
  h!.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'test',history:'group'})
  h!.receive('local','alice',{id:'approval',thread:'test',scope:'test',text:'Authorize this event automation to compute and verify the requested total. Never deploy.',addressed:true})
  const spec={operationId:'approve',triggerId:'local:approval',authorizationQuote:'Authorize this event automation',namespace:'test-events',eventSource:'https://producer.example/events',eventTypes:['test.request'],secretEnvs:[inEnv],parameters:{batch:{type:'string',maxLength:50}},template:{title:'Compute',objective:'Write result.json whose total is 42. Never deploy.',criteria:[{id:'total',description:'Total is 42',check:{kind:'json_equals',path:'result.json',pointer:'/total',expected:42}}],nodes:[{id:'compute',title:'Compute',instruction:'Write result.json for the event batch',workerId:'one',criterionIds:['total']}],maxRepairs:2,maxReplans:0},expiresAt:now+3600000,maxEvents:100,callback:{url,secretEnv:outEnv,idempotent:true,events:['goal.completed'],maxAttempts:4}}
@@ -183,6 +185,53 @@ it('fences already queued worker execution when a human pauses the goal',async()
  const c=f.h.scopes.context(f.h.store.triggers.get('local:approval')!,'local:test')!
  f.h.goals.command({action:'pause',id:f.goal().id,operationId:'pause-queued',expectedRevision:f.goal().revision},c)
  await f.restart();await f.h.tick();expect(f.workerCalls).toBe(0);expect(f.goal().state).toBe('paused')
+})
+it.each([1,2])('requires fresh approval after a backend package upgrade for protocol %i',async(protocolVersion)=>{
+ const packageRoot=mkdtempSync(join(tmpdir(),'webhook-backend-'));cleanups.push(async()=>{rmSync(packageRoot,{recursive:true,force:true})})
+ const manifest={id:'test-backend',label:'Test backend',version:'1.0.0',stateVersion:1,configSchema:{type:'object'},parametersSchema:{type:'object'},capabilities:{resume:true,tools:true,managed:true,contextBudget:true,steering:true,promptRefresh:true,images:false,nativeTakeover:false,history:true,purge:false,modelCatalog:true},network:false,environment:[]}
+ const entry=join(process.cwd(),'tests/fixtures/execution-backend.ts'),first=await buildBackendPackage(entry,manifest,join(packageRoot,'backend-v1')),second=await buildBackendPackage(entry,{...manifest,version:'1.0.1',network:true},join(packageRoot,'backend-v2'))
+ const f=fixture(undefined,false,undefined,first)
+ if(protocolVersion===2)await f.offline(()=>upgradeWebhooks(f.config,join(f.root,'protocol-backup')))
+ const grant=f.h.webhooks.create({...f.spec,operationId:'plugin-approval',namespace:'plugin-events',protocolVersion}),signed=f.signed()
+ await until(f,()=>!f.h.activeExecutions&&!f.h.store.jobs().length)
+ f.h.webhooks.receive(grant.id,signed.headers,signed.body)
+ await f.restart();expect(()=>f.h.webhooks.approved(f.h.webhooks.grant(grant.id))).not.toThrow()
+ f.config.backendPlugins=[{directory:second.directory,digest:second.digest}];await f.restart()
+ expect(f.h.store.get<any>('backend-plugin-installation',manifest.id)?.digest).toBe(second.digest)
+ expect(()=>f.h.webhooks.receive(grant.id,signed.headers,signed.body)).toThrow('automation_permissions_changed')
+ f.h.webhooks.dispatch();expect(f.h.webhooks.receipts(grant.id)[0]?.state).toBe('held');expect(f.h.store.list('router-goal')).toHaveLength(0);expect(f.h.store.list('backend-plugin-thread')).toHaveLength(0);expect(f.workerCalls).toBe(0)
+ const fresh=f.h.webhooks.create({...f.spec,operationId:'new-plugin-approval',namespace:'fresh-plugin-events',protocolVersion});expect(()=>f.h.webhooks.approved(fresh)).not.toThrow()
+})
+async function humanFollowup(f:ReturnType<typeof fixture>){
+ const ticketId=f.goal().taskIds[0]!
+ f.h.receive('local','alice',{id:'followup',thread:'test',scope:'test',text:'Continue this task under the original fixed objective.',addressed:true})
+ const trigger=f.h.store.triggers.get('local:followup')!,discussion='local:test',scoped=f.h.scopes.context(trigger,discussion)!
+ await f.h.manager.call({action:'send',ticketId,text:'Continue this task under the original fixed objective.',requestId:'human-followup',revision:f.h.settings.current().revision},{trigger,discussion,scoped})
+ expect(f.h.taskAuthority(ticketId)?.parentTrigger).toBe(trigger.id)
+ expect(f.h.store.tickets.get(ticketId)!.mandate.basis.scope?.automationInputId).toBe(f.goal().contract!.triggerId)
+ return ticketId
+}
+it('preserves pause after a human followup and restart, then resumes the original task',async()=>{
+ const url=await receiver((_req,res)=>{res.writeHead(204);res.end()}),f=fixture(url)
+ f.receive();f.h.webhooks.dispatch();await f.h.goals.advance();const ticketId=await humanFollowup(f),contract=JSON.stringify(f.goal().contract)
+ f.h.webhooks.goalControl({id:f.goal().id,action:'pause',operationId:'pause-followup',expectedRevision:f.goal().revision})
+ for(let n=0;n<5;n++){await f.h.tick();await new Promise(r=>setTimeout(r,5))}
+ expect(f.workerCalls).toBe(0)
+ await f.restart();for(let n=0;n<5;n++){await f.h.tick();await new Promise(r=>setTimeout(r,5))}
+ expect(f.workerCalls).toBe(0);expect(f.goal().state).toBe('paused')
+ f.h.webhooks.goalControl({id:f.goal().id,action:'resume',operationId:'resume-followup',expectedRevision:f.goal().revision})
+ await until(f,()=>f.goal().state==='completed');expect(f.goal().taskIds).toEqual([ticketId]);expect(JSON.stringify(f.goal().contract)).toBe(contract)
+})
+it('interrupts a running task after human followup when its automation goal is paused',async()=>{
+ const url=await receiver((_req,res)=>{res.writeHead(204);res.end()});let aborted=false
+ const f=fixture(url,false,async r=>{if(f.workerCalls>1)return;await new Promise<void>((_resolve,reject)=>{const abort=()=>{aborted=true;reject(r.signal!.reason)};if(r.signal?.aborted)abort();else r.signal!.addEventListener('abort',abort,{once:true})})})
+ f.receive();f.h.webhooks.dispatch();await f.h.goals.advance();const ticketId=await humanFollowup(f)
+ await until(f,()=>f.workerCalls===1&&f.h.executionActive(ticketId))
+ f.h.webhooks.goalControl({id:f.goal().id,action:'pause',operationId:'pause-running-followup',expectedRevision:f.goal().revision})
+ await until(f,()=>aborted&&!f.h.executionActive(ticketId))
+ const ticket=f.h.store.tickets.get(ticketId)!,assignment=ticket.assignments.at(-1)!
+ expect(f.h.validWork({ticketId,assignmentId:assignment.id,cwd:f.root,sandbox:'workspace-write',depth:0})).toBe(false);expect(existsSync(join(f.root,'result.json'))).toBe(false)
+ await f.restart();for(let n=0;n<5;n++)await f.h.tick();expect(f.workerCalls).toBe(1);expect(f.goal().state).toBe('paused')
 })
 it('publishes only explicitly selected independently verified artifacts, with a stable SHA-256 digest',async()=>{
  let body:any;const url=await receiver(async(req,res)=>{const chunks:Buffer[]=[];for await(const c of req)chunks.push(c);body=JSON.parse(Buffer.concat(chunks).toString());res.writeHead(204);res.end()}),f=fixture(url)
