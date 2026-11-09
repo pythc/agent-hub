@@ -83,7 +83,7 @@ for scenario, a, b in trials:
     if a not in results or b not in results:
         continue
     before, after = results[a], results[b]
-    for key in ['scenario', 'contract', 'config', 'fixtureHashes', 'harnessSha256', 'runtime']:
+    for key in ['scenario', 'contract', 'config', 'fixtureHashes', 'harnessSha256', 'runtime', 'measurementVersion']:
         if digest(before['conditions'].get(key)) != digest(after['conditions'].get(key)):
             raise ValueError(f'{scenario}: conditions differ at {key}')
     if before['criteria'] != after['criteria'] or before['objective'] != after['objective']:

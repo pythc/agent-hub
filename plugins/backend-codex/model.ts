@@ -9,6 +9,7 @@ import {hostPrivateFiles} from '../../src/private-files.ts'
 import {codexToolBridge} from '../../src/codex-tools.ts'
 import {BackendAdapterError} from '../backend-sdk.ts'
 import {NativeContext} from './context.ts'
+import {workerInputTransport} from './worker-input.ts'
 export {nativeProtocolHistory} from './context.ts'
 
 import type {Model,ModelRequest,ModelResult,ToolContent} from '../../src/model.ts'
@@ -86,6 +87,8 @@ export class CodexModel implements Model {
     finally{clearTimeout(timer);await client.close()}
   }
   async run(request: ModelRequest): Promise<ModelResult> {
+    const transport=workerInputTransport(request)
+    if(transport.binding)request={...request,input:transport.input,instructions:transport.instructions}
     let bridge:Awaited<ReturnType<typeof codexToolBridge>>|undefined
     let inferenceStarted=false
     const invoke=request.onTool?((name:string,args:unknown,id:string)=>{
