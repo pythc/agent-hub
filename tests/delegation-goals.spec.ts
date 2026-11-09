@@ -140,11 +140,32 @@ it('holds false ready evidence and prevents manual review from bypassing indepen
 
 it('rejects unread verifier citations within a bounded retry allowance without repeating remote execution',async()=>{
  const f=await fixture({verify:async(_r,input)=>passed(input)})
+ // Exercise the fallback path explicitly: complete inline snapshots count as
+ // delivered evidence after the independent verifier and authority recheck.
+ f.a.goalEvidenceBudget=()=>0
  f.startGoal({criteria:[{id:'answer',description:'Independently inspect the actual returned total',files:['result.json']}]})
  await until(f,()=>f.goal().state==='held')
  expect(f.task().acceptance).toBe('pending')
  expect(f.callsA.filter(r=>JSON.parse(r.input).kind==='goal_verification')).toHaveLength(3)
  expect(f.callsB.filter(r=>r.role==='worker')).toHaveLength(1)
+})
+
+it('keeps original delegated authority with complete inline evidence and independent verifier usage',async()=>{
+ const f=await fixture({verify:async(r,input)=>{
+  const goal=f.goal(),original=f.a.store.triggers.get(goal.contract!.triggerId)!
+  expect(input.originalRequest).toBe(original.text)
+  expect(input.authorizationScope).toBe(goal.contract!.mandate.scope)
+  expect(input.inlineEvidence?.length).toBeGreaterThan(0)
+  expect(input.inlineEvidence.some((e:any)=>e.content==='{"total":42}')).toBe(true)
+  expect(r.instructions).toContain('Peer-signed execution records')
+  expect(r.instructions).toContain('complete immutable snapshots are already in your input')
+  r.onUsage?.({id:'inline-peer-review',inputTokens:10,outputTokens:1})
+  return passed(input)
+ }})
+ f.startGoal({criteria:[{id:'answer',description:'Independently inspect the returned total 42',files:['result.json']}]})
+ await until(f,()=>f.goal().state==='completed')
+ expect(f.callsB.filter(r=>r.role==='worker')).toHaveLength(1)
+ expect(f.a.usage.summary().groups.find(g=>g.purpose==='verification')).toMatchObject({calls:2,reportedCalls:2,tokens:{inputTokens:20,outputTokens:2,totalTokens:22}})
 })
 
 it('waits for remote acceptance before a dependent local Worker and verifies the combined goal',async()=>{
