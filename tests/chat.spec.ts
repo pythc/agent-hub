@@ -22,6 +22,72 @@ function fixture(run?:(r:ModelRequest)=>Promise<unknown>){
 const send=(h:Runtime,id:string,text='Hello Router',clientMessageId=randomUUID())=>h.chat.send(id,'owner',{text,clientMessageId})
 async function settle(h:Runtime,done:()=>boolean){for(let i=0;i<500;i++){await h.tick();await new Promise(r=>setTimeout(r,2));if(done())return}throw Error('Chat did not settle')}
 function waitForAbort(r:ModelRequest){return new Promise<void>((resolve)=>{if(r.signal?.aborted)return resolve();r.signal?.addEventListener('abort',()=>resolve(),{once:true})})}
+function enableChatBatch(h:Runtime,id:string,settings:Record<string,number>={}){
+ h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Chat team',managers:[JSON.stringify(['local','operator'])],workerIds:['research','review'],sourceIds:['local'],backendIds:['codex']}})
+ h.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'chat:'+id,history:'group'})
+ h.proactive.command({action:'settings.put',scopeId:'team',operationId:'batch',expectedRevision:0,settings:{enabled:true,debounceMs:0,maxWaitMs:1,cooldownMs:0,...settings}})
+}
+const batchDecision=(action:string)=>({action,title:'Task',scope:'Requested work',question:'Which task should continue?',reason:'Explicit input',rules:[],targetTicketId:null,ruleAssessments:[]})
+
+it('delivers batch clarification once into chat, waits for input and recovers legacy sent replies after restart',async()=>{
+ const f=fixture(async()=>batchDecision('clarify')),c=f.h.chat.create('owner');enableChatBatch(f.h,c.id)
+ const run=send(f.h,c.id,'Continue it')
+ expect(f.h.chat.view(c.id,'owner').run?.state).toBe('queued')
+ await settle(f.h,()=>f.h.store.deliveries().some(d=>d.id.startsWith('router-clarify:')&&d.status==='sent'))
+ expect(f.h.chat.view(c.id,'owner')).toMatchObject({run:{state:'waiting'},messages:[{role:'user'},{role:'assistant',text:'Which task should continue?',runId:run.runId}]})
+ await f.h.flush();expect(f.h.chat.view(c.id,'owner').messages).toHaveLength(2)
+ // Older hosts marked the outbox sent without creating its chat projection.
+ f.h.store.db.prepare("DELETE FROM records WHERE kind='chat-message' AND json_extract(body,'$.role')='assistant'").run()
+ hosts.splice(hosts.indexOf(f.h),1);await f.h.close()
+ const h=new Runtime(f.config,{model:f.model});hosts.push(h)
+ expect(h.chat.view(c.id,'owner').messages.filter(m=>m.role==='assistant')).toMatchObject([{text:'Which task should continue?'}])
+ expect(h.chat.view(c.id,'owner').run?.state).toBe('waiting')
+ expect(()=>send(h,c.id,'The report task')).not.toThrow();expect(f.calls).toHaveLength(1)
+})
+it.each(['accept','ignore','failure'])('projects the %s batch lifecycle without leaving chat queued forever',async action=>{
+ const f=fixture(async r=>{if(!r.ephemeral)return {reply:'Router continued'};if(action==='failure')throw Error('Assessment unavailable');return batchDecision(action)}),c=f.h.chat.create('owner');enableChatBatch(f.h,c.id)
+ send(f.h,c.id);expect(()=>send(f.h,c.id,'Too early')).toThrow('Wait')
+ await settle(f.h,()=>f.h.store.list<any>('router-batch').some(b=>b.state==='decided'||b.state==='failed'))
+ await settle(f.h,()=>['completed','failed'].includes(f.h.chat.view(c.id,'owner').run?.state??''))
+ expect(f.h.chat.view(c.id,'owner').run?.state).toBe(action==='failure'?'failed':'completed')
+ expect(f.h.chat.view(c.id,'owner').messages.filter(m=>m.role==='assistant')).toHaveLength(action==='accept'?1:0)
+ expect(()=>send(f.h,c.id,'Next request')).not.toThrow()
+})
+it.each(['cancelled','revoked'])('does not recover a legacy clarification after its input is %s',async state=>{
+ const f=fixture(async()=>batchDecision('clarify')),c=f.h.chat.create('owner');enableChatBatch(f.h,c.id)
+ const run=send(f.h,c.id)
+ await settle(f.h,()=>f.h.store.deliveries().some(d=>d.id.startsWith('router-clarify:')&&d.status==='sent'))
+ f.h.store.db.prepare("DELETE FROM records WHERE kind='chat-message' AND json_extract(body,'$.role')='assistant'").run()
+ if(state==='cancelled')await f.h.chat.cancel(c.id,'owner',run.runId)
+ else f.h.updateSettings(f.h.settings.current().revision,{sources:f.h.config.sources.map(s=>({...s,allowedActors:['another-operator']}))})
+ hosts.splice(hosts.indexOf(f.h),1);await f.h.close()
+ const h=new Runtime(f.config,{model:f.model});hosts.push(h)
+ expect(h.chat.view(c.id,'owner').messages.filter(m=>m.role==='assistant')).toHaveLength(0)
+ expect(f.calls).toHaveLength(1)
+})
+it('fences a late batch clarification after the user cancels the chat run',async()=>{
+ let started=false,release!:()=>void
+ const gate=new Promise<void>(r=>{release=r})
+ const f=fixture(async()=>{started=true;await gate;return batchDecision('clarify')}),c=f.h.chat.create('owner');enableChatBatch(f.h,c.id)
+ const run=send(f.h,c.id)
+ try{
+  await settle(f.h,()=>started);expect(f.h.chat.view(c.id,'owner').run?.state).toBe('running')
+  await f.h.chat.cancel(c.id,'owner',run.runId)
+ }finally{release()}
+ await settle(f.h,()=>f.h.store.list<any>('router-batch').some(b=>b.state==='failed'))
+ expect(f.h.chat.view(c.id,'owner').run?.state).toBe('cancelled')
+ expect(f.h.chat.view(c.id,'owner').messages.filter(m=>m.role==='assistant')).toHaveLength(0)
+ expect(f.h.store.deliveries().filter(d=>d.id.startsWith('router-clarify:'))).toHaveLength(0)
+})
+it('keeps a fresh message out of a cancelled pending batch',async()=>{
+ const f=fixture(async()=>batchDecision('clarify')),c=f.h.chat.create('owner');enableChatBatch(f.h,c.id,{maxWaitMs:60000})
+ const first=send(f.h,c.id,'Old question');await f.h.chat.cancel(c.id,'owner',first.runId)
+ const next=send(f.h,c.id,'New question')
+ await settle(f.h,()=>['waiting','failed'].includes(f.h.chat.view(c.id,'owner').run?.state??''))
+ expect(f.h.chat.view(c.id,'owner').run).toMatchObject({id:next.runId,state:'waiting'})
+ expect(f.h.chat.view(c.id,'owner').messages.filter(m=>m.role==='assistant')).toMatchObject([{runId:next.runId}])
+ expect(f.calls).toHaveLength(1)
+})
 
 it('projects true partial Router output into one durable message and replaces it with the validated reply',async()=>{
   const {h}=fixture(),c=h.chat.create('owner'),run=send(h,c.id),notifications:number[]=[]

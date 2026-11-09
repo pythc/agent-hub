@@ -23,3 +23,22 @@ it('skips nonexistent DST times and executes a repeated local time only once',()
  const first=nextTime(fall,Date.parse(fall.startAt))!
  expect(utc(first)).toBe('2026-11-01T05:30:00.000Z');expect(utc(nextTime(fall,first+1))).toBe('2026-11-02T06:30:00.000Z')
 })
+it('continues weekly schedules after a nonexistent spring occurrence and respects the end date',()=>{
+ const t=timingSchema.parse({kind:'weekly',time:'02:30',timezone:'America/New_York',weekdays:[0],startAt:'2026-03-01T07:30:00Z'})
+ expect(utc(nextTime(t,Date.parse(t.startAt)+1))).toBe('2026-03-15T06:30:00.000Z')
+ expect(nextTime({...t,endAt:'2026-03-14T23:59:59Z'},Date.parse(t.startAt)+1)).toBeUndefined()
+ expect(utc(nextTime({...t,endAt:'2026-03-15T06:30:00Z'},Date.parse(t.startAt)+1))).toBe('2026-03-15T06:30:00.000Z')
+ expect(utc(nextTime({...t,weekdays:[0,1]},Date.parse(t.startAt)+1))).toBe('2026-03-02T07:30:00.000Z')
+})
+it('coalesces a long weekly backlog to the last real occurrence across a skipped week',()=>{
+ const t=timingSchema.parse({kind:'weekly',time:'02:30',timezone:'America/New_York',weekdays:[0],startAt:'2026-02-01T07:30:00Z'})
+ expect(utc(latestDue(t,Date.parse(t.startAt),Date.parse('2026-03-15T05:00:00Z')))).toBe('2026-03-01T07:30:00.000Z')
+ expect(utc(latestDue(t,Date.parse(t.startAt),Date.parse('2026-03-15T07:00:00Z')))).toBe('2026-03-15T06:30:00.000Z')
+})
+it('skips an entire missing local date and does not duplicate a weekly fall fold',()=>{
+ const skipped=timingSchema.parse({kind:'weekly',time:'09:00',timezone:'Pacific/Apia',weekdays:[5],startAt:'2011-12-23T19:00:00Z'})
+ expect(utc(nextTime(skipped,Date.parse(skipped.startAt)+1))).toBe('2012-01-05T19:00:00.000Z')
+ const fall=timingSchema.parse({kind:'weekly',time:'01:30',timezone:'America/New_York',weekdays:[0],startAt:'2026-11-01T00:00:00Z'})
+ const first=nextTime(fall,Date.parse(fall.startAt))!
+ expect(utc(first)).toBe('2026-11-01T05:30:00.000Z');expect(utc(nextTime(fall,first+1))).toBe('2026-11-08T06:30:00.000Z')
+})

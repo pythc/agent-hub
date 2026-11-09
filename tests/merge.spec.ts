@@ -121,3 +121,38 @@ it('blocks disabled policy, pauses, stopped work and expired authorizations',asy
  f.store.tickets.save(ticket);const grant=f.store.get<any>('merge-grant','github:1');f.store.put('merge-grant','github:1',{...grant,expiresAt:0});f.reset();await f.merger.tick()
  expect(f.store.get<any>('merge-grant','github:1').enabled).toBe(false);expect(f.store.get<any>('merge-attempt','github:1').phase).toBe('revoked')
 })
+it('rejects new grants and existing automatic grants for a disabled source',async()=>{
+ const f=integration();await f.authorize();f.source.config.enabled=false
+ await expect(f.authorize()).rejects.toThrow('disabled')
+ await f.merger.tick();expect(f.calls).toEqual([])
+ f.host.config.delivery.authorization='policy';f.store.db.prepare("DELETE FROM records WHERE kind IN ('merge-grant','merge-attempt')").run()
+ await f.merger.tick();expect(f.store.list('merge-grant')).toHaveLength(0);expect(f.calls).toEqual([])
+})
+it('rechecks source enablement after asynchronous authorization reads and before submitting',async()=>{
+ const f=integration(),snapshot=f.source.mergeSnapshot.bind(f.source)
+ f.source.mergeSnapshot=async n=>{const result=await snapshot(n);f.source.config.enabled=false;return result}
+ await expect(f.authorize()).rejects.toThrow('disabled');expect(f.store.list('merge-grant')).toHaveLength(0)
+ f.source.config.enabled=true;f.source.mergeSnapshot=snapshot;await f.authorize()
+ const request=f.api.request.bind(f.api)
+ f.api.request=async(...args)=>{const result=await request(...args);if(args[0]==='GET')f.source.config.enabled=false;return result}
+ await f.merger.tick();expect(f.calls.filter(c=>c.method==='PUT')).toHaveLength(0)
+})
+it.each(['submitting','uncertain'] as const)('keeps %s fenced through query errors, restart, policy disable and expiry',async phase=>{
+ const f=integration();await f.authorize()
+ f.store.put('merge-attempt','github:1',{id:'github:1',phase,head:'a'.repeat(40),at:0,reason:'Original write outcome unknown'})
+ const snapshot=f.source.mergeSnapshot.bind(f.source)
+ f.source.mergeSnapshot=async()=>{throw Error('Snapshot unavailable')}
+ await f.merger.tick()
+ expect(f.store.get<any>('merge-attempt','github:1')).toMatchObject({phase,reason:'Original write outcome unknown',checkError:'Error: Snapshot unavailable'})
+ const age=()=>{const a=f.store.get<any>('merge-attempt','github:1');f.store.put('merge-attempt',a.id,{...a,at:0})}
+ f.host.config.delivery.autoMerge=false;age();await f.merger.tick()
+ expect(f.store.get<any>('merge-attempt','github:1').phase).toBe(phase)
+ f.host.config.delivery.autoMerge=true;const grant=f.store.get<any>('merge-grant','github:1');f.store.put('merge-grant',grant.id,{...grant,expiresAt:0})
+ age();await f.merger.tick();expect(f.store.get<any>('merge-attempt','github:1').phase).toBe(phase)
+ f.store.put('merge-grant',grant.id,grant);f.source.mergeSnapshot=snapshot
+ await f.merger.close();const restarted=new Merger(f.host)
+ try{age();await restarted.tick();expect(f.calls.filter(c=>c.method==='PUT')).toHaveLength(0)
+  f.s.pull.merged=true;f.s.pull.merge_commit_sha='confirmed';age();await restarted.tick()
+  expect(f.store.get<any>('merge-attempt','github:1')).toMatchObject({phase:'merged',sha:'confirmed'})
+ }finally{await restarted.close()}
+})

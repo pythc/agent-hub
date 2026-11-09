@@ -101,6 +101,12 @@ export async function restoreState(config:Config,directory:string){
      const previous=old.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(String(row.kind),String(row.id))
      if(!previous||previous.body!==row.body)throw Error('Task, native thread or ownership advanced after backup; reconcile before restore')
     }
+    // External calls can finish without changing the task. Their intent/result
+    // receipts are the replay fence, including running and uncertain outcomes.
+    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('tool-receipt','browser-receipt','merge-attempt')").all()){
+     const previous=old.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(String(row.kind),String(row.id))
+     if(!previous||previous.body!==row.body)throw Error('External tool or merge effects advanced after backup; reconcile before restore')
+    }
     for(const row of live.prepare("SELECT id,body,status FROM outbox WHERE status IN ('sent','sending','uncertain')").all()){
      const previous=old.prepare('SELECT body,status FROM outbox WHERE id=?').get(String(row.id))
      if(!previous||previous.body!==row.body||previous.status!==row.status)throw Error('External effects advanced after backup; reconcile before restore')

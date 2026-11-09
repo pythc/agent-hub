@@ -1,4 +1,4 @@
-import {mkdtempSync,rmSync,appendFileSync,writeFileSync} from 'node:fs'
+import {mkdtempSync,rmSync,appendFileSync,writeFileSync,existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach,it,expect} from 'vitest'
@@ -30,4 +30,29 @@ it('restores offline state and retains a backup of the previous database',async(
  expect(verifyBackup(result.previous).schema).toBe(6)
  const restored=new Store(join(config.stateDir,'state.sqlite'))
  try{expect(restored.get('sample','a')).toEqual({value:1})}finally{restored.close()}
+})
+it.each(['tool-receipt','browser-receipt','merge-attempt'])('refuses to erase new %s external-effect evidence on restore',async kind=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-effects-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]})
+ const store=new Store(join(config.stateDir,'state.sqlite'));store.close()
+ await backupState(config,join(root,'backup'))
+ const live=new Store(join(config.stateDir,'state.sqlite')),receipt={id:'write',state:'complete',phase:'merged',result:{saved:true}}
+ live.put(kind,'write',receipt);live.close()
+ await expect(restoreState(config,join(root,'backup'))).rejects.toThrow('External tool or merge effects advanced')
+ const unchanged=new Store(join(config.stateDir,'state.sqlite'))
+ try{expect(unchanged.get(kind,'write')).toEqual(receipt)}finally{unchanged.close()}
+ expect(existsSync(join(config.stateDir,'host.lock'))).toBe(false)
+})
+it.each(['tool-receipt','browser-receipt','merge-attempt'])('preserves advanced %s evidence but permits an unchanged receipt',async kind=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-effects-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]})
+ const store=new Store(join(config.stateDir,'state.sqlite')),before={id:'write',state:'running',phase:'submitting'}
+ store.put(kind,'write',before);store.close();await backupState(config,join(root,'backup'))
+ const live=new Store(join(config.stateDir,'state.sqlite')),after={...before,state:'uncertain',phase:'uncertain'}
+ live.put(kind,'write',after);live.close()
+ await expect(restoreState(config,join(root,'backup'))).rejects.toThrow('External tool or merge effects advanced')
+ await backupState(config,join(root,'current-backup'))
+ expect((await restoreState(config,join(root,'current-backup'))).restored).toBe(true)
+ const restored=new Store(join(config.stateDir,'state.sqlite'))
+ try{expect(restored.get(kind,'write')).toEqual(after)}finally{restored.close()}
 })
