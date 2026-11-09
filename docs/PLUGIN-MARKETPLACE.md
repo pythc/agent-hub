@@ -30,6 +30,8 @@ Installing a connector does not authorize every group or grant every Worker its 
 
 The default source is `pythc/agent-hub/plugins/catalog.json`. It indexes published Agent board, Slack and Linear packages. Agent board retains versions 0.1.0 and 0.1.1 for compatible updates and rollback; Slack and Linear start at 1.0.0. See [GitHub releases](https://github.com/pythc/agent-hub/releases). Bundled descriptions are discovery hints, **not proof of availability**: a fresh host resolves the remote catalog before offering installation. Source-only directories have no install action.
 
+The [first release acceptance](PLUGIN-MARKETPLACE-RELEASE-2026-11-09.md) records real GitHub downloads and Agent board install, update, rollback and restart verification on an existing host.
+
 The schema is in `src/plugin-market-contract.ts`. Each published version includes:
 
 - Plugin/API version, supported platforms and minimum/maximum host version.
