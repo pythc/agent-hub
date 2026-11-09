@@ -1,0 +1,67 @@
+{
+  "baseRevision": "4e536746321b5492107666beacd5051b93c96337",
+  "command": {
+    "operationId": "p1-frozen-approval",
+    "triggerId": "local:approval",
+    "authorizationQuote": "Authorize this event automation",
+    "namespace": "p1-frozen",
+    "eventSource": "https://producer.example/events",
+    "eventTypes": [
+      "test.request"
+    ],
+    "secretEnvs": [
+      "P1_FROZEN_IN"
+    ],
+    "parameters": {
+      "batch": {
+        "type": "string",
+        "maxLength": 1000
+      }
+    },
+    "template": {
+      "title": "Compute",
+      "objective": "Write result.json whose total is 42. Never deploy.",
+      "criteria": [
+        {
+          "id": "total",
+          "description": "Total is 42",
+          "files": [],
+          "documents": [],
+          "check": {
+            "kind": "json_equals",
+            "path": "result.json",
+            "pointer": "/total",
+            "expected": 42
+          }
+        }
+      ],
+      "nodes": [
+        {
+          "id": "compute",
+          "title": "Compute",
+          "instruction": "Write result.json for the event batch",
+          "workerId": "one",
+          "dependsOn": [],
+          "criterionIds": [
+            "total"
+          ]
+        }
+      ]
+    },
+    "expiresAt": 1794230000000,
+    "maxEvents": 100,
+    "maxConcurrent": 1,
+    "perMinute": 60,
+    "callback": {
+      "url": "https://example.com/callback",
+      "secretEnv": "P1_FROZEN_OUT",
+      "idempotent": true,
+      "events": [
+        "goal.completed"
+      ],
+      "resultFiles": [],
+      "maxAttempts": 12
+    }
+  },
+  "fingerprint": "7ff18edf0de3ccaa256d0aa8e2936d333d5e1f36c726fbaa7b00b1726da0c67e"
+}

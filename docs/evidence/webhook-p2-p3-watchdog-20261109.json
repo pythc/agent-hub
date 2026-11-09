@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "realSeparateWatchdogProcesses": 2,
+  "healthyHTTPObservation": true,
+  "samples": 2,
+  "unnecessaryModelReviews": 0,
+  "waitNotRestarted": true
+}

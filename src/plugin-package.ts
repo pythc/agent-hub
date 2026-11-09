@@ -14,7 +14,7 @@ export const pluginManifestSchema=z.object({
   codeSha256:z.string().regex(/^[a-f0-9]{64}$/),
   configSchema:z.record(z.string(),z.unknown()),
   scopesPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),
-  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke','repositoryPull','mergeSnapshot','reviewGraph','resolveReview','draft','mergeIdentity','merge'])),
+  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke','repositoryPull','mergeSnapshot','reviewGraph','resolveReview','draft','mergeIdentity','merge','webhook'])),
   threadSeparator:z.enum([':','#']).optional(),
   observedPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/).optional(),
   repository:z.object({idPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),remoteTemplates:z.array(z.string().min(1).max(500).refine(s=>s.split('{repository}').length===2&&!/[\r\n]/.test(s),'One repository placeholder is required')).min(1).max(10),pushCredentialPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),pushUsername:z.string().regex(/^[a-zA-Z0-9_-]+$/).max(100)}).strict().optional(),

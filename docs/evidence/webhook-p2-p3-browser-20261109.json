@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "checks": [
+    "authenticated UI",
+    "dry-run no effects",
+    "receive stop resume persisted on reload",
+    "key rotation",
+    "HTTP duplicate",
+    "durable event wait",
+    "goal pause resume",
+    "callback retry",
+    "create grant through form",
+    "search empty state",
+    "keyboard focus",
+    "390px no overflow"
+  ],
+  "consoleErrors": [],
+  "model": "fixture stub; native model evidence separate"
+}

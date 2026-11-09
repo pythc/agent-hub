@@ -25,7 +25,7 @@ export class AgentMemory {
   const schema=host.store.get<number>('memory-schema','current')??1
   if(schema>2)throw Error('Memory schema is newer than this host; use a compatible release')
   // Additive upgrade: legacy facts retain their IDs, state, audience and sources.
-  host.store.atomic(()=>{for(const f of host.store.list<MemoryFact>('memory-fact'))if(!f.kind)host.store.put('memory-fact',f.id,{...f,kind:'fact',importance:3,protected:f.state==='active'});host.store.put('memory-schema','current',2);host.store.db.exec('PRAGMA user_version=7')})
+  host.store.atomic(()=>{for(const f of host.store.list<MemoryFact>('memory-fact'))if(!f.kind)host.store.put('memory-fact',f.id,{...f,kind:'fact',importance:3,protected:f.state==='active'});host.store.put('memory-schema','current',2);host.store.db.exec('PRAGMA user_version='+Math.max(7,Number(host.store.db.prepare('PRAGMA user_version').get()!.user_version)))})
   host.memory.recall=(c,q)=>this.recall(c,q)
   host.memory.validateUse=(c,refs)=>{if(!refs.length)return;if(!this.enabled(c))throw Error('Memory use disabled');const allowed=this.authorized(c);if(refs.some(ref=>!allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))throw Error('Memory audience changed')}
   host.memory.onMutation=()=>{this.queries.clear();this.reconcile()}

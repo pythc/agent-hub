@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "hostRestartPersistence": true,
+  "finalDesktopAndMobile": true,
+  "explicitThemeOverridesSystemTheme": true,
+  "consoleErrors": []
+}

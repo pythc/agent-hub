@@ -1,3 +1,4 @@
+import {upgradeWebhooks} from './webhook-upgrade.ts'
 import {pluginCommand} from './plugin-cli.ts'
 import {backendPluginCommand} from './backends/plugin-cli.ts'
 import {clientIds,clientConfig,installClient,restoreClient,type ClientId} from './clients.ts'
@@ -23,6 +24,7 @@ const command = args[0]==='--help'||args[0]==='-h'
   : !args.length || args[0]?.startsWith('--') ? 'setup' : args.shift()!
 async function main() {
   if(process.env.AGENTHUB_ENV_FILE)try{process.loadEnvFile(process.env.AGENTHUB_ENV_FILE)}catch{throw Error('Cannot load AGENTHUB_ENV_FILE; check its path and access permissions')}
+  if(command==='webhooks'){if(args[0]!=='upgrade'||!args[1]||!args[2])throw Error('Use webhooks upgrade <config.json> <new backup directory>; stop the host first');console.log(JSON.stringify(await upgradeWebhooks(loadConfig(args[1]),args[2]),null,2));return}
   if(command==='plugins'){console.log(JSON.stringify(await pluginCommand(args),null,2));return}
   if(command==='backend-plugins'){console.log(JSON.stringify(await backendPluginCommand(args),null,2));return}
   if(command==='office'){

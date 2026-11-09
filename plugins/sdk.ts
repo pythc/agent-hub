@@ -8,7 +8,13 @@ export type SourceContext=Omit<import('../src/sources.ts').SourceContext,'store'
 export type {Trigger,OutboundMessage} from '../src/vendor/dsh-core/index.ts'
 export type {PluginManifest} from '../src/plugin-package.ts'
 export type {RepositoryAccess,RepositoryMethods,RepositoryUpdate} from '../src/repository-source.ts'
-export interface PluginDefinition {create(config:import('../src/config.ts').SourceConfig,context?:SourceContext&{beforeRepositoryWrite():Promise<void>}):import('../src/sources.ts').Source}
+/** Pure data projection. The host retains event identity, verifies signatures and owns all authority. */
+export interface WebhookNormalizer {
+ config:import('../src/config.ts').SourceConfig
+ webhook(input:{schemaVersion:1;event:import('../src/webhook-protocol.ts').CloudEvent}):Record<string,string|number|boolean>|Promise<Record<string,string|number|boolean>>
+ close?():void|Promise<void>
+}
+export interface PluginDefinition {create(config:import('../src/config.ts').SourceConfig,context?:SourceContext&{beforeRepositoryWrite():Promise<void>}):import('../src/sources.ts').Source|WebhookNormalizer}
 
 export {records,record,recordPages} from './records.ts'
 export type {RecordQuery,RecordPage} from '../src/sources.ts'

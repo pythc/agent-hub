@@ -49,9 +49,11 @@ const sourceSchema = z.object({
   if(s.kind==='feishu'&&(!s.feishu||(!s.feishu.cli&&(!s.feishu.appIdEnv||!s.feishu.appSecretEnv))))ctx.addIssue({code:'custom',message:'Feishu source requires CLI or app credential environment names'})
   if(s.kind==='wecom'&&!s.wecom)ctx.addIssue({code:'custom',message:'WeCom source requires smart-bot configuration'})
 })
+import {webhookConfigSchema} from './webhook-protocol.ts'
 export const configSchema = z.object({
   stateDir: z.string().default('.superagent'),
   port: z.number().int().min(0).max(65535).default(4319),
+  webhooks:webhookConfigSchema.optional(),
   codex: z.string().default('codex'),
   backends:backendsSchema,
   backendPlugins:backendPackageReferences,

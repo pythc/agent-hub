@@ -6,6 +6,7 @@ import {z} from 'zod'
 import {configSchema,type Config} from './config.ts'
 import {backendsSchema} from './backend-config.ts'
 import {sourceDeployment} from './connector-config.ts'
+import {MAX_DB_SCHEMA} from './store.ts'
 
 const overlaySchema=z.object({format:z.literal(1),backends:backendsSchema,sources:z.array(configSchema.shape.sources.element)}).strict()
 const secretsSchema=z.record(z.string().regex(/^AGENTHUB_SETUP_[A-Z0-9_]+$/),z.string().min(1).max(16000))
@@ -35,7 +36,7 @@ export function recoverManagedFiles(state:string){
  if(existsSync(file)){
   const db=new DatabaseSync(file,{readOnly:true})
   try{
-   if(Number(db.prepare('PRAGMA user_version').get()!.user_version)>7)throw Error('Database is newer than this program')
+   if(Number(db.prepare('PRAGMA user_version').get()!.user_version)>MAX_DB_SCHEMA)throw Error('Database is newer than this program')
    const table=db.prepare("SELECT name FROM sqlite_master WHERE name='records'").get()
    committed=!!table&&!!db.prepare('SELECT id FROM records WHERE kind=? AND id=?').get(journal.restore?'restore-commit':'onboarding-deployment',journal.id)
   }finally{db.close()}

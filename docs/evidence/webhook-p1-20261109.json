@@ -1,0 +1,57 @@
+{
+  "ok": true,
+  "checks": {
+    "fourRealHostProcesses": true,
+    "threeAbruptRestarts": true,
+    "oneReceipt": true,
+    "oneGoal": true,
+    "threeTasks": true,
+    "originalContractUnchanged": true,
+    "falseReportIntercepted": true,
+    "oneAutomaticRepair": true,
+    "goalCompleted": true,
+    "nativeVerifierReadEvidence": true,
+    "sendingRecovered": true,
+    "threeCallbackAttempts": true,
+    "stableDeliveryId": true,
+    "frozenCallbackBody": true,
+    "receiverBusinessEffectOnce": true,
+    "callbackSent": true,
+    "noTaskRerunForCallback": true,
+    "correctArtifact": true,
+    "unchangedImplementation": true,
+    "publishedOnlyApprovedFiles": true,
+    "verifiedSummaryDelivered": true,
+    "verifiedReportDelivered": true,
+    "finalSchemaEight": true,
+    "currentFilesMatchEvidence": true,
+    "acceptanceHostClosed": true
+  },
+  "goalId": "goal-8b4c513bd854c7b6d1063760104fb448c48c1426da6919b8ebd0c02ed0aff628",
+  "implementation": {
+    "src/webhooks.ts": "77cfa1b60fcca06350c55aae77ac9b969cceebe9380b773b201a80c290387eda",
+    "src/webhook-protocol.ts": "62b9cfa9c44567ef19a9acde48b5f7bcd1b546b4af5583b7a24faacde2ba9e36",
+    "src/webhook-http.ts": "d225fcc1b1e30ab1eec84771d7bce45869adc9711f9418b163432eacd019ef4d",
+    "src/router-goals.ts": "00fb8aaf07e9dc010d991ff3b8a1207d5eef5c0fe3c20ff6c1acfeb5c433fb70",
+    "src/router-ingress.ts": "2386c0c1a7dfd53730a5d9f961ac44c9ac20869c0be7c2218c09031f59fe7a42",
+    "src/runtime.ts": "ee6c38789e6726c7bf69b6872d58b03f4698d3852b09b710aa3afd2133a2f7bc",
+    "src/store.ts": "202f0201291569fc5824999965ba7cae1f8c4ff716b23fd679eb3606e9764d1c",
+    "src/config.ts": "b8b959ad9493d9decbac636619f6e011e830b2288297ea0096ec482c87fb2cdd",
+    "src/server.ts": "6131808a39f95059db389f16fb36adaf6324b8d281701e041a51166bf85afa5c",
+    "src/agent-memory.ts": "5d09b717b4c326195eed28b937622becc2247676c6f57e6ede67423455481aba",
+    "src/backup.ts": "281478ed3cf63e317c9ff52de842590d36f0f326ba455b51d0b671132f69025d",
+    "src/managed-config.ts": "3e3aa0e1e607cd3b17a47e1579c47ae02885a96565d246dd9c241d304c983cdd",
+    "src/scope-migration.ts": "6c53687389427f445ce98aa72ca45a135d726c4ea151f8ef4d674b20d14dac71"
+  },
+  "callback": {
+    "attempts": 3,
+    "effects": 1
+  },
+  "source": "Real Codex Router, Worker and independent verifier; controlled wrong-artifact/false-report injection; real HTTP; actual SIGKILL process restarts; isolated from Feishu and live state.",
+  "automated": {
+    "testFiles": 77,
+    "tests": 1146,
+    "skipped": 0,
+    "typecheck": "passed"
+  }
+}
