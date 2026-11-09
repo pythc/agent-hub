@@ -70,6 +70,14 @@ it('counts base instructions and covered declarations once while retaining chang
  const value=f.context.envelope();expect(value.instructions).toBeUndefined();expect(value.tools).toBeUndefined();expect(value.baseInstructions).toEqual({text:'base'});expect(value.schema).toEqual({})
  const other=new NativeContext({instructions:'mandate',input:'x',schema:{required:['x']},tools:[{name:'new-tool'}]});other.setPath(f.path);other.begin();expect(other.envelope().tools).toEqual([{name:'new-tool'}])
 })
+it('does not assume that a native-only catalog covers configured dynamic tool definitions',()=>{
+ const f=fixture(),tool={type:'function',name:'host_tool',description:'x'.repeat(12000),inputSchema:{type:'object'}}
+ writeFileSync(f.path,JSON.stringify({type:'session_meta',payload:{dynamic_tools:[tool]}})+'\n'+record({type:'additional_tools',id:'native-only',tools:[{type:'function',name:'native_tool'}]}))
+ const context=new NativeContext({instructions:'mandate',input:'x',schema:{},tools:[tool]});context.setPath(f.path);context.begin()
+ expect(context.envelope().tools).toEqual([tool]);expect(protocolBytes(context.envelope())).toBeGreaterThan(12000)
+ f.append({type:'additional_tools',id:'host-declarations',tools:[tool]})
+ expect(context.envelope().tools).toBeUndefined()
+})
 it('retains an incomplete tail without dropping it and rejects malformed complete history',()=>{
  const f=fixture();appendFileSync(f.path,'\n'+JSON.stringify({type:'response_item',payload:message('next','user','unfinished')}).slice(0,-5))
  expect(JSON.stringify(nativeProtocolHistory(f.path))).toContain('unparsedTail')

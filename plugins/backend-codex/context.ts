@@ -7,6 +7,7 @@ interface History {baseInstructions?:unknown;dynamicTools?:unknown;items:Entry[]
 const identity=(item:Item)=>typeof item.id==='string'?'id:'+item.type+':'+item.id:typeof item.call_id==='string'?'call:'+item.type+':'+item.call_id:undefined
 const texts=(item:Item)=>Array.isArray(item.content)?item.content.flatMap((p:any)=>typeof p.text==='string'?[p.text]:[]):[]
 const ordered=(v:any):any=>Array.isArray(v)?v.map(ordered):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,ordered(v[k])])):v
+const containsDeclaration=(value:any,declaration:string):boolean=>!!value&&typeof value==='object'&&(JSON.stringify(ordered(value))===declaration||Object.values(value).some(v=>containsDeclaration(v,declaration)))
 
 /** Only actual response items survive; compaction replaces the live context. */
 export function readNativeHistory(path:string):History{
@@ -80,11 +81,13 @@ export class NativeContext {
   // Unknown parent identities stay conservatively pending.
   for(const p of this.tools)if(p.returned&&p.parents.size&&[...p.parents].every(id=>finished.has(id)))this.tools.delete(p)
   const instructionsCovered=h.items.some(e=>e.item.role==='developer'&&texts(e.item).some(t=>t.includes(this.config.instructions)))
-  const hasCatalog=h.items.some(e=>e.item.type==='additional_tools')
-  const toolsCovered=hasCatalog&&(!this.config.tools||JSON.stringify(ordered(this.config.tools))===JSON.stringify(ordered(h.dynamicTools)))
+  const tools=this.config.tools??h.dynamicTools,catalogs=h.items.filter(e=>e.item.type==='additional_tools').map(e=>e.item.tools)
+  // A native-only catalog need not expose the configured dynamic tools. Only
+  // an exact declaration proves coverage; ambiguous wrappers remain counted.
+  const toolsCovered=Array.isArray(tools)&&tools.every(tool=>catalogs.some(c=>containsDeclaration(c,JSON.stringify(ordered(tool)))))
   return {baseInstructions:h.baseInstructions??this.config.baseInstructions,
    ...(!instructionsCovered?{instructions:this.config.instructions}:{}),schema:this.config.schema,parameters:this.config.parameters,
-   ...(!toolsCovered?{tools:this.config.tools??h.dynamicTools}:{}),history:h.items.map(e=>e.item),
+   ...(!toolsCovered?{tools}:{}),history:h.items.map(e=>e.item),
    ...(!this.messages.length?{input:this.config.input}:{}),pendingMessages:this.messages.filter(p=>!p.done).map(p=>({role:p.role,text:p.text})),pendingTools:[...this.tools].map(p=>p.value)}
  }
 }
