@@ -1,7 +1,7 @@
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {RouterGoal} from './router-goals.ts'
-import type {Mandate} from './vendor/dsh-core/index.ts'
+import type {Mandate,Ticket} from './vendor/dsh-core/index.ts'
 import {validateGraph,classifyGoalFailure,type GoalCriterion,type GoalNode} from './goal-contract.ts'
 import {stableDigest} from './sources.ts'
 import {scopeBudget} from './context-budget.ts'
@@ -33,6 +33,21 @@ const reviewOutput={type:'object',properties:{approved:{type:'boolean'},explanat
 /** Plans may change implementation, never the retained authorization or acceptance contract. */
 export class GoalReplanning {
  constructor(private host:Runtime,private now:()=>number=Date.now){}
+ /** Project an approved node strategy into execution without rewriting the audit mandate. */
+ executionView(ticket:Ticket):Ticket {
+  const dispatches=this.host.store.list<{ticketId:string;goalId:string;replanId:string}>('goal-plan-dispatch').filter(d=>d.ticketId===ticket.id)
+  if(!dispatches.length)return ticket
+  const rounds=dispatches.map(d=>({d,r:this.host.store.get<ReplanRound>('goal-replan',d.replanId)})).sort((a,b)=>(b.r?.snapshot.planRevision??-1)-(a.r?.snapshot.planRevision??-1))
+  const {d,r}=rounds[0]!,g=this.host.goals.get(d.goalId),n=g?.nodes?.find(n=>n.ticketId===ticket.id)
+  if(!g||!n||ticket.ended||!['active','waiting'].includes(g.state)||!r||r.goalId!==g.id||r.state!=='applied'||!r.review?.approved||!r.proposal)throw Error('Reviewed execution strategy is unavailable')
+  const contract=this.contract(g),c=this.host.goals.context(g)
+  this.host.scopes.checkTask(ticket.id,c,true);this.assertWorker(g,n.workerId)
+  const before=r.snapshot.nodes.find(x=>x.id===n.id&&x.ticketId===ticket.id),edit=r.proposal.changes.find(x=>x.id===n.id)
+  if(!before||stableDigest(contract)!==stableDigest(r.snapshot.contract)||n.instruction!==(edit?.instruction??before.instruction)||stableDigest(n.dependsOn)!==stableDigest(edit?.dependsOn??before.dependsOn)||stableDigest(n.criterionIds)!==stableDigest(before.criterionIds)||n.workerId!==before.workerId)throw Error('Reviewed execution strategy changed')
+  const scope=JSON.stringify({kind:'reviewed_goal_step',goalId:g.id,replanId:r.id,planRevision:r.snapshot.planRevision+1,objective:contract.objective,node:{id:n.id,title:n.title,instruction:n.instruction},criteria:this.host.verification.criteria(g,n),originalAcceptance:contract.criteria,authorizationScope:contract.mandate.scope,requirements:this.host.continuity.command({action:'read'},c).requirements,notice:'This is the current independently approved node mandate. It supersedes earlier node implementation instructions in retained history, including file restrictions within the original authorizationScope. The original user authorization, objective, acceptance criteria and tool permissions remain binding. Inspect retained effects before acting; do not repeat completed work blindly.'})
+  if(Buffer.byteLength(scope)>this.host.scopes.scope(g.scopeId).contextBytes)throw Error('Reviewed execution strategy exceeds context budget')
+  return {...ticket,mandate:{...ticket.mandate,scope}}
+ }
  active(g:RouterGoal){return !!g.replanId&&activeStates.has(this.host.store.get<ReplanRound>('goal-replan',g.replanId)?.state??'')}
  contexts(goalId:string){return this.host.store.list<ReplanRound>('goal-replan').filter(r=>r.goalId===goalId).flatMap(r=>r.contextIds??[])}
  list(g:RouterGoal){this.host.goals.context(g);return this.host.store.list<ReplanRound>('goal-replan').filter(r=>r.goalId===g.id).map(({snapshot,...r})=>(r.contextIds??[]).every(id=>this.host.continuity.validContext(id))?({...r,planRevision:snapshot.planRevision,contractHash:stableDigest(snapshot.contract),failureNodeIds:snapshot.failureNodeIds}):({id:r.id,goalId:r.goalId,state:'stale',at:r.at,error:'Replanning sources changed; derived content is unavailable'}))}

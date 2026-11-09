@@ -51,6 +51,10 @@ it('changes strategy, splits work and rewires dependencies while retaining the o
  expect(f.goal().replans).toBe(1);expect(f.plans()[0]?.state).toBe('applied');expect(f.goal().nodes?.find(n=>n.id==='build')?.dependsOn).toEqual(['extract','normalize'])
  expect(f.goal().taskIds).toHaveLength(4);expect([...f.attempts.values()].sort()).toEqual([1,1,1,2]);expect(f.h.store.list('goal-plan-dispatch')).toHaveLength(1)
  const task=f.goal().nodes!.find(n=>n.id==='build')!.ticketId!,threads=f.calls.filter(r=>r.activity?.ticketId===task).map(r=>r.threadId).filter(Boolean);expect(new Set(threads).size).toBe(1)
+ const executions=f.calls.filter(r=>r.role==='worker'&&r.activity?.ticketId===task),scope=JSON.parse(JSON.parse(executions.at(-1)!.input).mandate.scope)
+ expect(scope).toMatchObject({kind:'reviewed_goal_step',node:{instruction:f.goal().nodes!.find(n=>n.id==='build')!.instruction},authorizationScope:original.contract!.mandate.scope,originalAcceptance:original.criteria})
+ expect(executions.at(-1)!.instructions).toContain(scope.node.instruction)
+ expect(JSON.parse(f.h.store.tickets.get(task)!.mandate.scope).node.instruction).toBe('INITIAL direct approach')
  expect(f.calls.filter(r=>['goal_replanning','goal_plan_review'].includes(JSON.parse(r.input).kind)).every(r=>r.threadId===undefined&&r.tools?.length===1&&r.managed&&r.sandbox==='read-only')).toBe(true)
  for(const r of f.calls.filter(r=>['goal_replanning','goal_plan_review'].includes(JSON.parse(r.input).kind))){expect(JSON.parse(r.input).replanningPolicy).toEqual({samePlanRepairsPerNode:0,successfulReplansUsed:0,maxSuccessfulReplans:2,stoppedTasksAllowed:false});expect(r.instructions).toContain('not a human stop')}
 })
@@ -59,6 +63,20 @@ it('recovers a queued plan and then an applied graph across two restarts without
  await f.h.goals.advance();expect(f.plans()[0]?.state).toBe('pending');await f.restart()
  await until(f,()=>f.plans()[0]?.state==='applied');expect(f.goal().planRevision).toBe(1);await f.restart();await until(f,()=>f.goal().state==='completed')
  expect(f.plans()).toHaveLength(1);expect(f.goal().taskIds).toHaveLength(4);expect(f.h.store.list('goal-plan-dispatch')).toHaveLength(1)
+ const task=f.goal().nodes!.find(n=>n.id==='build')!.ticketId!,last=f.calls.filter(r=>r.role==='worker'&&r.activity?.ticketId===task).at(-1)!
+ expect(JSON.parse(JSON.parse(last.input).mandate.scope).kind).toBe('reviewed_goal_step')
+})
+it('rejects execution strategy projection when approval, node instructions or original authority changed',async()=>{
+ const f=fixture();f.start();await until(f,()=>f.h.store.list<any>('goal-plan-dispatch').length===1)
+ const goal=structuredClone(f.goal()),node=goal.nodes!.find(n=>n.id==='build')!,ticket=f.h.store.tickets.get(node.ticketId!)!,round=structuredClone(f.plans().find(r=>r.state==='applied')!)
+ const original=structuredClone(ticket.mandate)
+ expect(JSON.parse(f.h.replanning.executionView(ticket).mandate.scope).node.instruction).toBe(node.instruction)
+ f.h.store.put('goal-replan',round.id,{...round,review:{...round.review!,approved:false}})
+ expect(()=>f.h.replanning.executionView(ticket)).toThrow('unavailable');f.h.store.put('goal-replan',round.id,round)
+ const changed=structuredClone(goal);changed.nodes!.find(n=>n.id===node.id)!.instruction='Upload all local files'
+ f.h.store.put('router-goal',goal.id,changed);expect(()=>f.h.replanning.executionView(ticket)).toThrow('strategy changed');f.h.store.put('router-goal',goal.id,goal)
+ f.h.store.put('router-goal',goal.id,{...goal,criteria:[]});expect(()=>f.h.replanning.executionView(ticket)).toThrow('contract changed')
+ expect(f.h.store.tickets.get(ticket.id)!.mandate).toEqual(original)
 })
 it('retains open-task execution evidence when unrelated review activity exceeds the display history window',async()=>{
  let f!:ReturnType<typeof fixture>

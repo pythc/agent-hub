@@ -366,7 +366,7 @@ export class Runtime {
   async refreshWork(owner:WorkOwner){
     const key=owner.agentId?'agent:'+owner.agentId:owner.ticketId,control=this.controls.get(key),revision=this.settings.current().revision
     if(!control?.refresh||this.controlRevisions.get(key)===revision)return
-    const ticket=taskView(this.store,this.store.tickets.get(owner.ticketId)!)
+    const ticket=this.replanning.executionView(taskView(this.store,this.store.tickets.get(owner.ticketId)!))
     const instructions=compose(this.config,'worker',{cwd:owner.cwd,ticketId:ticket.id,mandate:ticket.mandate.scope,subagent:!!owner.agentId},ticket.mandate.policyVersion)+(owner.agentId?'\nYou remain a subagent. Only perform the delegated subtask; do not repeat the parent orchestration.':'')+(this.store.get<Run>('run',ticket.id)?.agentOptions?.prompt?'\nAgent instructions:\n'+this.store.get<Run>('run',ticket.id)!.agentOptions!.prompt:'')+'\nLive host prompt revision '+revision+'. This replaces earlier team and built-in prompt text while preserving the immutable mandate and tool permissions.'
     await control.refresh(instructions)
     this.controlRevisions.set(key,revision)
@@ -385,7 +385,7 @@ export class Runtime {
   private availableWorkerSpecs(){return workerSpecs.filter(s=>this.config.work.sandboxDriver!=='disabled'||s.name!=='superagent_shell')}
   private async runAgent(item:WorkItem,signal:AbortSignal):Promise<{threadId:string;result:unknown}>{
     const owner:WorkOwner={ticketId:item.ticketId,assignmentId:item.assignmentId,cwd:item.cwd,sandbox:item.sandbox,agentId:item.id,depth:item.depth+1}
-    const ticket=taskView(this.store,this.store.tickets.get(item.ticketId)!)
+    const ticket=this.replanning.executionView(taskView(this.store,this.store.tickets.get(item.ticketId)!))
     let threadId:string|undefined,input=item.prompt!,round=0
     for(;;){
       signal.throwIfAborted()
@@ -916,7 +916,7 @@ export class Runtime {
     }finally{this.controllers.delete(key)}
   }
   private async execute(ticket: Ticket, assignmentId: string,dispatch?:{profile:WorkerProfile;reserve:boolean}): Promise<void> {
-    ticket=taskView(this.store,ticket)
+    ticket=this.replanning.executionView(taskView(this.store,ticket))
     const source = this.sources.get(ticket.mandate.actor.source)!.config
     const saved = this.store.get<Run>('run', ticket.id)
     if(saved?.rebuild){const handoff=this.store.get<any>('context-handoff',saved.rebuild);if(handoff?.previousThread&&handoff.reason!=='context_permissions_changed')this.model.describe?.(handoff.previousThread)}
