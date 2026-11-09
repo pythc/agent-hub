@@ -9,6 +9,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('root', type=Path, help='Parent of the fresh 01-a through 04-b trial directories')
 parser.add_argument('--native-index', type=Path, help='Optional Codex SQLite index; opened read-only')
+parser.add_argument('--pair', action='append', help='SCENARIO:BASELINE:OPTIMIZED directory names; repeat for each pair')
 args = parser.parse_args()
 root = args.root.resolve()
 fields = {'inputTokens': 'input_tokens', 'cachedInputTokens': 'cached_input_tokens',
@@ -71,8 +72,9 @@ def load(name):
 
 
 results, pairs = {}, []
-trials = [('clean', '01-a', '01-b'), ('repair', '02-a', '02-b'),
-          ('replan', '03-a', '03-b'), ('clean-repeat', '04-a', '04-b')]
+trials = [tuple(value.split(':')) for value in args.pair] if args.pair else [('clean', '01-a', '01-b'), ('repair', '02-a', '02-b'), ('replan', '03-a', '03-b'), ('clean-repeat', '04-a', '04-b')]
+if any(len(p) != 3 or not all(p) for p in trials):
+    parser.error('--pair must be SCENARIO:BASELINE:OPTIMIZED')
 for scenario, a, b in trials:
     for name in [a, b]:
         value = load(name)
@@ -81,8 +83,8 @@ for scenario, a, b in trials:
     if a not in results or b not in results:
         continue
     before, after = results[a], results[b]
-    for key in ['contract', 'config', 'fixtureHashes']:
-        if digest(before['conditions'][key]) != digest(after['conditions'][key]):
+    for key in ['scenario', 'contract', 'config', 'fixtureHashes', 'harnessSha256', 'runtime']:
+        if digest(before['conditions'].get(key)) != digest(after['conditions'].get(key)):
             raise ValueError(f'{scenario}: conditions differ at {key}')
     if before['criteria'] != after['criteria'] or before['objective'] != after['objective']:
         raise ValueError(f'{scenario}: acceptance criteria or objective changed')

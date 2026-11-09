@@ -3,18 +3,20 @@ import {mkdirSync,existsSync,writeFileSync,readFileSync} from 'node:fs'
 import {resolve,join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {createHash} from 'node:crypto'
+import {execFileSync} from 'node:child_process'
 import assert from 'node:assert/strict'
 import type {ModelRequest} from '../src/model.ts'
 
-const [output,implementationArg,scenario='clean']=process.argv.slice(2)
-if(!output||!implementationArg||!['clean','repair','replan'].includes(scenario))throw Error('Use <fresh-output> <implementation-root> [clean|repair|replan]')
+const [output,implementationArg,scenario='clean',budgetArg='10000000']=process.argv.slice(2)
+const contextBytes=Number(budgetArg)
+if(!output||!implementationArg||!['clean','repair','replan'].includes(scenario)||!Number.isSafeInteger(contextBytes)||contextBytes<4096||contextBytes>10000000)throw Error('Use <fresh-output> <implementation-root> [clean|repair|replan] [context-bytes<=10000000]')
 const root=resolve(output),implementation=resolve(implementationArg),cwd=join(root,'workspace')
 if(existsSync(join(root,'state')))throw Error('Use fresh isolated state')
 mkdirSync(cwd,{recursive:true,mode:0o700})
 const {Runtime}=await import(pathToFileURL(join(implementation,'src/runtime.ts')).href)
 const {configSchema}=await import(pathToFileURL(join(implementation,'src/config.ts')).href)
 const digest=(x:unknown)=>createHash('sha256').update(typeof x==='string'?x:JSON.stringify(x)).digest('hex')
-const sourceHashes=Object.fromEntries(['src/runtime.ts','src/goal-evidence.ts','src/goal-verification.ts','src/goal-replanning.ts','src/model-usage.ts','src/usage-ledger.ts','plugins/backend-codex/model.ts'].map(path=>[path,digest(readFileSync(join(implementation,path),'utf8'))]))
+const sourceHashes=Object.fromEntries(['src/runtime.ts','src/router-scope.ts','src/context-budget.ts','src/goal-evidence.ts','src/goal-verification.ts','src/goal-replanning.ts','src/model-usage.ts','src/usage-ledger.ts','src/execution-output.ts','plugins/backend-codex/model.ts','plugins/backend-codex/context.ts'].map(path=>[path,existsSync(join(implementation,path))?digest(readFileSync(join(implementation,path),'utf8')):null]))
 const save=(name:string,value:unknown)=>writeFileSync(join(root,name+'.json'),JSON.stringify(value,null,2)+'\n',{mode:0o600})
 const rows=Array.from({length:30},(_,i)=>({id:'R'+String(i%12+1).padStart(2,'0'),category:['A','B','C'][i%12%3],amount:(i%12+1)*10}))
 writeFileSync(join(cwd,'input.json'),JSON.stringify(rows))
@@ -41,16 +43,16 @@ const workerPrompt='Perform only the assigned local stage. Execute the exact sup
 const config=configSchema.parse({stateDir:join(root,'state'),port:0,codex:process.env.AGENTHUB_CODEX??'codex',turnTimeoutMs:300000,acceptMode:'auto',work:{sandboxDriver:process.platform==='darwin'?'seatbelt':'bubblewrap',network:false},execution:{router:{mode:'host',model:'gpt-6.1-terra',effort:'medium',prompt:'The harness has already started the exact authorized GoalContract. Inspect that existing goal; do not create goals or assign tasks. Host scheduling owns Workers, independent acceptance, repair and replanning. Reply ACCEPTED only when its durable state is completed; otherwise return an empty reply.'},management:{enabled:true,maxWorkers:3},workers:['one','two','three'].map(id=>({id,backend:'codex',model:'gpt-6.1-sol',effort:'high',tools:['superagent_shell'],prompt:workerPrompt}))},sources:[{id:'local',kind:'local',cwd,sandbox:'workspace-write',workspace:{mode:'source'},allowedActors:['operator']}]})
 const host=new Runtime(config),calls:any[]=[],original=host.model.run.bind(host.model)
 host.model.run=async(r:ModelRequest)=>{
- const input=JSON.parse(r.input),row:any={role:r.role,agentId:r.activity?.agentId,workerId:r.activity?.workerId,kind:input.kind,startedAt:Date.now(),inputBytes:Buffer.byteLength(r.input),inlineEvidence:input.inlineEvidence?.length??0,tools:[]};calls.push(row)
- try{return await original({...r,onThread:(id:string)=>{row.threadId=id;r.onThread?.(id)},onTool:r.onTool?async(name:string,args:unknown,id:string)=>{row.tools.push(name);return r.onTool!(name,args,id)}:undefined})}
+ const input=JSON.parse(r.input),row:any={role:r.role,agentId:r.activity?.agentId,workerId:r.activity?.workerId,kind:input.kind,startedAt:Date.now(),inputBytes:Buffer.byteLength(r.input),inlineEvidence:input.inlineEvidence?.length??0,tools:[],budgets:[]};calls.push(row)
+ try{return await original({...r,onBudget:receipt=>{row.budgets.push(receipt);r.onBudget?.(receipt)},onThread:(id:string)=>{row.threadId=id;r.onThread?.(id)},onTool:r.onTool?async(name:string,args:unknown,id:string)=>{row.tools.push(name);return r.onTool!(name,args,id)}:undefined})}
  catch(error){row.error=String(error);throw error}
  finally{row.endedAt=Date.now();save('calls',calls)}
 }
 const fixtureHashes=Object.fromEntries(['input.json','fixture.mjs','legacy.mjs','audit.log'].map(f=>[f,digest(readFileSync(join(cwd,f),'utf8'))]))
-save('conditions',{scenario,contract,contractSha256:digest(contract),config:{router:config.execution.router,workers:config.execution.workers,work:config.work,contextBytes:256000},fixtureHashes,implementation,sourceHashes})
+save('conditions',{scenario,contract,contractSha256:digest(contract),config:{router:config.execution.router,workers:config.execution.workers,work:config.work,contextBytes},fixtureHashes,implementation,sourceHashes,harnessSha256:digest(readFileSync(new URL(import.meta.url),'utf8')),runtime:{node:process.versions.node,platform:process.platform,arch:process.arch,codex:execFileSync(config.codex,['--version'],{encoding:'utf8',timeout:20000}).trim()}})
 let error:string|undefined;const startedAt=Date.now()
 try{
- host.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'bench',tenantId:'acceptance',name:'Matched evidence benchmark',contextBytes:256000,managers:[JSON.stringify(['local','operator'])],workerIds:['one','two','three'],sourceIds:['local'],backendIds:['codex']}})
+ host.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'bench',tenantId:'acceptance',name:'Matched evidence benchmark',contextBytes,managers:[JSON.stringify(['local','operator'])],workerIds:['one','two','three'],sourceIds:['local'],backendIds:['codex']}})
  host.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'bench',sourceId:'local',accountNamespace:'local',nativeId:'bench',history:'group'})
  const input=host.receive('local','operator',{id:'request',thread:'bench',scope:'bench',addressed:true,text:'Continuously process the local fixture until independent acceptance. '+objective}) as any
  const context=host.scopes.context(host.store.triggers.get(input.triggerId)!,'local:bench')!
@@ -59,6 +61,7 @@ try{
  while(Date.now()-startedAt<12*60000){
   await host.tick();await new Promise(r=>setTimeout(r,100))
   const goal=host.store.list('router-goal')[0]
+  assert.equal(host.scopes.scope('bench').contextBytes,contextBytes)
   assert.equal(digest(goal.criteria),criteriaHash);assert.equal(digest(goal.objective),objectiveHash);assert.equal(digest(goal.contract),authorityHash)
   if(goal.state==='held'||goal.state==='needs_input')throw Error('Goal held: '+goal.reason)
   if(goal.state==='completed'&&host.status().active===0&&host.store.jobs().length===0){settled=true;break}
