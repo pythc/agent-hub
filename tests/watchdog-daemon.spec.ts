@@ -34,7 +34,7 @@ async function fixture(modelFactory:(c:Config)=>Model){
 
 it('keeps probing during slow inference, uses host-current config, excludes credentials, and aborts revoked inference',async()=>{
  let request:ModelRequest|undefined,definition:Config|undefined,aborted=false
- const f=await fixture(c=>{definition=c;return {async run(r){request=r;await new Promise<void>((_,reject)=>r.signal!.addEventListener('abort',()=>{aborted=true;reject(Error('PRIVATE-MODEL-ERROR'))},{once:true}));throw Error('unreachable')}}})
+ const f=await fixture(c=>{definition=c;return {async run(r){request=r;r.onUsage?.({id:'step',inputTokens:100,cachedInputTokens:80,outputTokens:10});await new Promise<void>((_,reject)=>r.signal!.addEventListener('abort',()=>{aborted=true;reject(Error('PRIVATE-MODEL-ERROR'))},{once:true}));throw Error('unreachable')}}})
  try{
   await until(()=>!!request)
   expect(definition!.backends.live).toMatchObject({baseUrl:'https://current-provider.invalid/v1',model:'current-model'})
@@ -44,7 +44,7 @@ it('keeps probing during slow inference, uses host-current config, excludes cred
   f.stateful.targets=[];await until(()=>aborted)
   await delay(100)
   const db=new DatabaseSync(join(f.state,'watchdog','state.sqlite'),{readOnly:true})
-  try{const text=JSON.stringify(db.prepare('SELECT body FROM records').all());expect(text).not.toContain('PRIVATE-MODEL-ERROR');expect(text).not.toContain('Private goal');expect(text).not.toContain('CONTROL-PLANE-SECRET')}finally{db.close()}
+  try{const text=JSON.stringify(db.prepare('SELECT body FROM records').all());expect(text).not.toContain('PRIVATE-MODEL-ERROR');expect(text).not.toContain('Private goal');expect(text).not.toContain('CONTROL-PLANE-SECRET');const records=db.prepare("SELECT body FROM records WHERE kind='model-usage'").all().map(r=>JSON.parse(String(r.body)));expect(records).toHaveLength(1);expect(records[0]).toMatchObject({purpose:'watchdog',sourceId:'local',state:'interrupted',steps:{'0:step':{inputTokens:100,cachedInputTokens:80,outputTokens:10,totalTokens:110}}})}finally{db.close()}
  }finally{await f.close()}
 },15000)
 

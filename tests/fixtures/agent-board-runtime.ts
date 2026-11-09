@@ -1,5 +1,8 @@
 /** Synthetic acceptance records in an isolated REAL Runtime. No external model or application calls. */
 import {join} from 'node:path'
+import {mkdirSync} from 'node:fs'
+import {Store} from '../../src/store.ts'
+import {UsageLedger} from '../../src/usage-ledger.ts'
 import {configSchema} from '../../src/config.ts'
 import {Runtime} from '../../src/runtime.ts'
 import type {Ticket} from '../../src/vendor/dsh-core/index.ts'
@@ -44,6 +47,9 @@ export function seedBoard(host:Runtime,count=32){
   }
   host.usage.begin('usage-unknown','worker',{sourceId:'product',workerId:'build'})
   host.usage.finish('usage-unknown','interrupted')
+  const directory=join(host.config.stateDir,'watchdog');mkdirSync(directory,{recursive:true})
+  const observerStore=new Store(join(directory,'state.sqlite'))
+  try{const usage=new UsageLedger(observerStore);usage.begin('watchdog-fixture','subagent',{sourceId:'product'},'watchdog');usage.record('watchdog-fixture',0,{id:'step',inputTokens:100,cachedInputTokens:80,outputTokens:20});usage.finish('watchdog-fixture','completed')}finally{observerStore.close()}
   // Seeded records are display fixtures, not executable jobs. Serving this host must not call a model.
   host.store.db.prepare('DELETE FROM jobs').run()
   for(const thread of host.store.threads.list())host.store.threads.save({...thread,pending:[],evaluating:undefined})

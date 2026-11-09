@@ -154,7 +154,7 @@ export class Runtime {
     try { loadManagedConfig(config);validateBackendSelection(config);this.store = new Store(join(config.stateDir, 'state.sqlite'));try{recoverMarket(this.store,options.pluginActivation);loadMarketConfig(config,options.pluginActivation)}catch(error){this.store.close();throw error} }
     catch (error) { unlinkSync(this.lock); throw error }
     this.activity = new ExecutionActivity(this.store)
-    this.usage = new UsageLedger(this.store)
+    this.usage = new UsageLedger(this.store,join(this.config.stateDir,'watchdog','state.sqlite'))
     this.approvals = new Approvals(this.store)
     try{
       const initial=this.store.atomic(()=>{

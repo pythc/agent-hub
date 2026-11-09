@@ -31,6 +31,8 @@ with sync_playwright() as p:
             for key in data['usage']['tokens']:
                 data['usage']['tokens'][key] = None
             data['usage']['tokens']['outputTokens'] = 0
+        elif variant.get('watchdog_unavailable'):
+            data['usage']['watchdogUnavailable'] = True
         route.fulfill(response=response, json=data)
 
     page.route('**/api/workspace-views/*/runtime?*', fixture)
@@ -40,15 +42,16 @@ with sync_playwright() as p:
         frame = page.frame_locator('iframe[title="Agent board"]')
         frame.get_by_role('tab', name='Listening & usage', exact=True).click()
         usage = frame.get_by_role('region', name='Team token usage')
-        expect(usage.locator('.usage-totals dd')).to_have_text(['76,200', '75,000', '48,000', '1,200', '240'])
-        expect(usage.locator('.usage-coverage')).to_contain_text('Calls with usage 6 / 7')
+        expect(usage.locator('.usage-totals dd')).to_have_text(['76,320', '75,100', '48,080', '1,220', '240'])
+        expect(usage.locator('.usage-coverage')).to_contain_text('Calls with usage 7 / 8')
         expect(usage.locator('.usage-coverage')).to_contain_text('Unknown 1')
         expect(usage.locator('.usage-coverage')).to_contain_text('Partial 0')
         frame.get_by_role('combobox', name='Filter by source').select_option('personal')
         expect(usage.locator('.usage-totals dd').first).to_have_text('39,600')
         expect(frame.locator('.usage').locator('dl dd').first).to_have_text('360')
         frame.get_by_role('combobox', name='Filter by source').select_option('')
-        expect(usage.locator('.usage-totals dd').first).to_have_text('76,200')
+        expect(usage.locator('.usage-totals dd').first).to_have_text('76,320')
+        expect(usage.get_by_role('cell', name='Watchdog', exact=True)).to_be_visible()
         checks.append('Real numeric bridge; team source filter; auxiliary all-source scope preserved')
 
         for language in ['en', 'zh']:
@@ -62,13 +65,18 @@ with sync_playwright() as p:
                 for width in [1440, 390]:
                     page.set_viewport_size({'width': width, 'height': 1080})
                     expect(usage).to_be_visible()
-                    assert usage.locator('table tbody tr').count() == 6
+                    assert usage.locator('table tbody tr').count() == 7
                     assert frame.locator('html').evaluate('e => e.scrollWidth <= e.clientWidth + 1')
                     page.screenshot(path=str(out / f'{language}-{dark}-{width}.png'), full_page=True)
                 if dark:
                     page.get_by_role('button', name='Switch to light mode' if language == 'en' else '切换为浅色模式', exact=True).click()
         checks.append('English/Chinese, light/dark, 1440/390px and reduced motion without page overflow')
 
+        variant['watchdog_unavailable'] = True
+        page.wait_for_timeout(350)
+        frame.get_by_role('button', name='刷新看板').click()
+        expect(usage).to_contain_text('监督巡检用量暂不可读；当前合计可能不完整。')
+        variant.clear()
         variant['unknown'] = True
         page.wait_for_timeout(350)
         frame.get_by_role('button', name='刷新看板').click()

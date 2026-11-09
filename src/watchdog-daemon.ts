@@ -8,6 +8,8 @@ import {BackendRegistry} from './backends/registry.ts'
 import {WatchdogMonitor,StaleWatchdogDirective,watchdogInstructions,watchdogOutputSchema} from './watchdog-monitor.ts'
 import type {WatchdogSnapshot,WatchdogJudgment} from './watchdog-contract.ts'
 import type {Model} from './model.ts'
+import {randomUUID} from 'node:crypto'
+import {UsageLedger} from './usage-ledger.ts'
 export interface WatchdogDaemonOptions {signal?:AbortSignal;modelFactory?:(config:Config,store:Store)=>Model;health?:(value:unknown)=>void}
 
 export function watchdogEndpoint(raw:string){
@@ -29,7 +31,7 @@ export async function runWatchdog(configFile:string,once=false,options:WatchdogD
   catch(e:any){if(e.code!=='ESRCH')throw e}
   unlinkSync(lock);const fd=openSync(lock,'wx',0o600);try{writeFileSync(fd,String(process.pid))}finally{closeSync(fd)}
  }
- const store=new Store(join(directory,'state.sqlite')),monitor=new WatchdogMonitor(store),stop=new AbortController()
+ const store=new Store(join(directory,'state.sqlite')),monitor=new WatchdogMonitor(store),usage=new UsageLedger(store),stop=new AbortController()
  const shutdown=()=>stop.abort();process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown)
  options.signal?.addEventListener('abort',shutdown,{once:true});if(options.signal?.aborted)shutdown()
  const health=(value:unknown)=>{process.send?.(value as any);options.health?.(value)}
@@ -70,10 +72,14 @@ export async function runWatchdog(configFile:string,once=false,options:WatchdogD
      const input=JSON.stringify({kind:'watchdog_review',target:evidenceTarget,history})
      if(Buffer.byteLength(input)>current.contextBytes)throw Error('Watchdog evidence exceeds authorized context budget')
      const controller=new AbortController();judging.set(current.id,{fence:current.fence,controller})
+     const call='watchdog:'+randomUUID(),signal=AbortSignal.any([stop.signal,controller.signal,AbortSignal.timeout(fresh.config.modelTimeoutMs)])
+     // Numeric metadata only; do not persist the target, objective, evidence or judgment.
+     usage.begin(call,'subagent',{sourceId:current.principal.source},'watchdog')
      try{
-      const result=await model.run({role:'router',backendId:current.backendId,model:inference.model,principal:current.principal,cwd:directory,privateState:directory,managed:true,ephemeral:true,archiveOnComplete:true,sandbox:'read-only',tools:[],options:{...inference.options,tools:[],prompt:'',timeoutMs:fresh.config.modelTimeoutMs},signal:AbortSignal.any([stop.signal,controller.signal,AbortSignal.timeout(fresh.config.modelTimeoutMs)]),instructions:watchdogInstructions,input,schema:watchdogOutputSchema})
+      const result=await model.run({role:'router',backendId:current.backendId,model:inference.model,principal:current.principal,cwd:directory,privateState:directory,managed:true,ephemeral:true,archiveOnComplete:true,sandbox:'read-only',tools:[],options:{...inference.options,tools:[],prompt:'',timeoutMs:fresh.config.modelTimeoutMs},signal,onUsage:value=>usage.record(call,0,value),onBackend:backend=>usage.update(call,{backend}),onModel:model=>usage.update(call,{model}),instructions:watchdogInstructions,input,schema:watchdogOutputSchema})
+      usage.finish(call,'completed')
       return JSON.parse(result.text) as WatchdogJudgment
-     }finally{judging.delete(current.id)}
+     }catch(error){usage.finish(call,signal.aborted?'interrupted':'failed');throw error}finally{judging.delete(current.id)}
     },d=>request('/watchdog/recover',d)).catch(()=>{store.put('watchdog-health','review',{at:Date.now(),state:'review_unavailable'})}).finally(()=>{reviewTask=undefined})
     store.put('watchdog-health','daemon',{at:Date.now(),state:'healthy'})
     await request('/watchdog/heartbeat',{at:Date.now(),instanceId:snapshot.instanceId,observed:snapshot.targets.length,unavailable:snapshot.unavailable.length,reviews:store.list('watchdog-review').length,pending:store.list<{state:string}>('watchdog-directive').filter(d=>d.state==='pending').length})

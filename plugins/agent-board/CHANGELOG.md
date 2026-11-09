@@ -2,9 +2,9 @@
 
 ## 0.1.4 (unreleased)
 
-Add durable team token accounting by purpose, source-filtered totals, cache/reasoning subsets, and explicit missing/partial coverage. Requires a host with usage accounting; older hosts show an unavailable state. No account, prompt, tool arguments, or native history crosses the view bridge.
+Add durable team token accounting by purpose, source-filtered totals, cache/reasoning subsets, independent Watchdog usage, and explicit missing/partial coverage. History-cleaned detail remains unknown. Unreadable Watchdog accounting is marked incomplete. Requires a host with usage accounting; older hosts show an unavailable state. No account credentials, prompts, tool arguments, or native history cross the usage bridge.
 
-新增团队 token 用量、用途分组、来源筛选和缺报状态；缓存输入与推理输出分别计入输入与输出，不重复相加。旧宿主显示尚未提供统计。此版本尚未发布或安装到现有实例。
+新增团队 token 用量、用途分组、来源筛选、独立监督巡检和缺报状态；缓存输入与推理输出分别计入输入与输出，不重复相加。历史清理后的用量明细保持未知，监督用量不可读时显示不完整。旧宿主显示尚未提供统计。此版本尚未发布或安装到现有实例。
 
 ## 0.1.3
 

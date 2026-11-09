@@ -121,7 +121,7 @@ it('only accepts closed bridge commands and protects iframe bootstrap from marku
 it('exposes numeric team usage with source filtering and explicit unknown coverage',()=>{
  const h=fixture();seedBoard(h)
  const all=workspaceViewData(h,{}),selected=workspaceViewData(h,{source:'personal'})
- expect(all.usage).toMatchObject({calls:7,reportedCalls:6,unknownCalls:1,tokens:{inputTokens:75000,outputTokens:1200,totalTokens:76200,cachedInputTokens:48000}})
+ expect(all.usage).toMatchObject({calls:8,reportedCalls:7,unknownCalls:1,tokens:{inputTokens:75100,outputTokens:1220,totalTokens:76320,cachedInputTokens:48080}})
  expect(selected.usage).toMatchObject({calls:3,reportedCalls:3,unknownCalls:0,tokens:{inputTokens:39000}})
  const text=JSON.stringify(all.usage);expect(text).not.toContain('PRIVATE');expect(text).not.toContain('usage-fixture');expect(text).not.toContain('steps" : {')
 })

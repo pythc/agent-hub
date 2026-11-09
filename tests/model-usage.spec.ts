@@ -1,4 +1,4 @@
-import {mkdtempSync,rmSync} from 'node:fs'
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync,chmodSync,statSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach,expect,it} from 'vitest'
@@ -8,6 +8,7 @@ import {normalizeUsage,providerUsage} from '../src/model-usage.ts'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import {TransientModelError} from '../src/model.ts'
+import {HistoryCleanup} from '../src/history-cleanup.ts'
 const roots:string[]=[],stores:Store[]=[],hosts:Runtime[]=[]
 const root=()=>{const p=mkdtempSync(join(tmpdir(),'model-usage-'));roots.push(p);return p}
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const s of stores.splice(0))s.close();for(const p of roots.splice(0))rmSync(p,{recursive:true,force:true})})
@@ -56,6 +57,39 @@ it('keeps unknown and partial disjoint, including subset-only reported usage',()
  const {usage}=ledger();usage.begin('unknown','worker');usage.finish('unknown','failed')
  usage.begin('partial','worker');usage.record('partial',0,{id:'subset-only',cachedInputTokens:10});usage.finish('partial','completed')
  expect(usage.summary()).toMatchObject({calls:2,reportedCalls:1,unknownCalls:1,partialCalls:1,tokens:{inputTokens:null,cachedInputTokens:10,outputTokens:null,totalTokens:null}})
+})
+it('keeps deleted history unknown and does not resurrect its detail from late usage callbacks',()=>{
+ const {store,usage}=ledger();usage.begin('deleted','router',{triggerId:'forgotten',sourceId:'one'});usage.record('deleted',0,{id:'step',inputTokens:100,outputTokens:10});usage.finish('deleted','completed')
+ usage.begin('retained','worker',{sourceId:'two'});usage.record('retained',0,{id:'step',inputTokens:20,outputTokens:3});usage.finish('retained','completed')
+ const cleanup=new HistoryCleanup(store,root())
+ cleanup.apply({id:'delete',scopeId:'scope',at:Date.now(),roots:['forgotten'],records:[['model-usage','deleted']],tickets:[],triggers:[],sessions:[],files:[]})
+ expect(store.get<any>('model-usage','deleted').steps).toBeUndefined()
+ usage.record('deleted',0,{id:'late',inputTokens:999,outputTokens:999});usage.attempt('deleted',1,'completed');usage.finish('deleted','completed')
+ expect(store.get<any>('model-usage','deleted').steps).toBeUndefined()
+ expect(new UsageLedger(store).summary()).toMatchObject({calls:2,reportedCalls:1,unknownCalls:1,partialCalls:0,tokens:{totalTokens:23},groups:[{purpose:'router',unknownCalls:1},{purpose:'worker',reportedCalls:1}]})
+ expect(usage.summary('one').tokens.totalTokens).toBeNull()
+})
+it('includes source-filtered observer usage read-only without completing or duplicating its live calls',()=>{
+ const dir=root(),state=join(dir,'state'),path=join(state,'watchdog','state.sqlite');mkdirSync(join(state,'watchdog'),{recursive:true})
+ const observerStore=new Store(path);stores.push(observerStore);const observer=new UsageLedger(observerStore)
+ const host=new Runtime(configSchema.parse({stateDir:state,sources:[{id:'local',kind:'local',cwd:dir,allowedActors:['operator']}]}),{model:{async run(){throw Error('No inference in accounting test')}}});hosts.push(host)
+ host.usage.begin('same-id','router',{sourceId:'one'});host.usage.record('same-id',0,{id:'step',inputTokens:20,outputTokens:10});host.usage.finish('same-id','completed')
+ observer.begin('same-id','subagent',{sourceId:'two'},'watchdog');observer.record('same-id',0,{id:'step',inputTokens:60,cachedInputTokens:40,outputTokens:10})
+ for(let i=0;i<2;i++)expect(host.usage.summary()).toMatchObject({calls:2,reportedCalls:2,partialCalls:1,tokens:{totalTokens:100},groups:[{purpose:'router'},{purpose:'watchdog',tokens:{totalTokens:70}}]})
+ expect(host.usage.summary('two')).toMatchObject({calls:1,tokens:{totalTokens:70}})
+ expect(observerStore.get<any>('model-usage','same-id').state).toBe('running')
+ expect(host.store.list('model-usage')).toHaveLength(1)
+ expect(JSON.stringify(host.usage.summary())).not.toContain('same-id')
+})
+it('reports unreadable observer accounting without losing the available host counts',()=>{
+ const {store,usage}=ledger(),path=join(root(),'unreadable.sqlite');writeFileSync(path,'Not a SQLite database')
+ usage.begin('call','worker');usage.record('call',0,{id:'step',inputTokens:20,outputTokens:10});usage.finish('call','completed')
+ expect(new UsageLedger(store,path).summary()).toMatchObject({calls:1,tokens:{totalTokens:30},watchdogUnavailable:true})
+})
+it.skipIf(process.platform==='win32'||process.getuid?.()===0)('distinguishes observer path permission failure from a database that has not been created',()=>{
+ const {store}=ledger(),directory=join(root(),'observer');mkdirSync(directory);const path=join(directory,'state.sqlite');writeFileSync(path,'unreachable')
+ chmodSync(directory,0)
+ try{expect(()=>statSync(path)).toThrow(expect.objectContaining({code:'EACCES'}));expect(new UsageLedger(store,path).summary().watchdogUnavailable).toBe(true)}finally{chmodSync(directory,0o700)}
 })
 it('records every runtime retry and classifies verification without changing the model request',async()=>{
  const dir=root();let calls=0
