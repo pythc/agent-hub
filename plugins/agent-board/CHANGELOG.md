@@ -1,5 +1,11 @@
 # Agent board changes
 
+## 0.1.3
+
+Use plain-language labels throughout the board, including auxiliary model modes, usage reporting, judgment status, suggestions and task details. Keep unknown usage distinct from zero and reported-record counts distinct from token totals. Remove the usage footnote while retaining its scope in accessible hover descriptions. Suggestions remain suggestions; a read receipt remains a client acknowledgment, not proof that a person has read a reply.
+
+统一看板文案：仅记录、提供建议、用量记录数、判断状态、建议和任务详情均改用通俗表达。未知用量不显示为零，记录条数不混作 token 用量。移除用量区底部小字，统计范围保留在可访问的悬停说明中。模型建议不表示已执行，已读回执不表示用户本人已读。
+
 ## 0.1.2
 
 Simplify message-handling labels in English and Chinese. Remove the metric-card captions and explanatory footer; precise counting windows remain available on hover and to screen readers. Counts and routing behavior are unchanged.
