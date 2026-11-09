@@ -17,6 +17,7 @@ import {compose,composeCoordinator,promptStatus} from './prompts.ts'
 import {configurationSnapshot} from './configuration.ts'
 import {SettingsError,patchSchema} from './settings.ts'
 import {routerManagementPage} from './ui/router-management.ts'
+import {webhookWorkbenchPage} from './ui/webhook-workbench.ts'
 import {memoryWorkbenchPage} from './ui/memory-workbench.ts'
 import {routerProactivePage} from './ui/router-proactive.ts'
 import {configurationPage} from './ui/configuration.ts'
@@ -106,9 +107,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const page=account.authorized(req)?chatPage():accountPage
       res.end(req.method==='HEAD'?undefined:page);return
     }
-    if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/', '/auth', '/account', '/usage', '/router-management', '/memory-workbench', '/router-proactive'].includes(path)) {
+    if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/', '/auth', '/account', '/usage', '/router-management', '/memory-workbench', '/webhook-workbench', '/router-proactive'].includes(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
-      const page=path==='/usage'?configurationPage:path==='/auth'||path==='/account'||!account.authorized(req)?accountPage:path==='/memory-workbench'?memoryWorkbenchPage:path==='/router-management'?routerManagementPage:path==='/router-proactive'?routerProactivePage:chatPage()
+      const page=path==='/usage'?configurationPage:path==='/auth'||path==='/account'||!account.authorized(req)?accountPage:path==='/webhook-workbench'?webhookWorkbenchPage:path==='/memory-workbench'?memoryWorkbenchPage:path==='/router-management'?routerManagementPage:path==='/router-proactive'?routerProactivePage:chatPage()
       res.end(req.method==='HEAD'?undefined:page)
       return
     }
@@ -184,6 +185,12 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
     if(path==='/webhooks'&&req.method==='GET'){send(res,200,runtime.webhooks.snapshot());return}
+    if(path==='/webhooks/detail'&&req.method==='GET'){send(res,200,runtime.webhooks.detail(new URL(req.url??'/',requestOrigin).searchParams.get('id')??''));return}
+    if(path==='/webhooks/goal'&&req.method==='POST'){send(res,200,runtime.webhooks.goalControl(await body(req)));return}
+    if(path==='/webhooks/replay'&&req.method==='POST'){send(res,200,runtime.webhooks.replay(await body(req)));return}
+    if(path==='/webhooks/rotate'&&req.method==='POST'){send(res,200,runtime.webhooks.rotate(await body(req)));return}
+    if(path==='/webhooks/dry-run'&&req.method==='POST'){send(res,200,runtime.webhooks.dryRun(await body(req)));return}
+    if(path==='/webhooks/reconcile'&&req.method==='POST'){runtime.webhooks.reconcile(true);send(res,200,runtime.webhooks.snapshot().reconciliation);return}
     if(path==='/webhooks/grants'&&req.method==='POST'){send(res,201,runtime.webhooks.create(await body(req)));return}
     if(path==='/webhooks/control'&&req.method==='POST'){send(res,200,runtime.webhooks.control(await body(req)));return}
     if(path==='/api/plugin-market'&&req.method==='GET'){send(res,200,{...market.snapshot(),platform:process.platform,settingsRevision:runtime.settings.current().revision});return}

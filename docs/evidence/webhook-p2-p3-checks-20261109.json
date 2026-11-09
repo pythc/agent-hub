@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "base": "4e53674",
+  "branch": "codex/webhook-p2-p3-20261109",
+  "testFiles": 79,
+  "tests": 1172,
+  "newP2P3Tests": 26,
+  "commands": [
+    "npm run typecheck",
+    "npm test -- --maxWorkers=2 --testTimeout=15000 --hookTimeout=15000"
+  ],
+  "logs": {
+    "typecheck": {
+      "sha256": "2e678824bdc30aa0fe16d0a76fdba1e77b0fe3877bf7eee816d50ab29454ebe9",
+      "exitCode": 0
+    },
+    "vitest": {
+      "sha256": "f3677c736661dc64ba083a95fb46cf38efc757e78ea0eec4c592d01e213354a6",
+      "exitCode": 0
+    }
+  },
+  "nativeImplementationMatchesFinalFiles": true,
+  "productionDeployment": false
+}

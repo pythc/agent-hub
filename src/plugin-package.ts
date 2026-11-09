@@ -14,7 +14,7 @@ export const pluginManifestSchema=z.object({
   codeSha256:z.string().regex(/^[a-f0-9]{64}$/),
   configSchema:z.record(z.string(),z.unknown()),
   scopesPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),
-  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke'])),
+  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke','webhook'])),
   commandPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/).optional(),
   cursorEncoding:z.enum(['iso','unix-seconds']).default('iso'),
   cursorMode:z.enum(['scope','source','none']).default('none'),

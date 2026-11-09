@@ -24,6 +24,7 @@ export interface WatchdogTarget {
 export interface WatchdogSnapshot {
  instanceId:string;at:number;tickAt:number;paused:boolean;
  config:z.infer<typeof watchdogConfigSchema>;targets:WatchdogTarget[];
+ webhooks?:{waiting:number;overdue:number;heldReceipts:number;pendingDeliveries:number;lastReconciliation?:number};
  unavailable:{goalId:string;reason:string}[];
 }
 export const watchdogJudgmentSchema=z.object({

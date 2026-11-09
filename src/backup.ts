@@ -96,6 +96,7 @@ export async function restoreState(config:Config,directory:string){
    const live=new DatabaseSync(currentPath,{readOnly:true}),old=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
    try{
     const liveSchema=Number(live.prepare('PRAGMA user_version').get()!.user_version)
+    if(liveSchema>=9&&verified.schema<9)throw Error('Downgrade cannot preserve Webhook continuation and key protocols')
     if(liveSchema>=8&&verified.schema<8)throw Error('Downgrade cannot preserve Webhook authorization and delivery ledgers; reconcile before restore')
     if(liveSchema>=6&&verified.schema<6)throw Error('Online downgrade cannot represent Router scopes; use forward repair or a reviewed offline rollback')
     // Receipt ACKs, revocations, accepted results and callback attempts are

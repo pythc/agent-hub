@@ -12,14 +12,14 @@ export async function serveWebhooks(runtime:()=>Runtime,port:number,available:()
   if(!available()||runtime().shuttingDown||!runtime().config.webhooks)throw new WebhookError(503,'host_unavailable')
   if(!['application/json','application/cloudevents+json'].includes((req.headers['content-type']??'').split(';')[0]!.trim())||req.headers['content-encoding']&&req.headers['content-encoding']!=='identity')throw new WebhookError(415,'unsupported_encoding')
   const headers:Record<string,string|undefined>={}
-  for(const name of ['webhook-id','webhook-timestamp','webhook-signature']){
+  for(const name of runtime().webhooks.requiredHeaders(match[1]!)){
    if(req.rawHeaders.filter((h,i)=>i%2===0&&h.toLowerCase()===name).length!==1)throw new WebhookError(401,'invalid_signature_headers')
    const value=req.headers[name];if(typeof value!=='string')throw new WebhookError(401,'invalid_signature_headers');headers[name]=value
   }
   if(Number(req.headers['content-length']??0)>64000)throw new WebhookError(413,'event_too_large')
   const chunks:Buffer[]=[];let bytes=0
   for await(const chunk of req){bytes+=chunk.length;if(bytes>64000)throw new WebhookError(413,'event_too_large');chunks.push(Buffer.from(chunk))}
-  send(res,202,runtime().webhooks.receive(match[1]!,headers,Buffer.concat(chunks)))
+  send(res,202,await runtime().webhooks.ingest(match[1]!,headers,Buffer.concat(chunks)))
  }
  const server=createServer({requestTimeout:10000,headersTimeout:10000,maxHeaderSize:8192},(req,res)=>{void handle(req,res).catch(error=>{
   if(res.headersSent){res.end();return}

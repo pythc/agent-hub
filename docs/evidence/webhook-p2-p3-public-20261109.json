@@ -1,0 +1,67 @@
+{
+  "ok": true,
+  "checks": {
+    "realGitHubActions": true,
+    "publicHTTPSIngress": true,
+    "operatorAPIHidden": true,
+    "oneBusinessReceipt": true,
+    "providerRedeliveryDeduplicated": true,
+    "independentHostAcceptance": true,
+    "publicHTTPSCallback": true,
+    "callback503Then204": true,
+    "stableCallbackId": true,
+    "receiverEffectOnce": true
+  },
+  "workflowRunId": 42579091393,
+  "publicBoundaryRunId": 42579548433,
+  "providerRedelivery": {
+    "originalId": "3853034591107416064",
+    "redeliveryId": "3853034609824497664",
+    "status": 202,
+    "response": {
+      "receiptId": "evt_8907dcf7d99749b2b0a1730078c17f42",
+      "state": "dispatched",
+      "goalId": "goal-f165c16e3c3225488e79ade1a8edcc56affb4b86a45827d3085220fff233423d",
+      "duplicate": true
+    }
+  },
+  "callback": {
+    "attempts": 2,
+    "statuses": [
+      503,
+      204
+    ],
+    "distinctIds": 1,
+    "distinctBodies": 1,
+    "receiverEffects": 1
+  },
+  "operatorBoundary": {
+    "ok": true,
+    "runId": 42579548433,
+    "conclusion": "success",
+    "paths": [
+      "/settings",
+      "/webhooks",
+      "/watchdog/snapshot",
+      "/worker-mcp"
+    ],
+    "expectedHTTP": 404,
+    "expectedBody": {
+      "code": "not_found"
+    },
+    "probe": "Real GitHub-hosted Actions runner over public HTTPS",
+    "workflowCommit": "1ca3a8e9f96eb4015a02b58130e573ed91b35eae",
+    "repositoryArchived": true,
+    "tunnelStopped": true
+  },
+  "localOperatorProbe": "DNS unavailable; replaced by separately verified GitHub-hosted runner probe",
+  "model": "Deterministic fixture for public platform transport; native-model evidence is separate",
+  "privacy": "Only synthetic repository/workflow/result data. Cloudflare terminates TLS; tunnel is ephemeral and not a production relay.",
+  "cleanup": {
+    "webhookRemoved": true,
+    "tunnelsStopped": true,
+    "repositoryArchived": true,
+    "repository": "pythc/agenthub-webhook-acceptance-1794208262010",
+    "repositoryDeletion": "Not confirmed; archived instead"
+  }
+}

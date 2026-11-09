@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "oldCommit": "4e53674",
+  "oldStoreHash": "202f0201291569fc5824999965ba7cae1f8c4ff716b23fd679eb3606e9764d1c",
+  "newSchema": 9,
+  "rejected": true,
+  "message": "Error: Database is newer than this program. Use the matching version."
+}

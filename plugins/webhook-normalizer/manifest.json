@@ -1,0 +1,23 @@
+{
+  "id": "webhook-normalizer",
+  "kind": "webhook-normalizer",
+  "label": "Webhook batch projection",
+  "version": "1.0.0",
+  "stateVersion": 1,
+  "scopesPath": "/options/scopes",
+  "methods": ["webhook"],
+  "network": false,
+  "credentials": {},
+  "stateKinds": [],
+  "configSchema": {
+    "type": "object",
+    "required": ["options"],
+    "properties": {
+      "options": {
+        "type": "object",
+        "required": ["scopes"],
+        "properties": {"scopes": {"type": "array", "minItems": 1, "items": {"type": "string"}}}
+      }
+    }
+  }
+}

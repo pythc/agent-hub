@@ -43,13 +43,15 @@ export class HostWatchdog {
      const contractHash=stableDigest(g.contract),phase=run?.phase??'queued'
      const pendingApproval=this.host.store.list<any>('approval').some(p=>p.ticketId===t.id&&p.status==='pending')
      const unresolved=external.some(r=>r.state!=='complete')||['uncertain','interrupted','delivering','merging'].includes(phase)
-     const waiting=pendingApproval?'human_approval':unresolved?'uncertain_effects':active.length?'background_work':n.retryAt&&n.retryAt>this.now()?'retry_backoff':g.state==='waiting'&&g.nextAt&&g.nextAt>this.now()?'scheduled_wait':t.attention?.question?'human_input':undefined
-     const notBefore=waiting==='background_work'?Math.max(...active.map(w=>w.deadline??this.now()+this.host.config.watchdog.intervalMs)):waiting==='retry_backoff'?n.retryAt:waiting==='scheduled_wait'?g.nextAt:undefined
+     const eventWait=this.host.webhooks.continuations.pending(t.id,a.id)
+     const waiting=eventWait?'external_event':pendingApproval?'human_approval':unresolved?'uncertain_effects':active.length?'background_work':n.retryAt&&n.retryAt>this.now()?'retry_backoff':g.state==='waiting'&&g.nextAt&&g.nextAt>this.now()?'scheduled_wait':t.attention?.question?'human_input':undefined
+     const notBefore=waiting==='external_event'?eventWait!.deadline:waiting==='background_work'?Math.max(...active.map(w=>w.deadline??this.now()+this.host.config.watchdog.intervalMs)):waiting==='retry_backoff'?n.retryAt:waiting==='scheduled_wait'?g.nextAt:undefined
      const evidence=[
       {id:'artifacts',kind:'host_observation',value:observed},
       {id:'report',kind:'worker_assertion',value:a.report??null},
       {id:'calls',kind:'host_execution',value:calls.slice(-30).map(c=>({name:c.name,kind:c.kind,state:c.state,action:c.action,startedAt:c.startedAt,endedAt:c.endedAt}))},
       {id:'jobs',kind:'host_execution',value:jobs.slice(-20).map(w=>({id:w.id,kind:w.kind,state:w.state,deadline:w.deadline,exitCode:w.exitCode,command:w.command?.slice(0,2000)}))},
+      {id:'external-event',kind:'host_execution',value:eventWait?{id:eventWait.id,ruleId:eventWait.ruleId,state:eventWait.state,deadline:eventWait.deadline}:null},
       {id:'inputs',kind:'delivery',value:{pending:t.undelivered.length,assignmentId:a.id}},
      ]
      const basisHash=stableDigest({goal:g.id,revision:g.revision,contractHash,planRevision:g.planRevision,node:n,assignment:a.id,progressHash,inputs:t.undelivered,owner:this.host.scopes.ownership(t.id),report:a.report})
@@ -64,7 +66,7 @@ export class HostWatchdog {
     }
    }catch{unavailable.push({goalId:g.id,reason:'Current authority or bounded evidence is unavailable'})}
   }
-  return {instanceId:this.instanceId,at:this.now(),tickAt:this.host.store.get<{at:number}>('health','host')?.at??this.now(),paused:this.host.isPaused||this.host.shuttingDown,config:this.host.config.watchdog,targets,unavailable}
+  return {instanceId:this.instanceId,at:this.now(),tickAt:this.host.store.get<{at:number}>('health','host')?.at??this.now(),paused:this.host.isPaused||this.host.shuttingDown,config:this.host.config.watchdog,targets,unavailable,webhooks:{waiting:this.host.webhooks.continuations.list().filter(w=>w.state==='waiting').length,overdue:this.host.webhooks.continuations.list().filter(w=>w.state==='waiting'&&w.deadline<=this.now()).length,heldReceipts:Number(this.host.store.db.prepare("SELECT COUNT(*) n FROM webhook_inbox WHERE state='held'").get()!.n),pendingDeliveries:Number(this.host.store.db.prepare("SELECT COUNT(*) n FROM webhook_deliveries WHERE state IN ('pending','sending')").get()!.n),lastReconciliation:this.host.store.get<{at:number}>('webhook-reconciliation','latest')?.at}}
  }
  accept(value:unknown):WatchdogRecovery {
   const d=watchdogDirectiveSchema.parse(value),prior=this.host.store.get<WatchdogRecovery>('watchdog-recovery',d.id)

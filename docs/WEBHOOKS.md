@@ -1,4 +1,4 @@
-# Webhook P1：外部事件到独立验收结果
+# Webhook：外部事件、长期推进与独立验收结果
 
 P1 提供独立签名入口、持久收件、人工批准的自动化模板、现有 Router Goal 执行和独立验收、持久结果回调。普通 `/events/:sourceId` 与 `MessageSource.replyUrl` 保留原有协议；本功能不会改变它们对不确定外部副作用的处理。
 
@@ -161,3 +161,96 @@ WEBHOOK_ACCEPTANCE_DIR=/absolute/fresh/evidence-dir node --import tsx examples/w
 该脚本隔离 state/workspace，启动真实 Router、Worker 和独立 verifier，执行 30 行/18 唯一记录的三阶段任务；显式注入一次错误产物和假 ready 报告。四个宿主进程间进行三次真实 SIGKILL：收件落盘后、错误验收后、接收端已提交但尚未回应时。接收端下一次返回 503，随后 204。结果证据验证一次业务效果、同 ID 三次投递、原合同保持、原任务返工、回调不重跑任务，以及只有获准文件出现在结果中。失败注入是受控测试条件，不冒称自然发生的模型错误。
 
 实现参考 [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md)、[CloudEvents 1.0.2](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md)、[Node BlockList](https://nodejs.org/api/net.html#class-netblocklist) 和 IANA [IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry)/[IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry) 特殊地址注册表。没有复制其他 Agent 项目的任务引擎。
+
+## P2：事件续接与恢复
+
+新授权可设置 `protocolVersion:2` 和 `continuations`。每条规则固定节点、事件类型、关联参数、等待上限及早到事件保留时间：
+
+```json
+{
+  "protocolVersion": 2,
+  "continuations": [{
+    "id": "release",
+    "nodeId": "build",
+    "eventType": "ci.release",
+    "correlationParameter": "batch",
+    "timeoutSeconds": 1800,
+    "earlyEventSeconds": 86400
+  }]
+}
+```
+
+`correlationParameter` 必须引用已声明的字符串参数。启动类型和续接类型不能重叠，同一个规则在一个目标中只订阅一次。关联值在授权生命周期内不能被另一个启动事件复用，即使旧目标已经完成。续接事件使用同样的参数 schema；它没有权限提供 goalId、taskId、assignment 或扩大任务。
+
+Worker 使用：
+
+```json
+{"action":"wait","ruleId":"release","requestId":"release-wait"}
+```
+
+工具名为 `superagent_event`，仅向获准使用它的根 Worker 开放。调用立即返回持久等待；Worker 应报告 `waiting` 且不提出人工问题。`read`/重用同一 `wait` 请求读取原订阅，`cancel` 只取消自己的订阅。宿主把消费收件、写入任务输入、标记等待已交付放在同一事务内。目标原始 contract、节点方案、scope/owner epoch 和 assignment 都参与检查。订阅失效后不能自动转交新 assignment。
+
+早到事件先保存在 Inbox，不会抢占启动事件。事件在等待截止前已入库，即使重启恢复时已过截止，也仍可正常消费。没有匹配目标的事件按 `earlyEventSeconds` 过期。截止后才到的事件、已完成/取消目标的新事件和已消费事件的重复投递不会重新启动目标。暂停保留等待和已接收事件；只有有效的人为恢复才能继续。撤权会使等待失效。等待超时写入明确的缺失证据通知，不伪造输入；缺少固定事件证据的 `ready` 不能进入完成流程。
+
+已经消费的事件是保留证据。原任务的自动返工、经独立审查的重规划可更新数据版本和执行方案，继续使用这份证据；归属、授权、原始 contract 和 assignment 仍须有效。等待中的订阅检查完整数据版本及其自身节点方案，不因其他节点重规划的全局版本递增而失效。目标完成时逐项核对原授权的所有事件规则及相互关联的消费账本，不能通过改变计划遗漏外部前置条件。
+
+错误恢复区分以下情况：
+
+| 情况 | 恢复方式 |
+| --- | --- |
+| 回调 408/429/5xx/网络中断 | 原 ID、正文与目标自动退避重试；遵守预算和 Retry-After |
+| 回调 401/403/密钥不可用 | held，修复凭据后人工重试原回调 |
+| 其他不可重试 HTTP / SSRF / 重试耗尽 | dead，不重做业务任务 |
+| 目标创建事务失败 | 收件 held；`/webhooks/replay` 可在原授权仍有效时重试未派发的原事件 |
+| 撤权、关联冲突、归属变化 | held/stale，不通过重放恢复权限 |
+| 等待超时或无目标的早到事件过期 | expired；保留账本，需检查上游与授权，不补造事件 |
+
+`POST /webhooks/replay` 使用 `{receiptId,operationId}`，只允许尚未绑定目标/等待的 `dispatch_failed`。完成、取消、消费过的事件不能重开。`POST /webhooks/reconcile` 以及宿主定期对账只从已有领域事件恢复缺失投递，沿用事件 ID、正文、目标和尝试账本。不会根据 Worker 自称成功生成完成事件。已成功的尝试不会重发，已 held/dead 的尝试不会绕过分类。
+
+独立 Watchdog 的目标快照包含 `waiting:external_event`、截止时间和等待元数据；合法等待不作为停滞恢复。快照另提供收件 held、待投递、超时等待数量和最近对账时间。恢复和补偿的最终执行仍由宿主在当前授权下完成。
+
+## P3：工作台、平台与协议运维
+
+登录本机工作区后，导航中的“事件自动化”打开 `/webhook-workbench`。可创建授权、查看固定规则、预演规范化事件、筛选自动化、检查目标节点、暂停/恢复/取消目标、查看收件/回调历史、重试原事件或原回调、对账和轮换密钥。预演不写入收件、不创建目标、不发送 HTTP 回调。事件内容只在受现有 operator 账户权限保护的详情接口显示；公网独立端口没有任何管理 API。
+
+控制台新增接口均在现有 operator 认证及同源写入检查之后：
+
+- `GET /webhooks/detail?id=...`：有界事件详情及目标、领域事件。
+- `POST /webhooks/dry-run`：`{id,event}`，校验**规范化后的** CloudEvent 与规则。返回 `effects:none`；不模拟上游网络或签名。
+- `POST /webhooks/goal`：`{id,action:pause|resume|cancel,operationId,expectedRevision}`，复用原 Router Goal 权限与版本检查。
+- `POST /webhooks/rotate`：`{id,operationId,expectedRevision,inbound,outbound,overlapSeconds}`，仅接收环境变量名。
+- `POST /webhooks/replay`、`POST /webhooks/reconcile`：上述有界恢复操作。
+
+密钥轮换采用版本比较与持久命令去重；输入最多保留一把前任密钥，重叠最长 24 小时。重叠期间不能再次更换输入密钥而提前丢弃旧承诺。输入与输出密钥必须分离。接收方须先准备接受新输出密钥，已接受回调保留 ID、正文和目的地；轮换后的新尝试使用新输出密钥，正在发送的旧尝试不能撤回。尝试签名引用会记入宿主私有账本。不要在重叠期删除旧输入环境变量；不要把秘密值粘贴到工作台。
+
+### GitHub Actions 首个适配器
+
+设置 `transport:{kind:'github-workflow',repositoryId:123,repository:'owner/repo'}`，`eventSource` 必须是 `https://github.com/owner/repo`。仅支持 `workflow_run` 的 `requested`、`in_progress`、`completed`，例如固定启动类型 `github.workflow_run.completed.failure`。参数为 `repository`、`runId`、`attempt`、`sha`、`conclusion`、`status`，按模板声明类型/范围。
+
+GitHub 中的 Secret 填输入环境变量的**完整字符串值**，HMAC 使用其原样 UTF-8 字节；标准 Webhook 仍使用 `whsec_` 后 Base64 解码后的密钥。宿主校验原始 body 的 `X-Hub-Signature-256`，并固定仓库 ID、仓库名和授权时间下界。业务 ID 从已签名的仓库、run、attempt、action、status、conclusion 生成，未签名的 `X-GitHub-Delivery`/`X-GitHub-Event` 头不能改变业务身份。原始正文重序列化后签名不再有效。GitHub `ping` 不创建任务。
+
+签名与重投递语义依据 [GitHub 验证文档](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)、[重投递与去重建议](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)。GitHub 不保证自动补发失败投递，见 [官方重投递说明](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)。平台从未发送的事件仍需上游 cursor/API 对账；本实现不推断未收到事件已经发生。
+
+### 插件 Webhook capability
+
+Source Plugin API v2 manifest 可声明 `methods:['webhook']`（可额外声明 `close`），设置 `network:false`、空 `credentials`，并提供 `webhook({schemaVersion:1,event})` 返回规范化后的 `data` 对象。授权的 `normalizerSourceId` 固定选择该来源，来源必须在原 scope 中。执行使用现有独立 sandbox 进程；宿主不发送签名密钥、历史快照或跨来源权限。normalizer 不能读取宿主 records、写状态、注入 Trigger，也不能同时持有聊天/工具/网络能力。
+
+插件只能投影数据；CloudEvent 的 id/source/type 与授权规则由宿主保留并复核。原始规范化前事件参与冲突指纹，两个不同原文即使映射成相同参数也不会变成相同请求。插件包与配置变化使原授权的权限快照失效，需要重新批准。插件不能决定新目标、验收或回复地址。
+
+### 协议激活与回滚
+
+CloudEvents envelope 保持 1.0，回调 `data.schemaVersion` 保持 1；`protocolVersion:2` 指新增授权/等待/轮换语义，SQLite 屏障为 schema 9。全新无授权数据库可在首次创建 v2 授权的同一事务中启用。已有 P1 数据必须先停止宿主，再运行：
+
+```sh
+npm start -- webhooks upgrade /absolute/config.json /absolute/new-backup-directory
+```
+
+升级获取与宿主相同的独占锁，创建并验证完整备份，再事务激活 schema 9；备份失败不激活。活跃宿主或残留未核实锁会拒绝升级。旧 P1 二进制拒绝打开 schema 9；恢复旧备份不能抹掉等待、撤权、收件 ACK 或回调尝试。不要通过回滚旧二进制重放已有副作用；保留新协议并做向前修复。
+
+### 容量、网络和部署边界
+
+Inbox 全局最多保留 1000 条尚待处理事件，单次原始请求最多 64 KB，超额返回 429/413 且不 ACK。已接受事件、关联占位和死信不自动删除。工作台列表最多展示最近 1000 条，单入口详情最多 200 条；完整记录在私有 SQLite 中。历史归档、长期保留期和更大规模分区属于后续运维工作，不能直接删除去重占位。
+
+独立监听器只绑定 loopback。公网可在它前面使用受控 HTTPS 反向代理/隧道，管理端口保持私有。本次临时 Cloudflare 隧道用于合成数据实测，TLS 在 Cloudflare 终止，不是生产保密保证。当前没有离线云端存储中继：宿主离线时公网应返回失败，由上游重投；本机已 ACK 的 Inbox 则可重启恢复。不要把临时隧道当成生产 SLA 或无限离线容量。
+
+P2/P3 的本次实现、故障注入、真实模型与公网平台验证结果见 [验收与自查记录](WEBHOOK_P2_P3_REVIEW_2026-11-09.md)。

@@ -66,6 +66,7 @@ export function FeatureNavigation({
       },
     ],
     [
+      {href:"/webhook-workbench",label:L("Webhooks", "事件自动化"),Icon:Plug,current:false},
       {
         href: "/configure#execution/configuration",
         label: L("Agent team", "Agent 团队"),

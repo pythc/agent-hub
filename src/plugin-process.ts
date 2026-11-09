@@ -111,6 +111,7 @@ export class ProcessSource extends MessageSource {
   private apply(operations:unknown){
     if(!Array.isArray(operations)||operations.length>10000)throw Error('Invalid plugin state batch')
     if(!operations.length)return
+    if(this.pkg.manifest.methods.includes('webhook'))throw Error('Webhook normalizers cannot mutate host state')
     const c=this.active(),store=this.hostStore??this.sourceContext?.store
     if(!store)throw Error('Plugin state is unavailable')
     store.atomic(()=>{for(const op of operations){
@@ -172,7 +173,7 @@ export class ProcessSource extends MessageSource {
     if(this.child!==child)return
     try{
       const message=JSON.parse(line)
-      if(message.type==='records'){const result=this.records(message.kind,message.query);child.stdin.write(JSON.stringify({type:'records-result',id:message.id,result,stateAck:this.stateAck})+'\n');return}
+      if(message.type==='records'){const result=this.pkg.manifest.methods.includes('webhook')?(()=>{throw Error('Webhook normalizers cannot read host history')})():this.records(message.kind,message.query);child.stdin.write(JSON.stringify({type:'records-result',id:message.id,result,stateAck:this.stateAck})+'\n');return}
       if(message.type==='events'){this.apply(message.operations);this.stateAck=message.id;child.stdin.write(JSON.stringify({type:'ack',id:message.id})+'\n');return}
       if(message.type!=='result')throw Error('Invalid plugin response')
       const pending=this.pending.get(message.id);if(!pending)throw Error('Unknown plugin response')
@@ -216,13 +217,13 @@ export class ProcessSource extends MessageSource {
   invoke(method:string,...args:unknown[]){
     if(!this.pkg.manifest.methods.includes(method as any))return Promise.reject(Error('Plugin capability is unavailable'))
     const work=this.serial.then(async()=>{
-      this.guard(method,args);await this.launch();this.guard(method,args)
+      this.guard(method,args);if(method==='webhook'&&(this.pkg.manifest.network||Object.keys(this.pkg.manifest.credentials).length||this.pkg.manifest.methods.some(m=>m!=='webhook'&&m!=='close')))throw Error('Webhook normalizer must be isolated without network, credentials or other capabilities');await this.launch();this.guard(method,args)
       if(!['identity','probe','close'].includes(method)&&this.hostStore&&this.pkg.manifest.methods.includes('identity')){
         const identity=await this.request({type:'call',method:'identity',args:[],snapshot:this.snapshot(),stateAck:this.stateAck}),saved=this.hostStore.get<any>('source-identity',this.config.id)
         if(saved&&saved.principal!==identity?.id)throw Error('Plugin connection account changed')
         this.guard(method,args)
       }
-      const result=await this.request({type:'call',method,args,config:this.effectiveConfig(),snapshot:this.snapshot(),stateAck:this.stateAck})
+      const result=await this.request({type:'call',method,args,config:this.effectiveConfig(),snapshot:this.pkg.manifest.methods.includes('webhook')?[]:this.snapshot(),stateAck:this.stateAck})
       this.guard(method,args);return result
     })
     this.serial=work.catch(()=>{});return work
