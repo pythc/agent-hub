@@ -88,7 +88,7 @@ export class CodexModel implements Model {
   }
   async run(request: ModelRequest): Promise<ModelResult> {
     const transport=workerInputTransport(request)
-    if(transport.binding)request={...request,input:transport.input,instructions:transport.instructions}
+    if(transport.encoding)request={...request,input:transport.input,instructions:transport.instructions}
     let bridge:Awaited<ReturnType<typeof codexToolBridge>>|undefined
     let inferenceStarted=false
     const invoke=request.onTool?((name:string,args:unknown,id:string)=>{
