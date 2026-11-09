@@ -1133,7 +1133,8 @@ export class Runtime {
           this.store.put('router-inbox',message.id,message)
           const delegated=message.ticketId&&(this.store.get<any>('task-routing',message.ticketId)??this.store.get<any>('worker-assignment',message.ticketId))
           if(delegated?.mode==='host'&&delegated.parentTrigger&&!this.store.get('router-cancelled',delegated.parentTrigger)&&this.store.get<any>('router-report-read',delegated.discussion+':'+message.ticketId)?.at!==(ticket||undefined)?.assignments.at(-1)?.report?.at)this.store.enqueue('router:result:'+message.id,'router',{discussion:delegated.discussion,triggerId:delegated.parentTrigger,messageId:message.id})
-        }else await source.deliver(message); this.store.delivered(message.id);blocked.delete(channel) }
+        }else await source.deliver(message)
+        this.store.atomic(()=>{this.chat.deliveredClarification(message);this.store.delivered(message.id)});blocked.delete(channel) }
       catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
     }
   }

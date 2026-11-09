@@ -56,6 +56,28 @@ function fixture(custom?:(r:ModelRequest,input:any)=>Promise<any>){
 const batches=(h:Runtime)=>h.store.list<MessageBatch>('router-batch')
 const runs=(h:Runtime)=>h.store.list<ScheduledRun>('router-schedule-run')
 
+it('persists the next valid weekly occurrence and repairs legacy DST gaps without replay or resuming paused plans',async()=>{
+ const f=fixture();f.advance(Date.parse('2026-03-01T07:30:00Z')-f.now())
+ const anchor=f.receive('Authorize weekly check');await until(f.h,()=>f.calls.length===1)
+ const plan=f.plan(anchor.triggerId,{timing:{kind:'weekly',startAt:new Date(f.now()).toISOString(),timezone:'America/New_York',time:'02:30',weekdays:[0]}})
+ f.h.proactive.tick()
+ const key=stableDigest(['team','daily']),next=f.h.store.get<any>('router-schedule',key)
+ expect(new Date(next.nextAt).toISOString()).toBe('2026-03-15T06:30:00.000Z')
+ expect(runs(f.h)).toHaveLength(1)
+ // Reproduce the stored output of the old scheduler at the gap.
+ f.h.store.put('router-schedule',key,{...next,nextAt:undefined})
+ const paused={...plan,id:'paused',active:false,nextAt:undefined},expired={...plan,id:'expired',nextAt:undefined,timing:{...plan.timing,endAt:'2026-03-02T00:00:00Z'}}
+ f.h.store.put('router-schedule',stableDigest(['team','paused']),paused)
+ f.h.store.put('router-schedule',stableDigest(['team','expired']),expired)
+ f.advance(9*86400000)
+ hosts.splice(hosts.indexOf(f.h),1);await f.h.close()
+ const h=new Runtime(f.config,{model:f.model,clock:f.now});hosts.push(h)
+ expect(h.store.get<any>('router-schedule',key)).toMatchObject({...next,nextAt:Date.parse('2026-03-15T06:30:00Z')})
+ expect(h.store.get('router-schedule',stableDigest(['team','paused']))).toEqual(paused)
+ expect(h.store.get('router-schedule',stableDigest(['team','expired']))).toEqual(expired)
+ expect(runs(h)).toHaveLength(1);expect(f.calls).toHaveLength(1)
+})
+
 it('batches rapid messages once and only Router delivers Worker results',async()=>{
  const f=fixture();f.enable();f.receive('start calculate 1+1',{event:'one'});f.advance(50);f.receive('Also verify the arithmetic',{event:'two'});expect(batches(f.h)).toHaveLength(1)
  await f.h.tick();expect(f.calls).toHaveLength(0);f.advance(101)

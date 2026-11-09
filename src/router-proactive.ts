@@ -33,6 +33,13 @@ export class RouterProactive {
   host.routerIngress.ruleExecutionAllowed=ids=>ids.every(id=>host.config.rules.some(r=>r.id===id)||this.duties().some(d=>this.ruleId(d)===id&&d.mode==='auto'))
   host.routerIngress.defer=(a,t)=>this.collect(a,t)
   host.routerIngress.scheduledAuthority=id=>this.authority(id)
+  // Older versions exhausted their eight-day search at a weekly DST gap.
+  // Restore only the next future occurrence, never replay the missed week or
+  // resume a paused/expired plan. Normal launch-time authority checks still apply.
+  for(const p of host.store.list<Schedule>('router-schedule'))if(p.active&&p.timing.kind==='weekly'&&p.nextAt===undefined){
+   const nextAt=nextTime(p.timing,this.now())
+   if(nextAt!==undefined)host.store.put('router-schedule',stableDigest([p.scopeId,p.id]),{...p,nextAt})
+  }
  }
  private duties(){return this.host.store.list<Duty>('router-duty')}
  private ruleId(d:Duty){return 'duty:'+stableDigest([d.scopeId,d.id,d.revision,d.mode])}
@@ -156,7 +163,7 @@ export class RouterProactive {
   const c=this.host.scopes.context(t,a.discussion);if(!c)return false
   const settings=this.controls(c.route.scopeId);if(!settings.enabled)return false
   const now=this.now(),strength=a.mandate!.strength,key=stableDigest([c.route.scopeId,c.route.entryId,a.discussion,c.actor,strength,a.policyVersion,settings.revision])
-  const existing=this.host.store.list<MessageBatch>('router-batch').find(b=>b.state==='pending'&&b.id.startsWith(key+':')&&b.triggerIds.length<20&&now<b.firstAt+settings.maxWaitMs)
+  const existing=this.host.store.list<MessageBatch>('router-batch').find(b=>b.state==='pending'&&b.id.startsWith(key+':')&&b.triggerIds.length<20&&now<b.firstAt+settings.maxWaitMs&&b.triggerIds.every(id=>!this.host.store.get('router-cancelled',id)))
   if(existing){existing.triggerIds.push(t.id);existing.dueAt=Math.min(now+settings.debounceMs,existing.firstAt+settings.maxWaitMs);this.host.store.put('router-batch',existing.id,existing)}
   else{const id=key+':'+stableDigest(t.id);this.host.store.put('router-batch',id,{id,scopeId:c.route.scopeId,entryId:c.route.entryId,discussion:a.discussion,actor:c.actor,strength,policyVersion:a.policyVersion,settingsRevision:settings.revision,triggerIds:[t.id],firstAt:now,dueAt:now+settings.debounceMs,state:'pending'} satisfies MessageBatch)}
   return true

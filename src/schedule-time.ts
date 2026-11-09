@@ -24,7 +24,10 @@ function wall(year:number,month:number,day:number,hour:number,minute:number,zone
  for(const h of [-36,-12,0,12,36]){const at=nominal+h*3600000,p=parts(at,zone);offsets.add(Date.UTC(p.year!,p.month!-1,p.day!,p.hour!,p.minute!,p.second!)-at)}
  return [...offsets].map(o=>nominal-o).filter(at=>{const p=parts(at,zone);return p.year===year&&p.month===month&&p.day===day&&p.hour===hour&&p.minute===minute}).sort((a,b)=>a-b)[0]
 }
-/** Inclusive lower bound, first future occurrence; calendar horizon is at most a week. */
+// Two weekly cycles plus a day for timezone offset changes. A missing wall time
+// (or an entire skipped local date) must not exhaust a recurring schedule.
+const calendarHorizonDays=15
+/** Inclusive lower bound; gaps are skipped and folds execute only once. */
 export function nextTime(t:Timing,after:number):number|undefined{
  const start=Date.parse(t.startAt),from=Math.max(start,after),end=t.endAt?Date.parse(t.endAt):Infinity
  let found:number|undefined
@@ -32,7 +35,7 @@ export function nextTime(t:Timing,after:number):number|undefined{
  else if(t.kind==='interval')found=start+Math.max(0,Math.ceil((from-start)/(t.intervalSeconds!*1000)))*t.intervalSeconds!*1000
  else{
   const p=parts(from,t.timezone),[h,m]=t.time!.split(':').map(Number)
-  for(let n=0;n<=8;n++){
+  for(let n=0;n<=calendarHorizonDays;n++){
    const d=new Date(Date.UTC(p.year!,p.month!-1,p.day!+n))
    if(t.kind==='weekly'&&!t.weekdays!.includes(d.getUTCDay()))continue
    const at=wall(d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate(),h!,m!,t.timezone)
@@ -45,7 +48,7 @@ export function nextTime(t:Timing,after:number):number|undefined{
 export function latestDue(t:Timing,first:number,now:number):number{
  if(t.kind==='once')return first
  if(t.kind==='interval')return first+Math.floor((now-first)/(t.intervalSeconds!*1000))*t.intervalSeconds!*1000
- let candidate=nextTime(t,Math.max(first,now-9*86400000)),latest=first
+ let candidate=nextTime(t,Math.max(first,now-calendarHorizonDays*86400000)),latest=first
  while(candidate!==undefined&&candidate<=now){latest=candidate;candidate=nextTime(t,candidate+1)}
  return latest
 }

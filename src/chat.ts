@@ -9,6 +9,8 @@ import type {Run} from './store.ts'
 import type {ModelOutput} from './model.ts'
 import type {ExecutionCall} from './execution-activity.ts'
 import {partialReply} from './partial-reply.ts'
+import type {MessageBatch} from './router-proactive.ts'
+import type {ContextManifest} from './router-memory.ts'
 
 export class ChatError extends Error {
   constructor(readonly code:string, message:string, readonly status=409){super(message)}
@@ -44,6 +46,8 @@ export class ChatSessions {
     this.unsubscribe=host.activity.subscribe(call=>this.recordCall(call))
     // Older Router traces carry an exact chat trigger. Never infer old Worker lineage from a reassigned ticket.
     for(const call of host.activity.list())if(!host.store.get('chat-call',call.id)&&call.triggerId&&host.store.get('chat-run',call.triggerId))this.recordCall(call)
+    // Upgrade recovery: older hosts delivered batch questions without a chat row.
+    for(const message of host.store.deliveries())if(message.status==='sent')this.deliveredClarification(message)
   }
   subscribe(id:string,owner:string,listener:()=>void){this.get(id,owner);const set=this.listeners.get(id)??new Set();set.add(listener);this.listeners.set(id,set);return()=>{set.delete(listener);if(!set.size)this.listeners.delete(id)}}
   private changed(id:string){if(this.notifications.has(id))return;this.notifications.add(id);queueMicrotask(()=>{this.notifications.delete(id);for(const listener of this.listeners.get(id)??[])listener()})}
@@ -169,6 +173,15 @@ export class ChatSessions {
     this.message(c,{id:'reply:'+jobId,runId:run.id,role:'assistant',text,status:'complete'})
     this.changed(c.id)
   }
+  deliveredClarification(message:{id:string;text:string}){
+    if(!message.id.startsWith('router-clarify:')||this.host.store.get('chat-message','reply:'+message.id))return
+    const owner=this.host.store.get<{triggerId:string;inputs:string[];manifest?:ContextManifest}>('router-reply-owner',message.id)
+    if(!owner?.manifest||!this.host.store.get('chat-run',owner.triggerId))return
+    // Recheck after delivery, and on legacy recovery: cancellation or revoked
+    // evidence must not expose a late answer in a local conversation.
+    try{this.host.memory.validate(owner.manifest);for(const id of owner.inputs)this.host.routerIngress.authority(id)}catch{return}
+    this.host.store.atomic(()=>this.reply(message.id,owner.triggerId,message.text))
+  }
   send(id:string,owner:string,input:{clientMessageId:string;text:string}){
     return this.host.store.atomic(()=>{
       const c=this.get(id,owner),text=input.text.trim()
@@ -213,17 +226,20 @@ export class ChatSessions {
   view(id:string,owner:string,before?:number){
     const c=this.get(id,owner),runs=this.rows<ChatRun>('chat-run','conversationId',id),last=runs.at(-1)
     const tasks=this.tasks(c,last)
-    const jobs=last?this.host.store.db.prepare("SELECT state FROM jobs WHERE kind='router' AND json_extract(payload,'$.triggerId')=?").all(last.triggerId):[]
+    const batch=last?this.rows<MessageBatch>('router-batch','discussion',c.discussion).reverse().find(b=>b.triggerIds.includes(last.triggerId)):undefined
+    const jobs=last?this.host.store.db.prepare("SELECT state FROM jobs WHERE (kind='router' AND json_extract(payload,'$.triggerId')=?) OR (kind='router-batch' AND json_extract(payload,'$.batchId')=?)").all(last.triggerId,batch?.id??null):[]
+    const clarification=batch?.decision?.action==='clarify'?this.host.store.deliveries().find(d=>d.id==='router-clarify:'+batch.id):undefined
     const messages=this.host.store.db.prepare("SELECT body FROM records WHERE kind='chat-message' AND json_extract(body,'$.conversationId')=? AND json_extract(body,'$.sequence')<? ORDER BY json_extract(body,'$.sequence') DESC LIMIT 101").all(id,before??Number.MAX_SAFE_INTEGER).map(r=>JSON.parse(String(r.body)) as Message).reverse()
     let state:ChatRunState='queued'
     if(last){
       if(last.cancelled)state='cancelled'
       else if(last.cancelRequested)state='cancel_requested'
-      else if(jobs.some(j=>j.state==='running'))state='running'
-      else if(jobs.some(j=>j.state==='pending'))state='queued'
-      else if(jobs.some(j=>j.state==='failed'))state='failed'
+      else if(jobs.some(j=>j.state==='running')||batch?.state==='evaluating')state='running'
+      else if(jobs.some(j=>j.state==='pending')||batch?.state==='pending')state='queued'
+      else if(jobs.some(j=>j.state==='failed')||batch?.state==='failed')state='failed'
       else if(tasks.some(t=>t.state==='running'||t.state==='queued'))state='running'
       else if(tasks.some(t=>t.state==='waiting'))state='waiting'
+      else if(batch?.decision?.action==='clarify')state=clarification?.status==='sent'?'waiting':!clarification||['failed','uncertain','held','dropped'].includes(clarification.status)?'failed':'queued'
       else if(jobs.length&&jobs.every(j=>j.state==='done'))state='completed'
     }
     const workers=workerProfiles(this.host.config).map(w=>({id:w.id,label:w.label??w.id,model:w.model,state:w.state??'enabled',tasks:tasks.filter(t=>t.workerId===w.id)}))

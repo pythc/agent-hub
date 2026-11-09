@@ -11,6 +11,7 @@ import {Runtime} from '../src/runtime.ts'
 import {configSchema,type Config} from '../src/config.ts'
 import type {Model} from '../src/model.ts'
 import type {WorkOwner} from '../src/work.ts'
+import {backupState,restoreState} from '../src/backup.ts'
 
 const roots:string[]=[],hosts:Runtime[]=[],closers:(()=>Promise<void>)[]=[]
 afterEach(async()=>{for(const host of hosts.splice(0))await host.close();for(const close of closers.splice(0))await close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
@@ -27,6 +28,18 @@ async function fixture(override:Partial<Config>={}){
   return {host,root,config,owner,calls}
 }
 const input=(tool='echo',requestId=tool)=>({connection:'docs',tool,arguments:{text:'actual tool output'},requestId})
+
+it('rejects an older backup after an MCP write and retains deduplication after restart',async()=>{
+ const f=await fixture(),backup=join(f.root,'backup'),operation=input('write','stable-write')
+ await backupState(f.config,backup)
+ const result=await f.host.workerTools.call(f.owner,'superagent_tool',operation)
+ expect(result.success).toBe(true);expect(f.calls()).toHaveLength(1)
+ hosts.splice(hosts.indexOf(f.host),1);await f.host.close()
+ await expect(restoreState(f.config,backup)).rejects.toThrow('External tool or merge effects advanced')
+ const restored=new Runtime(f.config,{model:waiting});hosts.push(restored)
+ expect(await restored.workerTools.call(f.owner,'superagent_tool',operation)).toEqual(result)
+ expect(f.calls()).toHaveLength(1);expect(restored.toolConnections.receipts(f.owner.ticketId)).toHaveLength(1)
+})
 
 it('discovers real stdio tools, validates arguments, preserves structured/image/error results and fences grants',async()=>{
   const {host,owner,calls}=await fixture()
