@@ -113,7 +113,9 @@ export class WebhookContinuations {
     const correlation=this.key(g,r,rule),binding=this.host.store.get<{goalId:string}>('webhook-correlation',correlation),goal=binding?this.host.goals.get(binding.goalId):undefined
     const wait=this.list().find(w=>w.correlation===correlation)
     if(goal&&['completed','cancelled'].includes(goal.state)||wait&&wait.state!=='waiting'){r.state='ignored';r.error='continuation_closed';this.webhooks.saveReceipt(r);return}
-    if(!wait&&r.at+rule.earlyEventSeconds*1000<=this.now()){r.state='expired';r.error='unmatched_event_expired';this.webhooks.saveReceipt(r);return}
+    // A bound goal may spend longer than this TTL in earlier stages or a human pause.
+    // Only events with no goal binding are unmatched; subscription has its own deadline.
+    if(!binding&&!wait&&r.at+rule.earlyEventSeconds*1000<=this.now()){r.state='expired';r.error='unmatched_event_expired';this.webhooks.saveReceipt(r);return}
     if(!wait||!goal||!['active','waiting'].includes(goal.state))return
     if(r.at>wait.deadline){r.state='ignored';r.error='event_after_wait_deadline';this.webhooks.saveReceipt(r);return}
     try{this.valid(wait)}catch{return}

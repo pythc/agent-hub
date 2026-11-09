@@ -18,7 +18,7 @@ import {existsSync} from 'node:fs'
 const cleanups:(()=>Promise<void>)[]=[]
 afterEach(async()=>{for(const cleanup of cleanups.splice(0).reverse())await cleanup()})
 async function receiver(handler:(req:IncomingMessage,res:ServerResponse)=>void){const server=createServer(handler);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+(server.address() as any).port;cleanups.push(async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))});return url}
-function fixture(url='https://example.com/callback',wait=false,failFirst=false,replan=false){
+function fixture(url='https://example.com/callback',wait=false,failFirst=false,replan=false,limits:{maxConcurrent?:number}={}){
  const root=mkdtempSync(join(tmpdir(),'webhook-test-')),suffix=randomBytes(5).toString('hex'),inEnv='WH_IN_'+suffix,outEnv='WH_OUT_'+suffix
  process.env[inEnv]='whsec_'+randomBytes(32).toString('base64');process.env[outEnv]='whsec_'+randomBytes(32).toString('base64')
  let now=Date.now(),count=0,workerCalls=0,h:Runtime,closed=false
@@ -40,7 +40,7 @@ function fixture(url='https://example.com/callback',wait=false,failFirst=false,r
  h!.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'test',history:'group'})
  h!.receive('local','alice',{id:'approval',thread:'test',scope:'test',text:'Authorize this event automation to compute and verify the requested total. Never deploy.',addressed:true})
  const spec={protocolVersion:2,continuations:wait?[{id:'release',nodeId:'compute',eventType:'test.release',correlationParameter:'batch',timeoutSeconds:120,earlyEventSeconds:180}]:[],operationId:'approve',triggerId:'local:approval',authorizationQuote:'Authorize this event automation',namespace:'test-events',eventSource:'https://producer.example/events',eventTypes:['test.request'],secretEnvs:[inEnv],parameters:{batch:{type:'string',maxLength:50}},template:{title:'Compute',objective:'Write result.json whose total is 42. Never deploy.',criteria:[{id:'total',description:'Total is 42',check:{kind:'json_equals',path:'result.json',pointer:'/total',expected:42}}],nodes:[{id:'compute',title:'Compute',instruction:'Write result.json for the event batch',workerId:'one',criterionIds:['total']}],maxRepairs:replan?0:2,maxReplans:replan?1:0},expiresAt:now+3600000,maxEvents:100,callback:{url,secretEnv:outEnv,idempotent:true,events:['goal.completed'],maxAttempts:4}}
- const grant=h!.webhooks.create(spec)
+ const grant=h!.webhooks.create({...spec,...limits})
  const event=(id='event-1')=>({specversion:'1.0',id,source:spec.eventSource,type:'test.request',data:{batch:'batch-1'}})
  const signed=(value:any=event(),transportId='transport-1')=>{const body=Buffer.from(JSON.stringify(value)),timestamp=String(Math.floor(now/1000));return {body,headers:{'content-type':'application/cloudevents+json','webhook-id':transportId,'webhook-timestamp':timestamp,'webhook-signature':signWebhook(secretFromEnv(inEnv),transportId,timestamp,body)}}}
  const receive=(value:any=event())=>{const s=signed(value);return h.webhooks.receive(grant.id,s.headers,s.body)}
@@ -65,6 +65,33 @@ it('waits durably, resumes the same assignment exactly once after restart, and e
 it('accepts early events before the start and does not let them starve dispatch',async()=>{
  const f=fixture(undefined,true);f.receive(eventReceipt(f));f.receive();await f.restart();await until(f,()=>f.goal()?.state==='completed')
  expect(f.h.webhooks.receipts().filter(r=>r.state==='consumed')).toHaveLength(1);expect(f.h.store.list('router-goal')).toHaveLength(1)
+})
+it.each([false,true])('retains a bound early event beyond TTL before subscription, paused=%s, and consumes once after restart',async paused=>{
+ const f=fixture(undefined,true);const early=f.receive(eventReceipt(f));f.receive();f.h.webhooks.dispatch()
+ const goal=f.goal(),contract=JSON.stringify(goal.contract);expect(f.h.webhooks.continuations.list()).toHaveLength(0)
+ if(paused)f.h.webhooks.goalControl({id:goal.id,action:'pause',expectedRevision:goal.revision,operationId:'pause-before-subscribe'})
+ f.advance(181000);await f.restart();f.h.webhooks.reconcile(true)
+ expect(f.h.webhooks.receipt(early.receiptId)?.state).toBe('received');expect(f.receive(eventReceipt(f)).duplicate).toBe(true)
+ if(paused){expect(f.h.webhooks.continuations.list()).toHaveLength(0);expect(f.workerCalls).toBe(0);f.h.webhooks.goalControl({id:goal.id,action:'resume',expectedRevision:f.goal().revision,operationId:'resume-before-subscribe'})}
+ await until(f,()=>f.goal().state==='completed');expect(JSON.stringify(f.goal().contract)).toBe(contract)
+ const wait=f.h.webhooks.continuations.list()[0]!;expect(wait.state).toBe('delivered');expect(f.h.webhooks.receipt(early.receiptId)?.state).toBe('consumed')
+ expect(f.h.store.tickets.get(wait.ticketId)?.inputs.filter(i=>i.kind==='note'&&i.text?.includes('external_event'))).toHaveLength(1)
+})
+it('schedules distinct goals up to the limit after continuation consumption and restart through signed HTTP',async()=>{
+ const url=await receiver((_req,res)=>{res.writeHead(204);res.end()}),f=fixture(url,true,false,false,{maxConcurrent:2}),listener=await serveWebhooks(()=>f.h,0);cleanups.push(listener.close)
+ const send=async(id:string,batch:string,type='test.request')=>{const s=f.signed({...f.event(id),type,data:{batch}}),r=await fetch(listener.url+'/webhooks/'+f.grant.id,{method:'POST',headers:s.headers,body:s.body});expect(r.status).toBe(202);return r.json() as Promise<{receiptId:string;duplicate:boolean}>}
+ await send('start-1','one');await until(f,()=>!!f.h.webhooks.continuations.list().length&&f.h.store.get<any>('run',f.goal().taskIds[0]!)?.phase==='idle')
+ const first=f.goal();await send('release-1','one','test.release');f.h.webhooks.reconcile(true)
+ expect(f.h.webhooks.continuations.list()[0]?.state).toBe('delivered')
+ f.h.webhooks.goalControl({id:first.id,action:'pause',expectedRevision:f.goal().revision,operationId:'hold-first'})
+ await send('start-2','two');f.h.webhooks.dispatch();expect(f.h.store.list('router-goal')).toHaveLength(2)
+ const third=await send('start-3','three');f.h.webhooks.dispatch();expect(f.h.webhooks.receipt(third.receiptId)?.state).toBe('received')
+ await f.restart();f.h.webhooks.dispatch();expect(f.h.store.list('router-goal')).toHaveLength(2)
+ await send('release-2','two','test.release');await send('release-3','three','test.release')
+ f.h.webhooks.goalControl({id:first.id,action:'resume',expectedRevision:f.h.goals.get(first.id)!.revision,operationId:'resume-first'})
+ await until(f,()=>f.h.store.list<RouterGoal>('router-goal').length===3&&f.h.store.list<RouterGoal>('router-goal').every(g=>g.state==='completed'))
+ expect(f.h.webhooks.receipts().filter(r=>r.state==='consumed')).toHaveLength(3)
+ expect((await send('start-3','three')).duplicate).toBe(true);expect(f.h.store.list('router-goal')).toHaveLength(3)
 })
 it('retains a paused wait without waking it and rejects late events after cancellation',async()=>{
  const f=fixture(undefined,true);f.receive();await until(f,()=>!!f.h.webhooks.continuations.list().length&&f.h.store.get<any>('run',f.goal().taskIds[0]!)?.phase==='idle')
@@ -104,6 +131,24 @@ it('rotates keys with bounded overlap, revision fencing and restart persistence'
  const x={id:f.grant.id,operationId:'rotate',expectedRevision:0,inbound:'WH_ROTATE_IN',outbound:'WH_ROTATE_OUT',overlapSeconds:30};const result=f.h.webhooks.rotate(x);expect(f.h.webhooks.rotate(x)).toEqual(result);f.receive();await f.restart();expect(f.h.webhooks.snapshot().grants[0]?.keys).toEqual(result);f.advance(31000);expect(()=>f.receive(f.event('old-key'))).toThrow('invalid_signature')
  expect(()=>f.h.webhooks.rotate({...x,operationId:'stale'})).toThrow('key_revision_conflict')
  const raw=JSON.stringify(f.event('new-key')),timestamp=String(Math.floor((Date.now()+31000)/1000));expect(f.h.webhooks.receive(f.grant.id,{'webhook-id':'new','webhook-timestamp':timestamp,'webhook-signature':signWebhook(secretFromEnv('WH_ROTATE_IN'),'new',timestamp,raw)},Buffer.from(raw)).duplicate).toBe(false)
+})
+it.each([0,1])('imports both initial input keys on first rotation selecting key %s, without extending later overlap',async selected=>{
+ let nextOut='',callbackVerified=false
+ const url=await receiver((req,res)=>{void(async()=>{const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(chunk);verifyWebhook([secretFromEnv(nextOut)],req.headers as Record<string,string>,Buffer.concat(chunks));callbackVerified=true;res.writeHead(204);res.end()})().catch(()=>{res.writeHead(401);res.end()})})
+ const f=fixture(url),second=f.inEnv+'_SECOND',third=f.inEnv+'_THIRD';nextOut=f.outEnv+'_NEXT'
+ for(const name of [second,nextOut,third]){process.env[name]='whsec_'+randomBytes(32).toString('base64');cleanups.push(async()=>{delete process.env[name]})}
+ const keys=[f.inEnv,second],g=f.h.webhooks.create({...f.spec,operationId:'dual',namespace:'dual',secretEnvs:keys}),listener=await serveWebhooks(()=>f.h,0);cleanups.push(listener.close)
+ const send=async(name:string,id:string)=>{const s=f.signed(f.event(id));s.headers['webhook-signature']=signWebhook(secretFromEnv(name),s.headers['webhook-id'],s.headers['webhook-timestamp'],s.body);return fetch(listener.url+'/webhooks/'+g.id,{method:'POST',headers:s.headers,body:s.body})}
+ for(const name of keys)expect((await send(name,'before-'+name)).status).toBe(202)
+ const x={id:g.id,operationId:'rotate-dual',expectedRevision:0,inbound:keys[selected]!,outbound:nextOut,overlapSeconds:30}
+ expect(()=>f.h.webhooks.rotate({...x,inbound:third})).toThrow('key_rotation_overlap_active')
+ const rotated=f.h.webhooks.rotate(x);expect(rotated.previous).toBe(keys[1-selected]);expect(f.h.webhooks.rotate(x)).toEqual(rotated)
+ await f.restart();for(const name of keys)expect((await send(name,'after-'+name)).status).toBe(202)
+ f.advance(20000);expect(f.h.webhooks.rotate({...x,operationId:'output-again',expectedRevision:1,overlapSeconds:3600}).overlapUntil).toBe(rotated.overlapUntil)
+ expect(()=>f.h.webhooks.rotate({...x,operationId:'third-too-soon',expectedRevision:2,inbound:third})).toThrow('key_rotation_overlap_active')
+ f.advance(11000);await f.restart();expect((await send(keys[1-selected]!,'expired')).status).toBe(401);expect((await send(keys[selected]!,'current')).status).toBe(202)
+ expect(f.h.webhooks.rotate({...x,operationId:'third-now',expectedRevision:2,inbound:third}).previous).toBe(keys[selected])
+ await until(f,()=>f.h.webhooks.snapshot().deliveries.some(d=>d.state==='sent'));expect(callbackVerified).toBe(true)
 })
 it('retries only an undispatched transient failure with the same inbox identity',()=>{
  const f=fixture();f.receive();f.h.store.db.exec("CREATE TRIGGER fail_start BEFORE INSERT ON records WHEN NEW.kind='router-goal' BEGIN SELECT RAISE(ABORT,'disk failure'); END");f.h.webhooks.dispatch();const receipt=f.h.webhooks.receipts()[0]!;expect(receipt.error).toBe('dispatch_failed');f.h.store.db.exec('DROP TRIGGER fail_start');const x={receiptId:receipt.id,operationId:'retry'};f.h.webhooks.replay(x);f.h.webhooks.replay(x);f.h.webhooks.dispatch();expect(f.h.store.list('router-goal')).toHaveLength(1);expect(()=>f.h.webhooks.replay({...x,operationId:'retry-again'})).toThrow('not_replayable')

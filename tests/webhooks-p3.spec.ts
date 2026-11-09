@@ -18,6 +18,7 @@ import {callbackURL,publicAddress,secretFromEnv,signWebhook,verifyWebhook} from 
 import {backupState,verifyBackup,restoreState} from '../src/backup.ts'
 import {prepareManagedFiles,recoverManagedFiles,managedFiles} from '../src/managed-config.ts'
 import {existsSync} from 'node:fs'
+import {stableDigest} from '../src/sources.ts'
 
 const cleanups:(()=>Promise<void>)[]=[]
 afterEach(async()=>{for(const cleanup of cleanups.splice(0).reverse())await cleanup()})
@@ -59,6 +60,37 @@ it('requires an offline verified backup before protocol 2 activation and rejects
 })
 it('preserves consumed waits and rotated keys against stale backup restore',async()=>{
  const f=fixture();await backupState(f.config,join(f.root,'backup'));f.receive();await f.offline(async()=>{await expect(restoreState(f.config,join(f.root,'backup'))).rejects.toThrow('Webhook')})
+})
+it.each([false,true])('restores unchanged protected state after telemetry-only reconciliation, prior stats=%s',async priorStats=>{
+ const f=fixture(),backup=join(f.root,'idle-backup')
+ if(priorStats)f.h.webhooks.reconcile(true)
+ await backupState(f.config,backup);f.advance(1000);f.h.webhooks.reconcile(true);f.advance(1000);f.h.webhooks.reconcile(true)
+ expect(f.h.webhooks.receipts()).toHaveLength(0);expect(f.h.webhooks.snapshot().deliveries).toHaveLength(0)
+ await f.offline(()=>restoreState(f.config,backup));expect(f.h.webhooks.grant(f.grant.id)).toEqual(f.grant)
+ f.receive();f.h.webhooks.dispatch();expect(f.h.store.list('router-goal')).toHaveLength(1)
+})
+it.each(['revoke','keys','wait','callback'])('still rejects stale restore after protected %s state changes',async kind=>{
+ const url=await receiver((_req,res)=>{res.writeHead(204);res.end()}),f=fixture(url,kind==='wait'),backup=join(f.root,'protected-backup')
+ if(kind==='wait')f.receive()
+ await backupState(f.config,backup)
+ if(kind==='revoke')f.h.webhooks.control({id:f.grant.id,action:'revoke',operationId:'revoke-after-backup'})
+ if(kind==='keys')f.h.webhooks.rotate({id:f.grant.id,operationId:'rotate-after-backup',expectedRevision:0,inbound:f.inEnv,outbound:f.outEnv,overlapSeconds:0})
+ if(kind==='wait')await until(f,()=>!!f.h.webhooks.continuations.list().length&&f.h.store.get<any>('run',f.goal().taskIds[0]!)?.phase==='idle')
+ if(kind==='callback'){f.receive();await until(f,()=>f.h.webhooks.snapshot().deliveries.some(d=>d.state==='sent'))}
+ f.h.webhooks.reconcile(true);await f.offline(async()=>{await expect(restoreState(f.config,backup)).rejects.toThrow('Webhook')})
+})
+it('replays a frozen actual P1 command fingerprint without writes and rejects changed meaning',async()=>{
+ const f=fixture(undefined,false,1),frozen=JSON.parse(readFileSync(new URL('./fixtures/webhook-p1-command.json',import.meta.url),'utf8'))
+ // Exported with the actual 4e53674 parser and digest, not the current schema.
+ const old:any={...f.grant,...frozen.command};for(const key of ['protocolVersion','continuations','transport','normalizerSourceId'])delete old[key]
+ f.h.store.put('webhook-grant',old.id,old);f.h.store.put('webhook-command','grant_'+stableDigest(frozen.command.operationId),{fingerprint:frozen.fingerprint,grantId:old.id})
+ await f.restart();const before=f.h.store.db.prepare('SELECT kind,id,body FROM records ORDER BY kind,id').all()
+ expect(f.h.webhooks.create(frozen.command)).toEqual(old)
+ expect(f.h.webhooks.create({...frozen.command,protocolVersion:1,transport:{kind:'standard'},continuations:[]})).toEqual(old)
+ const changes=[{template:{...frozen.command.template,objective:'Different objective'}},{template:{...frozen.command.template,criteria:[{...frozen.command.template.criteria[0],description:'Changed acceptance'}]}},{callback:{...frozen.command.callback,url:'https://other.example/callback'}},{secretEnvs:['OTHER_IN']},{protocolVersion:2},{normalizerSourceId:'normalizer'},{transport:{kind:'github-workflow',repositoryId:1,repository:'test/project'}},{continuations:[{id:'release',nodeId:'compute',eventType:'test.release',correlationParameter:'batch',timeoutSeconds:30}]}]
+ for(const change of changes)expect(()=>f.h.webhooks.create({...frozen.command,...change})).toThrow('operation_id_conflict')
+ expect(f.h.store.db.prepare('SELECT kind,id,body FROM records ORDER BY kind,id').all()).toEqual(before)
+ f.h.store.put('webhook-grant',old.id,{...old,protocolVersion:1});expect(()=>f.h.webhooks.create(frozen.command)).toThrow('operation_id_conflict')
 })
 it('accepts real GitHub HMAC over raw bytes, fences repository/time and deduplicates altered unsigned delivery headers',async()=>{
  const f=fixture(),repository='test/project',g=f.h.webhooks.create({...f.spec,operationId:'github',namespace:'github-ci',transport:{kind:'github-workflow',repositoryId:123,repository},eventSource:'https://github.com/'+repository,eventTypes:['github.workflow_run.completed.failure'],parameters:{repository:{type:'string'},runId:{type:'string'},attempt:{type:'number',min:1,max:1000},sha:{type:'string'},conclusion:{type:'string'},status:{type:'string'}}})

@@ -102,7 +102,9 @@ export async function restoreState(config:Config,directory:string){
     // Receipt ACKs, revocations, accepted results and callback attempts are
     // durable external history even before a Worker ticket exists. Restoring an
     // older ledger could lose an ACK or revive a grant/side effect.
-    const webhookRecords=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'webhook-*' ORDER BY kind,id").all()
+    // Reconciliation statistics are reconstructable telemetry, not authorization
+    // or acknowledged external history. All other Webhook records stay protected.
+    const webhookRecords=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'webhook-*' AND kind!='webhook-reconciliation' ORDER BY kind,id").all()
     const currentWebhookRecords=webhookRecords(live)
     if(currentWebhookRecords.length&&JSON.stringify(currentWebhookRecords)!==JSON.stringify(webhookRecords(old)))throw Error('Webhook authorization advanced after backup; reconcile before restore')
     for(const table of ['webhook_inbox','webhook_events','webhook_deliveries','webhook_attempts']){

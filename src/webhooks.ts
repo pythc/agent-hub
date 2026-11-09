@@ -80,7 +80,16 @@ export class Webhooks {
  create(value:unknown){
   if(!this.host.config.webhooks)throw new WebhookError(409,'webhook_listener_not_configured')
   const x=webhookGrantSchema.parse(value),key='grant_'+stableDigest(x.operationId),prior=this.host.store.get<{fingerprint:string;grantId:string}>('webhook-command',key)
-  if(prior){if(prior.fingerprint!==stableDigest(x))throw new WebhookError(409,'operation_id_conflict');return this.grant(prior.grantId)}
+  if(prior){
+   const g=this.grant(prior.grantId)
+   if(prior.fingerprint!==stableDigest(x)){
+    // P1 hashed the parsed command before these fields existed. Only an actual
+    // legacy grant and an equivalent P1 command may use that fingerprint.
+    const {transport,normalizerSourceId,protocolVersion,continuations,...legacy}=x
+    if(g.transport!==undefined||g.normalizerSourceId!==undefined||g.protocolVersion!==undefined||g.continuations!==undefined||transport.kind!=='standard'||normalizerSourceId!==undefined||protocolVersion!==1||continuations.length||prior.fingerprint!==stableDigest(legacy))throw new WebhookError(409,'operation_id_conflict')
+   }
+   return g
+  }
   const t=this.host.store.triggers.get(x.triggerId)
   if(!t?.human||!t.text.includes(x.authorizationQuote))throw new WebhookError(403,'real_human_authorization_required')
   const mandate=this.host.routerIngress.authority(t.id),c=this.host.scopes.context(t,t.source+':'+t.threads[0]!.id)
@@ -228,7 +237,7 @@ export class Webhooks {
     const g=this.grant(r.grantId),approval=this.approved(g)
     if(g.continuations?.some(rule=>rule.eventType===r.event.type))return
     this.continuations.checkCorrelation(g,r)
-    const active=this.host.store.db.prepare("SELECT COUNT(*) n FROM webhook_inbox i JOIN records g ON g.kind='router-goal' AND g.id=json_extract(i.body,'$.goalId') WHERE i.grant_id=? AND json_extract(g.body,'$.state') NOT IN ('completed','cancelled')").get(g.id)!
+    const active=this.host.store.db.prepare("SELECT COUNT(DISTINCT g.id) n FROM webhook_inbox i JOIN records g ON g.kind='router-goal' AND g.id=json_extract(i.body,'$.goalId') WHERE i.grant_id=? AND json_extract(g.body,'$.state') NOT IN ('completed','cancelled')").get(g.id)!
     if(Number(active.n)>=g.maxConcurrent)return
     const triggerId='automation:'+r.id,actor='automation:'+g.id,discussion=approval.trigger.source+':'+r.id
     // The event is data, never interpolated into objective, authority or criteria.
@@ -373,10 +382,15 @@ export class Webhooks {
    const g=this.grant(x.id);this.approved(g)
    const previous=this.host.store.get<any>('webhook-keys',g.id),revision=previous?.revision??0
    if(x.expectedRevision!==revision)throw new WebhookError(409,'key_revision_conflict')
-   const inbound=secretFromEnv(x.inbound),outbound=secretFromEnv(x.outbound),current=this.inboundKeys(g)[0]!
-   if(inbound.equals(outbound)||this.inboundKeys(g).some(name=>secretFromEnv(name).equals(outbound))||inbound.equals(secretFromEnv(this.outboundKey(g))))throw new WebhookError(400,'separate_direction_credentials_required')
+   const inbound=secretFromEnv(x.inbound),outbound=secretFromEnv(x.outbound),accepted=this.inboundKeys(g),current=accepted[0]!
+   if(inbound.equals(outbound)||accepted.some(name=>secretFromEnv(name).equals(outbound))||inbound.equals(secretFromEnv(this.outboundKey(g))))throw new WebhookError(400,'separate_direction_credentials_required')
    if(previous?.previous&&previous.overlapUntil>this.now()&&x.inbound!==current)throw new WebhookError(409,'key_rotation_overlap_active')
-   const result={revision:revision+1,inbound:x.inbound,outbound:x.outbound,previous:x.inbound===current?previous?.previous:current,overlapUntil:x.inbound===current?previous?.overlapUntil??0:this.now()+x.overlapSeconds*1000}
+   // Import both initially accepted keys into the first bounded overlap. A third
+   // input key would silently discard one, so first select either existing key.
+   if(!previous&&accepted.length>1&&!accepted.includes(x.inbound))throw new WebhookError(409,'key_rotation_overlap_active')
+   const retained=x.inbound===current?previous?.previous??accepted.find(name=>name!==x.inbound):current
+   const overlapUntil=previous&&x.inbound===current?previous.overlapUntil??0:retained?this.now()+x.overlapSeconds*1000:0
+   const result={revision:revision+1,inbound:x.inbound,outbound:x.outbound,previous:retained,overlapUntil}
    this.host.store.put('webhook-keys',g.id,result)
    // Already accepted bodies/targets/IDs are immutable; only retry signing changes.
    this.host.store.db.prepare("UPDATE webhook_deliveries SET secret_env=? WHERE grant_id=? AND state IN ('pending','held','dead')").run(x.outbound,g.id)
