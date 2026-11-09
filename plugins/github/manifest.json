@@ -1,0 +1,247 @@
+{
+  "id": "agenthub-github",
+  "kind": "github",
+  "label": "GitHub",
+  "version": "1.0.0",
+  "stateVersion": 1,
+  "scopesPath": "/options/repositories",
+  "threadSeparator": "#",
+  "observedPath": "/github/receiveAll",
+  "commandPath": "/github/command",
+  "cursorMode": "source",
+  "cursorEncoding": "iso",
+  "methods": [
+    "poll",
+    "identity",
+    "members",
+    "read",
+    "context",
+    "deliver",
+    "probe",
+    "close",
+    "repositoryPull",
+    "mergeSnapshot",
+    "reviewGraph",
+    "resolveReview",
+    "draft",
+    "mergeIdentity",
+    "merge"
+  ],
+  "stateKinds": [
+    "source-cursor",
+    "thread-cursor",
+    "thread-health",
+    "plugin-state"
+  ],
+  "credentials": {
+    "TOKEN": "/github/tokenEnv",
+    "MERGE_TOKEN": "/options/mergeTokenEnv"
+  },
+  "network": true,
+  "repository": {
+    "idPath": "/repository",
+    "remoteTemplates": [
+      "https://github.com/{repository}.git",
+      "https://github.com/{repository}",
+      "git@github.com:{repository}.git"
+    ],
+    "pushCredentialPath": "/github/tokenEnv",
+    "pushUsername": "x-access-token"
+  },
+  "tools": [
+    {
+      "name": "message_read",
+      "resource": "message",
+      "description": "Read the exact admitted GitHub message; edited anchors fail.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "thread_read",
+      "resource": "thread",
+      "description": "Read comments on the reached GitHub Issue or PR.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "issue_read",
+      "resource": "issue",
+      "description": "Read the reached Issue or PR metadata.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pull_read",
+      "resource": "pull",
+      "description": "Read the reached pull request and current head.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "checks_read",
+      "resource": "checks",
+      "description": "Read Check Runs and Commit Statuses on the reached PR current head.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "files_read",
+      "resource": "files",
+      "description": "Read the first bounded page of changed PR files; truncated is explicit.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "triggerId"
+        ],
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "repository",
+      "github",
+      "options"
+    ],
+    "properties": {
+      "repository": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+      },
+      "github": {
+        "type": "object",
+        "required": [
+          "tokenEnv",
+          "command",
+          "receiveAll",
+          "transport"
+        ],
+        "properties": {
+          "tokenEnv": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "transport": {
+            "const": "http"
+          },
+          "receiveAll": {
+            "type": "boolean"
+          },
+          "gh": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "options": {
+        "type": "object",
+        "required": [
+          "repositories"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+            }
+          },
+          "mergeTokenEnv": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "apiBase": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "setup": {
+    "description": "One explicit repository per connection. Use a token with repository read and Issue/PR comment access; grant code write only for draft publication. Optional separate merge identity remains subject to host exact-head approval, human review, CI and task ownership gates. Host controls authorization, goals, acceptance, and task state. receiveAll enables observation; auto mode and explicit rules independently control proactive execution. Polling starts at a saved cursor (or the last ten seconds on a fresh connection).",
+    "fields": [
+      {
+        "name": "repository",
+        "label": "owner/repository",
+        "required": true
+      },
+      {
+        "name": "token-env",
+        "label": "GitHub token environment variable",
+        "required": true,
+        "secret": false
+      },
+      {
+        "name": "merge-token-env",
+        "label": "Optional separate merge identity environment variable",
+        "required": false,
+        "secret": false
+      }
+    ]
+  }
+}

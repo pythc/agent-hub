@@ -23,11 +23,7 @@ export const agentOptionsSchema=z.object({
 }).strict()
 export type AgentOptions=z.infer<typeof agentOptionsSchema>
 const parameters=parametersSchema.prefault({})
-export const backendDefinition=z.discriminatedUnion('kind',[
- z.object({kind:z.literal('codex'),label:z.string().trim().min(1).max(100).optional(),command:z.string().min(1).optional(),
-  args:z.array(z.string()).optional(),env:z.record(envName,envName).optional(),model:z.string().min(1).optional(),defaults:agentOptionsSchema.optional(),
- }).strict(),
- z.object({
+export const apiBackendDefinition=z.object({
   kind:z.enum(['openai-responses','openai-chat','anthropic']),label:z.string().trim().min(1).max(100).optional(),baseUrl:apiBase,model:z.string().min(1),apiKeyEnv:envName.optional(),
   images:z.boolean().default(false),maxSteps:z.number().int().min(1).max(256).default(64),
   maxToolCalls:z.number().int().min(1).max(10000).default(256),
@@ -39,10 +35,16 @@ export const backendDefinition=z.discriminatedUnion('kind',[
   headerEnv:z.record(z.string().regex(/^[A-Za-z0-9-]+$/),envName).optional(),defaults:agentOptionsSchema.optional(),
   subscription:z.object({provider:z.literal('chatgpt'),account:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),owner:z.object({source:z.string().min(1),actor:z.string().min(1)}).strict(),backgroundAuthorized:z.boolean()}).strict().optional(),
   chatTokenField:z.enum(['max_completion_tokens','max_tokens']).default('max_completion_tokens'),
+ }).strict()
+export const backendDefinition=z.discriminatedUnion('kind',[
+ z.object({kind:z.literal('plugin'),plugin:name,label:z.string().trim().min(1).max(100).optional(),model:z.string().min(1).optional(),config:z.record(z.string(),z.unknown()).prefault({}),env:z.record(envName,envName).prefault({}),readPaths:z.array(z.string().min(1)).default([]),writePaths:z.array(z.string().min(1)).default([]),defaults:agentOptionsSchema.optional()}).strict(),
+ z.object({kind:z.literal('codex'),label:z.string().trim().min(1).max(100).optional(),command:z.string().min(1).optional(),
+  args:z.array(z.string()).optional(),env:z.record(envName,envName).optional(),model:z.string().min(1).optional(),defaults:agentOptionsSchema.optional(),
  }).strict(),
+ apiBackendDefinition,
 ])
 export type BackendDefinition=z.infer<typeof backendDefinition>
-export type ApiDefinition=Exclude<BackendDefinition,{kind:'codex'}>
+export type ApiDefinition=Exclude<BackendDefinition,{kind:'codex'|'plugin'}>
 export const backendsSchema=z.record(name,backendDefinition).prefault({})
 export const workerProfileSchema=agentOptionsSchema.extend({id:name,label:z.string().trim().min(1).max(100).optional(),backend:name,model:z.string().trim().min(1).max(300).optional(),state:z.enum(['enabled','paused','retiring']).optional()}).strict()
 export type WorkerProfile=z.infer<typeof workerProfileSchema>
@@ -52,11 +54,14 @@ export const executionSchema=z.object({backend:name.default('codex'),roles:z.obj
  workers:z.array(workerProfileSchema).min(1).max(10).optional()}).strict().prefault({})
 export function validateBackendSelection(c:{execution:z.infer<typeof executionSchema>;backends:Record<string,BackendDefinition>;toolConnections?:Record<string,unknown>;decision?:DecisionConfig}){
  const provider=c.decision?.provider
- if(provider?.kind==='backend'){const d=c.backends[provider.id];if(!d||d.kind==='codex'||d.subscription)throw Error('Decision provider must reference an API backend without an agent subscription')}
+ if(provider?.kind==='backend'){const d=c.backends[provider.id];if(!d||!isApiBackend(d)||d.subscription)throw Error('Decision provider must reference an API backend without an agent subscription')}
  if(c.backends.codex&&c.backends.codex.kind!=='codex')throw Error('The backend ID codex is reserved for native Codex conversations')
  for(const id of [c.execution.backend,c.execution.router?.backend,...Object.values(c.execution.roles),...(c.execution.workers??[]).map(w=>w.backend),...(c.execution.management?.backends??[])])if(id&&id!=='codex'&&!c.backends[id])throw Error('Unknown execution backend: '+id)
- for(const d of Object.values(c.backends))if(d.kind!=='codex'&&d.subscription&&(d.kind!=='openai-responses'||d.baseUrl.replace(/\/+$/,'')!=='https://api.openai.com/v1'||d.apiKeyEnv))throw Error('ChatGPT subscription requires the public Responses API and its own OAuth account')
+ for(const d of Object.values(c.backends))if(d.kind!=='codex'&&d.kind!=='plugin'&&d.subscription&&(d.kind!=='openai-responses'||d.baseUrl.replace(/\/+$/,'')!=='https://api.openai.com/v1'||d.apiKeyEnv))throw Error('ChatGPT subscription requires the public Responses API and its own OAuth account')
  if(c.execution.workers&&new Set(c.execution.workers.map(w=>w.id)).size!==c.execution.workers.length)throw Error('Duplicate worker id')
  if(c.execution.router?.toolConnections?.length)throw Error('MCP tools are executed by Workers; configure their toolConnections instead of the Router')
  for(const options of [c.execution.router,...(c.execution.workers??[]),...Object.values(c.backends).map(b=>b.defaults)])for(const id of options?.toolConnections??[])if(!c.toolConnections?.[id])throw Error('Unknown tool connection: '+id)
 }
+
+export type PluginBackendDefinition=Extract<BackendDefinition,{kind:'plugin'}>
+export function isApiBackend(d:BackendDefinition):d is ApiDefinition{return d.kind!=='codex'&&d.kind!=='plugin'}

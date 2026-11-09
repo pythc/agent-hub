@@ -22,6 +22,7 @@ export type SourceChange=z.infer<typeof sourceChangeSchema>
 export interface RecordQuery {sourceId?:string;ids?:string[];cursor?:string;limit?:number;scope?:string;messageIds?:string[];subscribed?:boolean}
 export interface RecordPage<T=any> {items:{id:string;value:T}[];next?:string}
 export interface SourceContext {
+  repositoryUpdate?(update:import('./repository-source.ts').RepositoryUpdate):unknown
   /** Source-scoped bounded history; list/get on the v2 store contains only local/control state. */
   records?(kind:string,query?:RecordQuery):Promise<RecordPage>
   store: Store
@@ -34,6 +35,7 @@ export interface SourceContext {
   closed(thread: string, outcome: 'merged'|'closed', at: string): void
 }
 export interface Source {
+  readonly code?:import('./repository-source.ts').RepositoryAccess
   config: SourceConfig
   trigger(input: Incoming, actor: string, human?: boolean): Trigger
   deliver(message: OutboundMessage): Promise<void>

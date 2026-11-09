@@ -156,3 +156,6 @@ The repository and CLI retain the name `agent-hub`.
 
 Developer source packages: see [Plugins](docs/PLUGINS.md) for Feishu, Slack and Linear adapters and controlled upgrade/rollback.
 Optional [decision layer](docs/DECISION-LAYER.md): connect Jev, model APIs or a local model for intent classification, with record-only and advisory modes.
+
+
+Execution CLI plugin SDK, capability admission and versioned recovery: [Execution plugins](docs/EXECUTION_PLUGINS.md).

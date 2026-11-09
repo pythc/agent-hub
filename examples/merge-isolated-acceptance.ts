@@ -34,7 +34,8 @@ const platform=createServer(async(req,res)=>{
 await new Promise<void>(r=>platform.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+(platform.address() as any).port
 function api(identity:string):GithubApi{return {async request(method,path,body){const response=await fetch(url+'/'+path,{method,headers:{authorization:'Bearer '+identity,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});if(!response.ok)throw Error('Fixture HTTP '+response.status);return response.json()}}}
 const config=configSchema.parse({stateDir:join(root,'state'),delivery:{autoMerge:true,mergeGh:'isolated-merge-identity'},sources:[{id:'github',kind:'github',allowedActors:['operator'],cwd:root,repository:'fixture/repo',sandbox:'workspace-write'}]}),source=new GithubSource(config.sources[0]!,api('agent'))
-const host=new Runtime(config,{sources:[source],mergeApi:api('merger'),model:{async run(){throw Error('No model should run in merge contract acceptance')}}})
+const mergeTransport=api('merger');source.mergeIdentity=async()=>mergeTransport.request('GET','user');source.merge=async(number,head,method)=>mergeTransport.request('PUT','repos/'+source.config.repository+'/pulls/'+number+'/merge',{sha:head,merge_method:method});
+const host=new Runtime(config,{sources:[source],model:{async run(){throw Error('No model should run in merge contract acceptance')}}})
 function clear(){host.store.db.prepare("DELETE FROM records WHERE kind='merge-attempt'").run()}
 const puts=()=>calls.filter(c=>c.method==='PUT').length
 async function blocked(name:string){clear();const before=puts();await host.merger.tick();if(puts()!==before)throw Error(name+' submitted an unsafe merge');cases.push({name,passed:true,reason:host.store.get<any>('merge-attempt','github:'+number)?.reason})}

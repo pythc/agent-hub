@@ -28,6 +28,7 @@ it('defaults off, retains settings across restart, and rejects invalid provider 
  f.settings.save(1,{decision:{mode:'shadow',provider:{kind:'jev'}}})
  const fresh=configSchema.parse({...f.config,decision:{mode:'off'}});new Settings(f.store,fresh);expect(fresh.decision.mode).toBe('shadow')
  expect(()=>f.settings.save(2,{decision:{mode:'advisory',provider:{kind:'backend',id:'codex'}}})).toThrow('API backend')
+ expect(()=>f.settings.save(2,{backends:{external:{kind:'plugin',plugin:'codex-cli'}},decision:{mode:'advisory',provider:{kind:'backend',id:'external'}}})).toThrow('API backend')
  expect(()=>decisionConfigSchema.parse({mode:'advisory'})).toThrow()
  for(const value of [{provider:{kind:'openai-chat',baseUrl:'http://remote.invalid',model:'x'}},{provider:{kind:'jev'},effort:'high'},{parameters:{tools:[]}}])expect(()=>decisionConfigSchema.parse(value)).toThrow()
 })

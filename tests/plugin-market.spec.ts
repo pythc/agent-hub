@@ -6,7 +6,7 @@ import {gzipSync,gunzipSync} from 'node:zlib'
 import {it,expect,afterEach} from 'vitest'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
-import {PluginMarket} from '../src/plugin-market.ts'
+import {PluginMarket,marketBlockers} from '../src/plugin-market.ts'
 import {marketState,recoverMarket,loadMarketConfig} from '../src/plugin-market-state.ts'
 import {compareVersion,latestCompatible} from '../src/plugin-market-contract.ts'
 import {PluginGitHub,githubLocation} from '../src/plugin-github.ts'
@@ -157,4 +157,15 @@ it('keeps GET inventory free of network effects and obeys GitHub ETag and rate l
   let calls=0;const github=new PluginGitHub(async()=>{calls++;return new Response('{}',{status:429,headers:{'retry-after':'60'}})})
   await expect(github.catalog({url:'https://github.com/acme/plugins'})).rejects.toThrow('429')
   await expect(github.catalog({url:'https://github.com/acme/plugins'})).rejects.toThrow('rate limit');expect(calls).toBe(1)
+})
+
+it('retains repository and execution-plugin uncertainty fences across marketplace source activation',async()=>{
+ const f=await fixture(),store=f.host().store
+ store.put('backend-plugin-tool','native',{state:'running'})
+ store.put('pr-delivery','draft',{phase:'pushing'})
+ store.put('merge-attempt','merge',{phase:'uncertain'})
+ store.put('review-action','review',{phase:'pending'})
+ expect(marketBlockers(f.host()).map(b=>b.kind)).toEqual(expect.arrayContaining(['backend-effects','repository-publications','repository-merges','repository-reviews']))
+ for(const [kind,id] of [['backend-plugin-tool','native'],['pr-delivery','draft'],['merge-attempt','merge'],['review-action','review']])store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind!,id!)
+ expect(marketBlockers(f.host())).toEqual([])
 })

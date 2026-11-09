@@ -4,7 +4,7 @@ import {pathToFileURL} from 'node:url'
 
 let source, rows = new Map(), operations = [], stopped = false, active = false
 let sendSequence = 0
-const acknowledgements = new Map(), queries = new Map(), recentWrites = new Map()
+const acknowledgements = new Map(), queries = new Map(), recentWrites = new Map(), repositoryChecks = new Map()
 let querySequence=0
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n')
 const key = (kind, id) => JSON.stringify([kind, id])
@@ -43,6 +43,11 @@ const context = {
   checkpoint:async()=>{await flushEvents(true);await Promise.all([...acknowledgements.values()].map(v=>v.promise))},
   receive:trigger=>enqueue({type:'receive',trigger}),
   change:event=>enqueue({type:'change',event}),
+  repositoryUpdate:update=>enqueue({type:'repository-update',update}),
+  beforeRepositoryWrite:async()=>{
+    const id=++querySequence,promise=new Promise((resolve,reject)=>repositoryChecks.set(id,{resolve,reject}))
+    emit({type:'repository-authorize',id});await promise
+  },
   bind:()=>{throw Error('Plugins cannot bind host tasks')},
   closed:()=>{throw Error('Plugins cannot close host tasks')},
 }
@@ -54,6 +59,12 @@ lines.on('line',line=>{
   if(line.length>16_000_000)process.exit(2)
   let message
   try {message=JSON.parse(line)} catch {process.exit(2)}
+  if(message.type==='repository-authorized'){
+    const pending=repositoryChecks.get(message.id);if(!pending)process.exit(2)
+    repositoryChecks.delete(message.id)
+    if(message.allowed)pending.resolve();else pending.reject(Error('Repository authority withdrawn'))
+    return
+  }
   if(message.type==='records-result'){
     const pending=queries.get(message.id);if(!pending)process.exit(2)
     const items=new Map(message.result.items.map(row=>[row.id,row]))
@@ -72,7 +83,7 @@ lines.on('line',line=>{
     try {
       if(message.type==='init') {
         const plugin=(await import(pathToFileURL(message.module).href)).default
-        source=await plugin.create(message.config)
+        source=await plugin.create(message.config,context)
         emit({type:'result',id:message.id,result:true,operations:[]})
         return
       }

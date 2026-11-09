@@ -1,0 +1,158 @@
+{
+  "status": "passed",
+  "implementationCommit": "9d87417756eef8d6c0f09b92d9df141881fca72e",
+  "scope": "GitHub source plugin with native Codex execution; no production deployment",
+  "repository": "pythc/agenthub-github-validation",
+  "issueUrl": "https://github.com/pythc/agenthub-github-validation/issues/7",
+  "pullUrl": "https://github.com/pythc/agenthub-github-validation/pull/8",
+  "checks": {
+    "oneGoal": true,
+    "oneTask": true,
+    "sameTaskAcrossRestart": true,
+    "goalCompleted": true,
+    "commentRecovered": true,
+    "ciRecovered": true,
+    "ciAttached": true,
+    "falseReadyIntercepted": true,
+    "automaticRepair": true,
+    "independentVerifier": true,
+    "acceptedBeforeRelease": true,
+    "testsUnchanged": true,
+    "sameMandate": true,
+    "immutableCriteria": true,
+    "upgraded": true,
+    "rolledBack": true,
+    "codeOnlyRollback": true,
+    "unchangedImplementation": true,
+    "draftNeverMerged": true,
+    "realCI": true,
+    "noRouterErrors": true
+  },
+  "versions": [
+    {
+      "phase": 0,
+      "pid": 13635,
+      "version": "1.0.0",
+      "revision": 1
+    },
+    {
+      "phase": 1,
+      "pid": 15317,
+      "version": "1.0.0",
+      "revision": 1
+    },
+    {
+      "phase": 2,
+      "pid": 21059,
+      "version": "1.1.0",
+      "revision": 2
+    },
+    {
+      "phase": 3,
+      "pid": 21117,
+      "version": "1.0.0",
+      "revision": 3
+    }
+  ],
+  "models": {
+    "router": {
+      "model": "gpt-6.1-terra",
+      "effort": "medium"
+    },
+    "worker": {
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    }
+  },
+  "executionBackend": "native-codex",
+  "sourcePackage": {
+    "v1": "2bd948e6482c71334ee538d65cc8ca4508cdb2702db7a26d3d59fce15191dece",
+    "v2": "c69d98897afa205e576892118917e8594cc968f8110ca1f411cf4d637a76ffdf",
+    "stateVersion": 1
+  },
+  "goal": {
+    "id": "goal-af8f49645b85a2cf7841159413ef418539d2885a092537724c109c52c741180d",
+    "state": "completed",
+    "taskIds": [
+      "7071754b76624ccc67454098516d793e"
+    ],
+    "repairs": 1,
+    "verifications": [
+      {
+        "node": "implementation",
+        "state": "failed",
+        "methods": [
+          "program"
+        ]
+      },
+      {
+        "node": "implementation",
+        "state": "passed",
+        "methods": [
+          "agent",
+          "program"
+        ]
+      },
+      {
+        "node": null,
+        "state": "passed",
+        "methods": [
+          "agent",
+          "program"
+        ]
+      }
+    ]
+  },
+  "publication": {
+    "ticketId": "7071754b76624ccc67454098516d793e",
+    "sourceId": "github-live",
+    "repository": "pythc/agenthub-github-validation",
+    "branch": "superagent/ede2a96dcc7125cfe4b0",
+    "url": "https://github.com/pythc/agenthub-github-validation/pull/8",
+    "number": 8,
+    "sha": "1efdb77ba66118d3c22561899758c745c35329b3",
+    "draft": true,
+    "confirmedAt": 1794195666282,
+    "phase": "draft"
+  },
+  "ci": {
+    "id": 58392136937,
+    "sha": "1efdb77ba66118d3c22561899758c745c35329b3"
+  },
+  "implementation": {
+    "src/worker-manager.ts": "e8d9f28b1b53085e68bd2d5bd1402362cb061f0ae1a0c7bf7c131bea78825a6d",
+    "src/router-candidates.ts": "604f2b55f2cf5d21e4dee83c04916c80c1868e762bd7280d7377a33ef2dd86c5",
+    "src/repository-source.ts": "0d65b6aebe6a03109ddf2b830016a27bd819e1ea17708e046cde9e95533dc0fd",
+    "src/delivery.ts": "dc37aabdc369399346f7cdcca5d7a93cd2e36d6b4cfeeb46f698a3d4dfd04732",
+    "src/goal-verification.ts": "dd9b14ec4aea746e4175c62fde4c1d3e18d88862de3f23a82d411f72c2145156",
+    "src/router-goals.ts": "36234448b43ea4d3f90a164e1d40359438bd3cdd03668bbcd37e3692d833df25",
+    "src/merge.ts": "f126efe4405b6b13a645a57776725868895ef09c431e2cfcb6e65bfe7abcb5e1",
+    "src/plugin-package.ts": "7ac61392d41af076131dca34f919477ff73f0ed69fb39afac48d001bbaf147bb",
+    "src/plugin-process.ts": "35b3eb3ce4821791c41d470a8027b9cfeebb5c3e569552ad53e8cf02de50fac4",
+    "src/plugin-worker.mjs": "9ecf222a381bf356d06ac8f53376bb675d4864e399eda8851539f2cd8908c5ee",
+    "plugins/github/github.ts": "482bc5f5a2467cdf96004ae74905d733de581bedaac0df3c63741efb03b8ade2",
+    "plugins/github/package.ts": "b9f43e799dece51ab2b9dd12fd1b4b295fc204bca60d4a9abee6bcb1d6631cf6",
+    "plugins/github/manifest.json": "e8926dddd0584c4f9a594b50a579dbac19ead6a2f8feb74b2b325d49428899e5"
+  },
+  "proofHashes": {
+    "evidence.json": "959f32e7e1c1c8cd63c76db67e0dd108a02073a4dbd255e32573319b6d367896",
+    "phase-0.json": "a65ce9c9b93e265ba5a13c5a4690f070c53cd2e1cf14646f837e34dea400cf04",
+    "phase-1.json": "0cf0b34f72ad886102a126e6936b1dc180f9611a6c711e49ebe881a31b476c16",
+    "phase-2.json": "d605d9a4c2a7c337fa0f8c10fb9bd69c443a8ea7ebdba8be353e1acf75de5b5a",
+    "phase-3.json": "2ed57458b9f1259a9b57067ed36c86e4520bb0ac7af23f312d20d686915912fe",
+    "offline-events.json": "7a8e2f4b78bf1fea6c95dede10cff9bef278511ac95323d2cf177fd40a832965"
+  },
+  "faultInjection": "First commit intentionally fails frozen empty-input tests; first ready proposal intentionally reports cents=999. Neither changes the immutable acceptance criteria.",
+  "validation": {
+    "testFiles": 72,
+    "tests": 1062,
+    "typecheck": "passed",
+    "chatBuild": "passed"
+  },
+  "limits": [
+    "Actual local frozen tests posted as GitHub Commit Status; not hosted GitHub Actions.",
+    "Quiescent code upgrade and rollback; active tasks cannot hot-upgrade.",
+    "Earlier external CLI-plugin runs failed and are excluded; their end-to-end path remains unverified.",
+    "No real merge or production configuration change."
+  ]
+}

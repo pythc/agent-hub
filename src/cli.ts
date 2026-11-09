@@ -1,4 +1,5 @@
 import {pluginCommand} from './plugin-cli.ts'
+import {backendPluginCommand} from './backends/plugin-cli.ts'
 import {clientIds,clientConfig,installClient,restoreClient,type ClientId} from './clients.ts'
 import { readFileSync } from 'node:fs'
 import { loadConfig } from './config.ts'
@@ -23,6 +24,7 @@ const command = args[0]==='--help'||args[0]==='-h'
 async function main() {
   if(process.env.AGENTHUB_ENV_FILE)try{process.loadEnvFile(process.env.AGENTHUB_ENV_FILE)}catch{throw Error('Cannot load AGENTHUB_ENV_FILE; check its path and access permissions')}
   if(command==='plugins'){console.log(JSON.stringify(await pluginCommand(args),null,2));return}
+  if(command==='backend-plugins'){console.log(JSON.stringify(await backendPluginCommand(args),null,2));return}
   if(command==='office'){
     const [action,platform,...options]=args
     const directory=options[0]&&!options[0].startsWith('--')?options[0]:undefined,rest=directory?options.slice(1):options
@@ -32,7 +34,7 @@ async function main() {
   }
   else if(command==='backends'){
     if(args[0]!=='list')throw Error('Use backends list [config.json]')
-    if(!args[1]){console.log(JSON.stringify({supported:['codex','openai-responses','openai-chat','anthropic']}));return}
+    if(!args[1]){console.log(JSON.stringify({supported:['codex','plugin','openai-responses','openai-chat','anthropic']}));return}
     const config=loadConfig(args[1]),registry=new BackendRegistry(config,{get:()=>undefined,put:()=>{}})
     console.log(JSON.stringify({roles:config.execution,backends:registry.configured(),sandboxDriver:config.work.sandboxDriver},null,2));return
   }
@@ -124,6 +126,6 @@ async function main() {
     })
     console.log(JSON.stringify(await response.json(), null, 2))
     if (!response.ok) process.exitCode = 1
-  } else console.log('Commands: setup [private-directory] [--no-open] (default), serve <config>, supervise <config>, watchdog <config> [--once], watch <url> <token-file> [--once], open <url> <token-file> [--no-open], mcp <url> <token-file>, router <url> <token-file> --prompt <message> [--resume <UUID>] [--json], request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
+  } else console.log('Commands: backend-plugins pack|inspect|stage|probe (see docs/EXECUTION_PLUGINS.md), setup [private-directory] [--no-open] (default), serve <config>, supervise <config>, watchdog <config> [--once], watch <url> <token-file> [--once], open <url> <token-file> [--no-open], mcp <url> <token-file>, router <url> <token-file> --prompt <message> [--resume <UUID>] [--json], request <url> <token-file> <source> <discussion> <request-id> <text>, status <url> <token-file>, action <url> <token-file> <pause|resume|stop|retry|takeover|return> [id]')
 }
 main().catch(error => { console.error(String(error)); process.exitCode = 1 })

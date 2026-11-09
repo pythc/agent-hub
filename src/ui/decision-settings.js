@@ -71,7 +71,7 @@ function decisionSettings() {
   root.append(add(el('div', 'decision-heading'), add(el('div'), heading, el('p', '', L('A lightweight model to help Router read intent.', '用轻量模型辅助 Router 判断消息意图。'))), el('span', 'decision-saved-mode', L('Saved: ', '已保存：') + saved)))
   const body = el('div', 'decision-body'), settings = el('div', 'decision-config')
   const fields = el('div', 'team-fields')
-  const services = Object.entries(S.draft.backends || {}).filter(([, value]) => value.kind !== 'codex' && !value.subscription)
+  const services = Object.entries(S.draft.backends || {}).filter(([, value]) => !['codex', 'plugin'].includes(value.kind) && !value.subscription)
   const type = provider?.kind === 'backend' ? 'backend:' + provider.id : provider?.kind || ''
   const choices = [['', L('Choose a connection', '选择模型连接')], ...services.map(([id, value]) => ['backend:' + id, L('Use ', '使用 ') + (value.label || id)]),
     ['jev', 'Jev · TypeSafe'], ['openai-chat', L('OpenAI Chat / local model', 'OpenAI Chat / 本地模型')], ['openai-responses', 'OpenAI Responses'], ['anthropic', 'Anthropic Messages']]

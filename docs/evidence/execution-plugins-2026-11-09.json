@@ -1,0 +1,99 @@
+{
+  "date": "2026-11-09",
+  "platform": "macOS",
+  "node": "24.15.0",
+  "codexCli": "0.166.0-alpha.6",
+  "baselineMain": "7e5dca21615c93aa400927acb7dbbf7292a417b7",
+  "sourcePluginFoundation": "5347f64",
+  "automated": {
+    "typecheck": "passed",
+    "testFiles": 70,
+    "testsPassed": 1046,
+    "testsFailed": 0
+  },
+  "liveGoal": {
+    "status": "passed",
+    "checks": {
+      "twoProcessRestarts": true,
+      "oneGoal": true,
+      "fourTasks": true,
+      "goalCompleted": true,
+      "falseReportIntercepted": true,
+      "oneControlledRepair": true,
+      "sameRepairTask": true,
+      "finalVerificationRecovered": true,
+      "independentNativeVerifier": true,
+      "actualEvidenceReads": true,
+      "noUnacceptedRelease": true,
+      "correctRows": true,
+      "noRouterErrors": true,
+      "unchangedCode": true
+    },
+    "modelSessions": 8,
+    "allSessionsUseExecutionPlugin": true,
+    "independentVerificationRounds": 6,
+    "repairs": 1,
+    "acceptedReleases": 4,
+    "runtimeSourceHashes": {
+      "src/goal-contract.ts": "c5d9401848f79eaa2d8f9c8d5542c2c3f4c42584877d526260bfec47e168b804",
+      "src/goal-verification.ts": "8e8cd22fdfdde0920dda9f100e0db77690e6e566b31636ce441d96c1e4cee6cc",
+      "src/router-goals.ts": "6470e9481ff4698585385936eb8053e7d0572305214b4a6d9929d52ab5146bb7",
+      "src/runtime.ts": "b7f6de25938a918ab2c28b6117a0f988ce97c3f9650670dd8469e070887009ce",
+      "src/backends/plugin-process.ts": "cb9cb446d2206e4aa4d4bd40f4d80f42a853f377bb033817e5beb5314a91bbf9",
+      "src/backends/plugin-package.ts": "67a7a2d40d5feffe74e14cb8f7b3d58935bc6e12444c2d4b3052fd9babddc504",
+      "src/backends/plugin-worker.mjs": "933b19d7e5ce19a24238ba0c0376be60275f8dcaf05bc074b594eb13fd3f6641",
+      "src/client-status.ts": "0dfa0142b2a892f5734789f5399d8f5aeb939b6e912cae14affd4449272f6e6f"
+    }
+  },
+  "lifecycle": {
+    "status": "recovered",
+    "checks": {
+      "firstNativeIdentity": true,
+      "firstPackagePinned": true,
+      "firstContextRecovered": true,
+      "firstTurnCompleted": true,
+      "secondNativeIdentity": true,
+      "secondPackagePinned": true,
+      "secondContextRecovered": true,
+      "secondTurnCompleted": true,
+      "rollbackActive": true
+    },
+    "processRestarts": 2,
+    "firstAttemptPassed": false,
+    "initialReadbackFailure": "process_failed",
+    "readOnlyReconciliation": "passed",
+    "rootCause": "unconfirmed",
+    "packages": [
+      {
+        "digest": "bfc8e780c61426ad50a04401e3299d3dab67f729d0c67f0a601f200cc8071fcf",
+        "version": "1.0.0",
+        "codeSha256": "8fd29f4362ceb893a5e9871e1623c821c37c59b5f74ec327703b37b0f09e5472"
+      },
+      {
+        "digest": "a02ce6510c073e68bc6b29a6d6e7d181e54d41aaacfa7e2ef04811d64fe742e1",
+        "version": "1.0.1",
+        "codeSha256": "8fd29f4362ceb893a5e9871e1623c821c37c59b5f74ec327703b37b0f09e5472"
+      }
+    ]
+  },
+  "zcode": {
+    "cliVersion": "0.17.1",
+    "sandboxVersionProbe": "passed",
+    "authentication": "unknown",
+    "standaloneInference": "blocked",
+    "errorCode": "configuration_invalid",
+    "observedDiagnostic": "Select a model before sending a message",
+    "managedRolesEnabled": false
+  },
+  "finalRuntimeSourceDigest": "680c7073cd3d07ccf4b80c37de7ed6b93cf1551825b812d3007856b2cb6a53e7",
+  "postLiveFollowups": [
+    "Map typed uncertain/auth/configuration failures to existing recovery categories; prevent quality replanning around effect fences",
+    "Report unsupported or unauthenticated execution plugins as setup-required",
+    "Classify the observed ZCode model-selection failure as configuration_invalid"
+  ],
+  "notRun": [
+    "Deployment into existing background services",
+    "Linux real-provider execution",
+    "Publisher signatures or public plugin registry"
+  ]
+}

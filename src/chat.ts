@@ -1,3 +1,4 @@
+import {isApiBackend} from './backend-config.ts'
 import {createHash, randomUUID} from 'node:crypto'
 import type {Runtime} from './runtime.ts'
 import type {AgentOptions} from './backend-config.ts'
@@ -105,7 +106,7 @@ export class ChatSessions {
   }
   private source(){
     const h=this.host, selected=h.model instanceof BackendRegistry?h.model.definition(h.model.selected('router')):undefined
-    const principal=selected&&selected.kind!=='codex'?selected.subscription?.owner:undefined
+    const principal=selected&&isApiBackend(selected)?selected.subscription?.owner:undefined
     const source=h.config.sources.find(s=>s.kind==='local'&&s.enabled&&s.allowedActors.length>0&&(!principal||s.id===principal.source&&s.allowedActors.includes(principal.actor)))
     return source?{source,actor:principal?.actor??source.allowedActors[0]!}:undefined
   }
@@ -116,8 +117,8 @@ export class ChatSessions {
       const desc=h.model.describe?.(undefined,'router');backend=desc?.id;model=h.config.execution.router?.model??h.config.models.router??desc?.model
       if(h.model instanceof BackendRegistry){
         const d=h.model.definition(h.model.selected('router'))
-        if(d.kind!=='codex'&&d.apiKeyEnv&&!process.env[d.apiKeyEnv])code='model_credentials_missing'
-        if(d.kind!=='codex'&&d.subscription&&!h.subscriptions.list().some(a=>a.id===d.subscription!.account&&a.signedIn))code='model_credentials_missing'
+        if(isApiBackend(d)&&d.apiKeyEnv&&!process.env[d.apiKeyEnv])code='model_credentials_missing'
+        if(isApiBackend(d)&&d.subscription&&!h.subscriptions.list().some(a=>a.id===d.subscription!.account&&a.signedIn))code='model_credentials_missing'
       }
     }catch{code='model_unavailable'}
     if(h.config.execution.router?.mode!=='host')code='host_router_required'

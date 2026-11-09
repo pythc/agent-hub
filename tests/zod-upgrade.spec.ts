@@ -18,13 +18,13 @@ import { Approvals } from '../src/approvals.ts'
 const baseline: { zod: string; cases: { name: string; input: any; expected: Config }[] } =
   JSON.parse(readFileSync(new URL('./fixtures/zod3-config.json', import.meta.url), 'utf8'))
 // Preserve the historical fixture byte-for-byte; account explicitly for the new feature defaults.
-const watchdogUpgrade = (config: Config): Config => ({...config,viewPlugins:[],decision:decisionConfigSchema.parse({}),watchdog:Object.assign({enabled:true,reviewIntervalMs:600000,modelTimeoutMs:60000,maxReviewsPerHour:12,maxRecoveries:3},config.watchdog)})
+const featureDefaults = (config: Config): Config => ({...config,backendPlugins:config.backendPlugins??[],viewPlugins:[],decision:decisionConfigSchema.parse({}),watchdog:Object.assign({enabled:true,reviewIntervalMs:600000,modelTimeoutMs:60000,maxReviewsPerHour:12,maxRecoveries:3},config.watchdog)})
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 it.each(baseline.cases)('preserves the $name Zod 3 configuration and serialized round trip', ({ input, expected }) => {
-  expect(configSchema.parse(input)).toEqual(watchdogUpgrade(expected))
-  expect(configSchema.parse(JSON.parse(JSON.stringify(expected)))).toEqual(watchdogUpgrade(expected))
+  expect(configSchema.parse(input)).toEqual(featureDefaults(expected))
+  expect(configSchema.parse(JSON.parse(JSON.stringify(expected)))).toEqual(featureDefaults(expected))
 })
 
 it('continues accepting fractional milliseconds in pre-existing watchdog fields', () => {
@@ -57,8 +57,8 @@ it('preserves persisted settings, sparse saves, backup/restore and transaction f
     store.put('settings', 'current', { revision: 7, at: '2026-11-07T00:00:00.000Z', config: original })
     store.put('settings-backends', 'managed', true)
     const settings = new Settings(store, configSchema.parse(structuredClone(original)))
-    expect(settings.current().config).toEqual(watchdogUpgrade(original))
-    expect(settings.save(7, { effort: 'low' }).config).toEqual({ ...watchdogUpgrade(original), effort: 'low' })
+    expect(settings.current().config).toEqual(featureDefaults(original))
+    expect(settings.save(7, { effort: 'low' }).config).toEqual({ ...featureDefaults(original), effort: 'low' })
     const after = structuredClone(settings.current())
     expect(() => settings.save(7, { concurrency: 2 })).toThrow('conflict')
     expect(() => settings.save(8, { work: { unknown: true } })).toThrow()

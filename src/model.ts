@@ -17,7 +17,7 @@ export interface ModelRequest {
   contextBudget?:import('./context-budget.ts').ContextBudget
   contextId?:string
   onBudget?:(receipt:import('./context-budget.ts').BudgetReceipt)=>void
-  retainToolResult?:(callId:string,result:unknown)=>string
+  retainToolResult?:(callId:string,result:unknown)=>string|Promise<string>
   options?:AgentOptions
   principal?:{source:string;actor:string}
   onConfiguration?:(value:{requested:AgentOptions;sent:Record<string,unknown>;confirmed?:Record<string,unknown>})=>void

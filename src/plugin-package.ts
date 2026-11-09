@@ -1,8 +1,8 @@
-import {z} from 'zod'
-import {createHash,randomUUID} from 'node:crypto'
+import {randomUUID} from 'node:crypto'
 import {readFileSync,writeFileSync,mkdirSync,existsSync,realpathSync,statSync,renameSync,rmSync} from 'node:fs'
-import {join,resolve} from 'node:path'
-import {stableDigest} from './sources.ts'
+import {z} from 'zod'
+import {join} from 'node:path'
+import {readArtifact,buildArtifact} from './plugin-artifact.ts'
 import type {Store} from './store.ts'
 import type {Config} from './config.ts'
 
@@ -14,7 +14,10 @@ export const pluginManifestSchema=z.object({
   codeSha256:z.string().regex(/^[a-f0-9]{64}$/),
   configSchema:z.record(z.string(),z.unknown()),
   scopesPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),
-  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke'])),
+  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke','repositoryPull','mergeSnapshot','reviewGraph','resolveReview','draft','mergeIdentity','merge'])),
+  threadSeparator:z.enum([':','#']).optional(),
+  observedPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/).optional(),
+  repository:z.object({idPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),remoteTemplates:z.array(z.string().min(1).max(500).refine(s=>s.split('{repository}').length===2&&!/[\r\n]/.test(s),'One repository placeholder is required')).min(1).max(10),pushCredentialPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),pushUsername:z.string().regex(/^[a-zA-Z0-9_-]+$/).max(100)}).strict().optional(),
   commandPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/).optional(),
   cursorEncoding:z.enum(['iso','unix-seconds']).default('iso'),
   cursorMode:z.enum(['scope','source','none']).default('none'),
@@ -26,36 +29,14 @@ export const pluginManifestSchema=z.object({
 }).strict()
 export type PluginManifest=z.infer<typeof pluginManifestSchema>
 export interface PluginPackage {directory:string;manifest:PluginManifest;digest:string}
-const sha=(value:Buffer|string)=>createHash('sha256').update(value).digest('hex')
 export function pointer(value:unknown,path:string):unknown {
   return path.slice(1).split('/').reduce((v:any,k)=>v&&Object.hasOwn(v,k)?v[k]:undefined,value)
 }
-/** Only a manifest and a self-contained ESM bundle are executable package inputs. */
-export function readPluginPackage(directory:string,expectedDigest?:string):PluginPackage {
-  directory=realpathSync(directory)
-  for(const name of ['manifest.json','plugin.mjs']){
-    const path=join(directory,name)
-    if(realpathSync(path)!==path||!statSync(path).isFile()||statSync(path).size>16_000_000)throw Error('Invalid plugin package file')
-  }
-  const manifest=pluginManifestSchema.parse(JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8')))
-  const code=readFileSync(join(directory,'plugin.mjs'))
-  if(sha(code)!==manifest.codeSha256)throw Error('Plugin bundle checksum mismatch')
-  const digest=stableDigest(manifest)
-  if(expectedDigest&&expectedDigest!==digest)throw Error('Plugin package digest changed')
-  return {directory,manifest,digest}
-}
+/** Source packages share immutable storage with other categories, not execution authority. */
+export function readPluginPackage(directory:string,expectedDigest?:string):PluginPackage{return readArtifact(directory,pluginManifestSchema,expectedDigest)}
 export async function buildPluginPackage(entry:string,manifest:Omit<PluginManifest,'codeSha256'|'entry'|'apiVersion'>,destination:string){
-  if(existsSync(destination))throw Error('Package destination already exists')
-  const {build}=await import('esbuild')
-  const result=await build({entryPoints:[resolve(entry)],bundle:true,write:false,format:'esm',platform:'node',target:'node22',packages:'bundle',legalComments:'inline'})
-  const code=result.outputFiles[0]!.contents
-  const parsed=pluginManifestSchema.parse({...manifest,apiVersion:2,entry:'plugin.mjs',codeSha256:sha(Buffer.from(code))})
-  mkdirSync(destination,{recursive:true,mode:0o700})
-  writeFileSync(join(destination,'plugin.mjs'),code,{mode:0o600,flag:'wx'})
-  writeFileSync(join(destination,'manifest.json'),JSON.stringify(parsed,null,2)+'\n',{mode:0o600,flag:'wx'})
-  return readPluginPackage(destination)
+  return buildArtifact(entry,{...manifest,apiVersion:2},destination,pluginManifestSchema)
 }
-/** Install immutable bytes. Activation is a separate revisioned configuration change. */
 export function installPluginPackage(directory:string,stateDir:string,expectedDigest:string){
   const pkg=readPluginPackage(directory,expectedDigest),objects=join(stateDir,'plugins','objects'),target=join(objects,pkg.digest)
   mkdirSync(objects,{recursive:true,mode:0o700})
@@ -73,7 +54,7 @@ export function installPluginPackage(directory:string,stateDir:string,expectedDi
 export function activatePluginPackages(store:Store,config:Config,packages:PluginPackage[],previous?:Config){
   store.atomic(()=>{
     for(const old of store.list<any>('plugin-installation'))if(!config.sources.some(s=>s.id===old.sourceId))throw Error('Installed plugin source must be disabled, not silently removed')
-    const unfinished=()=>store.tickets.open().length>0||store.list<any>('router-goal').some(g=>!['completed','cancelled'].includes(g.state))||store.deliveries().some(d=>['pending','sending','uncertain','held'].includes(d.status))||store.list<any>('tool-receipt').some(r=>['running','uncertain'].includes(r.state))||store.db.prepare("SELECT 1 FROM jobs WHERE state IN ('pending','running') LIMIT 1").get()
+    const unfinished=()=>store.tickets.open().length>0||store.list<any>('router-goal').some(g=>!['completed','cancelled'].includes(g.state))||store.deliveries().some(d=>['pending','sending','uncertain','held'].includes(d.status))||store.list<any>('tool-receipt').some(r=>['running','uncertain'].includes(r.state))||store.list<any>('pr-delivery').some(r=>['pushing','creating','uncertain'].includes(r.phase))||store.list<any>('merge-attempt').some(r=>['submitting','uncertain'].includes(r.phase))||store.list<any>('review-action').some(r=>r.phase==='pending')||store.db.prepare("SELECT 1 FROM jobs WHERE state IN ('pending','running') LIMIT 1").get()
     for(const source of config.sources){
       const pkg=packages.find(p=>p.manifest.kind===source.kind),old=store.get<any>('plugin-installation',source.id)
       if(!pkg){if(old)throw Error('Installed plugin source cannot silently revert to a legacy adapter');continue}

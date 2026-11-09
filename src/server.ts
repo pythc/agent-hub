@@ -94,7 +94,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if((req.method==='GET'||req.method==='HEAD')&&path.startsWith('/chat-assets/')){
       const name=path.slice('/chat-assets/'.length),asset=chatAsset(name)
       if(!asset){send(res,404,{code:'not_found'});return}
-      const type=name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.png')?'image/png':name.endsWith('.woff2')?'font/woff2':'application/octet-stream'
+      const type=name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.png')?'image/png':name.endsWith('.svg')?'image/svg+xml':name.endsWith('.ico')?'image/x-icon':name.endsWith('.woff2')?'font/woff2':'application/octet-stream'
       res.writeHead(200,{'content-type':type});res.end(req.method==='HEAD'?undefined:asset);return
     }
     if((req.method==='GET'||req.method==='HEAD')&&path==='/chat'){

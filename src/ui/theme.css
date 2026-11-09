@@ -144,3 +144,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--action); }
 }
 
 :root[data-theme-switching] *, :root[data-theme-switching] *::before, :root[data-theme-switching] *::after { transition: none !important; }
+
+:root[data-theme="dark"] .brand-light{display:none}
+:root[data-theme="dark"] .brand-dark{display:block}

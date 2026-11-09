@@ -24,6 +24,17 @@ export class Settings {
     const saved=store.get<SettingsVersion>('settings','current')
     if(saved){
       const dynamic=Object.fromEntries(Object.keys(patchSchema.shape).filter(k=>k!=='sources'&&(k!=='backends'||store.get('settings-backends','managed'))&&k in saved.config).map(k=>[k,(saved.config as any)[k]]))
+      if(dynamic.backends){
+        const backends={...saved.config.backends}
+        for(const [id,previous] of Object.entries(backends))if(previous.kind==='plugin'&&config.backends[id]?.kind!=='plugin')throw Error('Execution plugin backend cannot be silently removed or replaced')
+        for(const [id,deployment] of Object.entries(config.backends))if(deployment.kind==='plugin'){
+          const previous=saved.config.backends[id]
+          // Code, credentials and filesystem grants come from reviewed startup
+          // configuration. Only live display/model defaults survive restarts.
+          backends[id]={...deployment,...(previous?.kind==='plugin'?{label:previous.label,model:previous.model,defaults:previous.defaults}:{})}
+        }
+        dynamic.backends=backends
+      }
       const sources=config.sources.map(source=>{
         const previous=saved.config.sources.find(s=>s.id===source.id)
         if(!previous)return source
@@ -44,6 +55,8 @@ export class Settings {
       const config=configSchema.parse({...this.config,...update})
       validateBackendSelection(config)
       normalizeWorkerCount(config)
+      const pluginDeployment=(backends:Config['backends'])=>Object.fromEntries(Object.entries(backends).filter(([,b])=>b.kind==='plugin').map(([id,b])=>{const {label,model,defaults,...deployment}=b;return [id,deployment]}))
+      if(update.backends&&JSON.stringify(pluginDeployment(config.backends))!==JSON.stringify(pluginDeployment(this.config.backends)))throw new SettingsError('restart_required','Execution backend deployment changes require a controlled restart')
       for(const [key,override] of Object.entries(config.prompts.overrides))if(override.text===builtins[key as keyof typeof builtins])delete config.prompts.overrides[key]
       if(new Set(config.sources.map(s=>s.id)).size!==config.sources.length)throw Error('Duplicate source id')
       const deployment=sourceDeployment

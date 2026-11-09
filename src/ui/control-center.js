@@ -4,7 +4,7 @@ function controlConnections() {
     try { endpoint = new URL(backend.baseUrl).hostname } catch {}
     return { id, kind: backend.kind, model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
       label: backend.label || (backend.kind === 'codex' ? 'Codex' : [endpoint, backend.model].filter(Boolean).join(' · ') || id),
-      connectionType: backend.subscription ? 'subscription' : backend.kind === 'codex' || backend.kind === 'cli' ? 'cli' : 'api' }
+      connectionType: backend.subscription ? 'subscription' : backend.kind === 'codex' || backend.kind === 'plugin' ? 'cli' : 'api' }
   })
 }
 function controlField(id,label,value,onChange,options=null,placeholder=''){

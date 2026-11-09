@@ -7,6 +7,10 @@ it('admits only a current-head approved, checked PR below the line threshold',()
  expect(mergeEligibility(snapshot(),policy())).toEqual([])
  const s=snapshot();s.pull.deletions=100;expect(mergeEligibility(s,policy()).join()).toContain('threshold')
 })
+it('fails closed on incomplete provider snapshots rather than treating missing checks or line counts as approval',()=>{
+ for(const field of ['additions','deletions','draft','merged']){const s:any=snapshot();delete s.pull[field];expect(mergeEligibility(s,policy())).toContain('Repository snapshot is incomplete or invalid')}
+ const s:any=snapshot();delete s.reviews[0].user.type;expect(mergeEligibility(s,policy())).toContain('Repository snapshot is incomplete or invalid')
+})
 it('rejects stale and dismissed approvals and enforces named reviewers',()=>{
  const s=snapshot();s.reviews[0]!.commit_id='old';expect(mergeEligibility(s,policy()).join()).toContain('approval')
  s.reviews[0]!.commit_id='a';s.reviews.push({...s.reviews[0]!,id:2,state:'DISMISSED',submitted_at:'two'})
@@ -45,8 +49,9 @@ function integration(){
  const ticket:any={id:'task',ended:undefined,mandate:{actor:{source:'github'}},follows:[{thread:'github:test/repo#1',own:true}],assignments:[{id:'a',state:'running',report:{state:'ready'}}],undelivered:[]}
  store.tickets.save(ticket);store.put('run','task',{ticketId:'task',assignmentId:'a',cwd:root,phase:'idle'})
  const calls:any[]=[],api:GithubApi={async request(method,path,body){calls.push({method,path,body});return method==='GET'?{login:'merge-service'}:{merged:true,sha:'merged-sha'}}}
- const host:any={config,store,sources:new Map([['github',source]]),status:()=>({paused:false})}
- const merger=new Merger(host,api);fixtures.push({root,store,merger})
+ const host:any={config,store,sources:new Map([['github',source]]),status:()=>({paused:false}),validWork:()=>true}
+ source.mergeIdentity=async()=>api.request('GET','user');source.merge=async(number,head,method)=>api.request('PUT','repos/test/repo/pulls/'+number+'/merge',{sha:head,merge_method:method});
+ const merger=new Merger(host);fixtures.push({root,store,merger})
  const reset=()=>{store.db.prepare("DELETE FROM records WHERE kind='merge-attempt'").run()}
  return {store,source,host,merger,s,calls,api,reset,authorize:()=>merger.authorize('task','github',1,s.pull.head.sha)}
 }
@@ -62,6 +67,18 @@ it('withdraws authorization before push and fences a revocation during preflight
  await f.authorize();f.reset()
  const request=f.api.request.bind(f.api);f.api.request=async(...args)=>{if(args[0]==='GET')await f.merger.beforePush('task','github','superagent/test');return request(...args)}
  await f.merger.tick();expect(f.calls.some(c=>c.method==='PUT')).toBe(false)
+})
+it.each(['policy','input','authority','grant'])('rechecks %s after a repository plugin queues the write',async changed=>{
+ const f=integration();await f.authorize()
+ f.source.merge=async(_number,_head,_method,_identity,mayAct)=>{
+  if(changed==='policy')f.host.config.delivery={...f.host.config.delivery,autoMerge:false}
+  if(changed==='input')f.store.tickets.save({...f.store.tickets.get('task')!,undelivered:['new-input']})
+  if(changed==='authority')f.host.validWork=()=>false
+  if(changed==='grant')f.store.put('merge-grant','github:1',{...f.store.get<any>('merge-grant','github:1'),head:'b'.repeat(40)})
+  expect(mayAct!()).toBe(false);throw Error('Host fenced queued write')
+ }
+ await f.merger.tick();expect(f.calls.some(c=>c.method==='PUT')).toBe(false)
+ expect(f.store.get<any>('merge-attempt','github:1').phase).toBe('uncertain')
 })
 it('blocks stale heads, self approvals, same merge account, pending inputs and stopped tasks',async()=>{
  const f=integration();await f.authorize()

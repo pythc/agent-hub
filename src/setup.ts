@@ -1,8 +1,10 @@
+import {isApiBackend} from './backend-config.ts'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 import {randomUUID} from 'node:crypto'
 import type {Runtime} from './runtime.ts'
 import {BackendRegistry} from './backends/registry.ts'
+import {backendPackages} from './backends/plugin-package.ts'
 import {existsSync,accessSync,constants} from 'node:fs'
 import {resolve,delimiter} from 'node:path'
 import {probeSandbox} from './sandbox.ts'
@@ -22,7 +24,14 @@ export class Setup {
     const profile=d.kind==='codex'?d:undefined
     await check(id,async()=>(await exec(binary,[...(profile?.args??[]),'--version'],{env:cliEnvironment(profile?.env),encoding:'utf8',timeout:10000})).stdout.trim(),'Configure an installed Codex CLI binary')
     await check(id+'-auth',async()=>{await exec(binary,[...(profile?.args??[]),'login','status'],{env:cliEnvironment(profile?.env),encoding:'utf8',timeout:10000});return {signedIn:true,remoteVerified:false}},'Run codex login with the configured CLI profile')
-   }else if(d.kind!=='codex')await check('backend:'+id,async()=>{
+   }else if(d.kind==='plugin')await check('backend:'+id,async()=>{
+    const capabilities=backendPackages(this.host.config).get(d.plugin)?.manifest.capabilities
+    if(!capabilities||!capabilities.managed||!capabilities.resume||!capabilities.tools||!capabilities.history||!capabilities.contextBudget)throw Error('Selected execution plugin cannot run managed roles')
+    const health=await registry!.probe(id)
+    if(!health.available||health.authenticated!==true||!health.accountIdentity)throw Error('Execution plugin account identity has not been verified')
+    return health
+   },'Check managed capabilities and the CLI account; a version probe alone does not verify a model call')
+   else if(isApiBackend(d))await check('backend:'+id,async()=>{
     if(d.subscription){const account=this.host.subscriptions.list().find(a=>a.id===d.subscription!.account);if(!account?.signedIn)throw Error('Subscription sign-in required');if(!d.subscription.backgroundAuthorized)throw Error('Subscription background authorization required');return {kind:d.kind,model:d.model,credential:'subscription',remoteVerified:false}}
     for(const name of [d.apiKeyEnv,...Object.values(d.headerEnv??{})].filter((n):n is string=>!!n))if(!process.env[name]?.trim())throw Error('Missing environment variable '+name)
     return {kind:d.kind,model:d.model,credential:d.apiKeyEnv?'present':'not-required',remoteVerified:false}

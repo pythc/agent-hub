@@ -12,8 +12,9 @@ import {hostPrivateFiles} from './private-files.ts'
 import type {SourceConfig} from './config.ts'
 import type {Store} from './store.ts'
 import type {Trigger,OutboundMessage} from './vendor/dsh-core/index.ts'
+import {repositoryUpdateSchema,type RepositoryAccess} from './repository-source.ts'
 
-const metadataKinds=new Set(['source-cursor','source-live','source-message-observation','source-freshness','thread-health','entry-label','source-identity-mismatch'])
+const metadataKinds=new Set(['source-cursor','source-live','source-message-observation','source-freshness','thread-health','thread-cursor','entry-label','source-identity-mismatch'])
 const readableKinds=new Set([...metadataKinds,'trigger','thread','source-identity','source-message-state'])
 const scopedId=(source:string,id:string)=>id===source||id.startsWith(source+':')
 const ref=z.object({source:z.string(),id:z.string()}).strict()
@@ -33,6 +34,7 @@ export class ProcessSource extends MessageSource {
   private serial:Promise<unknown>=Promise.resolve()
   private hostStore?:Store
   private resolveConfig:()=>SourceConfig|undefined=()=>this.config
+  private repositoryAuthority?:()=>void
   constructor(config:SourceConfig,readonly pkg:PluginPackage,private options:PluginProcessOptions){
     super(config)
     const validate=new Ajv2020({strict:false,validateFormats:false}).compile(pkg.manifest.configSchema)
@@ -44,7 +46,13 @@ export class ProcessSource extends MessageSource {
   attach(store:Store,resolveConfig?:()=>SourceConfig|undefined){this.hostStore=store;if(resolveConfig)this.resolveConfig=resolveConfig}
   private active(){const c=this.resolveConfig();if(!c?.enabled)throw Error('Plugin connection is disabled');return c}
   scopes(){const c=this.resolveConfig();return c?(pointer(c,this.pkg.manifest.scopesPath) as string[]).filter(s=>!c.listenScopes||c.listenScopes.includes(s)):[]}
-  validThread(thread:string){return this.scopes().some(s=>thread===s||thread.startsWith(s+':'))}
+  get code():RepositoryAccess|undefined {
+    const declaration=this.pkg.manifest.repository;if(!declaration)return
+    const config=this.resolveConfig()??this.config,id=pointer(config,declaration.idPath),variable=pointer(config,declaration.pushCredentialPath)
+    if(typeof id!=='string'||id!==config.repository||!this.scopes().includes(id)||typeof variable!=='string'||!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable)||!Object.values(this.pkg.manifest.credentials).includes(declaration.pushCredentialPath))throw Error('Repository capability configuration is invalid')
+    return {id,remotes:declaration.remoteTemplates.map(template=>template.replace('{repository}',id)),threadPrefix:id+(this.pkg.manifest.threadSeparator??':'),pushCredential:{kind:'environment',variable,username:declaration.pushUsername}}
+  }
+  validThread(thread:string){const separator=this.pkg.manifest.threadSeparator??':';return this.scopes().some(s=>thread===s||thread.startsWith(s+separator))}
   override get verificationCommand(){return this.pkg.manifest.commandPath?String(pointer(this.config,this.pkg.manifest.commandPath)??''):''}
   replay(scope:string|undefined,since:string){
     if(this.pkg.manifest.cursorMode==='none'||!Number.isFinite(Date.parse(since)))throw Error('Plugin replay is unavailable')
@@ -73,7 +81,7 @@ export class ProcessSource extends MessageSource {
       where.push("json_extract(r.body,'$.ref.source')=?");params.push(this.config.id)
       const threadScopes=query.scope?[query.scope]:scopes
       where.push('('+threadScopes.map(()=>"(json_extract(r.body,'$.ref.id')=? OR substr(json_extract(r.body,'$.ref.id'),1,?)=?)").join(' OR ')+')')
-      for(const scope of threadScopes)params.push(scope,scope.length+1,scope+':')
+      for(const scope of threadScopes)params.push(scope,scope.length+1,scope+(this.pkg.manifest.threadSeparator??':'))
       if(query.subscribed)where.push("json_array_length(r.body,'$.subscriptions')>0")
     }else if(kind==='source-message-state'){
       where.push("json_extract(r.body,'$.sourceId')=?");params.push(this.config.id)
@@ -92,7 +100,13 @@ export class ProcessSource extends MessageSource {
     for(const row of rows.slice(0,query.limit)){
       const size=Buffer.byteLength(String(row.body));if(size>1_000_000)throw Error('Plugin record exceeds page limit')
       if(bytes+size>1_000_000)break
-      items.push({id:String(row.id),value:JSON.parse(String(row.body))});bytes+=size
+      const value=JSON.parse(String(row.body))
+      if(kind==='thread'){
+        const tickets=(value.subscriptions??[]).map((id:string)=>store.tickets.get(id))
+        value.activeSubscription=tickets.some((t:any)=>t&&!t.ended)
+        value.lastSubscriptionAt=Math.max(0,...tickets.map((t:any)=>Date.parse(t?.ended?.at??'')).filter(Number.isFinite))
+      }
+      items.push({id:String(row.id),value});bytes+=size
     }
     return {items,...(rows.length>items.length?{next:items.at(-1)!.id}:{})}
   }
@@ -136,6 +150,10 @@ export class ProcessSource extends MessageSource {
         const event=sourceChangeSchema.parse(op.event)
         if(!this.sourceContext||!this.scopes().includes(event.scope))throw Error('Plugin lifecycle event is outside its source')
         this.sourceContext.change?.(event)
+      }else if(op.type==='repository-update'){
+        const update=repositoryUpdateSchema.parse(op.update)
+        if(!this.code||!this.sourceContext?.repositoryUpdate||update.repository!==this.code.id||!this.validThread(update.thread))throw Error('Repository observation is outside its scope')
+        this.sourceContext.repositoryUpdate(update)
       }else throw Error('Unsupported plugin host operation')
     }})
   }
@@ -172,6 +190,11 @@ export class ProcessSource extends MessageSource {
     if(this.child!==child)return
     try{
       const message=JSON.parse(line)
+      if(message.type==='repository-authorize'){
+        let allowed=false
+        try{if(!this.repositoryAuthority)throw Error('No active repository mutation');this.repositoryAuthority();allowed=true}catch{}
+        child.stdin.write(JSON.stringify({type:'repository-authorized',id:message.id,allowed})+'\n');return
+      }
       if(message.type==='records'){const result=this.records(message.kind,message.query);child.stdin.write(JSON.stringify({type:'records-result',id:message.id,result,stateAck:this.stateAck})+'\n');return}
       if(message.type==='events'){this.apply(message.operations);this.stateAck=message.id;child.stdin.write(JSON.stringify({type:'ack',id:message.id})+'\n');return}
       if(message.type!=='result')throw Error('Invalid plugin response')
@@ -202,6 +225,11 @@ export class ProcessSource extends MessageSource {
     const c=this.active()
     if(['poll','start'].includes(method)&&!c.capabilities.events)throw Error('Events disabled')
     if(['read','context'].includes(method)&&!c.capabilities.resources)throw Error('Resources disabled')
+    if(['repositoryPull','mergeSnapshot','reviewGraph','resolveReview','draft','mergeIdentity','merge'].includes(method)){
+      if(!this.code||!c.capabilities.resources)throw Error('Repository access revoked')
+      if(['resolveReview','draft','merge'].includes(method)&&!c.capabilities.replies)throw Error('Repository writes revoked')
+      if(['repositoryPull','mergeSnapshot','reviewGraph','resolveReview','merge'].includes(method)&&(!Number.isSafeInteger(args[0])||Number(args[0])<1||!this.validThread(this.code.threadPrefix+args[0])))throw Error('Repository target is unavailable')
+    }
     if(method==='deliver'){
       const m=args[0] as OutboundMessage
       if(!c.capabilities.replies||m.channel.source!==c.id||!this.validThread(m.channel.thread))throw Error('Reply access revoked')
@@ -213,7 +241,8 @@ export class ProcessSource extends MessageSource {
       if(t&&(t.source!==c.id||!this.scopes().includes(String(t.meta?.scope??t.meta?.chat))))throw Error('Resource access revoked')
     }
   }
-  invoke(method:string,...args:unknown[]){
+  invoke(method:string,...args:unknown[]){return this.call(method,args)}
+  private call(method:string,args:unknown[],mayAct?:()=>boolean){
     if(!this.pkg.manifest.methods.includes(method as any))return Promise.reject(Error('Plugin capability is unavailable'))
     const work=this.serial.then(async()=>{
       this.guard(method,args);await this.launch();this.guard(method,args)
@@ -222,8 +251,10 @@ export class ProcessSource extends MessageSource {
         if(saved&&saved.principal!==identity?.id)throw Error('Plugin connection account changed')
         this.guard(method,args)
       }
-      const result=await this.request({type:'call',method,args,config:this.effectiveConfig(),snapshot:this.snapshot(),stateAck:this.stateAck})
-      this.guard(method,args);return result
+      const authorize=()=>{this.guard(method,args);if(mayAct&&!mayAct())throw Error('Repository operation authority ended')}
+      if(['resolveReview','draft','merge'].includes(method)){authorize();this.repositoryAuthority=authorize}
+      try{const result=await this.request({type:'call',method,args,config:this.effectiveConfig(),snapshot:this.snapshot(),stateAck:this.stateAck});this.guard(method,args);return result}
+      finally{this.repositoryAuthority=undefined}
     })
     this.serial=work.catch(()=>{});return work
   }
@@ -231,10 +262,24 @@ export class ProcessSource extends MessageSource {
   async poll(context:SourceContext){this.sourceContext=context;this.hostStore=context.store;if(this.pkg.manifest.methods.includes('poll'))await this.invoke('poll')}
   identity(){return this.invoke('identity')}
   probe(){return this.invoke('probe')}
+  repositoryPull(number:number){return this.invoke('repositoryPull',number)}
+  mergeSnapshot(number:number){return this.invoke('mergeSnapshot',number)}
+  reviewGraph(number:number){return this.invoke('reviewGraph',number)}
+  async resolveReview(number:number,thread:string,mayAct?:()=>boolean){await this.call('resolveReview',[number,thread],mayAct)}
+  draft(branch:string,title:string,body:string,mayAct?:()=>boolean){return this.call('draft',[branch,title,body],mayAct)}
+  mergeIdentity(_identityHint?:string){return this.invoke('mergeIdentity')}
+  merge(number:number,head:string,method:'squash'|'merge'|'rebase',_identityHint?:string,mayAct?:()=>boolean){return this.call('merge',[number,head,method],mayAct)}
   members(scope=this.scopes()[0]){if(!scope||!this.scopes().includes(scope))throw Error('Scope is unavailable');return this.invoke('members',scope)}
   async read(request:{resource:string;trigger?:Trigger;pageSize:number}){
     const check=()=>{if(!this.active().capabilities.resources||request.trigger&&(request.trigger.source!==this.config.id||!this.scopes().includes(String(request.trigger.meta.scope??request.trigger.meta.chat))))throw Error('Resource is outside plugin source')}
     check();const result=await this.invoke('read',request);check();return result
+  }
+  authorizeRead(ticket:import('./vendor/dsh-core/index.ts').Ticket,resource:string){
+    const code=this.code;if(!code)return
+    const match=/^(?:[^/]+\/)?(?:issues|pulls)\/(\d+)(?:\/|$)/.exec(resource)
+    if(!match)return
+    const thread=code.threadPrefix+match[1]
+    if(!ticket.channels.some(c=>c.source===this.config.id&&c.thread===thread)&&!ticket.follows?.some(f=>f.thread===this.config.id+':'+thread))throw Error('Repository conversation is outside this worker')
   }
   async context(thread:string){if(!this.validThread(thread)||!this.active().capabilities.resources)throw Error('Thread is unavailable');const result=await this.invoke('context',thread);if(!this.validThread(thread)||!this.active().capabilities.resources)throw Error('Thread access revoked');return result}
   async deliver(message:OutboundMessage){

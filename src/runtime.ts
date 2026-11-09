@@ -1,3 +1,4 @@
+import {activateBackendPackages} from './backends/plugin-package.ts'
 import {HostWatchdog} from './watchdog-host.ts'
 import {recordMaintenanceReplay} from './maintenance-replay.ts'
 import {SourceIdentities} from './source-identity.ts'
@@ -31,7 +32,7 @@ import {fileURLToPath} from 'node:url'
 import {Setup} from './setup.ts'
 import {Reviews} from './review.ts'
 import {Merger} from './merge.ts'
-import type {GithubApi} from './connectors/github.ts'
+import {observeRepository} from './repository-source.ts'
 import {loadManagedConfig} from './managed-config.ts'
 import {loadMarketConfig,recoverMarket} from './plugin-market-state.ts'
 import {workerProfiles} from './worker-pool.ts'
@@ -126,8 +127,8 @@ export class Runtime {
   private timer?: ReturnType<typeof setInterval>
   private lock: string
   private paused = false
-  static async create(config:Config,options:{model?:Model;sources?:Source[];mergeApi?:GithubApi;clock?:()=>number;browserDriver?:BrowserDriver;pluginActivation?:string}={}){loadMarketConfig(config,options.pluginActivation);return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
-  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi;sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory;memoryRerank?:import('./memory-rerank.ts').RerankMemory;pluginActivation?:string } = {}) {
+  static async create(config:Config,options:{model?:Model;sources?:Source[];clock?:()=>number;browserDriver?:BrowserDriver;pluginActivation?:string}={}){loadMarketConfig(config,options.pluginActivation);return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
+  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory;memoryRerank?:import('./memory-rerank.ts').RerankMemory;pluginActivation?:string } = {}) {
     if(config.sourcePlugins.length&&!options.sourceRegistry)throw Error('Use Runtime.create to load configured source plugins')
     this.sourceRegistry=options.sourceRegistry??new SourceRegistry()
     validateBackendSelection(config)
@@ -162,6 +163,7 @@ export class Runtime {
           this.sources.set(source.id,adapter)
         }
         activatePluginPackages(this.store,config,this.sourceRegistry.packages,previous)
+        activateBackendPackages(this.store,config)
         return {settings,model}
       })
       this.settings=initial.settings;this.model=initial.model
@@ -217,9 +219,10 @@ export class Runtime {
     this.chat=new ChatSessions(this)
     this.browser=new BrowserManager(this,options.browserDriver)
     this.work=new WorkManager(this.store,config,{valid:owner=>this.validWork(owner),wake:item=>this.workCompleted(item),expired:(owner,killed,remaining)=>{const run=this.store.get<Run>('run',owner.ticketId);if(run?.phase==='background'&&this.validWork(owner)){this.store.put('run',owner.ticketId,{...run,phase:'idle'});this.engine.report(owner.ticketId,{state:'waiting',summary:(run.result??'')+' Background deadline reached. Killed jobs: '+killed.join(', ')+'; remaining subagents: '+remaining.join(', ')})}},agent:(item,signal)=>this.runAgent(item,signal)})
-    this.merger=new Merger(this,options.mergeApi)
+    this.merger=new Merger(this)
     this.setup=new Setup(this)
     this.reviews=new Reviews(this)
+    this.manager.restoreSubscriptions()
     this.store.recoverJobs()
     this.store.recoverDeliveries()
     for (const run of this.store.list<Run>('run')) {
@@ -472,7 +475,7 @@ export class Runtime {
       }
       this.store.put('source-event-key',key,trigger.id)
     }
-    if(!trigger.human&&String(trigger.meta.scope).startsWith('review')&&typeof trigger.meta.head==='string'&&(!this.config.delivery.automatedReviewers.length||this.config.delivery.automatedReviewers.includes(trigger.actor.id))){
+    if(!trigger.human&&String(trigger.meta.eventKind??trigger.meta.scope).startsWith('review')&&typeof trigger.meta.head==='string'&&(!this.config.delivery.automatedReviewers.length||this.config.delivery.automatedReviewers.includes(trigger.actor.id))){
       const key=trigger.source+':'+trigger.meta.number,rounds=this.store.get<string[]>('review-rounds',key)??[]
       if(!rounds.includes(trigger.meta.head)){
         if(rounds.length>=this.config.delivery.maxReviewRounds){this.store.audit({type:'review.round-limit',trigger:trigger.id,head:trigger.meta.head});return {disposition:'ignored',reason:'Automated review round limit'}}
@@ -1190,6 +1193,7 @@ export class Runtime {
         change:(event:SourceChange)=>this.sourceChanged(source.config.id,event),
         bind:(ticketId:string,thread:string,own:boolean)=>{this.engine.bindThread(ticketId,{source:source.config.id,id:thread},own)},
         closed:(thread:string,outcome:'merged'|'closed',at:string)=>this.engine.threadClosed({source:source.config.id,id:thread},outcome,at),
+        repositoryUpdate:(update:import('./repository-source.ts').RepositoryUpdate)=>observeRepository(source,this.store,this.engine,update),
       }
       const poll=Promise.resolve().then(async()=>{
         await source.start?.(context)

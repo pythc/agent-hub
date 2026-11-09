@@ -1,13 +1,16 @@
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
-import {GithubSource,GhApi,type GithubApi} from './connectors/github.ts'
+import {isRepositorySource,repositoryNumber} from './repository-source.ts'
 import type {Runtime} from './runtime.ts'
 import type {Config} from './config.ts'
 import type {Run} from './store.ts'
 import {latestAssignment} from './vendor/dsh-core/index.ts'
+import {z} from 'zod'
 export interface MergeGrant {id:string;ticketId:string;source:string;number:number;head:string;branch:string;base:string;expiresAt:number;enabled:boolean}
 export interface MergeAttempt {id:string;phase:'waiting'|'submitting'|'merged'|'uncertain'|'revoked';head:string;at:number;reason?:string;sha?:string}
+const snapshotSchema=z.object({actor:z.string().min(1),pull:z.object({state:z.string(),draft:z.boolean(),merged:z.boolean(),additions:z.number().int().min(0),deletions:z.number().int().min(0),mergeable:z.boolean().nullable(),head:z.object({sha:z.string().min(1)})}),reviews:z.array(z.object({id:z.number(),state:z.string(),commit_id:z.string().nullable().optional(),submitted_at:z.string().nullable().optional(),user:z.object({login:z.string().min(1),type:z.string()})})),checks:z.object({head:z.string().min(1),checks:z.array(z.object({name:z.string(),status:z.string(),conclusion:z.string().nullable()})),statuses:z.array(z.object({context:z.string(),state:z.string()}))}),graph:z.object({autoMergeRequest:z.unknown().refine(v=>v!==undefined),reviewThreads:z.object({nodes:z.array(z.object({isResolved:z.boolean(),isOutdated:z.boolean()})),pageInfo:z.object({hasNextPage:z.boolean()})})})})
 export function mergeEligibility(snapshot:any,policy:Config['delivery']):string[]{
+ if(!snapshotSchema.safeParse(snapshot).success)return ['Repository snapshot is incomplete or invalid']
  const {pull,reviews,checks,graph}=snapshot,errors:string[]=[]
  if(pull.state!=='open'||pull.draft||pull.merged)errors.push('PR is not open and ready')
  if(pull.additions+pull.deletions>=policy.maxChangedLines)errors.push('Changed-line threshold reached')
@@ -33,13 +36,13 @@ export function mergeEligibility(snapshot:any,policy:Config['delivery']):string[
 export class Merger {
  private running:Promise<void>|undefined
  private stopping=false
- constructor(private host:Runtime,private injectedApi?:GithubApi){}
- private source(id:string){const source=this.host.sources.get(id);if(!(source instanceof GithubSource))throw Error('GitHub merge source required');return source}
+ constructor(private host:Runtime){}
+ private source(id:string){const source=this.host.sources.get(id);if(!isRepositorySource(source))throw Error('Repository merge source required');return source}
  private async owned(ticketId:string,sourceId:string,number:number,snapshot:any){
   const ticket=this.host.store.tickets.get(ticketId),run=this.host.store.get<Run>('run',ticketId)
-  if(!ticket||ticket.ended||!run||run.phase!=='idle'||ticket.mandate.actor.source!==sourceId||!ticket.follows?.some(f=>f.own&&f.thread===sourceId+':'+this.source(sourceId).config.repository+'#'+number))throw Error('Merge requires this live task own PR')
+  if(!ticket||ticket.ended||!run||run.phase!=='idle'||ticket.mandate.actor.source!==sourceId||!ticket.follows?.some(f=>f.own&&f.thread===sourceId+':'+this.source(sourceId).code.threadPrefix+number))throw Error('Merge requires this live task own PR')
   const branch=(await promisify(execFile)('git',['branch','--show-current'],{cwd:run.cwd,encoding:'utf8',timeout:5000})).stdout.trim()
-  const repo=this.source(sourceId).config.repository
+  const repo=this.source(sourceId).code.id
   if(!branch.startsWith('superagent/')||snapshot.pull.head.ref!==branch||snapshot.pull.head.repo.full_name.toLowerCase()!==repo?.toLowerCase()||snapshot.pull.base.repo.full_name.toLowerCase()!==repo?.toLowerCase())throw Error('PR branch or repository is outside this task')
   return {ticket,run,branch}
  }
@@ -72,8 +75,9 @@ export class Merger {
     if(this.host.store.get<Run>('run',ticket.id)?.phase!=='idle'||ticket.undelivered.length||latestAssignment(ticket)?.report?.state!=='ready')continue
     for(const follow of ticket.follows??[]){
      if(!follow.own)continue
-     const separator=follow.thread.indexOf(':'),sourceId=follow.thread.slice(0,separator),source=this.host.sources.get(sourceId),number=Number(follow.thread.split('#').at(-1))
-     if(!(source instanceof GithubSource)||sourceId!==ticket.mandate.actor.source)continue
+     const separator=follow.thread.indexOf(':'),sourceId=follow.thread.slice(0,separator),source=this.host.sources.get(sourceId),thread=follow.thread.slice(separator+1)
+     if(!isRepositorySource(source)||sourceId!==ticket.mandate.actor.source)continue
+     const number=repositoryNumber(source,thread)
      const key=sourceId+':'+number,grant=this.host.store.get<MergeGrant>('merge-grant',key),attempt=this.host.store.get<MergeAttempt>('merge-attempt',key)
      if(grant?.enabled||attempt&&['submitting','uncertain','merged'].includes(attempt.phase))continue
      try{const snapshot=await source.mergeSnapshot(number);if(!mergeEligibility(snapshot,this.host.config.delivery).length&&!(grant&&!grant.enabled&&grant.head===snapshot.pull.head.sha)){await this.authorize(ticket.id,sourceId,number,snapshot.pull.head.sha);this.host.store.audit({type:'policy.merge.authorized',ticketId:ticket.id,head:snapshot.pull.head.sha})}}catch(error){this.host.store.audit({type:'policy.merge.blocked',ticketId:ticket.id,error:String(error).slice(0,200)})}
@@ -89,7 +93,7 @@ export class Merger {
    const record=(phase:MergeAttempt['phase'],reason?:string,sha?:string)=>this.host.store.put('merge-attempt',grant.id,{id:grant.id,phase,head:grant.head,at:Date.now(),reason,sha})
    const policy=this.host.config.delivery
    try{
-    if(!policy.autoMerge||!policy.mergeGh){record('waiting','Automatic merging is disabled or the merge identity CLI is missing');continue}
+    if(!policy.autoMerge){record('waiting','Automatic merging is disabled');continue}
     if(grant.expiresAt<Date.now()){this.revoke(grant.source,grant.number,'Authorization expired');continue}
     const source=this.source(grant.source),snapshot=await source.mergeSnapshot(grant.number)
     if(snapshot.pull.merged){
@@ -103,16 +107,19 @@ export class Merger {
     if(snapshot.pull.head.sha!==grant.head||snapshot.pull.base.ref!==grant.base)issues.push('Authorized head or base changed')
     if(ticket.undelivered.length||latestAssignment(ticket)?.report?.state!=='ready')issues.push('Worker has not finished current inputs')
     if(issues.length){record('waiting',issues.join('; '));continue}
-    const merger=this.injectedApi??new GhApi(policy.mergeGh),actor=await merger.request('GET','user')
+    const actor=await source.mergeIdentity(policy.mergeGh)
     if(actor.login.toLowerCase()===snapshot.actor.toLowerCase()){record('waiting','Merge identity must differ from the agent account');continue}
     const fresh=this.host.store.get<MergeGrant>('merge-grant',grant.id),live=this.host.store.tickets.get(ticket.id),liveRun=this.host.store.get<Run>('run',ticket.id)
     if(this.stopping||this.host.status().paused||!fresh?.enabled||fresh.head!==grant.head||fresh.expiresAt<Date.now()||live?.ended||live?.undelivered.length||latestAssignment(live!)?.report?.state!=='ready'||liveRun?.phase!=='idle'||JSON.stringify(policy)!==JSON.stringify(this.host.config.delivery))continue
-    // REST merge performs the head comparison atomically on GitHub. Enabling queued
+    // The provider merge must perform the head comparison atomically. Enabling queued
     // auto-merge has no expected-head field and would leave a stale-head race.
     this.host.store.atomic(()=>{record('submitting');this.host.store.put('run',ticket.id,{...run,phase:'merging'})})
     try{
-     const result=await merger.request('PUT','repos/'+source.config.repository+'/pulls/'+grant.number+'/merge',{sha:grant.head,merge_method:policy.method})
-     if(!result.merged)throw Error('GitHub did not confirm the merge')
+     const result=await source.merge(grant.number,grant.head,policy.method,policy.mergeGh,()=>{
+      const current=this.host.store.get<MergeGrant>('merge-grant',grant.id),task=this.host.store.tickets.get(ticket.id),running=this.host.store.get<Run>('run',ticket.id)
+      return !this.stopping&&!this.host.status().paused&&source.config.enabled&&source.config.capabilities.replies&&current?.enabled===true&&current.head===grant.head&&current.base===grant.base&&current.ticketId===ticket.id&&current.expiresAt>=Date.now()&&!!task&&!task.ended&&!task.undelivered.length&&latestAssignment(task)?.report?.state==='ready'&&running?.phase==='merging'&&running.assignmentId===run.assignmentId&&JSON.stringify(policy)===JSON.stringify(this.host.config.delivery)&&this.host.validWork({ticketId:ticket.id,assignmentId:run.assignmentId,cwd:run.cwd,sandbox:'workspace-write',depth:0})
+     })
+     if(!result.merged)throw Error('Repository provider did not confirm the merge')
      record('merged',undefined,result.sha)
     }catch(error){record('uncertain',String(error).slice(0,500))}
     finally{const current=this.host.store.get<Run>('run',ticket.id);if(current?.phase==='merging')this.host.store.put('run',ticket.id,{...current,phase:'idle'})}

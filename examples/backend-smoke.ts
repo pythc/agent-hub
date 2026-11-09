@@ -1,3 +1,4 @@
+import {isApiBackend} from '../src/backend-config.ts'
 import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs'
 import {resolve,join} from 'node:path'
 import {randomUUID} from 'node:crypto'
@@ -9,7 +10,7 @@ import {Runtime} from '../src/runtime.ts'
 const [file,id]=process.argv.slice(2)
 if(!file||!id)throw Error('Usage: backend-smoke.ts CONFIG BACKEND_ID')
 const original=loadConfig(file),backend=original.backends[id]
-if(!backend||backend.kind==='codex')throw Error('Select a configured API backend')
+if(!backend||!isApiBackend(backend))throw Error('Select a configured API backend')
 if(backend.apiKeyEnv&&!process.env[backend.apiKeyEnv]?.trim())throw Error('Missing environment variable '+backend.apiKeyEnv)
 mkdirSync('.local',{recursive:true})
 const root=mkdtempSync(resolve('.local/provider-smoke-')),cwd=join(root,'files'),marker='agenthub-'+randomUUID()

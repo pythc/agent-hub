@@ -2,7 +2,7 @@ import {pathToFileURL} from 'node:url'
 import {isAbsolute} from 'node:path'
 import type {Config,SourceConfig} from './config.ts'
 import {MessageSource,type Source} from './sources.ts'
-import {GithubSource} from './connectors/github.ts'
+import githubPlugin from '../plugins/github/index.ts'
 import feishuPlugin from '../plugins/feishu/index.ts'
 import {WecomSource} from './connectors/wecom.ts'
 import type {Ticket} from './vendor/dsh-core/index.ts'
@@ -30,9 +30,9 @@ export class SourceRegistry {
     for(const [kind,label,create] of [
       ['local','Local operator',(c:SourceConfig)=>new MessageSource(c)],
       ['webhook','HTTP events',(c:SourceConfig)=>new MessageSource(c)],
-      ['github','GitHub',(c:SourceConfig)=>new GithubSource(c)],
       ['wecom','WeCom',(c:SourceConfig)=>new WecomSource(c)],
-    ] as const)this.register({apiVersion:1,kind,label,create,...(kind==='github'?{observed:(c:SourceConfig)=>!!c.github?.receiveAll,authorizeRead:GithubSource.authorizeRead,replayCursors:(c:SourceConfig)=>[c.id]}:{}),...(kind==='wecom'?{scopes:(c:SourceConfig)=>c.wecom?.chats.length?c.wecom.chats:undefined}:{})})
+    ] as const)this.register({apiVersion:1,kind,label,create,...(kind==='wecom'?{scopes:(c:SourceConfig)=>c.wecom?.chats.length?c.wecom.chats:undefined}:{})})
+    this.register(githubPlugin)
     this.register(feishuPlugin)
   }
   register(plugin:SourcePlugin){
@@ -63,6 +63,7 @@ export class SourceRegistry {
         if(registry.plugins.has(pkg.manifest.kind)){if(!entry.replaceBuiltin)throw Error('Explicit replacement required for built-in adapter');registry.plugins.delete(pkg.manifest.kind)}
         registry.packages.push(pkg)
         registry.register({apiVersion:1,kind:pkg.manifest.kind,label:pkg.manifest.label,
+          observed:c=>pkg.manifest.observedPath?!!pointer(c,pkg.manifest.observedPath):true,
           scopes:c=>pointer(c,pkg.manifest.scopesPath) as string[],
           replayCursors:c=>pkg.manifest.cursorMode==='scope'?(pointer(c,pkg.manifest.scopesPath) as string[]).map(id=>c.id+':'+id):pkg.manifest.cursorMode==='source'?[c.id]:[],
           create:c=>new ProcessSource(c,pkg,{sandboxDriver:config.work.sandboxDriver,codex:config.codex,stateDir:config.stateDir,readPaths:entry.readPaths}),

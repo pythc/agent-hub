@@ -1,7 +1,7 @@
 import {z} from 'zod'
-import {backendDefinition,parametersSchema,effortSchema,type BackendDefinition} from './backend-config.ts'
+import {apiBackendDefinition,isApiBackend,parametersSchema,effortSchema,type BackendDefinition} from './backend-config.ts'
 
-const api=backendDefinition.options[1]
+const api=apiBackendDefinition
 const jev=z.object({kind:z.literal('jev'),baseUrl:api.shape.baseUrl.default('https://api.typesafe.ai/v1'),model:z.string().min(1).max(300).default('jev-latest'),apiKeyEnv:api.shape.apiKeyEnv,headers:api.shape.headers,headerEnv:api.shape.headerEnv}).strict()
 export const decisionConfigSchema=z.object({
  mode:z.enum(['off','shadow','advisory']).default('off'),
@@ -23,6 +23,6 @@ export function decisionProvider(config:DecisionConfig,backends:Record<string,Ba
  if(!p)return undefined
  if(p.kind!=='backend')return p
  const d=backends[p.id]
- if(!d||d.kind==='codex'||d.subscription)throw Error('Decision provider must reference an API backend without an agent subscription')
+ if(!d||!isApiBackend(d)||d.subscription)throw Error('Decision provider must reference an API backend without an agent subscription')
  return d
 }

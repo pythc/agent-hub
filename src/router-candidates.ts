@@ -1,5 +1,6 @@
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
+import {canContinueRepositoryTask} from './repository-source.ts'
 import type {Job} from './store.ts'
 import type {Trigger} from './vendor/dsh-core/index.ts'
 import type {ToolSpec} from './model.ts'
@@ -78,8 +79,8 @@ export class RouterCandidates {
  related():RelatedTask[]{
   const {host,batch}=this,t=this.trigger,c=host.scopes.context(t,batch.discussion)
   return host.store.list<{ticketId:string;discussion:string;actor:string;source:string}>('worker-assignment')
-   .filter(a=>a.discussion===batch.discussion&&a.source===t.source)
-   .flatMap(a=>{try{if(c){host.scopes.checkTask(a.ticketId,c);host.scopes.checkTaskEntry(host.scopes.ownership(a.ticketId)!,c.route.entryId,'result');const saved=host.store.get<{manifest:ContextManifest}>('task-context',a.ticketId);if(saved)host.memory.validate(saved.manifest)}const raw=host.store.tickets.get(a.ticketId),ticket=raw&&taskView(host.store,raw);return ticket?[{id:ticket.id,title:clipped(ticket.title,160),scope:clipped(ticket.mandate.scope,700),state:ticket.ended?.by??ticket.assignments.at(-1)?.report?.state??'running',ended:!!ticket.ended,canAttach:a.actor===t.actor.id}]:[]}catch{return []}}).slice(-8)
+   .filter(a=>a.source===t.source&&(a.discussion===batch.discussion||!!c&&canContinueRepositoryTask(host,t,a.ticketId)))
+   .flatMap(a=>{try{if(c){host.scopes.checkTask(a.ticketId,c);host.scopes.checkTaskEntry(host.scopes.ownership(a.ticketId)!,c.route.entryId,'result');const saved=host.store.get<{manifest:ContextManifest}>('task-context',a.ticketId);if(saved)host.memory.validate(saved.manifest)}const raw=host.store.tickets.get(a.ticketId),ticket=raw&&taskView(host.store,raw);return ticket?[{id:ticket.id,title:clipped(ticket.title,160),scope:clipped(ticket.mandate.scope,700),state:ticket.ended?.by??ticket.assignments.at(-1)?.report?.state??'running',ended:!!ticket.ended,canAttach:a.actor===t.actor.id&&a.discussion===batch.discussion||!!c&&canContinueRepositoryTask(host,t,a.ticketId)}]:[]}catch{return []}}).slice(-8)
  }
  card(){
   this.check()
@@ -120,6 +121,7 @@ export class RouterCandidates {
   }
   if(input.action==='attach'&&(!input.targetTicketId||!this.related().some(t=>t.id===input.targetTicketId&&!t.ended&&t.canAttach)))throw Error('Attachment must identify an active task owned by this actor in this discussion')
   if(input.action==='accept'&&input.targetTicketId)throw Error('A task continuation must attach instead of creating another task')
+  if(input.action==='accept'&&this.related().some(t=>t.canAttach&&canContinueRepositoryTask(this.host,this.trigger,t.id)))throw Error('An owned repository follow-up must attach to its existing task, not create duplicate work')
   this.host.store.atomic(()=>{
    // Keep a normal Router job as a crash/rollback continuation; finish consumes it in this turn.
    for(const id of this.batch.triggerIds){const result=this.host.routerIngress.decide(id,this.batch.policyVersion,input,id===this.batch.primary);if(!result)throw Error('Candidate is no longer pending');this.batch.result=result.state}

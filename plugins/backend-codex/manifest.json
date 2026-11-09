@@ -1,0 +1,29 @@
+{
+  "id": "codex-cli",
+  "label": "Codex CLI",
+  "version": "1.0.1",
+  "stateVersion": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "command": {"type": "string", "minLength": 1},
+      "args": {"type": "array", "items": {"type": "string"}},
+      "model": {"type": "string", "minLength": 1},
+      "effort": {"enum": ["low", "medium", "high", "xhigh"]},
+      "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 3600000}
+    },
+    "additionalProperties": false
+  },
+  "parametersSchema": {
+    "type": "object",
+    "properties": {"thread": {"type": "object"}, "turn": {"type": "object"}, "config": {"type": "object"}},
+    "additionalProperties": false
+  },
+  "capabilities": {
+    "resume": true, "tools": true, "managed": true, "contextBudget": true,
+    "steering": true, "promptRefresh": true, "images": true, "nativeTakeover": true,
+    "history": true, "purge": true, "modelCatalog": true
+  },
+  "network": true,
+  "environment": ["CODEX_HOME", "OPENAI_API_KEY", "OPENAI_BASE_URL", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"]
+}

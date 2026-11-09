@@ -26,6 +26,10 @@ export function marketBlockers(host:Runtime){
   count('goals',host.store.list<any>('router-goal').filter(g=>!['completed','cancelled'].includes(g.state)).length)
   count('deliveries',host.store.deliveries().filter(d=>['pending','sending','uncertain','held'].includes(d.status)).length)
   count('tool-receipts',host.store.list<any>('tool-receipt').filter(r=>['running','uncertain'].includes(r.state)).length)
+  count('backend-effects',host.store.list<any>('backend-plugin-tool').filter(r=>r.state==='running').length)
+  count('repository-publications',host.store.list<any>('pr-delivery').filter(r=>['pushing','creating','uncertain'].includes(r.phase)).length)
+  count('repository-merges',host.store.list<any>('merge-attempt').filter(r=>['submitting','uncertain'].includes(r.phase)).length)
+  count('repository-reviews',host.store.list<any>('review-action').filter(r=>r.phase==='pending').length)
   count('jobs',Number(host.store.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state IN ('pending','running')").get()!.n))
   return items
 }

@@ -166,7 +166,7 @@ export class ApiModel implements Model {
       if(result.contentItems.some(c=>c.type==='inputImage')&&!this.definition.images)result=failure('This backend is configured without image support. Image bytes were not sent to the model.')
       for(const item of result.contentItems)if(item.type==='inputImage')image(item.imageUrl!)
       effect.state='completed';effect.result=result;persist();turn.items.push({type:'functionCallOutput',callId:call.id,success:result.success,contentItems:result.contentItems})
-      const reference=r.contextBudget&&protocolBytes(result)>r.contextBudget.toolReserveBytes&&r.retainToolResult?receiptReference(result,r.retainToolResult(call.id,result)):undefined
+      const reference=r.contextBudget&&protocolBytes(result)>r.contextBudget.toolReserveBytes&&r.retainToolResult?receiptReference(result,await r.retainToolResult(call.id,result)):undefined
       results.push(reference??result)
      }
      this.appendResults(t,accepted.calls,results);delete t.pending;persist();if(budgetError)throw budgetError;continue
