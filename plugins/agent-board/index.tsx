@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client'
 import {Network,Cpu,RefreshCw,ArrowUpRight,ChevronRight,X,Inbox,Search,Radio,Layers,GitBranch,Sparkles,Check,Clock3,Activity,ShieldCheck} from 'lucide-react'
 import type {HostViewMessage,ViewHostMessage,ViewSnapshot,ViewTask,ViewAgent,ViewQuery,TaskState} from '../../src/workspace-view-contract.ts'
 import {styles} from './style.ts'
+import {boardTimestamp} from './time.ts'
 
 const style=document.createElement('style');style.nonce=document.currentScript?.nonce??'';style.textContent=styles;document.head.append(style)
 let port:MessagePort|undefined
@@ -37,7 +38,7 @@ function Board(){
   useEffect(()=>{if(search===(query.search??''))return;const timer=setTimeout(()=>update({search}),400);return()=>clearTimeout(timer)},[search,query])
   const open=(value:NonNullable<typeof detail>)=>{returnFocus.current=document.activeElement as HTMLElement;setDetail(value)}
   const close=()=>{dialog.current?.close();setDetail(null);returnFocus.current?.focus()}
-  const date=(value:number|string)=>new Date(value).toLocaleTimeString(language,{hour:'2-digit',minute:'2-digit'})
+  const date=(value:number|string)=>{const time=boardTimestamp(value,language);return <time dateTime={time.dateTime} title={time.title}>{time.label}</time>}
   const fresh=connection==='live'&&!data?.paused
   const label=connection==='stale'?L('Connection lost · data is stale','连接中断 · 数据已过期'):connection==='hidden'?L('Updates paused','更新已暂停'):connection==='loading'?L('Updating…','正在更新…'):L('Live','实时')
   function renderAgent({agent,router=false}:{agent:ViewAgent;router?:boolean}){
