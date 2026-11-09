@@ -6,6 +6,7 @@ export interface ViewTask {id:string;title:string;state:TaskState;sourceId:strin
 export interface ViewCall {id:string;kind:'router'|'worker'|'subagent'|'tool';name:string;state:'running'|'completed'|'failed'|'interrupted';workerId?:string;ticketId?:string;sourceId?:string;model?:string;startedAt:number;endedAt?:number}
 export interface ViewAgent {id:string;label:string;model:string|null;backend:string;active:number;taskIds:string[];state:'enabled'|'paused'|'retiring'}
 export interface ViewSnapshot {
+  usage?:import('./usage-contract.ts').UsageSummary;
   at:number;paused:boolean;query:ViewQuery;
   sources:{id:string;label:string;kind:string;enabled:boolean;status:'ok'|'retrying'|'error'|'unknown';at:number|null}[];
   team:{router:ViewAgent;workers:ViewAgent[];totalWorkers:number};

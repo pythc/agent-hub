@@ -36,6 +36,14 @@ export function seedBoard(host:Runtime,count=32){
   host.store.put('decision-call','routing-1',{id:'routing-1',at:Date.now(),revision:1,mode:'advisory',purpose:'routing',provider:'local',model:'local-classifier',status:'ok',latencyMs:42,usage:{inputTokens:360,outputTokens:18},decisions:[{id:'event',action:'REVIEW'}]})
   host.store.put('decision-call','routing-2',{id:'routing-2',at:Date.now(),revision:1,mode:'shadow',purpose:'routing',provider:'local',model:'local-classifier',status:'ok',latencyMs:37,decisions:[{id:'event',action:'IGNORE'}]})
   host.store.put('decision-call','probe',{id:'probe',at:Date.now(),revision:1,mode:'shadow',purpose:'probe',provider:'local',model:'local-classifier',status:'ok',latencyMs:40,usage:{inputTokens:99999,outputTokens:99999}})
+  for(const [index,purpose] of ['router','worker','verification','replanning','plan_review','memory'].entries()){
+    const id='usage-fixture-'+index
+    host.usage.begin(id,purpose==='worker'?'worker':'router',{sourceId:index%2?'personal':'product',...(purpose==='worker'?{workerId:'research'}:{})},purpose as any)
+    host.usage.record(id,0,{id:'step',inputTokens:10000+index*1000,cachedInputTokens:8000,outputTokens:200,reasoningOutputTokens:40})
+    host.usage.finish(id,'completed')
+  }
+  host.usage.begin('usage-unknown','worker',{sourceId:'product',workerId:'build'})
+  host.usage.finish('usage-unknown','interrupted')
   // Seeded records are display fixtures, not executable jobs. Serving this host must not call a model.
   host.store.db.prepare('DELETE FROM jobs').run()
   for(const thread of host.store.threads.list())host.store.threads.save({...thread,pending:[],evaluating:undefined})

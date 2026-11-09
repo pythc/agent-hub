@@ -18,7 +18,7 @@ export const migrationKinds=new Set(`trigger disposition thread ticket decision 
 browser-profile browser-session browser-receipt chat-call chat-conversation chat-message chat-revision chat-run
 router-cancelled router-candidate router-candidate-job router-followup router-followup-notice router-followup-stop-attempt router-followup-stopped router-handback
 approval asset backend-binding backend-thread capabilities entry-client-event entry-client-install entry-client-receipt entry-invite entry-label entry-plan entry-verification
-execution-call health member-preview merge-attempt merge-grant onboarding onboarding-deployment pr-delivery progress prompt-preview prompt-use resource-page retired-worker review-action review-rounds
+execution-call model-usage health member-preview merge-attempt merge-grant onboarding onboarding-deployment pr-delivery progress prompt-preview prompt-use resource-page retired-worker review-action review-rounds
 router-input-set router-duty router-proactive-settings router-schedule router-schedule-run router-batch router-intervention-clock proactive-receipt router-admission router-delegation router-error router-inbox router-migration router-read router-reply-owner router-report-read router-result router-session router-version
 router-journal router-commitment router-checkpoint journal-receipt router-goal goal-wake goal-receipt goal-delivery goal-verification goal-verification-attempt goal-repair goal-release goal-replan goal-plan-dispatch knowledge-document knowledge-version knowledge-chunk knowledge-receipt
 setup source-cursor source-envelope source-event-key source-health source-live source-observed thread-cursor thread-health tool-receipt transcript wecom-inbox

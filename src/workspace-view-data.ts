@@ -39,6 +39,7 @@ export function workspaceViewData(host:Runtime,input:unknown,user='local-operato
   }
   const inputUsage=usage('inputTokens'),outputUsage=usage('outputTokens'),attention=all.filter(t=>t.state==='attention')
   return {at:Date.now(),paused:host.isPaused,query,
+    usage:host.usage.summary(query.source),
     sources:sources.slice(0,200).map(s=>{const h=health.get(s.id);return {id:s.id,label:clip(s.label??s.id),kind:clip(s.kind),enabled:s.enabled,status:h&&['ok','retrying','error'].includes(h.status)?h.status as 'ok'|'retrying'|'error':'unknown',at:h?.at??null}}),
     team:{router:{id:'router',label:'Router',model:router.model?clip(router.model,300):null,backend:clip(router.backend),state:'enabled',active:activity.filter(c=>c.kind==='router'&&c.state==='running').length,taskIds:[]},workers,totalWorkers:workspace.architecture.workers.length},counts,
     tasks:{items:filtered.slice(query.offset,query.offset+25),total:filtered.length,offset:query.offset,limit:25,more:query.offset+25<filtered.length},

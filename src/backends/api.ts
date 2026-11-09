@@ -8,6 +8,7 @@ import {checkBudget,protocolBytes,receiptReference,ContextBudgetExceeded} from '
 import {protocolTombstone} from '../history-cleanup.ts'
 import {readResponsesStream,readChatStream,readAnthropicStream} from './stream.ts'
 import {contextProjection,recall,recallSpec} from './context.ts'
+import {providerUsage} from '../model-usage.ts'
 export {readResponsesStream} from './stream.ts'
 
 export interface ThreadStore {get<T>(kind:string,id:string):T|undefined;put(kind:string,id:string,value:unknown):void}
@@ -28,7 +29,7 @@ export class ApiModel implements Model {
  constructor(readonly id:string,readonly definition:ApiDefinition,private store:ThreadStore,private turnTimeoutMs:number,private credential?:()=>string|undefined|Promise<string|undefined>){}
  describe():BackendDescription{return {id:this.id,kind:this.definition.kind,model:this.definition.model,nativeTakeover:false,images:this.definition.images,resume:true,tools:true,steering:true,promptRefresh:true}}
  private endpoint(path:string){return this.definition.baseUrl.replace(/\/+$/,'')+'/'+path}
- private async http(path:string,signal:AbortSignal,body?:unknown,onOutput?:ModelRequest['onOutput']):Promise<any>{
+ private async http(path:string,signal:AbortSignal,body?:unknown,onOutput?:ModelRequest['onOutput'],onUsage?:(value:any)=>void):Promise<any>{
   const d=this.definition,credential=this.credential?await this.credential():d.apiKeyEnv?process.env[d.apiKeyEnv]:undefined
   if(d.apiKeyEnv&&!credential?.trim())throw Error('Backend '+this.id+' requires environment variable '+d.apiKeyEnv)
   const headers:Record<string,string>={...d.headers,...Object.fromEntries(Object.entries(d.headerEnv??{}).map(([key,env])=>{const value=process.env[env];if(!value)throw Error('Missing header environment variable '+env);return [key,value]})),'content-type':'application/json'}
@@ -39,7 +40,7 @@ export class ApiModel implements Model {
   catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' network request failed or timed out')}
   if(!response.ok){await response.body?.cancel();throw Error('Backend '+this.id+' HTTP '+response.status)}
   const reader=response.body?.getReader();if(!reader)throw Error('Backend response is empty')
-  if(response.headers.get('content-type')?.includes('text/event-stream'))return (d.kind==='anthropic'?readAnthropicStream:d.kind==='openai-chat'?readChatStream:readResponsesStream)(reader,d.maxContextBytes,signal,onOutput)
+  if(response.headers.get('content-type')?.includes('text/event-stream'))return d.kind==='anthropic'?readAnthropicStream(reader,d.maxContextBytes,signal,onOutput,'anthropic',onUsage):d.kind==='openai-chat'?readChatStream(reader,d.maxContextBytes,signal,onOutput,'chat',onUsage):readResponsesStream(reader,d.maxContextBytes,signal,onOutput,onUsage)
   if(d.subscription&&body)throw Error('Subscription response must be an event stream')
   const chunks:Uint8Array[]=[];let bytes=0
   for(;;){
@@ -47,7 +48,8 @@ export class ApiModel implements Model {
    try{value=await reader.read()}catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' response connection interrupted')}
    if(value.done)break;bytes+=value.value.length;if(bytes>d.maxContextBytes){await reader.cancel();throw Error('Backend response size limit exceeded')}chunks.push(value.value)
   }
-  try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Backend returned invalid JSON')}
+  let value:any;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Backend returned invalid JSON')}
+  if(value.usage)onUsage?.(value.usage);return value
  }
  async catalog(provider?:string){
   if(provider&&provider!==this.id&&provider!==this.definition.kind)throw Error('Unknown backend model catalog: '+provider)
@@ -83,7 +85,7 @@ export class ApiModel implements Model {
   const finalInstructions=instructions+(context.notice?'\n'+context.notice:'')+'\nReturn the final answer as exactly one JSON object matching this schema, without Markdown fences. Use tools before reporting completion when the task requires evidence.\n'+JSON.stringify(r.schema)
   if(d.kind==='anthropic')return {...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,max_tokens:d.maxOutputTokens,system:finalInstructions,messages:t.messages,...(d.outputFormat==='json-schema'?{output_config:{...(d.parameters.output_config as object??{}),format:{type:'json_schema',schema:r.schema}}}:{}),...(tools.length?{tools:tools.map(s=>({name:s.name,description:s.description,input_schema:s.inputSchema}))}:{})}
   if(d.kind==='openai-responses')return {...d.parameters,model:t.model,max_output_tokens:d.maxOutputTokens,instructions:finalInstructions,input:t.messages,store:false,...(d.subscription||r.onOutput?{stream:true}:{}),include:['reasoning.encrypted_content'],...(tools.length?{tools:tools.map(s=>({type:'function',name:s.name,description:s.description,parameters:s.inputSchema,strict:false}))}:{}),...(d.outputFormat==='prompt'?{}:{text:{...(d.parameters.text as object??{}),format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',name:'agent_result',strict:true,schema:r.schema}}})}
-  return {[d.chatTokenField]:d.maxOutputTokens,...d.parameters,...(r.onOutput?{stream:true}:{}),model:t.model,messages:[{role:'system',content:finalInstructions},...t.messages],...(tools.length?{tools:tools.map(s=>({type:'function',function:{name:s.name,description:s.description,parameters:s.inputSchema,strict:false}}))}:{}),...(d.outputFormat==='prompt'?{}:{response_format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',json_schema:{name:'agent_result',strict:true,schema:r.schema}}})}
+  return {[d.chatTokenField]:d.maxOutputTokens,...d.parameters,...(r.onOutput?{stream:true,stream_options:{...(d.parameters.stream_options as object??{}),include_usage:true}}:{}),model:t.model,messages:[{role:'system',content:finalInstructions},...t.messages],...(tools.length?{tools:tools.map(s=>({type:'function',function:{name:s.name,description:s.description,parameters:s.inputSchema,strict:false}}))}:{}),...(d.outputFormat==='prompt'?{}:{response_format:d.outputFormat==='json-object'?{type:'json_object'}:{type:'json_schema',json_schema:{name:'agent_result',strict:true,schema:r.schema}}})}
  }
  private accept(response:any,t:ApiThread):{calls:Call[];text:string;wire:any[]}{
   const kind=this.definition.kind
@@ -145,7 +147,9 @@ export class ApiModel implements Model {
     r.onConfiguration?.({requested:r.options??{},sent:{model:t.model,parameters:this.definition.parameters,maxOutputTokens:this.definition.maxOutputTokens,maxSteps:this.definition.maxSteps,maxToolCalls:this.definition.maxToolCalls,stream:!!(this.definition.subscription||r.onOutput)}})
     r.onProgress?.('backend/request')
     r.onOutput?.({id:turn.id+':'+step,type:'start',phase:'answer'})
-    const response=await this.http(this.definition.kind==='openai-chat'?'chat/completions':this.definition.kind==='anthropic'?'messages':'responses',signal,body,r.onOutput)
+    const usageId=turn.id+':'+step
+    r.onUsage?.({id:usageId})
+    const response=await this.http(this.definition.kind==='openai-chat'?'chat/completions':this.definition.kind==='anthropic'?'messages':'responses',signal,body,r.onOutput,value=>r.onUsage?.(providerUsage(usageId,this.definition.kind,value)))
     signal.throwIfAborted();if(typeof response.model==='string'){(turn as any).providerModel=response.model;r.onModel?.(response.model)}const accepted=this.accept(response,t),seen=new Set<string>()
     if((toolCalls+=accepted.calls.length)>this.definition.maxToolCalls)throw Error('Backend tool call budget exceeded')
     for(const call of accepted.calls){if(typeof call.id!=='string'||!call.id||typeof call.name!=='string'||typeof call.arguments!=='string'||call.arguments.length>1000000||seen.has(call.id)||t.effects[call.id])throw Error('Backend returned an invalid or repeated tool call ID');seen.add(call.id)}

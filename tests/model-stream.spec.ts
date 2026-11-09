@@ -62,3 +62,16 @@ it('rejects an Anthropic terminal with unfinished tool blocks',async()=>{
   const text=[{type:'message_start',message:{}},{type:'content_block_start',index:0,content_block:{type:'tool_use'}},{type:'message_delta',delta:{stop_reason:'tool_use'}},{type:'message_stop'}].map(frame).join('')
   await expect(readAnthropicStream(reader(text),10000,signal())).rejects.toThrow('Incomplete')
 })
+
+it('retains final Chat usage-only chunks even with no choices and preserves Anthropic input during output updates',async()=>{
+ const chat:any[]=[],anthropic:any[]=[]
+ const c=await readChatStream(reader(frame({choices:[{index:0,delta:{content:'{}'},finish_reason:'stop'}]})+frame({choices:[],usage:{prompt_tokens:100,completion_tokens:20,total_tokens:120}})+frame('[DONE]')),10000,signal(),undefined,'chat',u=>chat.push(u))
+ expect(c.usage).toEqual({prompt_tokens:100,completion_tokens:20,total_tokens:120});expect(chat).toHaveLength(1)
+ const a=await readAnthropicStream(reader(frame({type:'message_start',message:{id:'m',usage:{input_tokens:10,cache_read_input_tokens:90,output_tokens:0}}})+frame({type:'message_delta',delta:{stop_reason:'end_turn'},usage:{output_tokens:5}})+frame({type:'message_stop'})),10000,signal(),undefined,'a',u=>anthropic.push(u))
+ expect(a.usage).toEqual({input_tokens:10,cache_read_input_tokens:90,output_tokens:5});expect(anthropic.at(-1)).toEqual(a.usage)
+})
+it('reports known usage before an incomplete Responses error without converting it into success',async()=>{
+ const usage:any[]=[]
+ await expect(readResponsesStream(reader(frame({type:'response.incomplete',response:{usage:{input_tokens:12,output_tokens:2}}})),10000,signal(),undefined,u=>usage.push(u))).rejects.toThrow('incomplete')
+ expect(usage).toEqual([{input_tokens:12,output_tokens:2}])
+})

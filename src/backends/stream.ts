@@ -1,5 +1,6 @@
 import {TransientModelError,type ModelRequest} from '../model.ts'
 type Output=ModelRequest['onOutput']
+type Usage=(value:any)=>void
 
 /** SSE framing across UTF-8 and CR/LF chunk boundaries. EOF alone never means model success. */
 async function* events(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal){
@@ -27,11 +28,11 @@ async function* events(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:n
 function parse(data:string){try{return JSON.parse(data)}catch{throw Error('Invalid backend stream event')}}
 function providerError(value:any){if(value.error||value.type==='error')throw Error('Backend stream failed: '+String(value.error?.code??value.error?.type??'provider_error').slice(0,120))}
 
-export async function readResponsesStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal,onOutput?:Output){
+export async function readResponsesStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal,onOutput?:Output,onUsage?:Usage){
   const phases=new Map<string,'answer'|'commentary'>(),started=new Set<string>()
   for await(const data of events(reader,maxBytes,signal)){
     if(data==='[DONE]')continue
-    const value=parse(data);providerError(value)
+    const value=parse(data);if(value.response?.usage)onUsage?.(value.response.usage);providerError(value)
     if(['response.failed','response.incomplete'].includes(value.type))throw Error('Responses stream '+value.type)
     if(value.type==='response.output_item.added'&&value.item?.type==='message')phases.set(value.item.id,value.item.phase==='commentary'?'commentary':'answer')
     if(value.type==='response.output_text.delta'&&typeof value.delta==='string'){
@@ -44,15 +45,15 @@ export async function readResponsesStream(reader:ReadableStreamDefaultReader<Uin
   throw new TransientModelError('Responses stream disconnected before response.completed')
 }
 
-export async function readChatStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal,onOutput?:Output,id='chat'){
-  let content='',reasoning='',finish:string|null=null,model:string|undefined,refusal='',started=false
+export async function readChatStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal,onOutput?:Output,id='chat',onUsage?:Usage){
+  let content='',reasoning='',finish:string|null=null,model:string|undefined,refusal='',started=false,usage:any
   const calls=new Map<number,any>()
   for await(const data of events(reader,maxBytes,signal)){
     if(data==='[DONE]'){
       if(!finish)throw new TransientModelError('Chat stream ended before finish_reason')
-      return {model,choices:[{finish_reason:finish,message:{role:'assistant',content:content||null,...(reasoning?{reasoning_content:reasoning}:{}),...(refusal?{refusal}:{}),...(calls.size?{tool_calls:[...calls].sort((a,b)=>a[0]-b[0]).map(([,v])=>v)}:{})}}]}
+      return {model,usage,choices:[{finish_reason:finish,message:{role:'assistant',content:content||null,...(reasoning?{reasoning_content:reasoning}:{}),...(refusal?{refusal}:{}),...(calls.size?{tool_calls:[...calls].sort((a,b)=>a[0]-b[0]).map(([,v])=>v)}:{})}}]}
     }
-    const value=parse(data);providerError(value);if(typeof value.model==='string')model=value.model
+    const value=parse(data);if(value.usage){usage=value.usage;onUsage?.(usage)}providerError(value);if(typeof value.model==='string')model=value.model
     const choice=value.choices?.find((c:any)=>c.index===0)??value.choices?.[0];if(!choice)continue
     const delta=choice.delta??{}
     if(typeof delta.content==='string'){
@@ -74,12 +75,12 @@ export async function readChatStream(reader:ReadableStreamDefaultReader<Uint8Arr
   throw new TransientModelError('Chat stream disconnected before DONE')
 }
 
-export async function readAnthropicStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal,onOutput?:Output,id='anthropic'){
+export async function readAnthropicStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal,onOutput?:Output,id='anthropic',onUsage?:Usage){
   let message:any,stopped=false
   const blocks=new Map<number,any>(),inputs=new Map<number,string>(),closed=new Set<number>()
   for await(const data of events(reader,maxBytes,signal)){
     const value=parse(data);providerError(value)
-    if(value.type==='message_start')message={...value.message,content:[]}
+    if(value.type==='message_start'){message={...value.message,content:[]};if(message.usage)onUsage?.(message.usage)}
     if(value.type==='content_block_start'){
       if(!Number.isInteger(value.index)||blocks.has(value.index))throw Error('Invalid content block index')
       blocks.set(value.index,{...value.content_block})
@@ -105,6 +106,7 @@ export async function readAnthropicStream(reader:ReadableStreamDefaultReader<Uin
     if(value.type==='message_delta'){
       if(!message)throw Error('Missing message start')
       message={...message,...value.delta,usage:{...message.usage,...value.usage}};stopped=!!message.stop_reason
+      if(value.usage)onUsage?.(message.usage)
     }
     if(value.type==='message_stop'){
       if(!message||!stopped||closed.size!==blocks.size)throw Error('Incomplete Anthropic stream')
