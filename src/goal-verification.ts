@@ -9,7 +9,7 @@ import type {WorkerReport} from './vendor/dsh-core/index.ts'
 import type {Run} from './store.ts'
 import {stableDigest} from './sources.ts'
 import {scopeBudget} from './context-budget.ts'
-import {evidenceAccess,type GoalEvidence as Evidence} from './goal-evidence.ts'
+import {inlineEvidenceBudget,evidenceAccess,type GoalEvidence as Evidence} from './goal-evidence.ts'
 
 export interface GoalDelivery {id:string;goalId:string;ticketId:string;triggerId:string;scopeId:string;assignmentId:string;report:WorkerReport;reply?:string;inputRevision:number;at:number}
 interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];evidence:Evidence[]}
@@ -192,14 +192,18 @@ export class GoalVerification {
    if(!node)semantic.push({id:'__goal__',description:'The combined deliverables satisfy the original overall objective and every stated constraint: '+g.objective})
    if(semantic.length&&checks.every(c=>c.verdict==='passed')){
     const snapshot=round.snapshot
-    const access=evidenceAccess(snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{const current=this.host.goals.get(g.id);if(!current||!this.current(round!,current))throw Error('Acceptance evidence or authority changed')})
+    const modelInput={kind:'goal_verification',objective:g.objective,criteria:semantic,programChecks:checks,evidence:snapshot.evidence.map(({content,...meta})=>meta)}
+    const access=evidenceAccess(snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{const current=this.host.goals.get(g.id);if(!current||!this.current(round!,current))throw Error('Acceptance evidence or authority changed')},inlineEvidenceBudget(modelInput,this.host.goalEvidenceBudget(g)))
     const read=access.read
     const result=await this.host.runGoalVerifier(g,id,{
-     input:JSON.stringify({kind:'goal_verification',objective:g.objective,criteria:semantic,programChecks:checks,evidence:snapshot.evidence.map(({content,...meta})=>meta)}),
+     input:access.input(modelInput),
      schema:{type:'object',properties:{checks:{type:'array',minItems:semantic.length,maxItems:semantic.length,items:{type:'object',properties:{criterionId:{type:'string',enum:semantic.map(c=>c.id)},verdict:{type:'string',enum:['passed','failed','insufficient']},explanation:{type:'string'},evidenceIds:{type:'array',items:{type:'string'}}},required:['criterionId','verdict','explanation','evidenceIds'],additionalProperties:false}}},required:['checks'],additionalProperties:false},
      tools:access.tools,onTool:access.onTool,
     })
     if(this.host.shuttingDown)return false
+    const afterReview=this.host.goals.get(g.id)
+    if(!afterReview||!this.current(round,afterReview)){save({state:'stale',finishedAt:this.now()});return}
+    access.confirmInline()
     let parsed:z.infer<typeof verdict>
     try{parsed=verdict.parse(JSON.parse(result.text))}catch(error){throw Error('Verification protocol: '+String(error))}
     if(parsed.checks.length!==semantic.length||semantic.some(cr=>parsed.checks.filter(ch=>ch.criterionId===cr.id).length!==1))throw Error('Verification protocol: Verifier must decide every requested criterion exactly once')
