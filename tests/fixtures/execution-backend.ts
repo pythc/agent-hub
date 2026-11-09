@@ -24,15 +24,20 @@ export default {
     if(r.input==='tool'||r.input==='replay')await r.onTool!('allowed',{value:3},'same-call')
     if(r.input==='unknown-tool')await r.onTool!('forbidden',{},'bad-call')
     if(r.input==='bad-args')await r.onTool!('allowed',{value:'wrong'},'bad-call')
+    let isolation:Record<string,unknown>|undefined
     if(r.input==='isolation'){
-     if(process.env.PRIVATE_FIXTURE_SECRET)throw Error('Inherited secret')
-     try{readFileSync(String(config.secret));throw Error('Private file exposed')}catch(e:any){if(!['EPERM','EACCES'].includes(e.code))throw e}
-     try{writeFileSync(join(r.cwd,'native-write'),'bad');throw Error('Workspace write escaped')}catch(e:any){if(!['EPERM','EACCES'].includes(e.code))throw e}
+     const outcome=(operation:()=>unknown)=>{try{operation();return 'allowed'}catch(e:any){return e.code??'unknown'}}
+     isolation={
+      environmentAbsent:process.env.PRIVATE_FIXTURE_SECRET===undefined,
+      workspaceInput:readFileSync(join(r.cwd,'input'),'utf8'),
+      privateReadError:outcome(()=>readFileSync(String(config.secret))),
+      workspaceWriteError:outcome(()=>writeFileSync(join(r.cwd,'native-write'),'bad'))
+     }
     }
     if(r.input==='steer')await new Promise<void>(done=>r.onActive?.({interrupt:async()=>done(),steer:async(text,onRead)=>{history.push(text);onRead?.();done()},refresh:async()=>{}}))
     history.push(r.input);writeFileSync(file,JSON.stringify(history))
     const turn='completed-'+history.length;r.onTurn?.(turn)
-    return {threadId:id,turnId:turn,text:JSON.stringify({history,version:config.version??1})}
+    return {threadId:id,turnId:turn,text:JSON.stringify({history,version:config.version??1,...(isolation?{isolation}:{})})}
    },
    async history(id){return JSON.parse(readFileSync(join(dataDirectory,id+'.json'),'utf8'))},
    async catalog(){return {models:[{id:'fixture'}]}}

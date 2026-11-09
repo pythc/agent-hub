@@ -44,7 +44,16 @@ it('loads an independent package without provider switches and resumes the origi
 })
 it('isolates host secrets, task writes and unreferenced environment, including a nested workspace',async()=>{
  const f=await fixture();process.env.PRIVATE_FIXTURE_SECRET='do-not-inherit'
- await f.registry.run({...f.request,input:'isolation'})
+ writeFileSync(join(f.cwd,'input'),'assigned-workspace-input')
+ const result=await f.registry.run({...f.request,input:'isolation'}),isolation=JSON.parse(result.text).isolation
+ expect(isolation.environmentAbsent).toBe(true)
+ expect(isolation.workspaceInput).toBe('assigned-workspace-input')
+ // Bubblewrap hides private state and mounts the workspace read-only;
+ // Seatbelt instead rejects access to existing host paths.
+ expect(process.platform==='linux'?['ENOENT']:['EPERM','EACCES']).toContain(isolation.privateReadError)
+ expect(process.platform==='linux'?['EROFS']:['EPERM','EACCES']).toContain(isolation.workspaceWriteError)
+ expect(readFileSync(join(f.config.stateDir,'secret'),'utf8')).toBe('HOST-SECRET')
+ expect(readFileSync(join(f.cwd,'input'),'utf8')).toBe('assigned-workspace-input')
  expect(existsSync(join(f.cwd,'native-write'))).toBe(false)
 })
 it.each(['unknown-tool','bad-args'])('rejects %s before host execution',async(input)=>{
