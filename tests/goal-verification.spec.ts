@@ -28,7 +28,7 @@ function fixture(worker?:(r:ModelRequest,attempt:number)=>any,verify?:(r:ModelRe
   return {threadId,turnId,text:JSON.stringify(output)}
  }}
  const open=()=>{h=new Runtime(config,{model,clock:()=>now});hosts.push(h)};open()
- h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',managers:[JSON.stringify(['local','alice'])],workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
+ h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:[JSON.stringify(['local','alice'])],workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
  h.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'test',history:'group'})
  const input=h.receive('local','alice',{id:'request',thread:'test',scope:'test',text:'Continuously build, verify and repair the requested deliverable. Never deploy.',addressed:true}) as any
  const context=()=>{const t=h.store.triggers.get(input.triggerId)!;return h.scopes.context(t,'local:test')!}
@@ -379,5 +379,5 @@ it('limits inline evidence by the selected API backend wire budget as well as it
  f.h.config.execution.router!.backend='small'
  expect(f.h.goalEvidenceBudget(goal)).toBe(32768)
  f.h.config.execution.router!.backend='codex'
- expect(f.h.goalEvidenceBudget(goal)).toBe(256000)
+ expect(f.h.goalEvidenceBudget(goal)).toBe(128000)
 })

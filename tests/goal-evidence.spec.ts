@@ -1,6 +1,7 @@
 import {it,expect} from 'vitest'
 import {evidenceAccess,inlineEvidenceBudget,type GoalEvidence} from '../src/goal-evidence.ts'
 import {protocolBytes} from '../src/context-budget.ts'
+import {restoreInlineExecution} from '../src/execution-output.ts'
 const evidence=(id:string,content:string):GoalEvidence=>({id,content,hash:'immutable-hash',kind:'file',ticketId:'owned',key:'file.txt',criterionIds:['criterion']})
 it('delivers complete originals within the byte budget and only acknowledges them after a validated return',()=>{
  const originals=[evidence('a','完整原件 👩‍💻\nquotes " and \\'),evidence('b','x'.repeat(10000)),evidence('c','small')]
@@ -26,4 +27,14 @@ it('keeps legacy paging when the base input leaves no bundle budget',()=>{
  expect(inlineEvidenceBudget({text:'x'.repeat(2000)},4096)).toBe(0)
  const a=evidenceAccess([evidence('a','original')],4096,()=>{})
  expect(JSON.parse(a.input({kind:'test'}))).toEqual({kind:'test'});expect(a.read.size).toBe(0)
+})
+it('uses the increased budget to deliver larger originals and lossless output sharing without changing snapshots',()=>{
+ const text=('original output '.repeat(12)+'\n').repeat(80),content=JSON.stringify({jobs:[{id:'one',output:{text,complete:true}},{id:'two',output:{text,complete:false}}]})
+ const original={...evidence('ledger',content),kind:'execution' as const},file=evidence('file','x'.repeat(80000)),before=JSON.stringify([original,file])
+ const access=evidenceAccess([original,file],4096,()=>{},inlineEvidenceBudget({},10000000)),input=JSON.parse(access.input({kind:'test'}))
+ expect(input.inlineEvidence).toHaveLength(2)
+ expect(JSON.stringify(restoreInlineExecution(input.inlineEvidence[0].execution))).toBe(content)
+ expect(input.inlineEvidence[1].content).toBe(file.content)
+ expect(JSON.stringify([original,file])).toBe(before);expect(access.read.size).toBe(0)
+ access.confirmInline();expect([...access.read]).toEqual(['ledger','file'])
 })
