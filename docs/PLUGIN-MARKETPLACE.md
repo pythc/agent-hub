@@ -28,7 +28,7 @@ Installing a connector does not authorize every group or grant every Worker its 
 
 ## Publish a plugin
 
-The default source is `pythc/agent-hub/plugins/catalog.json`. The repository includes descriptions for Agent board, Slack and Linear. Their `releases` arrays remain empty until a real release asset has been published and indexed. Bundled descriptions are discovery hints, **not proof of availability**. Source-only directories have no install action.
+The default source is `pythc/agent-hub/plugins/catalog.json`. It indexes published Agent board, Slack and Linear packages. Agent board retains versions 0.1.0 and 0.1.1 for compatible updates and rollback; Slack and Linear start at 1.0.0. See [GitHub releases](https://github.com/pythc/agent-hub/releases). Bundled descriptions are discovery hints, **not proof of availability**: a fresh host resolves the remote catalog before offering installation. Source-only directories have no install action.
 
 The schema is in `src/plugin-market-contract.ts`. Each published version includes:
 
@@ -44,7 +44,7 @@ npx tsx examples/release-plugin.ts prepare agent-board .local/agent-board-releas
 
 After the code is pushed, use the **Publish a plugin** workflow. It validates the code, builds the package, creates a draft release, uploads the asset, publishes it, verifies GitHub's asset digest and opens a PR updating the catalog. The PR must be merged before the default market discovers that release. The repository must permit Actions to open pull requests. Enable GitHub immutable releases for asset/tag immutability; local checksum checks still apply either way. A failed release is not silently overwritten; inspect the draft/release before retrying.
 
-The publishing workflow itself has not been run as part of local implementation. No release is invented in the catalog, and no production host is changed by these commands or tests.
+The initial packages were built from committed source, published through `gh`, and indexed only after GitHub returned matching archive size and SHA-256. The manually triggered publishing workflow has not yet been exercised end to end. Package preparation alone does not upload a release or change a running host.
 
 ## Development and verification
 
@@ -65,4 +65,4 @@ The browser fixture uses the real host, sessions, database, package installer, s
 
 更新检查是自动的，安装更新需手动确认。有未完成任务或未确认的外部操作时，连接器更新会等待宿主空闲；不会替你停止任务。回退只切换插件代码，不回滚消息、任务或投递记录。
 
-当前目录中的未发布插件会显示“尚未发布安装包”。需发布 GitHub Release 并合并目录更新后，用户才能从默认市场安装。安装器和页面已可用，与公开发行、现有运行实例升级是不同步骤。
+首批已发布 Agent 看板 0.1.0 / 0.1.1、Slack 1.0.0 和 Linear 1.0.0。刷新默认来源后即可查看与安装。未发布的插件仍显示“尚未发布安装包”。安装连接器不会自动授权账号或群聊，需单独完成配置。

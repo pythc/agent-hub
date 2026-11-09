@@ -4,17 +4,21 @@ A removable Roppo workspace view. See active Router/Worker execution, tasks that
 
 The board reads the running host. It does not execute models, issue Worker commands, approve work or create its own task database. Light/dark themes and English/Chinese follow the host.
 
-## Build and install
+## Install from the marketplace
+
+Open **Tools and apps → Marketplace**, refresh the default GitHub source, then select **Agent board → Install**. The view appears in the existing navigation without restarting the host. Updates and retained-version rollback are managed from the same details drawer. See the [marketplace guide](../../docs/PLUGIN-MARKETPLACE.md) and [changes](CHANGELOG.md).
+
+## Build locally
 
 From the repository root, with dependencies already installed:
 
-Use a host build containing the workspace-view API v1 implementation in this branch. Older source-only plugin hosts cannot load this category; update the host code before activating a staged view configuration.
+Use a host build containing workspace-view API v1 and the marketplace. Older source-only plugin hosts cannot load this category; update the host code before activating a staged view configuration.
 
 ```sh
 npm run typecheck:views
-npm run pack:agent-board -- .local/agent-board-0.1.0
-node --import tsx src/cli.ts plugins inspect .local/agent-board-0.1.0
-node --import tsx src/cli.ts plugins stage /absolute/current-config.json .local/agent-board-0.1.0 REVIEWED_DIGEST /absolute/new-config.json
+npm run pack:agent-board -- .local/agent-board-0.1.1
+node --import tsx src/cli.ts plugins inspect .local/agent-board-0.1.1
+node --import tsx src/cli.ts plugins stage /absolute/current-config.json .local/agent-board-0.1.1 REVIEWED_DIGEST /absolute/new-config.json
 ```
 
 Use a new output directory for every build. Review the emitted digest and the new configuration before starting the host with it. Staging installs immutable bytes under `stateDir/plugins/objects/<digest>`; it does **not** restart or change a running host. Keep the current `stateDir` to preserve accounts, tasks, settings and browser state. The navigation entry appears automatically after activation.

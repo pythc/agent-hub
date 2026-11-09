@@ -15,9 +15,54 @@
       "directory": "plugins/agent-board",
       "license": "Apache-2.0",
       "maintainer": "pythc",
-      "releases": [],
       "screenshots": [
         "plugins/agent-board/preview.png"
+      ],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "hostMin": "0.10.0",
+          "platforms": [
+            "darwin",
+            "linux",
+            "win32"
+          ],
+          "apiVersion": 1,
+          "commit": "8f8d71d7a22850a90ad7250d37d762e647e33700",
+          "digest": "0548fa82dbf2e6b61978f79dd4f77479e6513df4ca3d220fd2d2c9647a41d6e3",
+          "sha256": "ac4b614eee22fce4a245ae8498f9685bd68ccba073df3fe8e1e692857b2f1e45",
+          "size": 86033,
+          "assetId": 726081592,
+          "notes": {
+            "en": "See your team at work. Follow tasks, tool calls and listening decisions in one view.",
+            "zh-CN": "查看团队如何协作，在一个页面跟进任务、工具调用与监听决策。"
+          },
+          "permissions": [
+            "workspace.runtime.read"
+          ]
+        },
+        {
+          "version": "0.1.1",
+          "hostMin": "0.10.0",
+          "platforms": [
+            "darwin",
+            "linux",
+            "win32"
+          ],
+          "apiVersion": 1,
+          "commit": "c8202be85d82a0f61a3cf8c7e5bbe2ea37583b46",
+          "digest": "72b2a9d762c64bb3e42265ea51c62da955b2f8536f195ede6c603338b46de2e0",
+          "sha256": "25b853b8106d9b85e32168bf0091145c074b51cd7924462bbd0b235dd390bf45",
+          "size": 86192,
+          "assetId": 726086124,
+          "notes": {
+            "en": "Task, activity and admission timestamps now show the full local date and time zone on hover. Invalid historical timestamps remain renderable.",
+            "zh-CN": "任务、动态和准入记录可悬停查看完整本地日期与时区；无效历史时间不再影响渲染。"
+          },
+          "permissions": [
+            "workspace.runtime.read"
+          ]
+        }
       ]
     },
     {
@@ -34,7 +79,43 @@
       "directory": "plugins/slack",
       "license": "Apache-2.0",
       "maintainer": "pythc",
-      "releases": []
+      "screenshots": [],
+      "releases": [
+        {
+          "version": "1.0.0",
+          "hostMin": "0.10.0",
+          "platforms": [
+            "darwin",
+            "linux"
+          ],
+          "apiVersion": 2,
+          "commit": "8f8d71d7a22850a90ad7250d37d762e647e33700",
+          "digest": "44c39485e7306abecb37022e0786f9cdbce1ffff62a23360bc3a97cddefd97fa",
+          "sha256": "e5bf1e84634d9bc0f4141035c9408f348062fa2a1419f9380f68ddd54d1437a1",
+          "size": 128216,
+          "assetId": 726085488,
+          "notes": {
+            "en": "Bring Router into your channels. Receive messages and report progress in the same thread.",
+            "zh-CN": "让 Router 进入工作群聊，在原会话中接收消息并报告任务进展。"
+          },
+          "permissions": [
+            "credential.APP_TOKEN",
+            "credential.TOKEN",
+            "network",
+            "source.close",
+            "source.context",
+            "source.deliver",
+            "source.identity",
+            "source.members",
+            "source.poll",
+            "source.probe",
+            "source.read",
+            "source.start",
+            "tool.message_read",
+            "tool.thread_read"
+          ]
+        }
+      ]
     },
     {
       "id": "agenthub-linear",
@@ -50,7 +131,43 @@
       "directory": "plugins/linear",
       "license": "Apache-2.0",
       "maintainer": "pythc",
-      "releases": []
+      "screenshots": [],
+      "releases": [
+        {
+          "version": "1.0.0",
+          "hostMin": "0.10.0",
+          "platforms": [
+            "darwin",
+            "linux"
+          ],
+          "apiVersion": 2,
+          "commit": "8f8d71d7a22850a90ad7250d37d762e647e33700",
+          "digest": "ad98d45b219f756c7a7ce5367ec37b5fe8f4e63f865518557c8fd4017b0290eb",
+          "sha256": "55f45636617d37a6592c12389041070d3cd522da5e91bbc4e7765353c223a479",
+          "size": 128624,
+          "assetId": 726085854,
+          "notes": {
+            "en": "Turn issues into coordinated work. Keep discussions and delivery connected to your team’s tracker.",
+            "zh-CN": "从事项开始协作，让讨论和交付回到团队的任务管理流程。"
+          },
+          "permissions": [
+            "credential.TOKEN",
+            "network",
+            "source.close",
+            "source.context",
+            "source.deliver",
+            "source.identity",
+            "source.members",
+            "source.poll",
+            "source.probe",
+            "source.read",
+            "source.start",
+            "tool.issue_read",
+            "tool.message_read",
+            "tool.thread_read"
+          ]
+        }
+      ]
     }
   ]
 }
