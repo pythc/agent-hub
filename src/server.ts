@@ -1,3 +1,5 @@
+import {deploymentMaintenance,DeploymentError} from './deployment-maintenance.ts'
+import {requestHostOrigin} from './http-deployment.ts'
 import {serveDelegation} from './delegation/server.ts'
 import {DelegationError} from './delegation/contract.ts'
 import {PluginMarket,MarketError} from './plugin-market.ts'
@@ -44,7 +46,7 @@ import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string)=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
   const connectionFile=join(runtime.config.stateDir,'connection.json')
-  const account=new PersonalAccount(runtime.config.stateDir)
+  const account=new PersonalAccount(runtime.config.stateDir,Date.now,runtime.config.http?.publicOrigin)
   let changing=false,unavailable=false,runtimeClosed=false,endpoint='',stopping=false,closingRuntime:Promise<void>|undefined
   let delegationServer:Awaited<ReturnType<typeof serveDelegation>>|undefined
   const onboarding=new Onboarding(()=>runtime,options.configurationPreview===true)
@@ -65,6 +67,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   try{watchdogToken=readFileSync(watchdogTokenPath,'utf8').trim()}catch{watchdogToken=randomBytes(32).toString('hex');writeFileSync(watchdogTokenPath,watchdogToken,{mode:0o600,flag:'wx'})}
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
+    if(error instanceof DeploymentError){send(response,error.status,{code:error.code,error:error.message});return}
     if(error instanceof MarketError){if(error.code==='market_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof WebhookError){send(response,error.status,{code:error.code});return}
     if(error instanceof ChatError||error instanceof BrowserError){send(response,error.status,{error:error.message,code:error.code});return}
@@ -96,7 +99,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     res.setHeader('x-content-type-options', 'nosniff')
     res.setHeader('referrer-policy','no-referrer')
     let requestOrigin=''
-    try{const authority=new URL('http://'+req.headers.host);if(!['127.0.0.1','localhost','[::1]'].includes(authority.hostname)||authority.port!==new URL(endpoint).port||authority.username||authority.password||authority.pathname!=='/'||authority.search||authority.hash)throw Error();requestOrigin=authority.origin}catch{send(res,403,{error:'Use this host’s local origin',code:'host_origin_required'});return}
+    try{requestOrigin=requestHostOrigin(req.headers.host,endpoint,runtime.config.http?.publicOrigin)}catch{send(res,403,{error:'Use this host’s local origin',code:'host_origin_required'});return}
     if(['POST','PATCH'].includes(req.method??'')&&req.headers.origin&&req.headers.origin!==requestOrigin){send(res,403,{error:'Use this page’s own origin',code:'same_origin_required'});return}
     const browserOperator=account.configured?account.authorized(req):sessions.authorized(req)
     if((req.method==='GET'||req.method==='HEAD')&&path.startsWith('/chat-assets/')){
@@ -188,6 +191,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/deployment/maintenance'&&req.method==='POST'){send(res,200,await deploymentMaintenance(runtime,await body(req)));return}
     if(path==='/webhooks'&&req.method==='GET'){send(res,200,runtime.webhooks.snapshot());return}
     if(path==='/webhooks/detail'&&req.method==='GET'){send(res,200,runtime.webhooks.detail(new URL(req.url??'/',requestOrigin).searchParams.get('id')??''));return}
     if(path==='/webhooks/goal'&&req.method==='POST'){send(res,200,runtime.webhooks.goalControl(await body(req)));return}
@@ -350,7 +354,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/subscription/status'){const input=z.object({attempt:z.string()}).strict().parse(await body(req));send(res,200,runtime.subscriptions.status(input.attempt));return}
     if(req.method==='POST'&&path==='/subscription/logout'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.logout(input.account));return}
     if(req.method==='POST'&&path==='/subscription/models'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.models(input.account));return}
-    if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(endpoint),expiresIn:600});return}
+    if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(runtime.config.http?.publicOrigin??endpoint),expiresIn:600});return}
     if(req.method==='POST'&&path==='/logout'){if(account.configured)account.logout(req,res);else sessions.logout(req,res);send(res,200,{operator:false});return}
     if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
     if(req.method==='GET'&&path==='/entry-workspace'){
@@ -513,18 +517,18 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     send(res, 404, { error: 'Unknown endpoint' })
   }
   server.requestTimeout = 30_000
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(runtime.config.port, '127.0.0.1', resolve) })
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(runtime.config.port, runtime.config.http?.listenHost??'127.0.0.1', resolve) })
   let webhookListener:Awaited<ReturnType<typeof serveWebhooks>>|undefined
   try{if(runtime.config.webhooks&&!options.configurationPreview)webhookListener=await serveWebhooks(()=>runtime,runtime.config.webhooks.port,()=>!changing&&!unavailable&&!runtimeClosed)}catch(error){server.close();throw error}
   server.once('close',()=>{void webhookListener?.close().catch(()=>{})})
   const address = server.address() as { port: number }
-  runtime.endpoint='http://127.0.0.1:'+address.port
+  runtime.endpoint='http://'+(runtime.config.http?.listenHost==='::1'?'[::1]':'127.0.0.1')+':'+address.port
   endpoint=runtime.endpoint
-  sessions.bindOrigin(endpoint)
+  sessions.bindOrigin(runtime.config.http?.publicOrigin??endpoint)
   try{atomicPrivateFile(connectionFile,JSON.stringify({application:'agent-hub',version:1,url:endpoint,accessToken:token},null,2)+'\n')}catch(error){await new Promise<void>(r=>server.close(()=>r()));throw error}
   try{delegationServer=runtime.delegation.enabled?await serveDelegation(runtime.delegation,runtime.delegation.preferredPort):undefined}catch(error){await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime.close();throw error}
   runtime.start()
-  return {server,url:endpoint,webhookUrl:webhookListener?.url,operatorUrl:sessions.link(endpoint),tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await webhookListener?.close().catch(()=>{});await stopRuntime()}}
+  return {server,url:endpoint,webhookUrl:webhookListener?.url,operatorUrl:sessions.link(runtime.config.http?.publicOrigin??endpoint),tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await webhookListener?.close().catch(()=>{});await stopRuntime()}}
 }
 function send(response: ServerResponse, status: number, value: unknown) {
   if (!response.headersSent) response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })

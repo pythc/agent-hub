@@ -444,10 +444,12 @@ export class Runtime {
   }
   /** Only a trusted adapter supplies actor identity; MCP clients use the configured local operator. */
   canWrite(){return !this.closing&&!this.paused}
-  async pauseForConfiguration(){
-    const previous=this.paused;this.pause(true);await this.tickIdle
+  async pauseForConfiguration(controlId?:string){
+    const previous=this.paused;this.pause(true,controlId);await this.tickIdle
     if(this.runningJobs.size||this.controllers.size||this.work.list().some(w=>['starting','running'].includes(w.state))||this.store.list<Run>('run').some(r=>r.phase==='merging')){
-      this.pause(previous);throw Error('configuration_busy')
+      const last=this.store.db.prepare("SELECT body FROM audit WHERE json_extract(body,'$.type')='pause' ORDER BY seq DESC LIMIT 1").get()
+      if(!controlId||last&&JSON.parse(String(last.body)).controlId===controlId)this.pause(previous)
+      throw Error('configuration_busy')
     }
     return previous
   }
@@ -1229,7 +1231,7 @@ export class Runtime {
       this.polls.set(source.config.id,poll)
     }
   }
-  pause(value: boolean): void { const migration=this.store.get<any>('scope-migration','current');if(!value&&migration&&migration.phase!=='active')throw Error('Complete migration reconciliation and activation before resuming');this.paused = value; this.store.put('settings', 'paused', value); this.store.audit({ type: 'pause', value }) }
+  pause(value: boolean,controlId?:string): void { const migration=this.store.get<any>('scope-migration','current');if(!value&&migration&&migration.phase!=='active')throw Error('Complete migration reconciliation and activation before resuming');this.paused = value; this.store.put('settings', 'paused', value); this.store.audit({ type: 'pause', value,...(controlId?{controlId}:{}) }) }
   async cancelRouter(triggerId:string,discussion:string):Promise<void>{
     this.delegation.cancelWhere(t=>t.triggerId===triggerId)
     const batch=this.store.list<{triggerIds:string[];jobIds:string[];phase:string}>('router-candidate').reverse().find(b=>b.triggerIds.includes(triggerId))

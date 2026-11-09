@@ -86,10 +86,11 @@ export class PersonalAccount {
   private pending = 0
   constructor(
     stateDir: string,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    cookieScope?:string
   ) {
     this.file = join(stateDir, 'personal-account.json')
-    this.cookieName = 'roppo_owner_' + digest(resolve(stateDir)).slice(0, 12)
+    this.cookieName = 'roppo_owner_' + digest(resolve(stateDir)+(cookieScope?'|'+cookieScope:'')).slice(0, 12)
     if (existsSync(this.file)) {
       if (lstatSync(this.file).isSymbolicLink())
         throw Error('Personal account file must not be a symbolic link')

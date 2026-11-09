@@ -36,6 +36,8 @@ npm ci
 
 No Roppo cloud account is required. The launcher creates or reopens your installation in `~/.agent-hub`. Returning to an existing deployment? [Start it with its original configuration](docs/OPERATIONS.md#start-the-right-instance).
 
+With Docker and Compose already running, run `./deployment/compose.sh up` from this repository. It builds a Linux runtime with Bubblewrap and Chromium, keeps private data in a dedicated volume, and prints a local setup link. Configure an API model in the web UI. See [Docker setup, backups and upgrades](docs/DOCKER.md) (中文) for supported environments and commands.
+
 ## Your workspace
 
 <picture>
@@ -116,7 +118,7 @@ Roppo preserves 15 domain-core files from DeepSeek's prototype at `8c32a9d`. The
 
 Roppo is **personal-first and under active development**: one local account per deployment. Organization identity, tenant isolation, and enterprise permissions are future work.
 
-Local-first means local workspace storage; model requests still go to your provider. The host binds to loopback, and remote access needs a separately configured secure connection. Embedded-browser acceptance has been completed on macOS with Chrome; Linux and Windows browser acceptance remains pending. Before upgrading, read the [backup and operations guide](docs/OPERATIONS.md).
+Local-first means local workspace storage; model requests still go to your provider. Native installs bind to loopback; Compose publishes only to host loopback. Remote access needs a separately configured secure connection. Browser acceptance covers macOS with Chrome and the documented Linux ARM64 container; other Linux environments and Windows remain pending. Before upgrading, read the [backup and operations guide](docs/OPERATIONS.md).
 
 ## Documentation
 
@@ -124,6 +126,7 @@ Local-first means local workspace storage; model requests still go to your provi
 | --- | --- |
 | [Models and connections](docs/MODELS.md) | [Backend protocols](docs/BACKENDS.md) · 中文 |
 | [Operations and backups](docs/OPERATIONS.md) | [Sources and tools](docs/INTEGRATIONS.md) · 中文 |
+| [Docker Compose](docs/DOCKER.md) · 中文 | Linux single-instance setup and controlled upgrades |
 | [Local instance delegation](docs/DELEGATION.md) · 中文 | [Deployment and delegation plan](docs/DEPLOYMENT_AND_DELEGATION_PLAN_2026-11-09.md) · 中文 |
 | [Local accounts](docs/PERSONAL_ACCOUNT.md) · 中文 | [MCP clients](docs/clients/README.md) · 中文 |
 | [Conversations](docs/CHAT.md) · 中文 | [Core semantics and parity](docs/PARITY.md) · 中文 |

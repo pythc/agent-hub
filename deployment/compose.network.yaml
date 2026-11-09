@@ -1,0 +1,6 @@
+# Optional: used by compose.sh only when ROPPO_SUBNET is explicitly exported.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${ROPPO_SUBNET:?Export an unused private subnet}

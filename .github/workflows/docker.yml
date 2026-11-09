@@ -1,0 +1,42 @@
+name: Container acceptance
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/docker.yml'
+      - '.dockerignore'
+      - 'compose.yaml'
+      - 'deployment/**'
+      - 'src/**'
+      - 'web/**'
+      - 'plugins/**'
+      - 'package*.json'
+      - 'examples/container-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build the runtime image
+        env:
+          ROPPO_IMAGE: roppo:ci
+        run: docker compose build roppo
+      - name: Verify an isolated container and its private volume
+        run: >-
+          python3 examples/container-acceptance.py
+          .local/container-ci
+          --project "roppo-acceptance-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          --image roppo:ci
+          --port 14439

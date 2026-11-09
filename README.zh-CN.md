@@ -36,6 +36,8 @@ npm ci
 
 无需注册 Roppo 云端账号。启动器会在 `~/.agent-hub` 创建或重新打开个人安装。已有部署请[沿用原配置启动](docs/OPERATIONS.md#start-the-right-instance)。
 
+已安装并运行 Docker 和 Compose 时，也可在仓库根目录执行 `./deployment/compose.sh up`，构建含 Bubblewrap、Chromium 的 Linux 运行镜像，创建独立数据卷并打印配置链接。在网页中配置 API 模型即可开始使用。环境边界和备份升级操作见 [Docker 部署指南](docs/DOCKER.md)。
+
 ## 你的工作空间
 
 <picture>
@@ -116,7 +118,7 @@ Roppo 保留了 DeepSeek 原型在 `8c32a9d` 的 15 个领域核心文件。工�
 
 Roppo **优先服务个人，仍在持续开发**，每个部署对应一个本地账号。组织身份、多租户隔离和企业权限属于后续工作。
 
-本地优先指工作空间保存在本地，模型请求仍会发送给选定的服务商。主机绑定回环地址，远程使用需要另行配置安全连接。内置浏览器已在 macOS 与 Chrome 上完成验收，Linux 和 Windows 浏览器仍待验收。升级前请阅读[备份与运维指南](docs/OPERATIONS.md)。
+本地优先指工作空间保存在本地，模型请求仍会发送给选定的服务商。原生安装绑定回环地址，Compose 仅向宿主回环地址发布端口；远程使用需要另行配置安全连接。浏览器验收覆盖 macOS / Chrome 与文档所述 Linux ARM64 容器，其他 Linux 环境和 Windows 仍待验收。升级前请阅读[备份与运维指南](docs/OPERATIONS.md)。
 
 ## 文档
 
@@ -124,6 +126,7 @@ Roppo **优先服务个人，仍在持续开发**，每个部署对应一个本�
 | --- | --- |
 | [模型与连接](docs/MODELS.md) · English | [后端协议](docs/BACKENDS.md) |
 | [运维与备份](docs/OPERATIONS.md) · English | [来源与工具](docs/INTEGRATIONS.md) |
+| [Docker Compose 部署](docs/DOCKER.md) | Linux 单实例安装与受控升级 |
 | [同机实例与子团队委派](docs/DELEGATION.md) | [部署与委派改造方案](docs/DEPLOYMENT_AND_DELEGATION_PLAN_2026-11-09.md) |
 | [本地账号](docs/PERSONAL_ACCOUNT.md) | [MCP 客户端](docs/clients/README.md) |
 | [对话工作空间](docs/CHAT.md) | [核心语义与对齐](docs/PARITY.md) |

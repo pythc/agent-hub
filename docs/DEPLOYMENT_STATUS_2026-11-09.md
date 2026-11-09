@@ -2,6 +2,8 @@
 
 核对时间：2026-11-09 20:33:51（北京时间）。本次只读检查现有部署；没有升级、重启、配对或修改其配置。
 
+本文保留上述时刻的原生部署快照。下表的 Docker 一行已同步随后完成的实现；操作说明见 [Docker 部署指南](DOCKER.md)。尚未替换下面的真实 macOS 实例，也未发布应用镜像。
+
 ## 正在使用的方案
 
 当前是单机 macOS 常驻实例。LaunchAgent 启动 `supervise`，监督器分别管理宿主和独立 Watchdog；Feishu 入口由宿主运行的连接器接入。Router 和 4 个 Workers 属于同一实例。模型后端可以远程，工作文件和命令仍由本机宿主管理。
@@ -43,7 +45,7 @@ LaunchAgent 的实际入口是 `/opt/homebrew/bin/node --import <app>/node_modul
 | Linux 主机 / VM | Node ≥22.19、Bubblewrap、systemd 模板 | 有 Linux CI / 特定 VM 的沙箱记录；systemd 是模板，未据此声称某台服务器已部署或验收 |
 | 同机多个独立实例 | 各自配置、端口、stateDir、workspace、身份和凭据 | 本轮两真实进程已验证；可选择前台或各自服务托管；没有统一实例创建器 |
 | 同机子团队委派 | A Router → B Router → B Workers | 收尾代码已实现一跳、显式配对与授权、目标独立验收；尚未切换现有实例 |
-| Docker | `deployment/Dockerfile.linux-acceptance` | 验收镜像，默认执行 `npm run check`；不是正式运行镜像，没有已验收的生产 Compose |
+| Docker Compose 单实例 | `deployment/Dockerfile`、`compose.yaml`、`deployment/compose.sh` | 运行镜像及安装、备份、受控升级入口；已在 Linux ARM64 Docker VM 隔离验收。未发布镜像，AMD64、裸 Linux 和真实模型提供商仍待验收；原 `Dockerfile.linux-acceptance` 继续用于开发检查 |
 | Windows | 部分程序入口存在 | 浏览器和命令沙箱的完整平台验收仍不完整 |
 
 Linux 的已有记录有明确环境与日期，详见 [LINUX](LINUX.md)；不能外推为任意发行版、架构或容器策略均通过。裸 `setup` / `serve` 不启动独立观察器。单独的 `watch` 或 `watchdog` 观察进程也不自动取得重启另一宿主的权力。
@@ -70,4 +72,4 @@ CLI `backup` / `verify-backup` / `restore` 负责数据库、受管配置等明�
 
 当前实际方案继续沿用 macOS LaunchAgent → supervise。需要分离同机团队的配置、账号或工作环境时，再创建第二个独立实例并开启 `managed-team`；单实例能满足工作时无须增加第二个 Router 的调用与运维成本。
 
-已取消跨机器部署和 Worker 直接统筹远端 Workers；这不删除已有 Linux 单实例支持。本轮也没有新增正式镜像、Compose、系统级安装器、跨组织协作或 HA。当前源码集成和验证状态见 [收尾记录](DELEGATION_CLOSEOUT_2026-11-09.md)。
+已取消跨机器部署和 Worker 直接统筹远端 Workers；这不删除 Linux 单实例支持。委派收尾未增加系统级安装器、跨组织协作或 HA，源码集成和验证状态见 [收尾记录](DELEGATION_CLOSEOUT_2026-11-09.md)。随后新增的 Docker 入口独立记录在 [Docker 部署指南](DOCKER.md)。

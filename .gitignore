@@ -11,6 +11,7 @@ validation/managed-native-*/
 examples/clients/
 
 .local/
+/.env
 validation/
 examples/acceptance-config.json
 plugins/codex/.mcp.json

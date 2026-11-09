@@ -1,3 +1,4 @@
+import {httpDeploymentSchema} from './http-deployment.ts'
 import {backendPackageReferences} from './backends/plugin-contract.ts'
 import {delegationConfigSchema} from './delegation/contract.ts'
 import { readFileSync } from 'node:fs'
@@ -54,6 +55,7 @@ import {webhookConfigSchema} from './webhook-protocol.ts'
 export const configSchema = z.object({
   stateDir: z.string().default('.superagent'),
   port: z.number().int().min(0).max(65535).default(4319),
+  http:httpDeploymentSchema.optional(),
   webhooks:webhookConfigSchema.optional(),
   codex: z.string().default('codex'),
   backends:backendsSchema,

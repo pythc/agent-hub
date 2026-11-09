@@ -1,0 +1,35 @@
+name: roppo
+services:
+  roppo:
+    image: ${ROPPO_IMAGE:-roppo:local}
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./deployment/seccomp-bubblewrap.json
+      - systempaths=unconfined
+    environment:
+      HOME: /data/state/home
+      ROPPO_PUBLIC_ORIGIN: http://127.0.0.1:${ROPPO_PORT:-4337}
+    ports:
+      - "127.0.0.1:${ROPPO_PORT:-4337}:4337"
+    volumes:
+      - roppo-data:/data
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+    shm_size: 256m
+    pids_limit: 512
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  roppo-data:

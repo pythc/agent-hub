@@ -20,3 +20,14 @@ plugins/codex/.mcp.json
 plugins/codex/mcp.json
 !deployment/
 !deployment/Dockerfile.linux-acceptance
+!deployment/Dockerfile
+!deployment/container-entrypoint.py
+!deployment/MOBY-PROFILES-LICENSE
+!LICENSE
+!NOTICE
+!THIRD_PARTY.md
+!docs/
+!docs/THIRD_PARTY_CHAT.md
+!docs/THIRD_PARTY_BROWSER.md
+!docs/licenses/
+!docs/licenses/**
