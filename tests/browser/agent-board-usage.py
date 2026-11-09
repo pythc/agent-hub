@@ -42,6 +42,8 @@ with sync_playwright() as p:
         usage = frame.get_by_role('region', name='Team token usage')
         expect(usage.locator('.usage-totals dd')).to_have_text(['76,200', '75,000', '48,000', '1,200', '240'])
         expect(usage.locator('.usage-coverage')).to_contain_text('Calls with usage 6 / 7')
+        expect(usage.locator('.usage-coverage')).to_contain_text('Unknown 1')
+        expect(usage.locator('.usage-coverage')).to_contain_text('Partial 0')
         frame.get_by_role('combobox', name='Filter by source').select_option('personal')
         expect(usage.locator('.usage-totals dd').first).to_have_text('39,600')
         expect(frame.locator('.usage').locator('dl dd').first).to_have_text('360')
