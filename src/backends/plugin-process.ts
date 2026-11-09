@@ -22,6 +22,7 @@ interface Thread {id:string;backendId:string;pluginId:string;digest:string;state
 interface Effect {fingerprint:string;state:'running'|'complete';result?:Awaited<ReturnType<NonNullable<ModelRequest['onTool']>>>;failure?:BackendDiagnostic}
 const text=z.string().min(1).max(1000)
 const healthSchema=z.object({available:z.boolean(),authenticated:z.union([z.boolean(),z.literal('unknown')]),remoteVerified:z.literal(false),accountIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional(),version:z.string().max(200).optional()}).strict()
+const historySchema=z.object({id:z.string().min(1).max(1000),turns:z.array(z.unknown())}).passthrough()
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'"
 const inside=(root:string,path:string)=>{const r=relative(root,path);return !r||r!=='..'&&!r.startsWith('..'+sep)&&!isAbsolute(r)}
 const canonical=(path:string)=>existsSync(path)?realpathSync(path):resolve(path)
@@ -75,6 +76,13 @@ export class ProcessBackend implements Model {
  }
  async history(threadId:string,cwd:string){return this.inspect('history',threadId,cwd)}
  async purge(threadId:string,cwd:string){
+  const tombstone=this.store.get<Thread&{deleted?:boolean}>('backend-plugin-thread',threadId)
+  // A completed cleanup erases the native mapping. Its paired durable receipt
+  // permits retries/replayed cleanup without inventing a replacement identity.
+  if(tombstone?.deleted&&this.store.get('backend-deleted',threadId)){
+   if(tombstone.id!==threadId||tombstone.backendId!==this.id||canonical(cwd)!==tombstone.cwd)throw Error('Execution backend workspace or identity changed')
+   return {local:'verified' as const,provider:'not_managed' as const}
+  }
   const value=await this.inspect('purge',threadId,cwd)
   return z.object({local:z.literal('verified'),provider:z.literal('not_managed')}).strict().parse(value)
  }
@@ -83,7 +91,15 @@ export class ProcessBackend implements Model {
   const record=this.record(threadId),pkg=this.pinned(record)
   if(canonical(cwd)!==record.cwd||!pkg.manifest.capabilities[method==='expose'?'nativeTakeover':method])throw new BackendPluginError('unsupported',this.id)
   const transport=await this.launch(pkg,record.cwd,undefined,record)
-  try{const health=healthSchema.parse(await transport.call('probe',{args:[]}));if(record.accountIdentity&&record.accountIdentity!==health.accountIdentity)throw new BackendPluginError('auth_required',this.id);return await transport.call(method,{args:[record.nativeId,record.cwd]})}finally{await transport.close()}
+  try{
+   const health=healthSchema.parse(await transport.call('probe',{args:[]}))
+   if(record.accountIdentity&&record.accountIdentity!==health.accountIdentity)throw new BackendPluginError('auth_required',this.id)
+   const value=await transport.call(method,{args:[record.nativeId,record.cwd]})
+   if(method!=='history')return value
+   const history=historySchema.safeParse(value)
+   if(!history.success||!record.nativeId||history.data.id!==record.nativeId)throw new BackendPluginError('invalid_output',this.id)
+   return {...history.data,id:record.id}
+  }finally{await transport.close()}
  }
  async catalog(){
   if(!this.pkg.manifest.capabilities.modelCatalog)throw new BackendPluginError('unsupported',this.id)

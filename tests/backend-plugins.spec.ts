@@ -40,7 +40,7 @@ it('loads an independent package without provider switches and resumes the origi
  const registry=new BackendRegistry(f.config,store),second=await registry.run({...f.request,threadId:first.threadId,input:'second'})
  expect(second.threadId).toBe(first.threadId);expect(JSON.parse(second.text).history).toEqual(['first','second'])
  expect(store.get<any>('backend-plugin-thread',first.threadId).nativeId).toBe(native)
- expect(await registry.history!(first.threadId,f.cwd)).toEqual(['first','second'])
+ expect(await registry.history!(first.threadId,f.cwd)).toEqual({id:first.threadId,turns:[{id:'0',items:[{type:'userMessage',text:'first'}]},{id:'1',items:[{type:'userMessage',text:'second'}]}]})
 })
 it('isolates host secrets, task writes and unreferenced environment, including a nested workspace',async()=>{
  const f=await fixture();process.env.PRIVATE_FIXTURE_SECRET='do-not-inherit'

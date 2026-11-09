@@ -79,10 +79,10 @@ function expandPlan(store:Store,stateDir:string,plan:HistoryPlan):HistoryPlan {
  for(const r of all)if(selected.has(r.kind+'\0'+r.id)){
   if(r.kind==='ticket')tickets.add(r.id)
   if(r.kind==='trigger')triggers.add(r.id)
-  if(['run','work','model-session','router-session','router-result','worker-migration','router-migration','context-handoff','backend-thread'].includes(r.kind)&&!r.body.ephemeral){
+  if(['run','work','model-session','router-session','router-result','worker-migration','router-migration','context-handoff','backend-thread','backend-plugin-thread'].includes(r.kind)&&!r.body.ephemeral){
    const sourceId=r.body.source??all.find(x=>x.kind==='trigger'&&plan.triggers.includes(x.id)&&r.body.discussion===x.body.source+':'+x.body.threads?.[0]?.id)?.body.source
    const cwd=r.body.cwd??r.body.from?.cwd??all.find(x=>x.kind==='run'&&x.id===r.body.ticketId)?.body.cwd??all.find(x=>x.kind==='settings'&&x.id==='current')?.body.config?.sources?.find((s:any)=>s.id===sourceId)?.cwd
-   for(const threadId of [r.body.threadId,r.body.from?.threadId,r.body.previousThread,...(r.kind==='backend-thread'?[r.id]:[])])if(typeof threadId==='string'){if(cwd)sessions.set(threadId,{threadId,cwd});else unresolved.add(threadId)}
+   for(const threadId of [r.body.threadId,r.body.from?.threadId,r.body.previousThread,...(['backend-thread','backend-plugin-thread'].includes(r.kind)?[r.id]:[])])if(typeof threadId==='string'){if(cwd)sessions.set(threadId,{threadId,cwd});else unresolved.add(threadId)}
   }
   if(r.kind==='asset'&&r.body.path)files.add(dirname(r.body.path))
   if(r.kind==='work')for(const suffix of ['.spec.json','.output','.result.json'])files.add(join(stateDir,'jobs',r.id+suffix))
@@ -106,6 +106,14 @@ export class HistoryCleanup {
    const v=value as any,ref=v.ref??this.store.triggers.get(id)?.threads[0]??this.store.list<any>('trigger').flatMap(t=>t.threads??[]).find(r=>r.source+':'+r.id===id)
    if(!ref)throw Error('Deleted thread requires its original source identity for reconciliation')
    return {...redactBody(v),ref,subscriptions:[],correlated:[],pending:[],context:[]}
+  }
+  if(kind==='backend-plugin-thread'){
+   // The deletion fence blocks normal reads/resume immediately. Keep only the
+   // private native mapping needed to retry purge until its verified receipt.
+   const body=redactBody(value)
+   if(this.store.get('backend-deleted',id))return {...body,deleted:true}
+   const v=value as Record<string,unknown>
+   return {...body,...Object.fromEntries(['pluginId','stateVersion','identity','nativeId','accountIdentity'].filter(k=>v[k]!==undefined).map(k=>[k,v[k]]))}
   }
   return kind==='backend-thread'?protocolTombstone(id,value):redactBody(value)
  }

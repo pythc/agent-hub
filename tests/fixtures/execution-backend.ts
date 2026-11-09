@@ -39,7 +39,7 @@ export default {
     const turn='completed-'+history.length;r.onTurn?.(turn)
     return {threadId:id,turnId:turn,text:JSON.stringify({history,version:config.version??1,...(isolation?{isolation}:{})})}
    },
-   async history(id){return JSON.parse(readFileSync(join(dataDirectory,id+'.json'),'utf8'))},
+   async history(id){return {id,turns:JSON.parse(readFileSync(join(dataDirectory,id+'.json'),'utf8')).map((input:string,index:number)=>({id:String(index),items:[{type:'userMessage',text:input}]}))}},
    async catalog(){return {models:[{id:'fixture'}]}}
   }
  }

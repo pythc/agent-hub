@@ -54,6 +54,10 @@ The host worker uses JSON lines over stdio. `initialize` creates the adapter; fi
 
 `run` must call `onThread` with its native session ID, call `onTurn`, and return matching IDs and nonempty text. Existing requests must resume the exact native ID. The host exposes its own `plugin:<uuid>` ID and keeps the native mapping private. It checks workspace, configuration, state protocol and authenticated account identity on resume. A changed identity requires explicit migration or a new backend/session.
 
+`history(nativeId, cwd)` must return an object with `id` equal to the requested native ID and a `turns` array. The host validates this identity before translating `id` to its `plugin:<uuid>` ID for history resources and exports; missing or mismatched identities are rejected. Other history fields are retained.
+
+History deletion fences reads and resume immediately. The host retains only the native/account mapping needed to retry deletion, including after restart and package upgrades. `purge` must verify local removal and be safe to retry when the original success response was lost. Only a verified deletion receipt allows the host to erase the mapping; subsequent cleanup retries use the durable deletion tombstone. This does not claim deletion of provider-side copies. Mappings already erased by older versions cannot be reconstructed safely from the remaining files: these cases stay pending and require verified original metadata, rather than a guessed native ID.
+
 `probe` reports `available`, `authenticated` (`true`, `false`, or `"unknown"`), `remoteVerified: false`, optional CLI version, and a stable SHA-256 account identity. Never return credentials. Local sign-in detection is not proof of a successful model call. Managed turns require a confirmed account identity and all of `managed`, `tools`, `resume`, `history`, and `contextBudget`.
 
 | Capability | Required behavior |
