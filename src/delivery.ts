@@ -53,7 +53,7 @@ export async function deliverDraft(runtime:Runtime,id:string,sourceId:string,tit
         try{
           writeFileSync(askpass,'#!/bin/sh\ncase "$1" in *Username*) printf "%s\\n" "$AGENTHUB_GIT_USERNAME";; *) printf "%s\\n" "$AGENTHUB_GIT_PASSWORD";; esac\n',{mode:0o700})
           await exec('git',['-c','core.hooksPath=/dev/null','-c','credential.helper=','-c','http.version=HTTP/1.1','push','origin','HEAD:refs/heads/'+branch],{cwd:run.cwd,encoding:'utf8',timeout:60000,env:{...gitEnv,GIT_ASKPASS:askpass,AGENTHUB_GIT_USERNAME:credential.username,AGENTHUB_GIT_PASSWORD:token}})
-        }catch{throw Error('Repository push did not confirm success; reconcile the remote head before retrying')}
+        }catch{throw Object.assign(Error('Repository push did not confirm success; reconcile the remote head before retrying'),{diagnostic:{operation:'tool',reason:'repository_push_unconfirmed'}})}
         finally{rmSync(scratch,{recursive:true,force:true})}
       }
     }

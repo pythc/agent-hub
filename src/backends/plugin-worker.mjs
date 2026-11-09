@@ -3,6 +3,11 @@ import {createInterface} from 'node:readline'
 import {pathToFileURL} from 'node:url'
 let model,controller,control,busy=false,sequence=0
 const pending=new Map(),codes=new Set(['auth_required','provider_rejected','quota_exhausted','rate_limited','transient','cancelled','invalid_output','unsupported','process_failed','outcome_unknown','configuration_invalid','context_budget_exceeded'])
+const methods=new Set(['initialize','account/read','thread/start','thread/resume','thread/read','thread/archive','thread/unarchive','thread/delete','thread/inject_items','turn/start','turn/steer','turn/interrupt','config/read','model/list'])
+function diagnostic(error,operation){
+ const d=error?.diagnostic,reason=['timeout','process_exit','spawn_error','rpc_rejected'].includes(d?.reason)?d.reason:'exception'
+ return {operation,reason,...(methods.has(d?.nativeMethod)?{nativeMethod:d.nativeMethod}:{}),...(Number.isSafeInteger(d?.rpcCode)?{rpcCode:d.rpcCode}:{}),...(d?.exitCode===null||Number.isSafeInteger(d?.exitCode)?{exitCode:d.exitCode}:{})}
+}
 const emit=value=>process.stdout.write(JSON.stringify(value)+'\n')
 const event=(name,value)=>emit({type:'event',event:name,...value===undefined?{}:{value}})
 const ask=(method,params)=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});emit({type:'request',id,method,params})})
@@ -55,7 +60,7 @@ async function handle(m){
    }finally{busy=false;control=undefined;controller=undefined}
   }
   emit({type:'result',id:m.id,result:result??null})
- }catch(error){emit({type:'result',id:m.id,error:{code:codes.has(error?.code)?error.code:'process_failed'}})}
+ }catch(error){emit({type:'result',id:m.id,error:{code:codes.has(error?.code)?error.code:'process_failed',diagnostic:diagnostic(error,['initialize','probe','run','history','purge','expose','catalog','control'].includes(m.method)?m.method:'transport')}})}
 }
 const lines=createInterface({input:process.stdin})
 lines.on('line',line=>{

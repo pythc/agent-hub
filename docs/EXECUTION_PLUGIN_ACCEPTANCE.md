@@ -36,3 +36,11 @@ The first exploratory goal run completed the task but failed its source-stabilit
 The Codex plugin reference currently requires a ChatGPT identity with workspace routing information; other credential kinds remain available through the pre-existing native/API backends. On macOS, automatic native parent-directory AGENTS loading cannot use its nested filesystem sandbox helper; the documented configuration explicitly disables that loader and requires repository guidance in the host context. See [deployment instructions](EXECUTION_PLUGINS.md).
 
 The independent native history failure needs further investigation before claiming high-volume reliability. Linux has construction/contract tests here, not live-provider proof. External CLI distributions are outside the plugin package digest and must be pinned/tested separately. No automatic state migration, package garbage collection, publisher signature verification, hot installation or public registry is claimed.
+
+## Follow-up GitHub lifecycle
+
+The [2026-11-09 external CLI follow-up](EXTERNAL_CLI_ACCEPTANCE_2026-11-09.md)
+passed the complete real GitHub task through packaged Codex execution, including
+restart continuity and independent repair/verification. Earlier history-call
+failures remain retained; this does not establish high-volume reliability or
+resolve their unrecorded native cause.

@@ -27,7 +27,7 @@ function executionPickActor(actor,focus=false){
 function executionMapNode({key,kind,id,name,model,action,glyph}){
  const node=el('button','execution-map-node tam-node');node.type='button';node.id='execution-map-node-'+key;node.dataset.mapKey=key;node.dataset.mapKind=kind;node.dataset.mapId=id
  let mark=glyph?icon(glyph):kind==='app'?opMark(id):icon(kind==='tool'?'prompts':'cpu')
- if(kind==='app'&&executionAssets[id]){mark=el('img','execution-source-logo');mark.src=executionAssets[id];mark.alt=''}
+ if(kind==='app'&&executionAssets[id]){mark=opMark(id,'small')}
  add(node,add(el('span','execution-map-node-title'),mark,el('strong','',name)),model?el('span','execution-map-node-model',model):null,el('span','execution-map-node-state'))
  node.onclick=action||(()=>executionOpenCalls(kind,id,node.id));return node
 }

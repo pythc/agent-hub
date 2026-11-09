@@ -8,5 +8,5 @@ export interface BackendPlugin {
  }
 }
 export class BackendAdapterError extends Error {
- constructor(readonly code:import('../src/backends/plugin-contract.ts').BackendErrorCode){super(code)}
+ constructor(readonly code:import('../src/backends/plugin-contract.ts').BackendErrorCode,readonly diagnostic?:import('../src/backends/plugin-contract.ts').BackendDiagnostic){super(code)}
 }

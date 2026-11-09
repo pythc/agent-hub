@@ -71,6 +71,13 @@ function workspaceTable(headings, values) {
   return add(el('div', 'workspace-table'), add(el('table'), head, body))
 }
 function opMark(id,size=''){
+  if(executionAssets[id]){
+    const mark=el('span','app-mark branded '+id+' '+size),image=el('img','brand-logo')
+    image.src=executionAssets[id];image.alt='';image.setAttribute('aria-hidden','true')
+    mark.append(image)
+    if(executionAssets[id+'Dark']){image.classList.add('brand-light');const dark=image.cloneNode();dark.src=executionAssets[id+'Dark'];dark.className='brand-logo brand-dark';mark.append(dark)}
+    return mark
+  }
   return add(el('span','app-mark '+id+' '+size),icon(({feishu:'message',wecom:'conversations',codex:'terminal',cursor:'pointer',vscode:'code',github:'branch',workbuddy:'spark'})[id]||'sources'))
 }
 function opPill(entry){const state=entry.status;return el('span','pill '+(state==='verified'?'green':state==='attention'?'amber':'neutral'),entryStateLabel(state))}

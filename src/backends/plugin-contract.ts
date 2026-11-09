@@ -18,6 +18,15 @@ export type BackendManifest=z.infer<typeof backendManifestSchema>
 export type BackendCapabilities=z.infer<typeof backendCapabilitiesSchema>
 export const backendErrorCodes=['auth_required','provider_rejected','quota_exhausted','rate_limited','transient','cancelled','invalid_output','unsupported','process_failed','outcome_unknown','configuration_invalid','context_budget_exceeded'] as const
 export type BackendErrorCode=typeof backendErrorCodes[number]
+// Only bounded protocol metadata crosses the sandbox. Never forward stderr,
+// provider messages, tool arguments or credential-bearing exception text.
+export const backendDiagnosticSchema=z.object({
+ operation:z.enum(['initialize','probe','run','history','purge','expose','catalog','control','tool','transport']),
+ reason:z.enum(['exception','timeout','process_exit','spawn_error','rpc_rejected','repository_push_unconfirmed']),
+ nativeMethod:z.enum(['initialize','account/read','thread/start','thread/resume','thread/read','thread/archive','thread/unarchive','thread/delete','thread/inject_items','turn/start','turn/steer','turn/interrupt','config/read','model/list']).optional(),
+ rpcCode:z.number().int().optional(),exitCode:z.number().int().nullable().optional(),
+}).strict()
+export type BackendDiagnostic=z.infer<typeof backendDiagnosticSchema>
 // Goal recovery currently consumes durable error strings. Preserve the typed
 // failure's meaning there: an unknown effect must never look like poor output
 // and trigger a new plan/session that bypasses the original effect fence.
@@ -31,10 +40,10 @@ const recoveryMeaning:Partial<Record<BackendErrorCode,string>>={
  unsupported:'permission or capability unavailable',
 }
 export class BackendPluginError extends Error {
- constructor(readonly code:BackendErrorCode,readonly backendId:string){super('Execution backend '+backendId+': '+code+(recoveryMeaning[code]?' ('+recoveryMeaning[code]+')':''));this.name='BackendPluginError'}
+ constructor(readonly code:BackendErrorCode,readonly backendId:string,readonly diagnostic?:BackendDiagnostic){super('Execution backend '+backendId+': '+code+(recoveryMeaning[code]?' ('+recoveryMeaning[code]+')':'')+(diagnostic?' ['+diagnostic.operation+'/'+diagnostic.reason+(diagnostic.nativeMethod?'/'+diagnostic.nativeMethod:'')+']':''));this.name='BackendPluginError'}
 }
 export const backendEnvelope=z.discriminatedUnion('type',[
- z.object({type:z.literal('result'),id:z.number().int().positive(),result:z.unknown().optional(),error:z.object({code:z.enum(backendErrorCodes)}).strict().optional()}).strict(),
+ z.object({type:z.literal('result'),id:z.number().int().positive(),result:z.unknown().optional(),error:z.object({code:z.enum(backendErrorCodes),diagnostic:backendDiagnosticSchema.optional()}).strict().optional()}).strict(),
  z.object({type:z.literal('event'),event:z.enum(['thread','turn','model','configuration','capabilities','progress','output','budget','contextReady','active','inputRead']),value:z.unknown().optional()}).strict(),
  z.object({type:z.literal('request'),id:z.number().int().positive(),method:z.enum(['tool','human','retain']),params:jsonObject}).strict(),
 ])

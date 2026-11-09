@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Plugin } from "vite";
 import postcss from "postcss";
+import {entryBrandAssets} from "../../src/ui/brand-assets.ts";
 import {
   configurationScripts,
   configurationStyles,
@@ -33,15 +34,7 @@ export function configurationContent(): Plugin {
           return ".management-content " + selector;
         });
       });
-      const executionAssets = Object.fromEntries(
-        ["feishu", "wecom"].map((name) => [
-          name,
-          "data:image/x-icon;base64," +
-            readFileSync(
-              new URL("../../src/ui/assets/" + name + ".ico", import.meta.url),
-            ).toString("base64"),
-        ]),
-      );
+      const executionAssets = entryBrandAssets;
       return `export function mount(configurationHost){
       const style=document.createElement('style');style.textContent=${JSON.stringify(css.toString())};document.head.append(style);
       const executionAssets=${JSON.stringify(executionAssets)};

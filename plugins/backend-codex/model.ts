@@ -5,6 +5,7 @@ import {checkBudget,protocolBytes,receiptReference,ContextBudgetExceeded} from '
 import type { Config } from '../../src/config.ts'
 import {hostPrivateFiles} from '../../src/private-files.ts'
 import {codexToolBridge} from '../../src/codex-tools.ts'
+import {BackendAdapterError} from '../backend-sdk.ts'
 
 import type {Model,ModelRequest,ModelResult,ToolContent} from '../../src/model.ts'
 export type {Model,ModelRequest,ModelResult,NativeControl,NativeRequest,ToolSpec,ToolContent} from '../../src/model.ts'
@@ -22,7 +23,7 @@ export const nativeContextProfile=1
 /** Account identity is rechecked before each plugin activation; no credential leaves this process. */
 export async function probeCodexAccount(binary:string,args:string[]=[]){
  const client=new AppServer(binary,args,process.cwd())
- const timer=setTimeout(()=>client.fail(Error('Account probe deadline exceeded')),15000)
+ const timer=setTimeout(()=>client.fail(new BackendAdapterError('transient',{operation:'probe',reason:'timeout'})),60000)
  try{await client.call('initialize',{clientInfo:{name:'agent-hub',version:'0.10.0'}});client.notify('initialized');return await client.call('account/read',{refreshToken:false})}
  finally{clearTimeout(timer);await client.close()}
 }
@@ -264,8 +265,8 @@ class AppServer {
     createInterface({ input: this.process.stdout }).on('line', line => {
       try { this.receive(JSON.parse(line)) } catch (error) { this.fail(error instanceof Error ? error : new Error('Invalid protocol message')) }
     })
-    this.process.on('error', error => this.fail(error))
-    this.process.on('exit', (code, signal) => this.fail(new Error('App Server exited: ' + (code ?? signal))))
+    this.process.on('error', error => this.fail(Object.assign(error,{diagnostic:{reason:'spawn_error'}})))
+    this.process.on('exit', (code, signal) => this.fail(Object.assign(new Error('App Server exited: ' + (code ?? signal)),{diagnostic:{reason:'process_exit',exitCode:code}})))
     this.process.stdin.on('error', error => this.fail(error))
   }
   private write(message: RpcMessage): void {
@@ -305,7 +306,7 @@ class AppServer {
       const pending = this.pending.get(Number(message.id))
       if (!pending) return
       this.pending.delete(Number(message.id))
-      if (message.error) pending.reject(new Error('RPC ' + message.error.code + ': ' + message.error.message))
+      if (message.error) pending.reject(Object.assign(new Error('RPC ' + message.error.code + ': ' + message.error.message),{diagnostic:{reason:'rpc_rejected',nativeMethod:pending.method,rpcCode:message.error.code}}))
       else {
         // Bind synchronously: readline can deliver more notifications from the same
         // stdout chunk before the awaiting turn/start continuation gets to run.

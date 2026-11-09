@@ -30,6 +30,8 @@ The source package moved through `1.0.0 / revision 1 → 1.1.0 / revision 2 → 
 
 The controller's final read-only aggregation initially hit a GitHub EOF after all lifecycle phases had finished. Re-running only aggregation (`AGENTHUB_GITHUB_REPORT_ONLY=1`) succeeded without repeating model work or external writes. Full private phase snapshots and their hashes are retained locally; the repository contains only the sanitized result.
 
+A subsequent [external CLI plugin run](EXTERNAL_CLI_ACCEPTANCE_2026-11-09.md) passed the same lifecycle plus explicit plugin/session-continuity checks. The earlier failures below remain historical evidence.
+
 ## Retained failed attempts and limits
 
 Earlier runs are retained privately and are not counted as acceptance. The first exposed missing PR result evidence in the verifier ledger; the verifier correctly withheld acceptance, and this was fixed. A subsequent run missed a newly created Issue despite a successful poll and later single-item readback; the exact upstream cause was not captured, so list visibility delay remains an inference. The bounded overlap recovery has a deterministic regression test.

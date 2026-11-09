@@ -15,11 +15,11 @@ import {hostPrivateFiles} from '../private-files.ts'
 import {stableDigest} from '../sources.ts'
 import {ContextBudgetExceeded,type BudgetReceipt} from '../context-budget.ts'
 import {TransientModelError} from '../model.ts'
-import {backendEnvelope,backendResult,BackendPluginError} from './plugin-contract.ts'
+import {backendEnvelope,backendResult,backendDiagnosticSchema,BackendPluginError,type BackendDiagnostic} from './plugin-contract.ts'
 import {installBackendPackage,readBackendPackage,backendObjects,validatePluginValue,type BackendPackage} from './plugin-package.ts'
 
-interface Thread {id:string;backendId:string;pluginId:string;digest:string;stateVersion:number;nativeId?:string;cwd:string;identity:string;accountIdentity?:string;state:'running'|'completed'|'failed'|'interrupted';effectIds:string[];turnId?:string}
-interface Effect {fingerprint:string;state:'running'|'complete';result?:Awaited<ReturnType<NonNullable<ModelRequest['onTool']>>>}
+interface Thread {id:string;backendId:string;pluginId:string;digest:string;stateVersion:number;nativeId?:string;cwd:string;identity:string;accountIdentity?:string;state:'running'|'completed'|'failed'|'interrupted';effectIds:string[];turnId?:string;lastFailure?:{at:number;code:string;diagnostic?:BackendDiagnostic}}
+interface Effect {fingerprint:string;state:'running'|'complete';result?:Awaited<ReturnType<NonNullable<ModelRequest['onTool']>>>;failure?:BackendDiagnostic}
 const text=z.string().min(1).max(1000)
 const healthSchema=z.object({available:z.boolean(),authenticated:z.union([z.boolean(),z.literal('unknown')]),remoteVerified:z.literal(false),accountIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional(),version:z.string().max(200).optional()}).strict()
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'"
@@ -52,8 +52,9 @@ export class ProcessBackend implements Model {
   if(old&&old.cwd!==cwd)throw Error('Execution backend workspace changed; explicit migration required')
   const record:Thread=old??{id:'plugin:'+randomUUID(),backendId:this.id,pluginId:pkg.manifest.id,digest:pkg.digest,stateVersion:pkg.manifest.stateVersion,identity:pluginIdentity(this.definition,pkg),cwd,state:'running',effectIds:[]}
   if(record.effectIds.some(id=>this.store.get<Effect>('backend-plugin-tool',id)?.state==='running'))throw new BackendPluginError('outcome_unknown',this.id)
-  const transport=await this.launch(pkg,cwd,request,record)
+  let transport:Awaited<ReturnType<ProcessBackend['launch']>>|undefined
   try{
+   transport=await this.launch(pkg,cwd,request,record)
    const probe=await transport.call('probe',{args:[]})
    const health=healthSchema.parse(probe)
    if(!health.available)throw new BackendPluginError('configuration_invalid',this.id)
@@ -69,8 +70,8 @@ export class ProcessBackend implements Model {
    if(Object.keys(request.schema).length){let output:unknown;try{output=JSON.parse(result.text)}catch{throw new BackendPluginError('invalid_output',this.id)}if(!ajv.compile(request.schema)(output))throw new BackendPluginError('invalid_output',this.id)}
    record.state='completed';this.save(record)
    return {threadId:record.id,turnId:result.turnId,text:result.text}
-  }catch(error){record.state=request.signal?.aborted?'interrupted':'failed';this.save(record);throw error}
-  finally{await transport.close()}
+  }catch(error){record.state=request.signal?.aborted?'interrupted':'failed';record.lastFailure={at:Date.now(),code:error instanceof BackendPluginError?error.code:error instanceof TransientModelError?'transient':'process_failed',...(error instanceof BackendPluginError&&error.diagnostic?{diagnostic:error.diagnostic}:error instanceof TransientModelError&&record.lastFailure?.diagnostic?{diagnostic:record.lastFailure.diagnostic}:{})};this.save(record);throw error}
+  finally{await transport?.close()}
  }
  async history(threadId:string,cwd:string){return this.inspect('history',threadId,cwd)}
  async purge(threadId:string,cwd:string){
@@ -109,6 +110,9 @@ export class ProcessBackend implements Model {
     callbackIds.add(m.id)
     let result:unknown
     if(m.method==='tool'){
+     // A thrown host operation is not permission to try the write with a new
+     // native call ID. Keep the durable uncertainty fence within this turn too.
+     if(record.effectIds.some(id=>this.store.get<Effect>('backend-plugin-tool',id)?.failure))throw new BackendPluginError('outcome_unknown',this.id)
      const p=z.object({name:text,args:z.unknown(),callId:text}).strict().parse(m.params),spec=request.tools?.find(t=>t.name===p.name)
      if(!spec||!request.onTool||!ajv.compile(spec.inputSchema)(p.args))throw new BackendPluginError('unsupported',this.id)
      const id=stableDigest([record.id,record.turnId,p.callId]),fingerprint=stableDigest([p.name,p.args]),saved=this.store.get<Effect>('backend-plugin-tool',id)
@@ -118,7 +122,8 @@ export class ProcessBackend implements Model {
       if(++toolCalls>(request.options?.maxToolCalls??256))throw new BackendPluginError('unsupported',this.id)
       inflightTools.add(id);record.effectIds.push(id);this.save(record)
       this.store.put('backend-plugin-tool',id,{fingerprint,state:'running'})
-      result=await request.onTool(p.name,p.args,p.callId)
+      try{result=await request.onTool(p.name,p.args,p.callId)}
+      catch(error){const diagnostic=backendDiagnosticSchema.safeParse((error as any)?.diagnostic);this.store.put('backend-plugin-tool',id,{fingerprint,state:'running',failure:diagnostic.success?diagnostic.data:{operation:'tool',reason:'exception'}});throw error}
       this.store.put('backend-plugin-tool',id,{fingerprint,state:'complete',result});inflightTools.delete(id)
      }
     }else if(m.method==='human'){
@@ -151,7 +156,7 @@ export class ProcessBackend implements Model {
    }
   }
   const abort=()=>{if(!closed){try{send({type:'cancel'})}catch{}fail(new BackendPluginError('cancelled',this.id))}}
-  const timer=setTimeout(()=>fail(new BackendPluginError('outcome_unknown',this.id)),request?.options?.timeoutMs??this.config.turnTimeoutMs)
+  const timer=setTimeout(()=>fail(new BackendPluginError('outcome_unknown',this.id,{operation:'transport',reason:'timeout'})),request?.options?.timeoutMs??this.config.turnTimeoutMs)
   let exited:Promise<void>=Promise.resolve()
   const close=async()=>{clearTimeout(timer);request?.signal?.removeEventListener('abort',abort);fail(new BackendPluginError('process_failed',this.id));readReceipts.clear();await exited;rmSync(scratch,{recursive:true,force:true})}
   try{
@@ -165,7 +170,7 @@ export class ProcessBackend implements Model {
    child=spawn(command.command,command.args,{cwd:workDirectory,env,stdio:['pipe','pipe','pipe'],detached:true})
    exited=new Promise<void>(done=>child!.once('close',()=>done()))
    child.stderr.resume();child.stdin.on('error',()=>fail(new BackendPluginError('process_failed',this.id)))
-   child.once('error',()=>fail(new BackendPluginError('process_failed',this.id)));child.once('close',()=>fail(new BackendPluginError('process_failed',this.id)))
+   child.once('error',()=>fail(new BackendPluginError('process_failed',this.id,{operation:'transport',reason:'spawn_error'})));child.once('close',code=>fail(new BackendPluginError('process_failed',this.id,{operation:'transport',reason:'process_exit',exitCode:code})))
    child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{
     if(closed)return;buffer+=chunk;if(Buffer.byteLength(buffer)>16_000_000){fail(new BackendPluginError('invalid_output',this.id));return}
     let i:number
@@ -174,7 +179,7 @@ export class ProcessBackend implements Model {
       const m=backendEnvelope.parse(JSON.parse(line))
       if(m.type==='event')event(m)
       else if(m.type==='request')void callback(m)
-      else{const waiter=pending.get(m.id);if(!waiter)throw Error('Unexpected backend response');pending.delete(m.id);if(m.error){const code=m.error.code;waiter.reject(code==='context_budget_exceeded'&&lastBudget?new ContextBudgetExceeded(lastBudget):code==='transient'?new TransientModelError('Execution backend temporarily unavailable'):new BackendPluginError(code,this.id))}else waiter.resolve(m.result)}
+      else{const waiter=pending.get(m.id);if(!waiter)throw Error('Unexpected backend response');pending.delete(m.id);if(m.error){const code=m.error.code;if(record)record.lastFailure={at:Date.now(),code,diagnostic:m.error.diagnostic};waiter.reject(code==='context_budget_exceeded'&&lastBudget?new ContextBudgetExceeded(lastBudget):code==='transient'?new TransientModelError('Execution backend temporarily unavailable'):new BackendPluginError(code,this.id,m.error.diagnostic))}else waiter.resolve(m.result)}
      }catch(error){fail(error instanceof ContextBudgetExceeded?error:new BackendPluginError('invalid_output',this.id))}
     }
    })

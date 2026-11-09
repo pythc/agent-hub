@@ -15,6 +15,8 @@ export default {
     r.onThread?.(id);r.onTurn?.(r.input==='replay'?'stable-turn':randomUUID())
     r.onConfiguration?.({requested:r.options??{},sent:{parameters:r.options?.parameters}})
     r.onContextReady?.()
+    if(r.input==='diagnostic')throw Object.assign(Error('secret-provider-message'),{diagnostic:{reason:'rpc_rejected',nativeMethod:'thread/start',rpcCode:-32000,message:'secret-value'}})
+    if(r.input==='fence'){try{await r.onTool!('allowed',{value:3},'first')}catch{};await r.onTool!('allowed',{value:4},'second')}
     if(r.input==='crash')process.exit(3)
     if(r.input==='hang'||r.input==='descendant')await new Promise(()=>{})
     if(r.input==='malformed'){process.stdout.write('malformed\n');await new Promise(()=>{})}

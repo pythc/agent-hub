@@ -76,6 +76,23 @@ The host validates tool names/arguments against the current request and records 
 
 The adapter never receives a goal-completion API. Router goals, immutable objectives, authorization, acceptance criteria, independent verification, repair and replanning stay in the host. A CLI exit code or self-reported success is not acceptance. Unsupported adapters cannot be used for managed Router/Worker/Subagent roles. The separate native `router` client command still uses Codex; execution plugins use host Router mode.
 
+## Failure diagnostics
+
+The host retains bounded `lastFailure` metadata on plugin session records and
+`failure` metadata on uncertain tool receipts: operation, reason, known native
+RPC method/code and exit code. Provider messages, stderr, tool arguments and
+credentials are never copied into these fields. Diagnostics do not establish
+whether a remote write succeeded. An uncertain effect remains fenced across
+restart and blocks later tool calls with new IDs in the same turn.
+
+Codex account probing has a 60-second deadline. A deadline at this read-only,
+pre-inference stage is `transient`; an interrupted model turn or publication is
+not reclassified as safely retryable. The Codex reference package is `1.0.1`,
+with the existing state protocol and session pinning retained.
+
+The real external-package GitHub lifecycle is recorded in
+[the 2026-11-09 follow-up acceptance](EXTERNAL_CLI_ACCEPTANCE_2026-11-09.md).
+
 ## Upgrade and rollback
 
 ```sh

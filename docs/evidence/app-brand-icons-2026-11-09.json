@@ -1,0 +1,28 @@
+{
+  "passed": 6,
+  "checks": [
+    "Five real registered app adapters render bundled brand assets; no credentials or network calls are needed for their inventory",
+    "Dark palette uses the official white GitHub variant; theme and icons survive reload",
+    "390px reduced-motion layout has no horizontal overflow or missing app marks",
+    "Theme control remains keyboard operable; decorative logos do not add duplicate accessible names",
+    "No personal attribution, third-party image requests or browser exceptions",
+    "Standalone guide and compiled workspace share the same bundled registry"
+  ],
+  "errors": [],
+  "externalImageRequests": 0,
+  "scope": "Real isolated Runtime and registered source packages; no platform or model requests in UI checks",
+  "screenshots": {
+    "apps-light.png": "19e1dba28970d59d0d5a4548e0f7ae62986a2c1a31271e3f5dfb05594bc30dfb",
+    "apps-dark.png": "b02fff3c4101c83050193050f897ddbec92ddb6120973ee039aefe1fabb26863",
+    "apps-mobile.png": "c00dca46812bab2f000a35e40a186bc1d292b5c59e640f376d95700bef0fc44b",
+    "apps-mobile-lower.png": "3cbc524838072c0980278433eb0f0584a9ef04fda029e13976125f352e623491"
+  },
+  "assets": {
+    "src/ui/assets/wecom.ico": "b11c0e4016a8e04ee32a85a638e23126cd6434dd9e4dc6b762aca3a61951a9d0",
+    "src/ui/assets/github-white.svg": "ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b",
+    "src/ui/assets/feishu.ico": "69da9be6053530750202e4f674d621274bd86a9fc23f44a16c5e6c7aa56dfd9e",
+    "src/ui/assets/slack.png": "ca3872d0fb85ff9858bcbdc529d6e1db32c029c681c6e723e4f2ecb1c7defea6",
+    "src/ui/assets/linear.svg": "9326c9bb47752fe51157e5e024e0282875e9163ee22825151f80999037760d78",
+    "src/ui/assets/github-black.svg": "693d7abe6f899646cc2e96856723b45e95f71885a54910b2749f6decdf7e1ee1"
+  }
+}

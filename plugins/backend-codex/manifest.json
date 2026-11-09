@@ -1,7 +1,7 @@
 {
   "id": "codex-cli",
   "label": "Codex CLI",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "stateVersion": 1,
   "configSchema": {
     "type": "object",

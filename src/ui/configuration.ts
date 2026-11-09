@@ -1,6 +1,7 @@
 import {configurationScripts} from './configuration-assets.ts'
 import { readFileSync } from 'node:fs'
 import {roppoMark} from './account.ts'
+import {entryBrandAssets} from './brand-assets.ts'
 
 // Ship the existing same-origin, inline document contract without a browser build step.
 const asset = (name: string) => readFileSync(new URL(name, import.meta.url), 'utf8')
@@ -15,4 +16,4 @@ export const configurationPage: string = `<!doctype html>
 <link rel="icon" href="${roppoMark}"><style>:root{--roppo-mark:url('${roppoMark}')}\n${asset('configuration.css')}\n${asset('operator-workspace.css')}\n${asset('workspace-settings.css')}\n${asset('affect-ui.css')}\n${asset('flow-motion.css')}\n${asset('execution-page.css')}\n${asset('team-studio.css')}\n${asset('theme.css')}\n${asset('workspace-motion.css')}\n${asset('workflow-story.css')}\n${asset('integrations.css')}</style></head>
 <body><div id="app"></div><div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
 <noscript>Enable JavaScript to configure AgentHub. 请启用 JavaScript 以配置 AgentHub。</noscript>
-<script>(() => { 'use strict';\nconst configurationHost=null;\nconst executionAssets=${JSON.stringify(Object.fromEntries(['feishu','wecom'].map(id=>[id,'data:image/x-icon;base64,'+readFileSync(new URL('assets/'+id+'.ico',import.meta.url)).toString('base64')])))};\n${client}\n})();</script></body></html>`
+<script>(() => { 'use strict';\nconst configurationHost=null;\nconst executionAssets=${JSON.stringify(entryBrandAssets)};\n${client}\n})();</script></body></html>`

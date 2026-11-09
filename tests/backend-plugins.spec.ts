@@ -149,3 +149,17 @@ it('stops a native descendant when the owning host process is killed',async()=>{
   expect(readdirSync(data).some(name=>existsSync(join(data,name,'escaped')))).toBe(false)
  }finally{owner.kill('SIGKILL')}
 })
+
+it('retains safe native failure metadata without provider messages or secret details',async()=>{
+ const f=await fixture();let id=''
+ await expect(f.registry.run({...f.request,input:'diagnostic',onThread:v=>id=v})).rejects.toMatchObject({code:'process_failed',diagnostic:{operation:'run',reason:'rpc_rejected',nativeMethod:'thread/start',rpcCode:-32000}})
+ const record=f.store.get<any>('backend-plugin-thread',id)
+ expect(record.lastFailure.diagnostic.nativeMethod).toBe('thread/start')
+ expect(JSON.stringify(record)).not.toContain('secret-')
+})
+it('blocks a new native call ID after a host effect becomes uncertain in the same turn',async()=>{
+ const f=await fixture();let calls=0
+ await expect(f.registry.run({...f.request,input:'fence',tools:[{type:'function',name:'allowed',description:'test',inputSchema:{type:'object'}}],onTool:async()=>{calls++;throw Object.assign(Error('private error'),{diagnostic:{operation:'tool',reason:'repository_push_unconfirmed'}})}})).rejects.toMatchObject({code:'outcome_unknown'})
+ expect(calls).toBe(1)
+ expect(f.store.list<any>('backend-plugin-tool')[0].failure).toEqual({operation:'tool',reason:'repository_push_unconfirmed'})
+})
