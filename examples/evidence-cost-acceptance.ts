@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto'
 import {execFileSync} from 'node:child_process'
 import assert from 'node:assert/strict'
 import type {ModelRequest} from '../src/model.ts'
+import type {BudgetReceipt} from '../src/context-budget.ts'
 
 const [output,implementationArg,scenario='clean',budgetArg='10000000']=process.argv.slice(2)
 const contextBytes=Number(budgetArg)
@@ -44,7 +45,7 @@ const config=configSchema.parse({stateDir:join(root,'state'),port:0,codex:proces
 const host=new Runtime(config),calls:any[]=[],original=host.model.run.bind(host.model)
 host.model.run=async(r:ModelRequest)=>{
  const input=JSON.parse(r.input),row:any={role:r.role,agentId:r.activity?.agentId,workerId:r.activity?.workerId,kind:input.kind,startedAt:Date.now(),inputBytes:Buffer.byteLength(r.input),inlineEvidence:input.inlineEvidence?.length??0,tools:[],budgets:[]};calls.push(row)
- try{return await original({...r,onBudget:receipt=>{row.budgets.push(receipt);r.onBudget?.(receipt)},onThread:(id:string)=>{row.threadId=id;r.onThread?.(id)},onTool:r.onTool?async(name:string,args:unknown,id:string)=>{row.tools.push(name);return r.onTool!(name,args,id)}:undefined})}
+ try{return await original({...r,onBudget:(receipt:BudgetReceipt)=>{row.budgets.push(receipt);r.onBudget?.(receipt)},onThread:(id:string)=>{row.threadId=id;r.onThread?.(id)},onTool:r.onTool?async(name:string,args:unknown,id:string)=>{row.tools.push(name);return r.onTool!(name,args,id)}:undefined})}
  catch(error){row.error=String(error);throw error}
  finally{row.endedAt=Date.now();save('calls',calls)}
 }

@@ -2,12 +2,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import {createHash} from 'node:crypto'
 import {normalizeUsage,usageFields} from '../../src/model-usage.ts'
-import {existsSync,readFileSync} from 'node:fs'
+import {existsSync} from 'node:fs'
 import {checkBudget,protocolBytes,receiptReference,ContextBudgetExceeded} from '../../src/context-budget.ts'
 import type { Config } from '../../src/config.ts'
 import {hostPrivateFiles} from '../../src/private-files.ts'
 import {codexToolBridge} from '../../src/codex-tools.ts'
 import {BackendAdapterError} from '../backend-sdk.ts'
+import {NativeContext} from './context.ts'
+export {nativeProtocolHistory} from './context.ts'
 
 import type {Model,ModelRequest,ModelResult,ToolContent} from '../../src/model.ts'
 export type {Model,ModelRequest,ModelResult,NativeControl,NativeRequest,ToolSpec,ToolContent} from '../../src/model.ts'
@@ -38,15 +40,6 @@ export function cliEnvironment(environment?:Record<string,string>){
   }
   return env
 }
-/** Count model-visible protocol items, not duplicate telemetry/world snapshots. */
-export function nativeProtocolHistory(path:string){
- const text=readFileSync(path,'utf8'),lines=text.split('\n'),records=lines.filter(Boolean).map((line,i)=>{try{return JSON.parse(line)}catch(error){if(i===lines.length-1&&!text.endsWith('\n'))return {type:'response_item',payload:{unparsedTail:line}};throw error}})
- const meta=records.find(r=>r.type==='session_meta')?.payload
- let items:any[]=[]
- for(const r of records){if(r.type==='response_item')items.push(r.payload);else if(r.type==='compacted'&&Array.isArray(r.payload?.replacement_history))items=r.payload.replacement_history}
- return {baseInstructions:meta?.base_instructions,dynamicTools:meta?.dynamic_tools,items}
-}
-
 /** One owned stdio process per activation. Persistent threads survive activations. */
 export class CodexModel implements Model {
   constructor(private readonly config: Pick<Config, 'codex' | 'model' | 'effort' | 'turnTimeoutMs'>, private readonly extraArgs: string[] = [],private readonly environment?:Record<string,string>) {}
@@ -102,23 +95,30 @@ export class CodexModel implements Model {
     // Disable configured servers in the per-thread managed config below. A
     // startup override for a missing server creates an invalid partial entry.
     let protocolPath:string|undefined,budgetError:ContextBudgetExceeded|undefined
-    const additions:unknown[]=[],raw:unknown[]=[]
-    const envelope=()=>({instructions:request.instructions,...(request.managed?{baseInstructions:managedBase}:{}),input:request.input,schema:request.schema,tools:request.tools,parameters:request.options?.parameters,...(protocolPath&&existsSync(protocolPath)?{history:nativeProtocolHistory(protocolPath)}:{raw}),additions})
-    const check=(phase:string,reserve=false)=>checkBudget(envelope(),request.contextBudget,'native-protocol',phase,request.onBudget,reserve)
+    const context=new NativeContext({instructions:request.instructions,input:request.input,schema:request.schema,tools:request.tools,parameters:request.options?.parameters,...(request.managed?{baseInstructions:managedBase}:{})})
+    const check=(phase:string,reserve=false)=>{if(request.contextBudget)checkBudget(context.envelope(),request.contextBudget,'native-protocol',phase,request.onBudget,reserve)}
+    const exceeded=(error:unknown)=>{if(!(error instanceof ContextBudgetExceeded))throw error;budgetError??=error;setTimeout(()=>{void client.interrupt()},0)}
     const guardedTool:ModelRequest['onTool']=request.onTool?async(name,args,callId)=>{
       if(budgetError)return {success:false,contentItems:[{type:'inputText',text:'Context budget exceeded; tool was not executed'}]}
-      try{additions.push({callId,name,args});check('before_tool',true)}catch(error){if(!(error instanceof ContextBudgetExceeded))throw error;budgetError=error;setTimeout(()=>{void client.interrupt()},0);return {success:false,contentItems:[{type:'inputText',text:'Context budget exceeded; tool was not executed'}]}}
-      let result=await invoke!(name,args,callId)
-      if(request.contextBudget&&protocolBytes(result)>request.contextBudget.toolReserveBytes){
-        if(!request.retainToolResult)throw Error('A durable receipt store is required for an oversized native tool result')
-        result=receiptReference(result,await request.retainToolResult(callId,result))
-      }
-      additions.push({callId,result})
-      try{check('tool_receipt')}catch(error){if(!(error instanceof ContextBudgetExceeded))throw error;budgetError=error;setTimeout(()=>{void client.interrupt()},0)}
-      return result
+      const pending=request.contextBudget?context.tool(callId,name,args):undefined
+      try{
+        try{check('before_tool',true)}catch(error){exceeded(error);return {success:false,contentItems:[{type:'inputText',text:'Context budget exceeded; tool was not executed'}]}}
+        let result:Awaited<ReturnType<NonNullable<ModelRequest['onTool']>>>
+        try{result=await invoke!(name,args,callId)}catch(error){result={success:false,contentItems:[{type:'inputText',text:String(error).slice(0,1000)}]}}
+        if(request.contextBudget&&protocolBytes(result)>request.contextBudget.toolReserveBytes){
+          if(!request.retainToolResult)throw Error('A durable receipt store is required for an oversized native tool result')
+          result=receiptReference(result,await request.retainToolResult(callId,result))
+        }
+        if(pending)context.toolResult(pending,result)
+        try{check('tool_receipt')}catch(error){exceeded(error)}
+        return result
+      }finally{if(pending)context.toolReturned(pending)}
     }:undefined
     const client = new AppServer(this.config.codex, [...this.extraArgs,...(request.managed?managedStartup:[])], request.cwd,request.onHumanRequest,request.onProgress,guardedTool,this.environment,request.onOutput,(method,params)=>{
-      if(request.contextBudget&&method==='rawResponseItem/completed')raw.push(params.item)
+      if(request.contextBudget&&method==='rawResponseItem/completed'&&params?.threadId===client.threadId&&params?.turnId===client.turnId){
+        context.observe(params.item)
+        if(!budgetError)try{check('native_item')}catch(error){exceeded(error)}
+      }
       if(method==='thread/tokenUsage/updated'&&params?.threadId===client.threadId&&params?.turnId===client.turnId&&params.tokenUsage?.total){
         // Native total is thread-cumulative; last describes this provider step.
         const id='native:'+params.turnId+':'+createHash('sha256').update(JSON.stringify(usageFields.map(key=>params.tokenUsage.total[key]??null))).digest('hex').slice(0,24)
@@ -166,13 +166,15 @@ export class CodexModel implements Model {
         for(const path of hostPrivateFiles())filesystem[path]='deny'
         isolated={...managedContext,mcp_servers:mcp,plugins:Object.fromEntries(Object.keys(effective.plugins??{}).map(name=>[name,{enabled:false}])),features:managedFeatures,default_permissions:'superagent-managed',permissions:{'superagent-managed':{extends:request.sandbox==='workspace-write'?':workspace':':read-only',filesystem,network:{enabled:false}}}}
       }
+      const developerInstructions=request.instructions+(bridge?'\nFor this activation use the roppo-router MCP tools: they expose the current tools and schemas. Older native dynamic tools may remain in history; do not substitute those for this activation’s MCP tools.':'')
+      context.setInstructions(developerInstructions)
       const params = {
         ...threadOptions,
         ...(request.contextBudget&&!request.threadId?{experimentalRawEvents:true,historyMode:'legacy'}:{}),
         ...(request.managed?{baseInstructions:managedBase}:{}),
         cwd: request.cwd, approvalPolicy: request.onHumanRequest||request.operator?'on-request':'never', ...(request.managed?{permissions:'superagent-managed'}:{sandbox:request.sandbox??'read-only'}),
         ...((request.model||(!request.threadId?this.config.model:undefined))?{model:request.model||this.config.model}:{}),
-        developerInstructions: request.instructions+(bridge?'\nFor this activation use the roppo-router MCP tools: they expose the current tools and schemas. Older native dynamic tools may remain in history; do not substitute those for this activation’s MCP tools.':''),
+        developerInstructions,
         ...((isolated||Object.keys(configOptions).length)?{config:{...configOptions,...isolated}}:{}),
       }
       const result = request.threadId
@@ -180,7 +182,8 @@ export class CodexModel implements Model {
         : await client.call('thread/start', { ...params, ephemeral: request.ephemeral ?? false,...(request.tools?{dynamicTools:request.tools}:{}) })
       const threadId = result.thread.id as string
       protocolPath=result.thread.path
-      if(request.contextBudget&&request.threadId&&!protocolPath)throw Error('Native history is unavailable for complete budget accounting; explicit context rebuild required')
+      if(request.contextBudget&&request.threadId&&(!protocolPath||!existsSync(protocolPath)))throw Error('Native history is unavailable for complete budget accounting; explicit context rebuild required')
+      context.setPath(protocolPath)
       client.threadId = threadId
       request.onThread?.(threadId)
       if(result.model)request.onModel?.(result.model)
@@ -197,6 +200,7 @@ export class CodexModel implements Model {
       if(request.managed)request.onContextReady?.()
       // Arm completion before starting: notifications may arrive before the RPC reply.
       const completed = client.completion()
+      if(request.contextBudget)context.begin()
       check('before_turn',true)
       request.onConfiguration?.({requested:options,sent:{model:result.model??request.model??this.config.model,effort,parameters:custom},confirmed:result.model?{model:result.model}:undefined})
       inferenceStarted=true
@@ -207,11 +211,12 @@ export class CodexModel implements Model {
       })
       client.turnId = started.turn.id
       request.onTurn?.(client.turnId!)
-      request.onActive?.({interrupt:()=>client.interrupt(),refresh:async(text:string)=>{additions.push({instructions:text});check('refresh');await client.call('thread/inject_items',{threadId,items:[{type:'message',role:'developer',content:[{type:'input_text',text}]}]})},steer:async(text:string,onRead?:()=>void)=>{
-        additions.push({input:text});check('steer')
+      request.onActive?.({interrupt:()=>client.interrupt(),refresh:async(text:string)=>{const p=request.contextBudget?context.message('developer',text):undefined;try{check('refresh');await client.call('thread/inject_items',{threadId,items:[{type:'message',role:'developer',content:[{type:'input_text',text}]}]})}catch(error){if(p)context.discard(p);throw error}},steer:async(text:string,onRead?:()=>void)=>{
+        const p=request.contextBudget?context.message('user',text):undefined
+        try{check('steer')}catch(error){if(p)context.discard(p);throw error}
         if(onRead)client.inputReceipts.set(text,onRead)
         try{await client.call('turn/steer',{threadId,expectedTurnId:client.turnId,input:[{type:'text',text}]})}
-        catch(error){client.inputReceipts.delete(text);throw error}
+        catch(error){client.inputReceipts.delete(text);if(p)context.discard(p);throw error}
       }})
       if (request.signal?.aborted) await client.interrupt()
       const terminal = await completed
@@ -372,7 +377,7 @@ class AppServer {
       }
       return
     }
-    if(!this.turnId&&/^(?:item\/(?:started|completed|agentMessage\/delta)|turn\/(?:started|completed)|thread\/tokenUsage\/updated)$/.test(message.method)){
+    if(!this.turnId&&/^(?:item\/(?:started|completed|agentMessage\/delta)|turn\/(?:started|completed)|thread\/tokenUsage\/updated|rawResponseItem\/completed)$/.test(message.method)){
       if(this.earlyOutput.length>=1000)throw Error('Native output arrived without a confirmed turn')
       this.earlyOutput.push(message);return
     }
