@@ -16,9 +16,9 @@ Use a host build containing workspace-view API v1 and the marketplace. Older sou
 
 ```sh
 npm run typecheck:views
-npm run pack:agent-board -- .local/agent-board-0.1.1
-node --import tsx src/cli.ts plugins inspect .local/agent-board-0.1.1
-node --import tsx src/cli.ts plugins stage /absolute/current-config.json .local/agent-board-0.1.1 REVIEWED_DIGEST /absolute/new-config.json
+npm run pack:agent-board -- .local/agent-board-0.1.2
+node --import tsx src/cli.ts plugins inspect .local/agent-board-0.1.2
+node --import tsx src/cli.ts plugins stage /absolute/current-config.json .local/agent-board-0.1.2 REVIEWED_DIGEST /absolute/new-config.json
 ```
 
 Use a new output directory for every build. Review the emitted digest and the new configuration before starting the host with it. Staging installs immutable bytes under `stateDir/plugins/objects/<digest>`; it does **not** restart or change a running host. Keep the current `stateDir` to preserve accounts, tasks, settings and browser state. The navigation entry appears automatically after activation.

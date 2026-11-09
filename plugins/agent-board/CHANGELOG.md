@@ -1,5 +1,11 @@
 # Agent board changes
 
+## 0.1.2
+
+Simplify message-handling labels in English and Chinese. Remove the metric-card captions and explanatory footer; precise counting windows remain available on hover and to screen readers. Counts and routing behavior are unchanged.
+
+消息处理指标改用通俗的中英文名称，移除卡片小字和底部说明。统计范围可通过悬停及屏幕阅读器查看，计数与路由行为保持不变。
+
 ## 0.1.1
 
 Task, activity and admission timestamps now expose their full local date and time zone on hover, with machine-readable timestamps. This distinguishes records from different days while keeping rows compact. Invalid historical timestamps render an unavailable marker instead of crashing the view.
