@@ -2,6 +2,8 @@
 
 2026-11-09。本轮在隔离分支 `codex/roppo-token-evidence-20261109` 完成实现和试验，未部署、推送或发布插件。现有实例的账户、权限、配置与任务数据未由本轮修改。
 
+后续协议计数修复、无损重复输出及同为 10MB 预算的修复／重规划对照见 [新研究记录](PROTOCOL_EVIDENCE_10MB_BENCHMARK_2026-11-09.md)。本文保留原 256KB 实验口径，不与后续样本混算。
+
 两轮普通任务的 A/B 两组均完成原有独立验收，合计已报告 token 从 **1,049,315 降至 332,539（−68.3%）**，未缓存输入从 **234,286 降至 173,184（−26.1%）**。平均端到端耗时从 **268.8 秒降至 151.1 秒（−43.8%）**。这是两对成功样本的描述统计；每对耗时降幅分别为 15.1% 和 61.7%，样本不足以给出稳定的生产加速承诺。
 
 **统计口径与看板**
@@ -82,11 +84,11 @@
 先安装依赖并确保原生 CLI 已登录。以下是会真实消耗用量的隔离试验，必须给新输出目录。A 使用统计基线 checkout，B 使用对应优化 checkout，不能使用现有实例的 stateDir。
 
 ```sh
-node --import tsx examples/evidence-cost-acceptance.ts .local/new-ab/01-a /absolute/path/to/telemetry-only-baseline clean
-node --import tsx examples/evidence-cost-acceptance.ts .local/new-ab/01-b /absolute/path/to/optimized clean
+node --import tsx examples/evidence-cost-acceptance.ts .local/new-ab/01-a /absolute/path/to/telemetry-only-baseline clean 256000
+node --import tsx examples/evidence-cost-acceptance.ts .local/new-ab/01-b /absolute/path/to/optimized clean 256000
 ```
 
-修复和重规划分别用 `repair`、`replan`，保存为 02-a／02-b、03-a／03-b；重复普通任务保存为 04-a／04-b。保持成对条件一致，顺序执行，保留未通过结果。本轮顺序为普通 A→B、修复 B→A、重规划 A→B、普通重复 A→B。比较工具会拒绝条件不一致；未配对完成或未通过的样本不会得到正常节省比例。
+修复和重规划分别用 `repair`、`replan`，保存为 02-a／02-b、03-a／03-b；重复普通任务保存为 04-a／04-b。复现本报告须显式传入 `256000`；后续 10MB 研究已提高 harness 默认值，不改变这里的历史实测。保持成对条件一致，顺序执行，保留未通过结果。本轮顺序为普通 A→B、修复 B→A、重规划 A→B、普通重复 A→B。比较工具会拒绝条件不一致；未配对完成或未通过的样本不会得到正常节省比例。
 
 ```sh
 python3 examples/compare-evidence-cost.py .local/new-ab --native-index /absolute/path/to/codex/state_5.sqlite
