@@ -140,7 +140,7 @@ it('loads as an external sandboxed package, resumes host state, and upgrades/rol
   const manifest=JSON.parse(readFileSync(new URL('../plugins/linear/manifest.json',import.meta.url),'utf8'))
   const v1=await buildPluginPackage(fileURLToPath(new URL('../plugins/linear/index.ts',import.meta.url)),manifest,join(f.root,'v1'))
   const v2=await buildPluginPackage(fileURLToPath(new URL('../plugins/linear/index.ts',import.meta.url)),{...manifest,version:'1.1.0'},join(f.root,'v2'))
-  const config=configSchema.parse({stateDir:f.root,work:{sandboxDriver:process.platform==='darwin'?'seatbelt':'bwrap'},sourcePlugins:[{directory:v1.directory,digest:v1.digest}],sources:[{...f.config,options:{...f.config.options,apiBase:endpoint}}]})
+  const config=configSchema.parse({stateDir:f.root,work:{sandboxDriver:process.platform==='darwin'?'seatbelt':'bubblewrap'},sourcePlugins:[{directory:v1.directory,digest:v1.digest}],sources:[{...f.config,options:{...f.config.options,apiBase:endpoint}}]})
   const create=async()=>{const source=(await SourceRegistry.load(config)).create(config.sources[0]!) as ProcessSource;source.attach(f.store);sources.push(source);await source.start(f.ctx);return source}
   activatePluginPackages(f.store,config,[v1]);const source=await create();await source.poll(f.ctx)
   expect(f.events).toHaveLength(2);await source.deliver(outbound(f.events[1]!));expect(writes).toBe(1)
