@@ -103,7 +103,7 @@ export async function restoreState(config:Config,directory:string){
     }
     // External calls can finish without changing the task. Their intent/result
     // receipts are the replay fence, including running and uncertain outcomes.
-    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('tool-receipt','browser-receipt','merge-attempt')").all()){
+    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool')").all()){
      const previous=old.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(String(row.kind),String(row.id))
      if(!previous||previous.body!==row.body)throw Error('External tool or merge effects advanced after backup; reconcile before restore')
     }

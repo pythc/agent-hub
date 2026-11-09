@@ -31,7 +31,7 @@ it('restores offline state and retains a backup of the previous database',async(
  const restored=new Store(join(config.stateDir,'state.sqlite'))
  try{expect(restored.get('sample','a')).toEqual({value:1})}finally{restored.close()}
 })
-it.each(['tool-receipt','browser-receipt','merge-attempt'])('refuses to erase new %s external-effect evidence on restore',async kind=>{
+it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool'])('refuses to erase new %s external-effect evidence on restore',async kind=>{
  const root=mkdtempSync(join(tmpdir(),'restore-effects-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]})
  const store=new Store(join(config.stateDir,'state.sqlite'));store.close()
@@ -43,7 +43,7 @@ it.each(['tool-receipt','browser-receipt','merge-attempt'])('refuses to erase ne
  try{expect(unchanged.get(kind,'write')).toEqual(receipt)}finally{unchanged.close()}
  expect(existsSync(join(config.stateDir,'host.lock'))).toBe(false)
 })
-it.each(['tool-receipt','browser-receipt','merge-attempt'])('preserves advanced %s evidence but permits an unchanged receipt',async kind=>{
+it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool'])('preserves advanced %s evidence but permits an unchanged receipt',async kind=>{
  const root=mkdtempSync(join(tmpdir(),'restore-effects-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]})
  const store=new Store(join(config.stateDir,'state.sqlite')),before={id:'write',state:'running',phase:'submitting'}
