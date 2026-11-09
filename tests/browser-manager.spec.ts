@@ -224,6 +224,20 @@ it("gives Workers separate real-driver sessions and fences cross-assignment and 
   );
   expect(host.browser.list("other").sessions).toHaveLength(0);
 });
+
+it("projects only the current user's browser control metadata without page or vault content", async () => {
+  const {host,driver}=await fixture();
+  const alice=host.browser.saveProfile('alice',{name:'Alice private profile',allowedWorkers:[]});
+  const bob=host.browser.saveProfile('bob',{name:'Bob private profile',allowedWorkers:[]});
+  const a=await host.browser.openPersonal('alice',alice.id,randomUUID());
+  const b=await host.browser.openPersonal('bob',bob.id,randomUUID());
+  const calls=driver.calls.length;
+  expect(host.browser.controlSummary('alice')).toEqual({total:1,items:[{id:a.id,workerId:undefined,control:'human'}]});
+  expect(host.browser.controlSummary('alice').items.some(s=>s.id===b.id)).toBe(false);
+  expect(host.browser.controlSummary('other')).toEqual({total:0,items:[]});
+  expect(JSON.stringify(host.browser.controlSummary('alice'))).not.toMatch(/url|title|profile|credential|cookie|known-login/);
+  expect(driver.calls.length).toBe(calls);
+});
 it("rejects disabled browser grants at the common WorkerTools entry point", async () => {
   const { host, owner } = await fixture(),
     run = host.store.get<any>("run", owner.ticketId);

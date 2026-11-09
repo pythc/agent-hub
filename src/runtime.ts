@@ -33,6 +33,7 @@ import {Reviews} from './review.ts'
 import {Merger} from './merge.ts'
 import type {GithubApi} from './connectors/github.ts'
 import {loadManagedConfig} from './managed-config.ts'
+import {loadMarketConfig,recoverMarket} from './plugin-market-state.ts'
 import {workerProfiles} from './worker-pool.ts'
 import type {WorkerProfile} from './backend-config.ts'
 import {mergeOptions} from './agent-options.ts'
@@ -74,6 +75,7 @@ import {ChatSessions,chatToolDetails} from './chat.ts'
 export class Runtime {
   readonly watchdog:HostWatchdog
   get isPaused(){return this.paused}
+  get activeExecutions(){return this.controllers.size}
   executionActive(id:string){return this.controllers.has(id)}
   interruptForWatchdog(id:string){this.controllers.get(id)?.abort(Error('Watchdog recovery requested'))}
   readonly chat:ChatSessions
@@ -124,8 +126,8 @@ export class Runtime {
   private timer?: ReturnType<typeof setInterval>
   private lock: string
   private paused = false
-  static async create(config:Config,options:{model?:Model;sources?:Source[];mergeApi?:GithubApi;clock?:()=>number;browserDriver?:BrowserDriver}={}){return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
-  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi;sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory;memoryRerank?:import('./memory-rerank.ts').RerankMemory } = {}) {
+  static async create(config:Config,options:{model?:Model;sources?:Source[];mergeApi?:GithubApi;clock?:()=>number;browserDriver?:BrowserDriver;pluginActivation?:string}={}){loadMarketConfig(config,options.pluginActivation);return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
+  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];mergeApi?:GithubApi;sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory;memoryRerank?:import('./memory-rerank.ts').RerankMemory;pluginActivation?:string } = {}) {
     if(config.sourcePlugins.length&&!options.sourceRegistry)throw Error('Use Runtime.create to load configured source plugins')
     this.sourceRegistry=options.sourceRegistry??new SourceRegistry()
     validateBackendSelection(config)
@@ -146,7 +148,7 @@ export class Runtime {
         closeSync(descriptor)
       }
     }
-    try { loadManagedConfig(config);validateBackendSelection(config);this.store = new Store(join(config.stateDir, 'state.sqlite')) }
+    try { loadManagedConfig(config);validateBackendSelection(config);this.store = new Store(join(config.stateDir, 'state.sqlite'));try{recoverMarket(this.store,options.pluginActivation);loadMarketConfig(config,options.pluginActivation)}catch(error){this.store.close();throw error} }
     catch (error) { unlinkSync(this.lock); throw error }
     this.activity = new ExecutionActivity(this.store)
     this.approvals = new Approvals(this.store)

@@ -7,6 +7,7 @@ import {sourcePluginsSchema,sourceCapabilitiesSchema,toolConnectionsSchema} from
 import {decisionConfigSchema} from './decision-config.ts'
 import {browserConfigSchema} from './browser-contract.ts'
 import {watchdogConfigSchema} from './watchdog-contract.ts'
+import {viewPluginsSchema} from './workspace-view-package.ts'
 
 const sourceSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
@@ -55,6 +56,7 @@ export const configSchema = z.object({
   execution:executionSchema,
   decision:decisionConfigSchema,
   sourcePlugins:sourcePluginsSchema,
+  viewPlugins:viewPluginsSchema,
   toolConnections:toolConnectionsSchema,
   browser:browserConfigSchema,
   model: z.string().optional(),
@@ -88,6 +90,7 @@ export function loadConfig(path: string): Config {
   const config = configSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
   validateBackendSelection(config)
   config.stateDir = resolve(base, config.stateDir)
+  for(const plugin of config.viewPlugins)plugin.directory=resolve(base,plugin.directory)
   for(const plugin of config.sourcePlugins){if('module'in plugin)plugin.module=resolve(base,plugin.module);else{plugin.directory=resolve(base,plugin.directory);plugin.readPaths=plugin.readPaths.map(path=>resolve(base,path))}}
   for(const connection of Object.values(config.toolConnections))if(connection.transport.kind==='stdio'&&connection.transport.cwd)connection.transport.cwd=resolve(base,connection.transport.cwd)
   const ids = new Set<string>()

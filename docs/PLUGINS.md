@@ -1,5 +1,7 @@
 # Source plugins v2
 
+For UI extensions, see [Workspace view plugins](WORKSPACE_VIEWS.md). They share the package CLI but have a separate manifest, capability and browser sandbox contract.
+
 AgentHub now loads operator-installed source packages without adding source-kind branches to the core. Feishu, Slack and [Linear](LINEAR_PLUGIN.md) are reference packages; `examples/plugins/checkpoint-source.ts` is a third-party-shaped example used by the real-model acceptance run. This is a local developer interface, not a hosted marketplace or a signed publisher registry.
 
 The Router retains task authority, goals, dependencies, re-planning, acceptance and reply ownership. Plugins transport verified messages, read authorized resources and deliver host outbox messages. They cannot directly create/complete tasks or change authorization and acceptance criteria. Native Worker tools are resource reads through existing reached-trigger, assignment and scope checks; writes remain Router-owned outbox actions.
@@ -136,3 +138,7 @@ The model example uses a real Router and two real Workers, a third-party-shaped 
 3. Run `node --import tsx examples/plugin-live-slack.ts resume /absolute/fresh/slack-evidence` with the same environment. It checks persisted identity, event, cursor and delivery receipt, recovers the offline reply through REST before reopening Socket Mode, then checks repeat-poll deduplication and reply readback.
 
 Only `evidence.json` with `ok: true` establishes completion. A `ready.json` file proves readiness only. A failed/uncertain send requires reconciliation; the harness does not blindly retry it. These phases verify real transport and process recovery, not a production Router deployment or a new real-model task run.
+
+## Marketplace distribution
+
+Install and manage released packages from the built-in [plugin marketplace](PLUGIN-MARKETPLACE.md). GitHub catalogs describe compatible immutable versions; source-only directories are not installable. The market keeps downloaded, configured and active states separate and preserves the controlled-restart and task-state boundaries described here.

@@ -3,6 +3,7 @@ import {
   History,
   Inbox,
   Link2,
+  LayoutDashboard,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
@@ -26,6 +27,7 @@ type Props = {
   closeMenu: () => void;
   openWorkspaces: () => void;
   user?: { displayName: string };
+  views?: {id:string;label:string}[];
 };
 /** Global functions stay separate from the conversation list, even when collapsed. */
 export function FeatureNavigation({
@@ -39,6 +41,7 @@ export function FeatureNavigation({
   closeMenu,
   openWorkspaces,
   user,
+  views = [],
 }: Props) {
   const groups = [
     [
@@ -48,6 +51,7 @@ export function FeatureNavigation({
         Icon: MessageSquare,
         current: !configuring,
       },
+      ...views.map(view=>({href:'/configure#plugin/'+view.id,label:view.label,Icon:LayoutDashboard,current:configuring&&hash==='plugin/'+view.id})),
       {
         href: "/configure#tasks/history",
         label: L("Tasks", "任务"),
@@ -81,10 +85,10 @@ export function FeatureNavigation({
         current: configuring && hash.startsWith("connections"),
       },
       {
-        href: "/configure#integrations",
+        href: "/configure#integrations/market",
         label: L("Tools and apps", "工具与应用"),
         Icon: Wrench,
-        current: configuring && hash === "integrations",
+        current: configuring && hash.startsWith("integrations"),
       },
       {
         href: "/configure#prompts",

@@ -8,7 +8,7 @@ import {workerSpecs} from './worker-tools.ts'
 const text=(value:unknown,limit=1800)=>typeof value==='string'?value.slice(0,limit):''
 /** Operator-only projections. No configuration, credentials or native protocol history are copied into the work list. */
 export function operatorWorkspace(host:Runtime,offset=0,limit=25,filter:{state?:string;search?:string}={}){
- const status=host.status(),tickets=host.store.tickets.list(),deliveries=host.store.deliveries(),approvals=host.store.list<Approval>('approval').filter(a=>a.status==='pending'&&a.expiresAt>Date.now())
+ const status={paused:host.isPaused,active:host.activeExecutions},tickets=host.store.tickets.list(),deliveries=host.store.deliveries(),approvals=host.store.list<Approval>('approval').filter(a=>a.status==='pending'&&a.expiresAt>Date.now())
  const runs=host.store.list<Run>('run'),model=(id:string)=>host.config.backends[id]?.model??host.config.model,router=host.config.execution.router?.backend??host.config.execution.roles.router??host.config.execution.backend
  const activity=host.activity.list().reverse().sort((a,b)=>b.startedAt-a.startedAt).map(call=>{
   const source=host.config.sources.find(s=>s.id===call.sourceId),client=call.triggerId&&host.store.get<{client:string}>('entry-client-event',call.triggerId)?.client

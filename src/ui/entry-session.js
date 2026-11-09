@@ -115,7 +115,7 @@ function updateWorkspaceLocation(replace = false) {
 }
 function applyWorkspaceLocation() {
   if(typeof configurationHost !== 'undefined' && configurationHost && !configurationHost.active())return
-  const hash = location.hash.slice(1)
+  const hash = location.hash === '#integrations/tools' ? 'integrations' : location.hash.slice(1)
   const page = Object.hasOwn(workspacePages, hash) ? workspacePages[hash] : null
   let matched
   if (page) return entryNavigate(page, '', { fromLocation: true, view: page === 'execution' ? 'calls' : 'roles' })

@@ -54,7 +54,10 @@ import type { ChatSessions } from "../../src/chat.ts";
 import { ResourceWorkspace } from "./resource-workspace.tsx";
 import { initialResources, openResource, resourceKey, type ResourceKind } from "./resource-state.ts";
 import { FeatureNavigation } from "./navigation.tsx";
+import {lazy,Suspense} from "react";
+const PluginMarketplace=lazy(()=>import("./plugin-marketplace.tsx").then(m=>({default:m.PluginMarketplace})));
 import { Configuration } from "./configuration.tsx";
+import {WorkspaceView,useWorkspaceViews} from './workspace-view.tsx';
 import { FilesPanel } from "./files.tsx";
 import { BrowserPanel } from "./browser.tsx";
 import mark from "../../src/ui/assets/roppo-mark.png";
@@ -901,6 +904,11 @@ function Chat(p: ChatProps) {
     if (!next) setPanelExpanded(false);
   };
   const hash = route.split("#")[1] ?? "tasks";
+  const marketRoute=configuring&&(hash==='integrations'||hash.startsWith('integrations/'));
+  const marketTools=hash==='integrations'||hash==='integrations/tools';
+  const views=useWorkspaceViews();
+  const pluginId=configuring&&hash.startsWith('plugin/')?hash.slice(7):null;
+  const currentView=views.find(view=>view.id===pluginId);
   const pageNames: Record<string, string> = {
     tasks: L("Workspace", "工作区"),
     "tasks/history": L("Tasks", "任务"),
@@ -908,12 +916,13 @@ function Chat(p: ChatProps) {
     execution: L("Agent team", "Agent 团队"),
     models: L("Model connections", "模型连接"),
     connections: L("Conversation entries", "会话入口"),
-    integrations: L("Tools and apps", "工具与应用"),
+    integrations: L("Plugins & tools", "插件与工具"),
     prompts: L("Shared instructions", "共享指令"),
     advanced: L("Settings", "设置"),
     usage: L("Usage guide", "使用指引"),
   };
   const pageTitle =
+    currentView?.label[lang] ??
     pageNames[hash] ??
     pageNames[hash.split("/")[0]!] ??
     L("Workspace", "工作区");
@@ -921,7 +930,7 @@ function Chat(p: ChatProps) {
     document.title =
       (configuring ? pageTitle : L("Conversations", "对话")) + " · Roppo";
     setMenu(false);
-  }, [route, lang]);
+  }, [route, lang, pageTitle]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [loading, setLoading] = useState(!!id),
     [error, setError] = useState(""),
@@ -1360,8 +1369,9 @@ function Chat(p: ChatProps) {
             mobile={narrow}
             menuOpen={menu}
             closeMenu={closeNavigation}
-            openWorkspaces={() => setPickerRequest((value) => value + 1)}
+            openWorkspaces={() => {if(pluginId||marketRoute&&!marketTools){history.pushState(null,"","/configure#tasks");window.dispatchEvent(new Event('roppo:navigation'))}setPickerRequest((value) => value + 1)}}
             user={boot?.user}
+            views={views.map(view=>({id:view.id,label:view.label[lang]}))}
           />
           <aside
             className="conversation-sidebar"
@@ -1547,12 +1557,14 @@ function Chat(p: ChatProps) {
                 </button>
               </div>
             </header>
+            {marketRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading plugins…","正在加载插件…")}</div>}><PluginMarketplace route={hash} language={lang}/></Suspense>:null}
             <Configuration
-              visible={configuring}
+              visible={configuring&&!pluginId&&(!marketRoute||marketTools)}
               route={route}
               language={lang}
               pickerRequest={pickerRequest}
             />
+            {pluginId?<WorkspaceView key={pluginId} id={pluginId} view={currentView} dark={dark} language={lang}/>:null}
             <div
               ref={bodyRef}
               className={

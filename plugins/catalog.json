@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "plugins": [
+    {
+      "id": "agent-board",
+      "category": "workspace-view",
+      "name": {
+        "en": "Agent board",
+        "zh-CN": "Agent 看板"
+      },
+      "description": {
+        "en": "See your team at work. Follow tasks, tool calls and listening decisions in one view.",
+        "zh-CN": "查看团队如何协作，在一个页面跟进任务、工具调用与监听决策。"
+      },
+      "directory": "plugins/agent-board",
+      "license": "Apache-2.0",
+      "maintainer": "pythc",
+      "releases": [],
+      "screenshots": [
+        "plugins/agent-board/preview.png"
+      ]
+    },
+    {
+      "id": "agenthub-slack",
+      "category": "source",
+      "name": {
+        "en": "Slack",
+        "zh-CN": "Slack"
+      },
+      "description": {
+        "en": "Bring Router into your channels. Receive messages and report progress in the same thread.",
+        "zh-CN": "让 Router 进入工作群聊，在原会话中接收消息并报告任务进展。"
+      },
+      "directory": "plugins/slack",
+      "license": "Apache-2.0",
+      "maintainer": "pythc",
+      "releases": []
+    },
+    {
+      "id": "agenthub-linear",
+      "category": "source",
+      "name": {
+        "en": "Linear",
+        "zh-CN": "Linear"
+      },
+      "description": {
+        "en": "Turn issues into coordinated work. Keep discussions and delivery connected to your team’s tracker.",
+        "zh-CN": "从事项开始协作，让讨论和交付回到团队的任务管理流程。"
+      },
+      "directory": "plugins/linear",
+      "license": "Apache-2.0",
+      "maintainer": "pythc",
+      "releases": []
+    }
+  ]
+}

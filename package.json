@@ -10,11 +10,13 @@
   "scripts": {
     "start": "tsx src/cli.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && npm run typecheck:chat",
+    "typecheck": "tsc --noEmit && npm run typecheck:chat && npm run typecheck:views",
     "check": "npm run typecheck && npm test",
     "demo": "tsx examples/native-smoke.ts",
     "build:chat": "vite build --config web/chat/vite.config.ts",
     "typecheck:chat": "tsc -p web/chat/tsconfig.json",
+    "typecheck:views": "tsc -p plugins/agent-board/tsconfig.json",
+    "pack:agent-board": "tsx src/cli.ts plugins pack plugins/agent-board/index.tsx plugins/agent-board/manifest.json",
     "prestart": "npm run build:chat",
     "pretest": "npm run build:chat"
   },

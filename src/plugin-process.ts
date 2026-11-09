@@ -17,7 +17,7 @@ const metadataKinds=new Set(['source-cursor','source-live','source-message-obser
 const readableKinds=new Set([...metadataKinds,'trigger','thread','source-identity','source-message-state'])
 const scopedId=(source:string,id:string)=>id===source||id.startsWith(source+':')
 const ref=z.object({source:z.string(),id:z.string()}).strict()
-const triggerSchema=z.object({id:z.string().min(1).max(1000),source:z.string(),threads:z.array(ref).min(1).max(20),actor:ref,human:z.boolean(),addressed:z.enum(['direct','indirect']).optional(),at:z.string().datetime({offset:true}),text:z.string().max(100000),meta:z.record(z.unknown()),channel:z.object({source:z.string(),thread:z.string(),address:z.record(z.string())}).strict().optional()}).strict()
+const triggerSchema=z.object({id:z.string().min(1).max(1000),source:z.string(),threads:z.array(ref).min(1).max(20),actor:ref,human:z.boolean(),addressed:z.enum(['direct','indirect']).optional(),at:z.string().datetime({offset:true}),text:z.string().max(100000),meta:z.record(z.string(),z.unknown()),channel:z.object({source:z.string(),thread:z.string(),address:z.record(z.string(),z.string())}).strict().optional()}).strict()
 const quote=(s:string)=>"'"+s.replaceAll("'","'\\''")+"'"
 export interface PluginProcessOptions {sandboxDriver:SandboxDriver;codex:string;stateDir:string;readPaths?:string[];timeoutMs?:number}
 /** One connection, one process. The child receives no host DB, task-control API or ambient credentials. */

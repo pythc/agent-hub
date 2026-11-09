@@ -1,0 +1,7 @@
+{
+  "category": "workspace-view",
+  "id": "agent-board",
+  "version": "0.1.0",
+  "label": {"en": "Agent board", "zh-CN": "Agent 看板"},
+  "capabilities": ["workspace.runtime.read"]
+}

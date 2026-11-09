@@ -1,3 +1,6 @@
+import {PluginMarket,MarketError} from './plugin-market.ts'
+import {PluginGitHub} from './plugin-github.ts'
+import {Ajv2020} from 'ajv/dist/2020.js'
 import {decisionConfigSchema} from './decision-config.ts'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -30,8 +33,10 @@ import {chatPage,chatAsset} from './ui/chat-page.ts'
 import {ChatError} from './chat.ts'
 import {BrowserError} from './browser-contract.ts'
 import {browserRequest} from './browser-http.ts'
+import {enabledView,viewCatalog} from './workspace-view-package.ts'
+import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 
-export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config)=>Runtime|Promise<Runtime>;clientHome?:string;clientName?:string}={}) {
+export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string)=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
   const connectionFile=join(runtime.config.stateDir,'connection.json')
   const account=new PersonalAccount(runtime.config.stateDir)
@@ -39,10 +44,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const onboarding=new Onboarding(()=>runtime,options.configurationPreview===true)
   const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
   async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=runtime.close()}await closingRuntime}
-  async function rebuild(config:Config){
+  const market=new PluginMarket(()=>runtime,options.pluginGitHub)
+  async function rebuild(config:Config,activationId?:string){
     await stopRuntime()
     if(stopping)throw Error('Host is stopping')
-    const next=await (options.createRuntime?options.createRuntime(configSchema.parse(config)):Runtime.create(configSchema.parse(config)))
+    const next=await (options.createRuntime?options.createRuntime(configSchema.parse(config),activationId):Runtime.create(configSchema.parse(config),{pluginActivation:activationId}))
     runtime=next;runtimeClosed=false;closingRuntime=undefined;runtime.endpoint=endpoint;runtime.start()
   }
   let token: string
@@ -53,6 +59,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   try{watchdogToken=readFileSync(watchdogTokenPath,'utf8').trim()}catch{watchdogToken=randomBytes(32).toString('hex');writeFileSync(watchdogTokenPath,watchdogToken,{mode:0o600,flag:'wx'})}
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
+    if(error instanceof MarketError){if(error.code==='market_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof ChatError||error instanceof BrowserError){send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof AccountError){send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof OnboardingError){if(error.code==='setup_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
@@ -173,6 +180,56 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/api/plugin-market'&&req.method==='GET'){send(res,200,{...market.snapshot(),platform:process.platform,settingsRevision:runtime.settings.current().revision});return}
+    if(path==='/api/plugin-market/preview'&&req.method==='GET'){
+      const query=z.object({catalog:z.string().max(80),plugin:z.string().max(64),index:z.coerce.number().int().min(0).max(3)}).strict().parse(Object.fromEntries(new URL(req.url!,'http://localhost').searchParams))
+      const preview=await market.preview(query.catalog,query.plugin,query.index);res.writeHead(200,{'content-type':preview.type});res.end(preview.bytes);return
+    }
+    if(path==='/api/plugin-market/catalogs'&&req.method==='POST'){
+      const input=z.object({url:z.string().url().max(800).optional(),tokenEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100).optional(),remove:z.string().max(80).optional()}).strict().parse(await body(req))
+      send(res,200,await market.catalogs(input));return
+    }
+    if(path==='/api/plugin-market/plan'&&req.method==='POST'){send(res,200,market.plan(await body(req)));return}
+    if(path==='/api/plugin-market/execute'&&req.method==='POST'){
+      const input=z.object({planId:z.string().uuid(),requestId:z.string().uuid()}).strict().parse(await body(req))
+      const plan=runtime.store.get<any>('plugin-market-plan',input.planId)
+      if(plan?.action!=='install')changing=true
+      try{send(res,200,await market.execute(input.planId,input.requestId,rebuild))}finally{changing=false}return
+    }
+    if(path.startsWith('/api/plugin-market/manifest/')&&req.method==='GET'){send(res,200,market.manifest(path.slice('/api/plugin-market/manifest/'.length)));return}
+    if(path==='/api/plugin-market/connection/plan'&&req.method==='POST'){
+      const input=z.object({pluginId:z.string(),revision:z.number().int().nonnegative(),label:z.string().min(1).max(100),actors:z.array(z.string().min(1).max(200)).min(1).max(100),options:z.record(z.string(),z.unknown()),credentials:z.record(z.string(),z.string().min(1).max(16000)).default({})}).strict().parse(await body(req))
+      const manifest=market.manifest(input.pluginId),credentials:Record<string,string>={},values=structuredClone(input.options)
+      for(const [key,value]of Object.entries(input.credentials)){
+        const path=manifest.credentials[key];if(!path||!/^\/options\/[A-Za-z_][A-Za-z0-9_]*$/.test(path))throw Error('This credential needs advanced source configuration')
+        const env='AGENTHUB_SETUP_PLUGIN_'+randomUUID().replaceAll('-','').toUpperCase()+'_'+key
+        values[path.split('/')[2]!]=env;credentials[env]=value
+      }
+      const source=configSchema.shape.sources.element.parse({id:'app-'+randomUUID().slice(0,8),kind:manifest.kind,label:input.label,options:values,allowedActors:input.actors,cwd:runtime.config.sources[0]!.cwd,sandbox:'read-only'})
+      const validator=new Ajv2020({strict:false,validateFormats:false}).compile(manifest.configSchema)
+      if(!validator(source))throw Error('Connection fields do not match the plugin schema: '+JSON.stringify(validator.errors?.map(e=>({path:e.instancePath,message:e.message}))))
+      send(res,200,onboarding.sourcePlan(input.revision,source,credentials));return
+    }
+    if(path==='/api/plugin-market/connection/apply'&&req.method==='POST'){
+      const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));changing=true
+      try{send(res,200,await onboarding.apply(input.id,rebuild))}finally{changing=false}return
+    }
+    if(path==='/api/workspace-views'||path.startsWith('/api/workspace-views/')){
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      if(path==='/api/workspace-views'){send(res,200,{views:viewCatalog(runtime.config)});return}
+      const match=path.match(/^\/api\/workspace-views\/([a-z][a-z0-9_-]{0,63})\/(bundle|runtime)$/)
+      if(!match){send(res,404,{code:'view_not_found'});return}
+      const params=new URL(req.url!,'http://localhost').searchParams,digest=params.get('digest')
+      if(!digest||!/^[a-f0-9]{64}$/.test(digest)){send(res,400,{code:'view_digest_required'});return}
+      let pkg
+      try{pkg=enabledView(runtime.config,match[1]!,digest)}catch{send(res,404,{code:'view_unavailable'});return}
+      if(match[2]==='bundle'){send(res,200,{digest:pkg.digest,code:pkg.code});return}
+      if(!pkg.manifest.capabilities.includes('workspace.runtime.read')){send(res,403,{code:'view_capability_required'});return}
+      params.delete('digest')
+      const query=viewQuerySchema.parse(Object.fromEntries(params))
+      if(query.source&&!runtime.config.sources.some(s=>s.id===query.source)){send(res,400,{code:'view_source_unknown'});return}
+      send(res,200,workspaceViewData(runtime,query,account.status(req).user?.id??'local-operator'));return
+    }
     if(req.method==='GET'&&path==='/router-management/catalog'){
       send(res,200,{sources:runtime.config.sources.filter(s=>s.enabled).map(s=>({id:s.id,name:s.label??s.id,kind:s.kind})),workers:runtime.manager.list().workers.map(w=>({id:w.id,label:w.label})),backends:[...new Set(runtime.manager.list().workers.map(w=>w.backend))],tasks:runtime.store.tickets.list().map(t=>({id:t.id,title:t.title})),contexts:runtime.store.list<any>('router-admission').filter(a=>a.state==='accepted'&&runtime.store.get<any>('router-route',a.triggerId)&&!runtime.scopes.binding(runtime.store.get<any>('router-route',a.triggerId).entryId).privateActor).map(a=>{const route=runtime.store.get<any>('router-route',a.triggerId),entry=runtime.scopes.binding(route.entryId);return {id:a.triggerId,scopeId:route.scopeId,entryId:entry.id,label:entry.nativeId+' · '+a.at}})});return
     }

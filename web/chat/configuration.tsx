@@ -4,9 +4,9 @@ let controller: ReturnType<typeof mount> | undefined;
 let element: HTMLDivElement | undefined;
 let pending: Promise<void> | undefined;
 const active = () =>
-  location.pathname === "/configure" ||
+  !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
   location.pathname === "/configure/" ||
-  location.pathname === "/";
+  location.pathname === "/");
 async function prepare() {
   if (!pending)
     pending = import("virtual:configuration-content")

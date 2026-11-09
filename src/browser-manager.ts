@@ -273,6 +273,11 @@ export class BrowserManager {
       streaming: !!s.streaming,
     };
   }
+  /** Read-only operator summary: no vault access, URLs, page titles, profiles or credentials. */
+  controlSummary(user:string){
+    const sessions=[...this.sessions.values()].filter(s=>s.ready&&!s.closing&&!s.ended&&(s.user===user||s.user==='host'))
+    return {total:sessions.length,items:sessions.slice(0,50).map(s=>({id:s.id,workerId:s.workerId,control:s.control}))}
+  }
   list(user: string, client?: string, conversationId?: string) {
     const profiles = this.host.store
       .list<BrowserProfile>("browser-profile")

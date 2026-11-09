@@ -64,6 +64,7 @@ export function installPluginPackage(directory:string,stateDir:string,expectedDi
   mkdirSync(temp,{mode:0o700})
   try{
     for(const name of ['manifest.json','plugin.mjs'])writeFileSync(join(temp,name),readFileSync(join(pkg.directory,name)),{mode:0o600,flag:'wx'})
+    const license=join(pkg.directory,'LICENSE');if(existsSync(license)&&realpathSync(license)===license&&statSync(license).isFile()&&statSync(license).size<=1000000)writeFileSync(join(temp,'LICENSE'),readFileSync(license),{mode:0o600,flag:'wx'})
     readPluginPackage(temp,pkg.digest);renameSync(temp,target)
   }finally{if(existsSync(temp))rmSync(temp,{recursive:true})}
   return readPluginPackage(target,pkg.digest)

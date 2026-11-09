@@ -1,0 +1,61 @@
+name: Publish a plugin
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: Plugin to package and release
+        required: true
+        type: choice
+        options: [agent-board, agenthub-slack, agenthub-linear]
+
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: plugin-release-${{ inputs.plugin }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      PLUGIN_ID: ${{ inputs.plugin }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run tests/plugin-market.spec.ts tests/plugin-packages.spec.ts tests/workspace-view.spec.ts tests/slack-plugin.spec.ts tests/linear-plugin.spec.ts tests/plugin-protocol.spec.ts --maxWorkers=2
+      - name: Build immutable package
+        run: npx tsx examples/release-plugin.ts prepare "$PLUGIN_ID" .local/plugin-release
+      - name: Publish release asset
+        shell: bash
+        run: |
+          tag=$(jq -r .tag .local/plugin-release/workflow.json)
+          file=$(jq -r .file .local/plugin-release/workflow.json)
+          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "$tag" --notes-file .local/plugin-release/notes.md
+          gh release upload "$tag" ".local/plugin-release/$file"
+          gh release edit "$tag" --draft=false
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > .local/plugin-release/remote-release.json
+          jq --arg name "$file" '.assets[] | select(.name == $name)' .local/plugin-release/remote-release.json > .local/plugin-release/asset.json
+          npx tsx examples/release-plugin.ts index "$PLUGIN_ID" .local/plugin-release .local/plugin-release/asset.json
+      - name: Propose catalog update
+        shell: bash
+        run: |
+          branch="codex/plugin-catalog-$GITHUB_RUN_ID"
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add plugins/catalog.json
+          git commit -m "Publish $PLUGIN_ID in the plugin catalog"
+          git push origin "$branch"
+          cat > .local/plugin-release/pr.md <<'EOF'
+          Adds a released plugin version to the marketplace catalog. The archive was built, tested, uploaded and checked against GitHub's asset digest before indexing. Existing installed versions remain pinned until the operator chooses to update.
+          EOF
+          gh pr create --base main --head "$branch" --title "Publish $PLUGIN_ID in the plugin catalog" --body-file .local/plugin-release/pr.md

@@ -1,3 +1,4 @@
+import {captureMarketPackages,verifyMarketPackages,restoreMarketPackages} from './plugin-market-backup.ts'
 import {exportHistoryIndex,verifyHistoryIndex,type HistoryReader} from './history-backup.ts'
 import {DatabaseSync,backup} from 'node:sqlite'
 import {mkdirSync,writeFileSync,readFileSync,existsSync,copyFileSync,unlinkSync,chmodSync,openSync,closeSync,renameSync} from 'node:fs'
@@ -42,7 +43,7 @@ export async function backupState(config:Config,destination:string,options:{hist
  chmodSync(target,0o600)
  const after=captureManaged(config.stateDir);if(JSON.stringify(managed)!==JSON.stringify(after))throw Error('Setup changed during backup; retry backup')
  const snapshot=new DatabaseSync(target,{readOnly:true});let effective:Config|undefined,history:Awaited<ReturnType<typeof exportHistoryIndex>>
- try{effective=checkManaged(snapshot,managed,config);history=await exportHistoryIndex(snapshot,directory,options.historyReader)}finally{snapshot.close()}
+ try{effective=checkManaged(snapshot,managed,config);captureMarketPackages(snapshot,config.stateDir,directory);history=await exportHistoryIndex(snapshot,directory,options.historyReader)}finally{snapshot.close()}
  const hashes:Record<string,string>={}
  for(const name of ['connections','secrets'] as const)if(managed[name]!==undefined){atomicPrivateFile(join(directory,'setup',name==='connections'?'connections.json':'credentials.json'),managed[name]!);hashes[name]=digest(managed[name]!)}
  const ledger=readRevocations(config.stateDir);if(ledger.length)atomicPrivateFile(join(directory,'memory-revocations.jsonl'),ledger.map(r=>JSON.stringify(r)).join('\n')+'\n')
@@ -59,7 +60,7 @@ export function verifyBackup(directory:string){
  const db=new DatabaseSync(path,{readOnly:true})
  try{
   if(Number(db.prepare('PRAGMA user_version').get()!.user_version)!==manifest.schema||db.prepare('PRAGMA integrity_check').get()!.integrity_check!=='ok')throw Error('Backup failed SQLite verification')
-  checkManaged(db,backupManaged(directory,manifest))
+  checkManaged(db,backupManaged(directory,manifest));verifyMarketPackages(db,directory)
   if(manifest.history)verifyHistoryIndex(directory,manifest.history)
   const head=db.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get()
   if(manifest.revocations&&hash(join(directory,'memory-revocations.jsonl'))!==manifest.revocations)throw Error('Revocation ledger checksum mismatch')
@@ -84,6 +85,8 @@ export async function restoreState(config:Config,directory:string){
  const temporary=join(config.stateDir,'restore-'+process.pid+'.sqlite')
  try{
   const verified=verifyBackup(directory)
+  const packageDB=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
+  try{restoreMarketPackages(packageDB,directory,config.stateDir)}finally{packageDB.close()}
   recoverManagedFiles(config.stateDir)
   const currentPath=join(config.stateDir,'state.sqlite')
   const ledger=readRevocations(config.stateDir),incoming=readRevocations(directory)
