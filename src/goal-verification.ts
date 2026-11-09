@@ -16,6 +16,7 @@ interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;r
 export interface VerificationCheck {criterionId:string;verdict:'passed'|'failed'|'insufficient';explanation:string;evidenceIds:string[];method:'program'|'agent'}
 export interface VerificationRound {id:string;goalId:string;nodeId?:string;triggerId:string;scopeId:string;entryId:string;ticketIds:string[];state:'pending'|'running'|'passed'|'failed'|'insufficient'|'errored'|'stale';snapshot:Snapshot;checks:VerificationCheck[];attempts:number;error?:string;at:number;finishedAt?:number;threadId?:string}
 const verdict=z.object({checks:z.array(z.object({criterionId:z.string(),verdict:z.enum(['passed','failed','insufficient']),explanation:z.string().min(1).max(8000),evidenceIds:z.array(z.string()).min(1)}).strict()).min(1)}).strict()
+const operational=(e:Evidence)=>e.kind==='execution'||e.kind==='report'&&e.key==='watchdog-observation'
 
 /** Read only declared, bounded artifacts within this task's actual workspace. */
 function readArtifact(cwd:string,path:string):{content:string;missing?:boolean} {
@@ -64,11 +65,16 @@ export class GoalVerification {
   const all=this.host.work.list(ticketId),calls=this.host.activity.list().filter(a=>a.ticketId===ticketId&&a.kind==='tool'),receipts=this.host.toolConnections.receipts(ticketId)
   const jobs=all.slice(0,100).map(w=>{
    let policy:any=null
+   let output:{text?:string;complete:boolean;hash?:string;reason?:string}|undefined
    if(w.kind==='shell'&&/^[a-f0-9-]{36}$/.test(w.id))try{
     const spec=JSON.parse(readArtifact(this.host.work.directory,w.id+'.spec.json').content)
     if(spec.id===w.id&&spec.command===w.command&&spec.cwd===w.cwd)policy={sandboxDriver:spec.sandboxDriver,sandbox:spec.sandbox,network:spec.network}
    }catch{}
-   return {id:w.id,assignmentId:w.assignmentId,kind:w.kind,state:w.state,exitCode:w.exitCode,error:w.error?.slice(0,1000),command:w.command?.slice(0,16000),commandTruncated:(w.command?.length??0)>16000,commandHash:w.command?stableDigest(w.command):undefined,recordedPolicy:policy}
+   if(w.kind==='shell'&&/^[a-f0-9-]{36}$/.test(w.id))try{
+    const log=readArtifact(this.host.work.directory,w.id+'.output')
+    output=log.missing?{complete:false,reason:'Host output is unavailable'}:{text:log.content.slice(0,8000),complete:log.content.length<=8000,hash:stableDigest(log.content)}
+   }catch{output={complete:false,reason:'Host output could not be captured within the bounded evidence limit'}}
+   return {id:w.id,assignmentId:w.assignmentId,kind:w.kind,state:w.state,exitCode:w.exitCode,error:w.error?.slice(0,1000),command:w.command?.slice(0,16000),commandTruncated:(w.command?.length??0)>16000,commandHash:w.command?stableDigest(w.command):undefined,recordedPolicy:policy,output}
   })
   const cap=this.host.store.get<any>('capabilities',ticketId)
   return JSON.stringify({basis:'Host-managed execution ledger; not a Worker assertion',scope:'Task-side commands and tool calls. Configured model inference is outside task-side network policy. This is not an audit of unrelated OS processes.',complete:all.length<=100&&calls.length<=200&&receipts.length<=100,jobs,toolCalls:calls.slice(0,200).map(a=>({id:a.id,name:a.name,state:a.state})),externalTools:receipts.slice(0,100).map(r=>({id:r.id,connection:r.connection,tool:r.tool,state:r.state})),managedCapabilities:cap?{managed:cap.managed,mcpServers:cap.mcpServers}:null})
@@ -123,6 +129,11 @@ export class GoalVerification {
    // file-check ownership unchanged, including same-named files in other tasks.
    const citeIds=(values:string[])=>[...new Set([...values,...semanticAncestors.filter(cr=>cr.ancestors.has(n.id)).map(cr=>cr.id)])]
    add({kind:'execution',ticketId:n.ticketId,key:'host-execution',content:this.execution(n.ticketId),criterionIds:citeIds(ids)})
+   // Final acceptance needs the same immutable failure observation the planner
+   // received. Exclude mutable recovery status so resolving it cannot stale a review.
+   for(const r of this.host.store.list<WatchdogRecovery>('watchdog-recovery').filter(r=>r.goalId===g.id&&r.ticketId===n.ticketId&&r.contractHash===stableDigest(g.contract)&&r.state!=='stale')){
+    add({kind:'report',ticketId:n.ticketId,key:'watchdog-observation',criterionIds:citeIds(ids),content:JSON.stringify({id:r.id,assignmentId:r.assignmentId,contractHash:r.contractHash,at:r.at,judgment:r.judgment,observation:r.observation??null})})
+   }
    add({kind:'report',ticketId:n.ticketId,key:'delivery',content:JSON.stringify({report:proposal.report,reply:proposal.reply}),criterionIds:citeIds(ids)})
    const files=[...new Set(assigned.flatMap(cr=>[...(cr.files??[]),...(cr.check?[cr.check.path]:[])]))]
    for(const path of files){if(!run)throw Error('Task workspace is missing');add({kind:'file',ticketId:n.ticketId,key:path,...readArtifact(run.cwd,path),criterionIds:citeIds(assigned.filter(cr=>cr.files?.includes(path)||cr.check?.path===path).map(cr=>cr.id))})}
@@ -191,7 +202,7 @@ export class GoalVerification {
     if(parsed.checks.length!==semantic.length||semantic.some(cr=>parsed.checks.filter(ch=>ch.criterionId===cr.id).length!==1))throw Error('Verification protocol: Verifier must decide every requested criterion exactly once')
     for(const ch of parsed.checks){
      if(ch.evidenceIds.some(id=>!read.has(id)||ch.criterionId!=='__goal__'&&!snapshot.evidence.find(e=>e.id===id)?.criterionIds.includes(ch.criterionId)))throw Error('Verification protocol: Verifier cited evidence it did not inspect for this criterion')
-     const required=snapshot.evidence.filter(e=>(e.kind==='file'||e.kind==='document'||e.kind==='execution'&&ch.criterionId==='__goal__')&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId)))
+     const required=snapshot.evidence.filter(e=>(e.kind==='file'||e.kind==='document'||operational(e)&&ch.criterionId==='__goal__')&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId)))
      if(ch.verdict==='passed'&&required.some(e=>e.missing||!read.has(e.id)||!ch.evidenceIds.includes(e.id)))throw Error('Verification protocol: Verifier skipped required artifact evidence')
      checks.push({...ch,method:'agent'})
     }
@@ -200,7 +211,7 @@ export class GoalVerification {
     // that the work itself failed. Retry only the independent review within
     // the protocol limit; exhaustion retains the insufficient verdict.
     const unresolved=checks.filter(ch=>ch.verdict!=='passed')
-    const incomplete=(ch:VerificationCheck)=>/truncat|截断/i.test(ch.explanation)||snapshot.evidence.some(e=>!e.missing&&['file','document','execution'].includes(e.kind)&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId))&&!read.has(e.id))
+    const incomplete=(ch:VerificationCheck)=>/truncat|截断/i.test(ch.explanation)||snapshot.evidence.some(e=>!e.missing&&(['file','document','execution'].includes(e.kind)||operational(e))&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId))&&!read.has(e.id))
     if(unresolved.length&&unresolved.every(ch=>ch.verdict==='insufficient'&&incomplete(ch))){
      save({checks,state:'errored',error:'Verification protocol: evidence output was truncated or available evidence was not fully read',finishedAt:this.now()});return
     }

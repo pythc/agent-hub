@@ -57,7 +57,12 @@ it('recovers a silent stalled multi-stage goal through reviewed replanning and i
  expect(plan.proposal.evidenceIds).toContain(accepted.id);expect(plan.review.evidenceIds).toContain(accepted.id)
  expect(f.goal().criteria).toEqual(original.criteria);expect(f.goal().taskIds).toHaveLength(2)
  expect(f.h.store.list<WatchdogRecovery>('watchdog-recovery')).toMatchObject([{state:'resolved'}])
- expect(f.h.store.list<any>('goal-verification').some(r=>!r.nodeId&&r.state==='passed')).toBe(true)
+ const final=f.h.store.list<any>('goal-verification').find(r=>!r.nodeId&&r.state==='passed')
+ expect(final).toBeDefined()
+ const observed=final.snapshot.evidence.find((e:any)=>e.key==='watchdog-observation')
+ expect(JSON.parse(observed.content)).toMatchObject(JSON.parse(JSON.stringify({id:accepted.id,observation:accepted.observation,judgment:accepted.judgment})))
+ expect(JSON.parse(observed.content)).not.toHaveProperty('state')
+ expect(f.h.verification.current(final,f.goal())).toBe(true)
 })
 it('rejects a stale judgment after artifacts change, pause, cancellation or acceptance mutation',async()=>{
  const f=fixture(),target=await stalled(f)

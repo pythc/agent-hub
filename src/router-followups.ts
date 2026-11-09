@@ -48,9 +48,13 @@ export function relayRouterFollowups(host:Runtime,trigger:Trigger):string[]{
 }
 
 /** Only a reached, host-created follow-up can return to admission, and only once all its owners return it. */
-export function returnRouterFollowup(host:Runtime,ticketId:string,id:string,reason:string){
+export function reachedRouterFollowup(host:Runtime,ticketId:string,id:string){
  const relay=host.store.get<Relay>('router-followup',id),ticket=host.store.tickets.get(ticketId)
- if(!relay||relay.ticketId!==ticketId||!ticket?.inputs.some(i=>i.kind==='trigger'&&i.triggerId===id))throw Error('Handback is not a reached Router follow-up')
+ return !!relay&&relay.ticketId===ticketId&&!!ticket?.inputs.some(i=>i.kind==='trigger'&&i.triggerId===id)
+}
+export function returnRouterFollowup(host:Runtime,ticketId:string,id:string,reason:string){
+ if(!reachedRouterFollowup(host,ticketId,id))throw Error('Handback is not a reached Router follow-up')
+ const relay=host.store.get<Relay>('router-followup',id)!
  if(relay.returned)return
  host.store.put('router-followup',id,{...relay,returned:reason})
  reconsiderRouterFollowups(host,relay.triggerId)
