@@ -31,6 +31,7 @@ export default {
     }
     if(r.input==='steer')await new Promise<void>(done=>r.onActive?.({interrupt:async()=>done(),steer:async(text,onRead)=>{history.push(text);onRead?.();done()},refresh:async()=>{}}))
     history.push(r.input);writeFileSync(file,JSON.stringify(history))
+    if(r.input==='usage')r.onUsage?.({id:'provider-step',inputTokens:120,cachedInputTokens:80,outputTokens:10,totalTokens:130})
     const turn='completed-'+history.length;r.onTurn?.(turn)
     return {threadId:id,turnId:turn,text:JSON.stringify({history,version:config.version??1})}
    },

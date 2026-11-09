@@ -44,7 +44,7 @@ export class BackendPluginError extends Error {
 }
 export const backendEnvelope=z.discriminatedUnion('type',[
  z.object({type:z.literal('result'),id:z.number().int().positive(),result:z.unknown().optional(),error:z.object({code:z.enum(backendErrorCodes),diagnostic:backendDiagnosticSchema.optional()}).strict().optional()}).strict(),
- z.object({type:z.literal('event'),event:z.enum(['thread','turn','model','configuration','capabilities','progress','output','budget','contextReady','active','inputRead']),value:z.unknown().optional()}).strict(),
+ z.object({type:z.literal('event'),event:z.enum(['thread','turn','model','configuration','capabilities','progress','output','budget','contextReady','active','inputRead','usage']),value:z.unknown().optional()}).strict(),
  z.object({type:z.literal('request'),id:z.number().int().positive(),method:z.enum(['tool','human','retain']),params:jsonObject}).strict(),
 ])
 export const backendResult=z.object({threadId:z.string().min(1).max(1000),turnId:z.string().min(1).max(1000),text:z.string().min(1).max(8_000_000)}).strict()

@@ -1,5 +1,11 @@
 # Agent board changes
 
+## 0.1.4 (unreleased)
+
+Add durable team token accounting by purpose, source-filtered totals, cache/reasoning subsets, and explicit missing/partial coverage. Requires a host with usage accounting; older hosts show an unavailable state. No account, prompt, tool arguments, or native history crosses the view bridge.
+
+新增团队 token 用量、用途分组、来源筛选和缺报状态；缓存输入与推理输出分别计入输入与输出，不重复相加。旧宿主显示尚未提供统计。此版本尚未发布或安装到现有实例。
+
 ## 0.1.3
 
 Use plain-language labels throughout the board, including auxiliary model modes, usage reporting, judgment status, suggestions and task details. Keep unknown usage distinct from zero and reported-record counts distinct from token totals. Remove the usage footnote while retaining its scope in accessible hover descriptions. Suggestions remain suggestions; a read receipt remains a client acknowledgment, not proof that a person has read a reply.

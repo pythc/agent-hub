@@ -117,3 +117,11 @@ it('only accepts closed bridge commands and protects iframe bootstrap from marku
   const document=viewDocument('const x="</ScRiPt><script>alert(1)</script>"','nonce')
   expect(document.match(/<\/script>/gi)).toHaveLength(1);expect(document).toContain("connect-src 'none'");expect(document).toContain("form-action 'none'")
 })
+
+it('exposes numeric team usage with source filtering and explicit unknown coverage',()=>{
+ const h=fixture();seedBoard(h)
+ const all=workspaceViewData(h,{}),selected=workspaceViewData(h,{source:'personal'})
+ expect(all.usage).toMatchObject({calls:7,reportedCalls:6,unknownCalls:1,tokens:{inputTokens:75000,outputTokens:1200,totalTokens:76200,cachedInputTokens:48000}})
+ expect(selected.usage).toMatchObject({calls:3,reportedCalls:3,unknownCalls:0,tokens:{inputTokens:39000}})
+ const text=JSON.stringify(all.usage);expect(text).not.toContain('PRIVATE');expect(text).not.toContain('usage-fixture');expect(text).not.toContain('steps" : {')
+})

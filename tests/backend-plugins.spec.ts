@@ -31,6 +31,11 @@ async function fixture(patch:Record<string,unknown>={}){
  const registry=new BackendRegistry(config,store),request:ModelRequest={cwd,instructions:'test',input:'first',schema:{},managed:true}
  return {root,pkg,config,cwd,store,registry,request}
 }
+it('forwards whitelisted usage through the isolated adapter transport',async()=>{
+ const f=await fixture(),usage:unknown[]=[]
+ await f.registry.run({...f.request,input:'usage',onUsage:value=>usage.push(value)})
+ expect(usage).toEqual([{id:'provider-step',inputTokens:120,cachedInputTokens:80,outputTokens:10,totalTokens:130}])
+})
 it('loads an independent package without provider switches and resumes the original native session after reopening the store',async()=>{
  const f=await fixture(),first=await f.registry.run(f.request)
  expect(first.threadId).toMatch(/^plugin:/)

@@ -42,6 +42,7 @@ import {agentOptionsSchema} from './backend-config.ts'
 import {WorkerManager,managementSpecs} from './worker-manager.ts'
 import {SubscriptionAccounts} from './backends/subscription.ts'
 import {ExecutionActivity} from './execution-activity.ts'
+import {UsageLedger} from './usage-ledger.ts'
 import {RouterIngress} from './router-ingress.ts'
 import {RouterScopes,scopeCommandSchema,type ScopeContext} from './router-scope.ts'
 import {RouterMemory,memoryToolSpecs,type ContextManifest} from './router-memory.ts'
@@ -95,6 +96,7 @@ export class Runtime {
   readonly manager:WorkerManager
   readonly subscriptions:SubscriptionAccounts
   readonly activity:ExecutionActivity
+  readonly usage:UsageLedger
   readonly sourceRegistry:SourceRegistry
   readonly toolConnections:ToolConnections
   readonly decision:DecisionLayer
@@ -152,6 +154,7 @@ export class Runtime {
     try { loadManagedConfig(config);validateBackendSelection(config);this.store = new Store(join(config.stateDir, 'state.sqlite'));try{recoverMarket(this.store,options.pluginActivation);loadMarketConfig(config,options.pluginActivation)}catch(error){this.store.close();throw error} }
     catch (error) { unlinkSync(this.lock); throw error }
     this.activity = new ExecutionActivity(this.store)
+    this.usage = new UsageLedger(this.store)
     this.approvals = new Approvals(this.store)
     try{
       const initial=this.store.atomic(()=>{
@@ -185,7 +188,14 @@ export class Runtime {
     this.store.atomic(()=>{
       for(const a of this.store.list<{mode:string;parentTrigger?:string;discussion:string}>('worker-assignment'))if(a.mode==='host'&&a.parentTrigger)this.routerIngress.restoreLegacy(a.parentTrigger,a.discussion)
     })
-    this.decision=new DecisionLayer(config,this.store,()=>this.settings.current().revision)
+    this.decision=new DecisionLayer(config,this.store,()=>this.settings.current().revision,record=>{
+      if(record.purpose!=='routing'||!record.requested)return
+      const id='auxiliary:'+record.id
+      this.usage.begin(id,'auxiliary',{sourceId:record.sourceId},'auxiliary')
+      this.usage.update(id,{backend:record.provider,model:record.model})
+      if(record.tokenUsage)this.usage.record(id,0,record.tokenUsage)
+      this.usage.finish(id,record.status==='ok'?'completed':'failed')
+    })
     let logicalNow = this.store.get<number>('clock', 'last') ?? 0
     this.engine = new Engine({
       now: () => {
@@ -348,18 +358,21 @@ export class Runtime {
     const onConfiguration=request.onConfiguration,configurationRevision=this.settings.current().revision
     request.onConfiguration=value=>{this.store.put('agent-configuration',activity,{...value,revision:configurationRevision,role,workerId:context.workerId,at:Date.now()});onConfiguration?.(value)}
     const activity=this.activity.begin(role,role,context)
+    this.usage.begin(activity,role,context)
     const originalBudget=request.onBudget
     request.onBudget=receipt=>{this.store.put('context-budget',activity,{activity,...context,scopeId,...receipt,at:Date.now()});originalBudget?.(receipt)}
     request.retainToolResult=(callId,result)=>{const id=activity+':'+callId;this.store.put('model-tool-receipt',id,{id,activity,...context,scopeId,result});return id}
     const onBackend=request.onBackend,onModel=request.onModel,onTool=request.onTool
-    request={...request,onBackend:id=>{this.activity.update(activity,{backend:id});onBackend?.(id)},onModel:model=>{this.activity.update(activity,{model});onModel?.(model)},...(role==='router'&&onTool?{onTool:(name,args,callId)=>this.activity.tool(name,context,()=>onTool(name,args,callId),activity,chatToolDetails(name,args))}:{})}
+    request={...request,onBackend:id=>{this.activity.update(activity,{backend:id});this.usage.update(activity,{backend:id});onBackend?.(id)},onModel:model=>{this.activity.update(activity,{model});this.usage.update(activity,{model});onModel?.(model)},...(role==='router'&&onTool?{onTool:(name,args,callId)=>this.activity.tool(name,context,()=>onTool(name,args,callId),activity,chatToolDetails(name,args))}:{})}
     this.activity.update(activity,{backend:request.backendId,model:request.model})
     try{
     let threadId=request.threadId
     const originalInput=request.input
     for(let attempt=0;;attempt++){
-      try{const result=await this.model.run({...request,model:threadId?undefined:request.model??(role==='router'?this.config.execution.router?.model??this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;this.store.put('model-session',id,{threadId:id,cwd:request.cwd,ephemeral:request.ephemeral??false,activity,...context,scopeId,contextId:manifest?.id,at:Date.now()});request.onThread?.(id)}});this.activity.finish(activity,'completed');return result}
+      this.usage.attempt(activity,attempt,'running')
+      try{const result=await this.model.run({...request,onUsage:value=>{this.usage.record(activity,attempt,value);request.onUsage?.(value)},model:threadId?undefined:request.model??(role==='router'?this.config.execution.router?.model??this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;this.store.put('model-session',id,{threadId:id,cwd:request.cwd,ephemeral:request.ephemeral??false,activity,...context,scopeId,contextId:manifest?.id,at:Date.now()});request.onThread?.(id)}});this.usage.attempt(activity,attempt,'completed');this.usage.finish(activity,'completed');this.activity.finish(activity,'completed');return result}
       catch(error){
+        this.usage.attempt(activity,attempt,request.signal?.aborted?'interrupted':'failed')
         if(error instanceof ContextBudgetExceeded){this.store.put('context-rebuild',context.ticketId??activity,{...context,activity,threadId,scopeId,state:'held',reason:error.code,receipt:error.receipt,at:Date.now()});throw error}
         if(request.signal?.aborted||attempt>=3||!(error instanceof TransientModelError)&&!/HTTP (408|429|5\d\d)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|connection reset|stream disconnected|temporar(?:y|ily)|error sending request/i.test(String(error)))throw error
         this.store.audit({type:'model.retry',threadId,attempt:attempt+1,error:String(error).slice(0,300)})
@@ -367,7 +380,7 @@ export class Runtime {
         await new Promise(resolve=>setTimeout(resolve,Math.min(10000,1000*2**attempt)))
       }
     }
-    }catch(error){this.activity.finish(activity,request.signal?.aborted?'interrupted':'failed');throw error}
+    }catch(error){this.usage.finish(activity,request.signal?.aborted?'interrupted':'failed');this.activity.finish(activity,request.signal?.aborted?'interrupted':'failed');throw error}
   }
   validWork(owner:WorkOwner):boolean {
     const ticket=this.store.tickets.get(owner.ticketId),assignment=ticket&&latestAssignment(ticket)
@@ -723,7 +736,7 @@ export class Runtime {
       const card=followups?followups.card():candidates?candidates.card():undefined
       if((candidates||followups)&&this.config.decision.mode!=='off'){
         const input=decisionInput(card,id=>this.store.triggers.get(id)?.text),fingerprint=JSON.stringify(input)
-        const pending=this.decision.evaluate(input,{id:job.id,signal:controller.signal,valid:()=>{
+        const pending=this.decision.evaluate(input,{id:job.id,sourceId:source.id,signal:controller.signal,valid:()=>{
           if(this.store.get('router-cancelled',triggerId))return false
           candidates?.check();if(scoped)this.scopes.assertCurrent(scoped);if(packet)this.memory.validate(packet.manifest)
           return fingerprint===JSON.stringify(decisionInput(followups?followups.card():candidates!.card(),id=>this.store.triggers.get(id)?.text))

@@ -94,3 +94,12 @@ it('binds native output to the acknowledged turn even when notifications share i
  expect(events.filter(e=>e.type==='delta').map(e=>e.text).join('')).toBe('correct')
  expect(JSON.stringify(events)).not.toContain('stale')
 })
+
+it('deduplicates native step identity across repeated snapshots and excludes other threads and stale turns',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-usage-'));roots.push(root);const binary=join(root,'codex'),usage:any[]=[]
+ const last={inputTokens:100,cachedInputTokens:80,cacheWriteInputTokens:0,outputTokens:10,reasoningOutputTokens:2,totalTokens:110}
+ writeFileSync(binary,'#!'+process.execPath+`\nconst send=x=>console.log(JSON.stringify(x));require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.id)return;if(m.method!=='turn/start')return send({id:m.id,result:m.method==='thread/resume'?{thread:{id:'native'}}:{}});const last=${JSON.stringify(last)},total={...last,inputTokens:1100,totalTokens:1110},event=(threadId,turnId)=>({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{last,total}}});send(event('native','turn'));send({id:m.id,result:{turn:{id:'turn'}}});send(event('native','turn'));send(event('foreign','turn'));send(event('native','stale'));send({method:'item/completed',params:{threadId:'native',turnId:'turn',item:{type:'agentMessage',text:'done'}}});send({method:'turn/completed',params:{threadId:'native',turn:{id:'turn',status:'completed'}}})})\n`,{mode:0o700})
+ const model=new CodexModel({codex:binary,effort:'medium',turnTimeoutMs:5000})
+ await model.run({cwd:root,threadId:'native',instructions:'test',input:'test',schema:{},onUsage:u=>usage.push(u)})
+ expect(usage).toHaveLength(2);expect(usage[0]).toEqual(usage[1]);expect(usage[0]).toMatchObject(last)
+})

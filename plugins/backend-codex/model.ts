@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import {createHash} from 'node:crypto'
+import {normalizeUsage,usageFields} from '../../src/model-usage.ts'
 import {existsSync,readFileSync} from 'node:fs'
 import {checkBudget,protocolBytes,receiptReference,ContextBudgetExceeded} from '../../src/context-budget.ts'
 import type { Config } from '../../src/config.ts'
@@ -115,7 +117,14 @@ export class CodexModel implements Model {
       try{check('tool_receipt')}catch(error){if(!(error instanceof ContextBudgetExceeded))throw error;budgetError=error;setTimeout(()=>{void client.interrupt()},0)}
       return result
     }:undefined
-    const client = new AppServer(this.config.codex, [...this.extraArgs,...(request.managed?managedStartup:[])], request.cwd,request.onHumanRequest,request.onProgress,guardedTool,this.environment,request.onOutput,(method,params)=>{if(request.contextBudget&&method==='rawResponseItem/completed')raw.push(params.item)})
+    const client = new AppServer(this.config.codex, [...this.extraArgs,...(request.managed?managedStartup:[])], request.cwd,request.onHumanRequest,request.onProgress,guardedTool,this.environment,request.onOutput,(method,params)=>{
+      if(request.contextBudget&&method==='rawResponseItem/completed')raw.push(params.item)
+      if(method==='thread/tokenUsage/updated'&&params?.threadId===client.threadId&&params?.turnId===client.turnId&&params.tokenUsage?.total){
+        // Native total is thread-cumulative; last describes this provider step.
+        const id='native:'+params.turnId+':'+createHash('sha256').update(JSON.stringify(usageFields.map(key=>params.tokenUsage.total[key]??null))).digest('hex').slice(0,24)
+        const usage=normalizeUsage({id,...params.tokenUsage.last});if(usage)request.onUsage?.(usage)
+      }
+    })
     const abort = () => client.interrupt()
     request.signal?.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(() => client.fail(new Error('Turn deadline exceeded; inspect workspace before retrying')), this.config.turnTimeoutMs)
@@ -355,6 +364,7 @@ class AppServer {
         if(this.compaction.signal?.aborted)void this.interrupt()
       }
       if(this.turnId&&params?.turnId&&params.turnId!==this.turnId)return
+      if(message.method==='thread/tokenUsage/updated')this.onNotification?.(message.method,params)
       if(message.method==='item/completed'&&params?.item?.type==='contextCompaction')this.compaction.itemCompleted=true
       if(message.method==='turn/completed'&&params.turn?.id===this.turnId){
         if(params.turn.status==='completed'&&this.compaction.itemCompleted)this.compaction.resolve()
@@ -362,7 +372,7 @@ class AppServer {
       }
       return
     }
-    if(!this.turnId&&/^(?:item\/(?:started|completed|agentMessage\/delta)|turn\/(?:started|completed))$/.test(message.method)){
+    if(!this.turnId&&/^(?:item\/(?:started|completed|agentMessage\/delta)|turn\/(?:started|completed)|thread\/tokenUsage\/updated)$/.test(message.method)){
       if(this.earlyOutput.length>=1000)throw Error('Native output arrived without a confirmed turn')
       this.earlyOutput.push(message);return
     }

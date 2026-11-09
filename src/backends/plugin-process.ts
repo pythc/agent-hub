@@ -15,6 +15,7 @@ import {hostPrivateFiles} from '../private-files.ts'
 import {stableDigest} from '../sources.ts'
 import {ContextBudgetExceeded,type BudgetReceipt} from '../context-budget.ts'
 import {TransientModelError} from '../model.ts'
+import {normalizeUsage} from '../model-usage.ts'
 import {backendEnvelope,backendResult,backendDiagnosticSchema,BackendPluginError,type BackendDiagnostic} from './plugin-contract.ts'
 import {installBackendPackage,readBackendPackage,backendObjects,validatePluginValue,type BackendPackage} from './plugin-package.ts'
 
@@ -145,6 +146,7 @@ export class ProcessBackend implements Model {
     case 'thread':{const id=text.parse(value);if(record.nativeId&&record.nativeId!==id)throw Error('Backend replaced its native session');record.nativeId=id;this.save(record);request.onThread?.(record.id);break}
     case 'turn':record.turnId=text.parse(value);this.save(record);request.onTurn?.(record.turnId);break
     case 'model':request.onModel?.(text.parse(value));break
+    case 'usage':{const usage=normalizeUsage(value);if(usage)request.onUsage?.(usage);break}
     case 'configuration':request.onConfiguration?.(z.object({requested:z.record(z.string(),z.unknown()),sent:z.record(z.string(),z.unknown()),confirmed:z.record(z.string(),z.unknown()).optional()}).strict().parse(value) as any);break
     case 'capabilities':request.onCapabilities?.(z.object({mcpServers:z.array(text),disabledPlugins:z.array(text),managed:z.boolean()}).strict().parse(value));break
     case 'progress':request.onProgress?.(text.parse(value));break

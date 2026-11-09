@@ -4,6 +4,7 @@ import {apiOptions} from './agent-options.ts'
 import type {Config} from './config.ts'
 import {decisionProvider,type DecisionConfig} from './decision-config.ts'
 import type {Store} from './store.ts'
+import {providerUsage,type ModelUsage} from './model-usage.ts'
 
 const actions=['STOP','CONTINUE','IGNORE','INTERVENE','REVIEW'] as const
 const action=z.enum(actions)
@@ -28,6 +29,7 @@ export interface DecisionRecord {
  decisions?:z.infer<typeof answerSchema>['decisions'];
  confidence?:Record<string,{confidence:number;probabilities:Record<string,number>}>;
  usage?:{inputTokens?:number;outputTokens?:number};
+ sourceId?:string;requested?:boolean;tokenUsage?:ModelUsage;
 }
 class DecisionError extends Error {constructor(readonly code:string){super(code)}}
 const fail=(code:string):never=>{throw new DecisionError(code)}
@@ -38,10 +40,10 @@ function usage(raw:any){return z.object({inputTokens:count,outputTokens:count}).
 export class DecisionLayer {
  private active=new Map<string,Promise<DecisionRecord|undefined>>()
  private shutdown=new AbortController()
- constructor(private config:Config,private store:Store,private revision:()=>number){}
+ constructor(private config:Config,private store:Store,private revision:()=>number,private onRecord?:(record:DecisionRecord)=>void){}
  records():DecisionRecord[]{return this.store.db.prepare("SELECT body FROM records WHERE kind='decision-call' ORDER BY rowid DESC LIMIT 100").all().map(row=>JSON.parse(String(row.body)))}
  async close(){this.shutdown.abort();await Promise.allSettled(this.active.values())}
- evaluate(input:DecisionInput,options:{id:string;signal?:AbortSignal;valid?:()=>boolean;config?:DecisionConfig;probe?:boolean}):Promise<DecisionRecord|undefined>{
+ evaluate(input:DecisionInput,options:{id:string;signal?:AbortSignal;valid?:()=>boolean;config?:DecisionConfig;probe?:boolean;sourceId?:string}):Promise<DecisionRecord|undefined>{
   const config=structuredClone(options.config??this.config.decision)
   if(config.mode==='off'&&!options.probe)return Promise.resolve(undefined)
   const revision=this.revision(),provider=decisionProvider(config,this.config.backends)
@@ -51,7 +53,8 @@ export class DecisionLayer {
   const previous=this.store.get<DecisionRecord>('decision-call',key)
   if(previous){let valid=true;try{valid=!options.signal?.aborted&&(!options.valid||options.valid())}catch{valid=false};return Promise.resolve(valid?previous:{...previous,status:'stale',decisions:undefined,confidence:undefined,code:'context_changed'})}
   const base:DecisionRecord={id:key,at:Date.now(),revision,mode:config.mode,purpose:options.probe?'probe':'routing',provider:config.provider?.kind==='backend'?config.provider.id:provider.kind,model:provider.model,status:'unavailable',latencyMs:0}
-  const save=(record:DecisionRecord)=>{this.store.put('decision-call',key,record);return record}
+  base.sourceId=options.sourceId
+  const save=(record:DecisionRecord)=>{this.store.put('decision-call',key,record);this.onRecord?.(record);return record}
   if(this.shutdown.signal.aborted||this.active.size>=config.maxConcurrent)return Promise.resolve(save({...base,status:'skipped',code:'capacity'}))
   const run=async():Promise<DecisionRecord>=>{
    const deadline=AbortSignal.timeout(config.timeoutMs),signal=AbortSignal.any([this.shutdown.signal,deadline,...(options.signal?[options.signal]:[])])
@@ -84,6 +87,7 @@ export class DecisionLayer {
       path='messages';body={...p,model:provider.model,system:instructions+'\nReturn only JSON matching '+JSON.stringify(outputSchema),messages:[{role:'user',content:state}],max_tokens:config.maxOutputTokens,stream:false,...(format==='json-schema'?{output_config:{...(p.output_config as object??{}),format:{type:'json_schema',schema:outputSchema}}}:{})}
      }
     }
+    base.requested=true
     const response=await fetch(provider.baseUrl.replace(/\/+$/,'')+'/'+path,{method:'POST',body:JSON.stringify(body),headers,signal,redirect:'error'})
     if(!response.ok){await response.body?.cancel();fail('http_'+response.status)}
     const reader=response.body?.getReader();if(!reader)fail('empty_response')
@@ -92,6 +96,7 @@ export class DecisionLayer {
     let raw:any
     try{raw=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{fail('invalid_json')}
     // Usage is retained even if the provider's answer is unusable. Unknown counts stay unknown.
+    base.tokenUsage=providerUsage('request',provider.kind,raw.usage)
     try{base.usage=usage(raw.usage)}catch{fail('invalid_usage')}
     let decisions:DecisionRecord['decisions'],confidence:DecisionRecord['confidence']
     try{
