@@ -84,6 +84,28 @@
           "permissions": [
             "workspace.runtime.read"
           ]
+        },
+        {
+          "version": "0.1.3",
+          "hostMin": "0.10.0",
+          "platforms": [
+            "darwin",
+            "linux",
+            "win32"
+          ],
+          "apiVersion": 1,
+          "commit": "561ca4db85032cf674858de0f4874456490474ec",
+          "digest": "20e1ecb978392250c63d09234a232a7317ebb8b20f367483f380dccbc700e434",
+          "sha256": "3321ddec0354e9b31e957cf6a839ca814dc1d5484de677e0a43040ca71aceb67",
+          "size": 88008,
+          "assetId": 726175086,
+          "notes": {
+            "en": "Plain-language auxiliary model modes, usage reporting, judgments and task details. Unknown usage stays distinct from zero; suggested actions and client read receipts keep their original meaning. Remove the permanent usage footnote while keeping scope details available on hover.",
+            "zh-CN": "辅助模型模式、用量记录数、判断建议和任务详情改用通俗表达。保留未知与零用量、建议与已执行、客户端回执与用户已读的区别。去掉常驻用量小字，统计范围可悬停查看。"
+          },
+          "permissions": [
+            "workspace.runtime.read"
+          ]
         }
       ]
     },
