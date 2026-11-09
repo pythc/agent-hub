@@ -9,8 +9,8 @@ export function usagePurpose(role:string,context:ExecutionContext):UsagePurpose{
  const id=context.agentId??''
  return id.startsWith('memory:')?'memory':id.startsWith('goal-verify:')?'verification':id.startsWith('goal-replan:')?id.endsWith(':review')?'plan_review':'replanning':role==='router'?'router':role==='worker'?'worker':'subagent'
 }
-const reported=(r:UsageRecord)=>Object.values(r.steps).some(s=>s.inputTokens!==undefined||s.outputTokens!==undefined||s.totalTokens!==undefined)
-const partial=(r:UsageRecord)=>r.state!=='completed'||Object.values(r.attempts??{}).some(s=>s!=='completed')||!Object.values(r.steps).length||Object.values(r.steps).some(s=>s.inputTokens===undefined||s.outputTokens===undefined)
+const reported=(r:UsageRecord)=>Object.values(r.steps).some(s=>usageFields.some(field=>s[field]!==undefined))
+const partial=(r:UsageRecord)=>reported(r)&&(r.state!=='completed'||Object.values(r.attempts??{}).some(s=>s!=='completed')||Object.values(r.steps).some(s=>s.inputTokens===undefined||s.outputTokens===undefined))
 /** Durable accounting is independent of the pruned activity display and native history. No prompt/result content. */
 export class UsageLedger {
  constructor(private store:Store){for(const r of store.list<UsageRecord>('model-usage'))if(r.state==='running')this.finish(r.id,'interrupted')}
@@ -22,13 +22,14 @@ export class UsageLedger {
  record(id:string,attempt:number,value:unknown){
   const usage=normalizeUsage(value),r=this.store.get<UsageRecord>('model-usage',id);if(!usage||!r)return
   const key=attempt+':'+usage.id
-  r.steps[key]={...r.steps[key],...usage};this.store.put('model-usage',id,r)
+  if(JSON.stringify(r.steps[key])===JSON.stringify(usage))return
+  r.steps[key]=usage;this.store.put('model-usage',id,r)
  }
  finish(id:string,state:Exclude<UsageRecord['state'],'running'>){const r=this.store.get<UsageRecord>('model-usage',id);if(r)this.store.put('model-usage',id,{...r,state,endedAt:Date.now()})}
  summary(sourceId?:string):UsageSummary{
   const records=this.store.list<UsageRecord>('model-usage').filter(r=>!sourceId||r.sourceId===sourceId),steps=records.flatMap(r=>Object.values(r.steps))
   const group=(purpose:UsagePurpose):UsageGroup=>{const rows=records.filter(r=>r.purpose===purpose),reportedCalls=rows.filter(reported).length;return {purpose,calls:rows.length,reportedCalls,unknownCalls:rows.length-reportedCalls,partialCalls:rows.filter(partial).length,steps:rows.reduce((n,r)=>n+Object.keys(r.steps).length,0),tokens:sumUsage(rows.flatMap(r=>Object.values(r.steps)))}}
   const ids=new Set(records.map(r=>r.id)),legacy=this.store.list<any>('execution-call').filter(r=>r.kind!=='tool'&&(!sourceId||r.sourceId===sourceId)&&!ids.has(r.id))
-  return {since:records.length?Math.min(...records.map(r=>r.at)):null,calls:records.length,reportedCalls:records.filter(reported).length,unknownCalls:records.filter(r=>!reported(r)).length,partialCalls:records.filter(partial).length,steps:steps.length,tokens:sumUsage(steps),fieldReported:Object.fromEntries(usageFields.map(field=>[field,steps.filter(s=>s[field]!==undefined).length])) as UsageSummary['fieldReported'],groups:([...new Set(records.map(r=>r.purpose))]).map(group),legacyUntrackedCalls:legacy.length}
+  return {since:records.length?records.reduce((at,r)=>Math.min(at,r.at),records[0]!.at):null,calls:records.length,reportedCalls:records.filter(reported).length,unknownCalls:records.filter(r=>!reported(r)).length,partialCalls:records.filter(partial).length,steps:steps.length,tokens:sumUsage(steps),fieldReported:Object.fromEntries(usageFields.map(field=>[field,steps.filter(s=>s[field]!==undefined).length])) as UsageSummary['fieldReported'],groups:([...new Set(records.map(r=>r.purpose))]).map(group),legacyUntrackedCalls:legacy.length}
  }
 }

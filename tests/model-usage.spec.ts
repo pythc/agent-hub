@@ -20,7 +20,7 @@ it('replaces repeated step snapshots and keeps retries, failed usage, and missin
  usage.attempt('call',0,'failed');usage.attempt('call',1,'completed')
  usage.record('call',1,{id:'step',inputTokens:120,outputTokens:20});usage.finish('call','completed')
  usage.begin('unknown','worker',{sourceId:'two'});usage.finish('unknown','failed')
- expect(usage.summary()).toMatchObject({calls:2,reportedCalls:1,unknownCalls:1,partialCalls:2,steps:2,tokens:{inputTokens:220,cachedInputTokens:80,outputTokens:30,reasoningOutputTokens:4,totalTokens:250},fieldReported:{cachedInputTokens:1}})
+ expect(usage.summary()).toMatchObject({calls:2,reportedCalls:1,unknownCalls:1,partialCalls:1,steps:2,tokens:{inputTokens:220,cachedInputTokens:80,outputTokens:30,reasoningOutputTokens:4,totalTokens:250},fieldReported:{cachedInputTokens:1}})
  expect(usage.summary('one')).toMatchObject({calls:1,tokens:{totalTokens:250}})
  expect(usage.summary('two')).toMatchObject({calls:1,tokens:{inputTokens:null,totalTokens:null}})
 })
@@ -41,6 +41,21 @@ it('normalizes cache and reasoning as subsets and includes Anthropic cache read/
  expect(providerUsage('r','openai-responses',{input_tokens:100,input_tokens_details:{cached_tokens:80},output_tokens:20,output_tokens_details:{reasoning_tokens:5}})).toEqual({id:'r',inputTokens:100,cachedInputTokens:80,outputTokens:20,reasoningOutputTokens:5,totalTokens:120})
  expect(providerUsage('c','openai-chat',{prompt_tokens:100,prompt_tokens_details:{cached_tokens:40},completion_tokens:20})).toEqual({id:'c',inputTokens:100,cachedInputTokens:40,outputTokens:20,totalTokens:120})
  expect(providerUsage('a','anthropic',{input_tokens:10,cache_read_input_tokens:80,cache_creation_input_tokens:20,output_tokens:5})).toEqual({id:'a',inputTokens:110,cachedInputTokens:80,cacheWriteInputTokens:20,outputTokens:5,totalTokens:115})
+})
+it('replaces a corrected snapshot without retaining absent or invalid old subdivisions',()=>{
+ const {usage}=ledger();usage.begin('call','worker')
+ usage.record('call',0,{id:'step',inputTokens:100,cachedInputTokens:80,outputTokens:10,reasoningOutputTokens:4})
+ usage.record('call',0,{id:'step',inputTokens:20,outputTokens:3});usage.finish('call','completed')
+ expect(usage.summary()).toMatchObject({steps:1,reportedCalls:1,unknownCalls:0,partialCalls:0,tokens:{inputTokens:20,cachedInputTokens:null,outputTokens:3,reasoningOutputTokens:null,totalTokens:23}})
+ usage.record('call',0,{id:'step',inputTokens:20,cachedInputTokens:80,outputTokens:3,reasoningOutputTokens:4})
+ expect(usage.summary().tokens).toMatchObject({cachedInputTokens:null,reasoningOutputTokens:null})
+ usage.record('call',0,{id:'step',inputTokens:20,cachedInputTokens:0,outputTokens:3,reasoningOutputTokens:0})
+ expect(usage.summary().tokens).toMatchObject({cachedInputTokens:0,reasoningOutputTokens:0,totalTokens:23})
+})
+it('keeps unknown and partial disjoint, including subset-only reported usage',()=>{
+ const {usage}=ledger();usage.begin('unknown','worker');usage.finish('unknown','failed')
+ usage.begin('partial','worker');usage.record('partial',0,{id:'subset-only',cachedInputTokens:10});usage.finish('partial','completed')
+ expect(usage.summary()).toMatchObject({calls:2,reportedCalls:1,unknownCalls:1,partialCalls:1,tokens:{inputTokens:null,cachedInputTokens:10,outputTokens:null,totalTokens:null}})
 })
 it('records every runtime retry and classifies verification without changing the model request',async()=>{
  const dir=root();let calls=0
