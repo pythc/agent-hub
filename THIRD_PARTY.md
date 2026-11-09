@@ -19,7 +19,7 @@ The upstream domain baseline was rechecked against commit
 
 ## WeKnora adaptations
 
-Selected search, text-splitting, memory and Wiki primitives were adapted from
+Selected search, text-splitting and memory primitives were adapted from
 [Tencent/WeKnora](https://github.com/Tencent/WeKnora), commit
 `e3fb2335bf3f8cadd32142380c60b2677a27bf99`. The original MIT notice is in
 [`src/vendor/weknora/LICENSE`](src/vendor/weknora/LICENSE); the source paths and

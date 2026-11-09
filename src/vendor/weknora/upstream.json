@@ -7,7 +7,6 @@
     "internal/searchutil/snippet.go": "363aa33582f4563eebb53c41f056e1d86abfd4c8aa271bdcd6976087ef2a1f3d",
     "internal/infrastructure/chunker/heading_splitter.go": "f23dc878e8ed4766307615e55c7942ff4a0aedc376b1070b39e2d6d02da427e6",
     "internal/infrastructure/chunker/splitter.go": "09a4ab3bf23d0b35540f998a10c683aadc9ec793ef3c26b2a859b36b48f1c698",
-    "internal/types/memory.go": "f80c10de28fea92529c7e404388235af93203ab2b0555ce9f5235f16067f3faa",
-    "internal/application/service/wiki_slug_handles.go": "8fed170496f8d2cf32ac8311a22e9a9b3cc18beb8767904fe3dc4cf10d866e6a"
+    "internal/types/memory.go": "f80c10de28fea92529c7e404388235af93203ab2b0555ce9f5235f16067f3faa"
   }
 }

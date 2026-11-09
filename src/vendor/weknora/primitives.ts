@@ -66,10 +66,3 @@ export function splitDocument(text:string,size=1024,overlap=80):TextChunk[]{
  }
  return out
 }
-export function wikiLinks(content:string):string[]{
- // Links in fenced code and inline code are not graph edges.
- let fence:string|undefined;const lines:string[]=[]
- for(const line of content.split('\n')){const marker=/^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];if(marker){if(!fence)fence=marker;else if(marker[0]===fence[0]&&marker.length>=fence.length&&line.trim()===marker)fence=undefined;continue}if(!fence)lines.push(line)}
- const prose=lines.join('\n').replace(/(`+)[^`]*?\1/g,'')
- return [...new Set([...prose.matchAll(/\[\[([^\]\n|]+)(?:\|[^\]\n]*)?\]\]/g)].map(m=>m[1]!.trim()).filter(Boolean))]
-}

@@ -131,7 +131,7 @@ Local-first means local workspace storage; model requests still go to your provi
 | [Browser and handoff](docs/BROWSER.md) · 中文 | [Office integrations](docs/OFFICE.md) · 中文 |
 | [Proactive Router and token costs](docs/PROACTIVE_ROUTER.md) | Admission, follow-ups, context and compatibility |
 | [Long-running goals and acceptance](docs/GOAL_ACCEPTANCE_2026-11-07.md) · 中文 | [Failure-driven replanning](docs/GOAL_REPLANNING_2026-11-07.md) · 中文 |
-| [Scoped memory and continuity](docs/EMBEDDED_KNOWLEDGE_AND_CONTINUITY_2026-11-07.md) · 中文 | Embedded document/Wiki library and sourced context |
+| [Scoped memory and continuity](docs/EMBEDDED_KNOWLEDGE_AND_CONTINUITY_2026-11-07.md) · 中文 | Embedded document library and sourced context |
 
 ## Build with us
 

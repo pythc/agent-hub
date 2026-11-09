@@ -25,7 +25,7 @@ try{
  const memory=receive('remember','记住：我的验收暗号是青竹。')
  const trigger=h.store.triggers.get(memory.triggerId)!,c=h.scopes.context(trigger,'local:continuity')!
  const source=h.knowledge.command({action:'put',operationId:'arithmetic',expectedRevision:0,title:'Arithmetic acceptance',content:'# Acceptance\nA = 17\nB = 25\nCompute A + B.\nMarker: EMBEDDED_ARITHMETIC_763'},c)
- h.knowledge.command({action:'put',operationId:'wiki',expectedRevision:0,kind:'wiki',slug:'acceptance/arithmetic',title:'Arithmetic source',content:'Arithmetic comes from the retained source document.',citations:[{documentId:source.id,revision:1,start:0,end:12}]},c)
+ h.knowledge.command({action:'put',operationId:'summary',expectedRevision:0,title:'Arithmetic source',content:'Arithmetic comes from the retained source document.',citations:[{documentId:source.id,revision:1,start:0,end:12}]},c)
  await wait('explicit-memory',()=>delivered('MEMORY SAVED'))
  const firstThread=h.store.list<any>('router-session')[0]?.threadId
  receive('arm','ARM GOAL：请持续完成文档中的算术核验，直到验收标准满足。必须保留原文来源，禁止部署。先保存目标并等待 10 秒，重启后继续，由 worker-1 读取文档 '+source.id+' 并计算，最终核对结果 42。')

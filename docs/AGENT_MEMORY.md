@@ -74,7 +74,7 @@ python3 tests/browser/agent-memory.py
 
 浏览器脚本需要已有 Playwright Python 环境和 Chromium。原生提取测试会在模型调用已开始后终止自己创建的独立测试进程组，再用新的进程恢复，随后验证确认、更新、跨会话使用及清空后重启。所有场景都使用隔离目录与合成内容。
 
-本轮验收详情与范围见 [AGENT_MEMORY_VALIDATION.md](AGENT_MEMORY_VALIDATION.md)。这不是外部 WeKnora 服务接入，也没有在本轮继续此前暂停的 Wiki 页面工作。已用 Potion 和 BGE 的本地真实权重验证 embedding 索引、混合召回、重启、遗忘及降级；小规模合成样本仍有漏召回，实际业务语料和线上服务仍需独立验收。
+本轮验收详情与范围见 [AGENT_MEMORY_VALIDATION.md](AGENT_MEMORY_VALIDATION.md)。这不是外部 WeKnora 服务接入，Wiki 能力已按用户要求移除并清理运行库数据，见 [Wiki 移除说明](WIKI_REMOVAL_2026-11-09.md)；Agent 记忆能力保留。已用 Potion 和 BGE 的本地真实权重验证 embedding 索引、混合召回、重启、遗忘及降级；小规模合成样本仍有漏召回，实际业务语料和线上服务仍需独立验收。
 
 整理过程被中断后，启动恢复为 `interrupted`。自动模式会重新检查当前权限和记忆开关再调度；显式模式需要重新发起人工整理。恢复不会自动确认候选，也不会跳过每日模型预算。合并候选与完成回执在同一事务提交，关闭宿主会取消并等待人工／自动整理。
 

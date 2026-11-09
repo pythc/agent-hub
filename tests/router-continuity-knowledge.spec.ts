@@ -1,13 +1,14 @@
 import {it,expect,afterEach} from 'vitest'
-import {mkdtempSync,rmSync,readFileSync} from 'node:fs'
+import {mkdtempSync,rmSync,readFileSync,existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import type {Model,ModelRequest} from '../src/model.ts'
 import type {RouterGoal} from '../src/router-goals.ts'
-import {splitDocument,normalizeKeywordScores,extractSnippet,detectExplicitMemory,wikiLinks} from '../src/vendor/weknora/primitives.ts'
+import {splitDocument,normalizeKeywordScores,extractSnippet,detectExplicitMemory} from '../src/vendor/weknora/primitives.ts'
 import {serve} from '../src/server.ts'
+import {stableDigest} from '../src/sources.ts'
 import {clientStatus} from '../src/client-status.ts'
 
 const roots:string[]=[],hosts:Runtime[]=[]
@@ -39,7 +40,6 @@ it('keeps Unicode chunk offsets exact, handles heading fences and bounded scores
  const scores=[{score:1},{score:3},{score:2}];expect(normalizeKeywordScores(scores).map(x=>x.score)).toEqual([0,1,.5]);expect(scores[0]!.score).toBe(1)
  expect(normalizeKeywordScores([{score:1},{score:1}]).map(x=>x.score)).toEqual([1,1])
  expect(extractSnippet('look [a.*] literal','[a.*]')).toContain('[a.*]')
- expect(wikiLinks('[[real|标题]]\n```\n[[fake]]\n````\n[[next]]\n~~~\n[[unfinished]]')).toEqual(['real','next'])
  expect(detectExplicitMemory('请记住：每次回复使用中文')).toBe('每次回复使用中文')
  expect(detectExplicitMemory('不要记住：测试')).toBeUndefined()
  expect(detectExplicitMemory('记住：'+'x'.repeat(301))).toBeUndefined()
@@ -60,13 +60,10 @@ it('isolates document search by entry, preserves revisions and rejects conflicti
  expect(f.h.knowledge.command({action:'restore',id:doc.id,version:1,operationId:'restore',expectedRevision:2},c).revision).toBe(3)
  expect(f.h.knowledge.command({action:'read',id:doc.id},c).content).toContain('secrets')
 })
-it('tracks Wiki citations, stale sources, backlinks and transitive revocation',()=>{
+it('tracks document citations, stale sources and transitive revocation',()=>{
  const f=fixture(),c=f.context(f.receive()),doc=f.put(c,'🙂真实来源 alpha')
- const page=f.put(c,'[[other]] 引用内容',{kind:'wiki',slug:'guide',citations:[{documentId:doc.id,revision:1,start:1,end:5}]})
- const other=f.put(c,'[[guide|指南]]',{kind:'wiki',slug:'other'})
- expect(f.h.knowledge.command({action:'links',id:page.id},c).outgoing[0].documentId).toBe(other.id)
- expect(f.h.knowledge.command({action:'links',id:page.id},c).incoming[0].id).toBe(other.id)
- expect(()=>f.put(c,'bad',{kind:'wiki',citations:[{documentId:doc.id,revision:1,start:0,end:200}]})).toThrow('offsets')
+ const page=f.put(c,'[[other]] 引用内容',{citations:[{documentId:doc.id,revision:1,start:1,end:5}]})
+ expect(()=>f.put(c,'bad',{citations:[{documentId:doc.id,revision:1,start:0,end:200}]})).toThrow('offsets')
  expect(()=>f.put(c,'cycle',{id:doc.id,expectedRevision:1,citations:[{documentId:page.id,revision:1,start:0,end:2}]})).toThrow('cycle')
  const refs=f.h.knowledge.references(f.h.knowledge.command({action:'read',id:page.id},c),c)
  f.put(c,'changed source',{id:doc.id,expectedRevision:1})
@@ -135,11 +132,9 @@ it('invalidates derived commitments, checkpoints and goal plans when a read docu
  expect(JSON.stringify(f.h.goals.list(c))).not.toContain('SOURCE_SECRET_883')
  expect(JSON.stringify(f.h.goals.command(start,c,packet.manifest))).not.toContain('SOURCE_SECRET_883')
 })
-it('records dependencies from Wiki links and historical-version citations, not only current page content',()=>{
- const f=fixture(),c=f.context(f.receive()),source=f.put(c,'original cited source'),page=f.put(c,'[[related]] summary',{kind:'wiki',slug:'page',citations:[{documentId:source.id,revision:1,start:0,end:5}]}),related=f.put(c,'[[page]]',{kind:'wiki',slug:'related'})
- const links=f.h.knowledge.references(f.h.knowledge.command({action:'links',id:page.id},c),c)
- expect(links.map(r=>r.documentId)).toContain(related.id)
- f.put(c,'current page without citation',{id:page.id,expectedRevision:1,kind:'wiki',slug:'page'})
+it('records dependencies from historical-version citations, not only current document content',()=>{
+ const f=fixture(),c=f.context(f.receive()),source=f.put(c,'original cited source'),page=f.put(c,'[[related]] summary',{citations:[{documentId:source.id,revision:1,start:0,end:5}]})
+ f.put(c,'current page without citation',{id:page.id,expectedRevision:1})
  const old=f.h.knowledge.command({action:'versions',id:page.id,version:1},c),refs=f.h.knowledge.references(old,c)
  expect(refs.map(r=>r.documentId)).toContain(source.id)
  f.h.knowledge.command({action:'delete',id:source.id,operationId:'delete-source',expectedRevision:1},c)
@@ -151,6 +146,8 @@ it('lets a Worker retrieve scoped knowledge but rejects Worker writes',async()=>
   if(r.role==='router'&&input.kind!=='worker_result'){await tool(r,'worker_manage',{action:'assign',id:'one',text:'Read the provided document and verify it',revision:0,requestId:'read-doc'});return {reply:''}}
   if(r.role==='worker'){
    const output=await tool(r,'superagent_knowledge',{action:'read',id:docId});expect(output.content).toBe('Worker source 763');read=true
+   await expect(r.onTool!('superagent_knowledge',{action:'links',id:docId},'old-links')).rejects.toThrow()
+   await expect(r.onTool!('superagent_knowledge',{action:'list',kind:'wiki'},'old-wiki')).rejects.toThrow()
    await expect(r.onTool!('superagent_knowledge',{action:'delete',id:docId,operationId:'forbidden',expectedRevision:1},'write')).rejects.toThrow()
   }
  })
@@ -244,6 +241,10 @@ it('offers authenticated operator knowledge and goal APIs without private-entry 
   expect((await fetch(url+'/router-knowledge',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).status).not.toBe(200)
   const response=await fetch(url+'/router-knowledge',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(body)})
   expect(response.status).toBe(200);expect(await response.json()).toMatchObject({items:[]})
+  for(const command of [{action:'links'},{action:'list',kind:'wiki'},{action:'put',title:'Old',content:'body',slug:'old'}]){
+   const rejected=await fetch(url+'/router-knowledge',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({...body,command})})
+   expect(rejected.status).toBe(400)
+  }
   f.h.scopes.command({action:'entry.bind',operationId:'private-entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'account',nativeId:'private',privateActor:JSON.stringify(['local','alice']),history:'unknown'})
   const privateInput=f.receive('Private request',{group:'private'})
   const denied=await fetch(url+'/router-knowledge',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({triggerId:privateInput.triggerId,command:{action:'list'}})})
@@ -252,16 +253,16 @@ it('offers authenticated operator knowledge and goal APIs without private-entry 
 })
 
 it('keeps a cited historical revision unavailable after its original input is withdrawn',()=>{
- const f=fixture(),original=f.context(f.receive('Source version one')),wikiContext=f.context(f.receive('Summarize source'))
+ const f=fixture(),original=f.context(f.receive('Source version one')),summaryContext=f.context(f.receive('Summarize source'))
  const doc=f.put(original,'Original version content')
- const page=f.put(wikiContext,'Summary of original version',{kind:'wiki',citations:[{documentId:doc.id,revision:1,start:0,end:8}]})
+ const page=f.put(summaryContext,'Summary of original version',{citations:[{documentId:doc.id,revision:1,start:0,end:8}]})
  f.h.store.put('source-invalid-trigger',original.trigger.id,{reason:'source content withdrawn'})
- expect(()=>f.h.knowledge.command({action:'read',id:page.id},wikiContext)).toThrow('unavailable')
+ expect(()=>f.h.knowledge.command({action:'read',id:page.id},summaryContext)).toThrow('unavailable')
  const updated=f.context(f.receive('Replace the source with a fresh version'))
  f.put(updated,'Fresh version content',{id:doc.id,expectedRevision:1})
  expect(f.h.knowledge.command({action:'read',id:doc.id},updated).content).toBe('Fresh version content')
- expect(()=>f.h.knowledge.command({action:'read',id:page.id},wikiContext)).toThrow('unavailable')
- expect(f.h.knowledge.command({action:'search',query:'Summary'},wikiContext).items).toEqual([])
+ expect(()=>f.h.knowledge.command({action:'read',id:page.id},summaryContext)).toThrow('unavailable')
+ expect(f.h.knowledge.command({action:'search',query:'Summary'},summaryContext).items).toEqual([])
 })
 
 it('keeps pending goal notices tied to the context that produced them',async()=>{
@@ -296,4 +297,61 @@ it('lets the actual Worker broker recall authorized memory and binds its source 
  await until(f.h,()=>f.h.store.tickets.list().some(t=>t.ended));expect(read).toBe(true)
  const manifest=f.h.store.get<any>('task-context',f.h.store.tickets.list()[0]!.id).manifest
  expect(manifest.facts.some((ref:any)=>ref.id===memoryId)).toBe(true);expect(manifest.evidence.some((ref:any)=>ref.id===e.id)).toBe(true)
+})
+
+it('retires legacy Wiki on host restart, invalidates old citations and preserves ordinary documents and memory',async()=>{
+ const f=fixture(),c=f.context(f.receive('Retain ordinary memory and documents'))
+ const doc=f.put(c,'ordinary source'),legacy=f.put(c,'old wiki body'),summary=f.put(c,'derived summary',{citations:[{documentId:legacy.id,revision:1,start:0,end:3}]})
+ f.h.memory.ingest(c);f.h.memory.captureExplicit(f.context(f.receive('记住：保留独立的 Agent 记忆。')))
+ const facts=f.h.store.list('memory-fact');expect(facts).toHaveLength(1)
+ const refs=f.h.knowledge.references(f.h.knowledge.command({action:'read',id:summary.id},c),c)
+ const old=f.h.store.get<any>('knowledge-document',legacy.id)
+ f.h.store.put('knowledge-document',legacy.id,{...old,kind:'wiki',slug:'old',links:['source']})
+ f.put(c,'ordinary source',{id:doc.id,expectedRevision:1})
+ f.h.store.put('knowledge-version',doc.id+':1',{...f.h.store.get<any>('knowledge-document',doc.id),kind:'wiki',revision:1})
+ await f.restart()
+ const fresh=f.context({triggerId:c.trigger.id})
+ expect(f.h.store.get('knowledge-document',legacy.id)).toBeUndefined()
+ expect(f.h.store.list('knowledge-chunk').some((ch:any)=>ch.documentId===legacy.id)).toBe(false)
+ expect(f.h.store.list('knowledge-receipt').some((r:any)=>r.documentId===legacy.id)).toBe(false)
+ expect(()=>f.h.knowledge.command({action:'read',id:summary.id},fresh)).toThrow('unavailable')
+ expect(()=>f.h.knowledge.validate(fresh,refs)).toThrow('unavailable')
+ expect(()=>f.put(fresh,'new unrelated text',{id:legacy.id})).toThrow('permanently retired')
+ expect(f.h.knowledge.command({action:'read',id:doc.id},fresh).content).toBe('ordinary source')
+ expect(f.h.store.list('memory-fact')).toEqual(facts)
+ f.put(fresh,'[[brackets stay plain text]]',{id:doc.id,expectedRevision:2})
+ expect(f.h.knowledge.command({action:'read',id:doc.id},fresh)).not.toHaveProperty('links')
+ expect(f.h.knowledge.command({action:'read',id:doc.id},fresh)).not.toHaveProperty('slug')
+ await f.restart()
+ expect(f.h.knowledge.command({action:'read',id:doc.id},f.context({triggerId:c.trigger.id})).content).toBe('[[brackets stay plain text]]')
+})
+it('rejects legacy Wiki receipts and historical restores even when inserted after startup',()=>{
+ const f=fixture(),c=f.context(f.receive()),doc=f.put(c,'ordinary body')
+ const input={action:'put',id:doc.id,title:'Legacy',content:'old content',operationId:'legacy',expectedRevision:1,offset:0,limit:20}
+ const key=stableDigest([c.route.scopeId,c.route.entryId,c.actor,input.operationId])
+ f.h.store.put('knowledge-receipt',key,{documentId:doc.id,fingerprint:stableDigest(input),result:{...doc,kind:'wiki',slug:'old'}})
+ expect(()=>f.h.knowledge.command(input,c)).toThrow('receipt no longer available')
+ f.h.store.put('knowledge-version',doc.id+':9',{...f.h.store.get<any>('knowledge-document',doc.id),kind:'wiki',revision:9})
+ expect(()=>f.h.knowledge.command({action:'restore',id:doc.id,version:9,operationId:'restore-wiki',expectedRevision:1},c)).toThrow('Version unavailable')
+ expect(f.h.knowledge.command({action:'versions',id:doc.id},c).items).toHaveLength(1)
+ f.h.store.put('knowledge-document','injected-wiki',{...f.h.store.get<any>('knowledge-document',doc.id),id:'injected-wiki',kind:'wiki'})
+ expect(()=>f.h.knowledge.command({action:'read',id:'injected-wiki'},c)).toThrow('unavailable')
+ expect(()=>f.put(c,'overwrite',{id:'injected-wiki',expectedRevision:1})).toThrow('authority')
+})
+
+it('releases the host lock when retirement fails and permits a clean retry',async()=>{
+ const f=fixture(),c=f.context(f.receive()),doc=f.put(c,'old wiki')
+ f.h.store.put('knowledge-document',doc.id,{...f.h.store.get<any>('knowledge-document',doc.id),kind:'wiki'})
+ f.h.store.db.exec("CREATE TRIGGER fail_wiki_delete BEFORE DELETE ON records WHEN OLD.kind='knowledge-document' BEGIN SELECT RAISE(ABORT,'injected delete failure'); END")
+ await expect(f.restart()).rejects.toThrow('injected delete failure')
+ expect(existsSync(join(f.config.stateDir,'host.lock'))).toBe(false)
+ const {Store}=await import('../src/store.ts'),store=new Store(join(f.config.stateDir,'state.sqlite'))
+ try{
+  expect(store.get<any>('knowledge-document',doc.id).kind).toBe('wiki')
+  expect(store.get('knowledge-retired',doc.id)).toBeUndefined()
+  store.db.exec('DROP TRIGGER fail_wiki_delete')
+ }finally{store.close()}
+ const recovered=new Runtime(f.config,{model:f.model});hosts.push(recovered)
+ expect(recovered.store.get('knowledge-document',doc.id)).toBeUndefined()
+ expect(recovered.store.get('knowledge-retired',doc.id)).toMatchObject({reason:'wiki-removed'})
 })
