@@ -30,9 +30,10 @@ export class RouterIngress {
  ruleExecutionAllowed?: (ids:readonly string[])=>boolean
  defer?: (record:RouterAdmission,trigger:Trigger)=>boolean
  scheduledAuthority?: (id:string)=>Mandate|undefined
+ automationRevalidate?: (mandate:Mandate)=>boolean|undefined
  constructor(private config:Config,private store:Store,private registry:SourceRegistry,private scopes?:RouterScopes){}
  rules(trigger?:Trigger){return this.rulesFor?.(trigger)??this.config.rules}
- policy(trigger?:Trigger){const p=makePolicy({...this.config,rules:this.rules(trigger)},()=>false,this.registry);return {...p,admitsInferred:(ids:readonly string[])=>p.admitsInferred(ids)&&(this.ruleExecutionAllowed?.(ids)??true),revalidate:(m:Mandate)=>p.revalidate(m)&&(m.strength==='explicit'||(this.ruleExecutionAllowed?.(m.basis.rules??[])??true))}}
+ policy(trigger?:Trigger){const p=makePolicy({...this.config,rules:this.rules(trigger)},()=>false,this.registry);return {...p,admitsInferred:(ids:readonly string[])=>p.admitsInferred(ids)&&(this.ruleExecutionAllowed?.(ids)??true),revalidate:(m:Mandate)=>this.automationRevalidate?.(m)??(p.revalidate(m)&&(m.strength==='explicit'||(this.ruleExecutionAllowed?.(m.basis.rules??[])??true)))}}
  get(id:string){return this.store.get<RouterAdmission>('router-admission',id)}
  private discussion(trigger:Trigger){return trigger.source+':'+trigger.threads[0]!.id}
  private gate(trigger:Trigger,anchor?:RouterAdmission):GateResult{

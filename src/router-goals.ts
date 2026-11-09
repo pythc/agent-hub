@@ -26,7 +26,7 @@ export class RouterGoals {
   const previous=host.routerIngress.scheduledAuthority
   host.routerIngress.scheduledAuthority=id=>this.authority(id)??previous?.(id)
  }
- private belongs(g:RouterGoal,c:ScopeContext){return g.scopeId===c.route.scopeId&&g.entryId===c.route.entryId&&g.discussion===c.route.discussion&&g.actor===c.actor}
+ private belongs(g:RouterGoal,c:ScopeContext){return g.scopeId===c.route.scopeId&&g.entryId===c.route.entryId&&(g.discussion===c.route.discussion&&g.actor===c.actor||this.host.webhooks?.ownsTrigger(g.contract?.triggerId??g.triggerId)&&c.trigger.human&&this.host.scopes.canManage(c))}
  private sourcesValid(g:RouterGoal){return [...(g.contextIds??[]),...this.host.replanning.contexts(g.id)].every(id=>this.host.continuity.validContext(id))}
  private retryVerification(round:VerificationRound){
   const store=this.host.store,id=round.id+':'+round.attempts
@@ -42,7 +42,7 @@ export class RouterGoals {
   try{if(this.host.scopes.binding(g.entryId).privateActor)return [];const t=this.host.store.triggers.get(g.triggerId);if(!t)return [];this.host.routerIngress.authority(t.id);const c=this.host.scopes.context(t,g.discussion);const visible=c&&this.list(c).find(item=>item.id===g.id);return visible?[visible]:[]}catch{return []}
  })}
  private anchor(g:RouterGoal){
-  const t=this.host.store.triggers.get(g.triggerId);if(!t?.human)throw Error('Goal authorization source unavailable')
+  const t=this.host.store.triggers.get(g.triggerId);if(!t||!t.human&&!this.host.webhooks?.ownsTrigger(t.id))throw Error('Goal authorization source unavailable')
   const mandate=this.host.routerIngress.authority(t.id),c=this.host.scopes.context(t,g.discussion)
   if(!c||!this.belongs(g,c)||this.host.scopes.binding(g.entryId).revision!==g.bindingRevision)throw Error('Goal entry or ownership changed')
   if(mandate.strength!=='explicit')throw Error('Goal needs explicit standing authority')
@@ -51,7 +51,7 @@ export class RouterGoals {
   return {trigger:t,mandate,context:c}
  }
  private wake(triggerId:string){return this.host.store.get<Wake>('goal-wake',triggerId)}
- forInput(triggerId:string){const wake=this.wake(triggerId);return wake?this.host.store.get<RouterGoal>('router-goal',wake.goalId):this.host.store.list<RouterGoal>('router-goal').find(g=>g.triggerId===triggerId&&!terminal.has(g.state))}
+ forInput(triggerId:string){const wake=this.wake(triggerId);return wake?this.host.store.get<RouterGoal>('router-goal',wake.goalId):this.host.store.list<RouterGoal>('router-goal').find(g=>g.triggerId===triggerId&&(!terminal.has(g.state)||this.host.webhooks?.ownsTrigger(triggerId)))}
  private authority(triggerId:string):Mandate|undefined{
   const wake=this.wake(triggerId);if(!wake)return
   const g=this.host.store.get<RouterGoal>('router-goal',wake.goalId),t=this.host.store.triggers.get(triggerId)
@@ -66,14 +66,16 @@ export class RouterGoals {
  beforeTurn(triggerId:string,receipt=false){const w=this.wake(triggerId);if(w){const g=this.host.store.get<RouterGoal>('router-goal',w.goalId);if(!g||!['active','waiting'].includes(g.state)&&!(receipt&&g.state==='completed'))throw Error('Goal continuation is not running');this.authority(triggerId);if(w.state==='queued')this.host.store.put('goal-wake',triggerId,{...w,state:'running'})}}
  toolAllowed(triggerId:string,name:string,args:any){
   const w=this.wake(triggerId),g=this.forInput(triggerId);if(!g)return
-  if(g.state==='completed'&&w){if(name==='router_goal'&&['list','inspect','complete'].includes(args.action)||name==='worker_manage'&&['list','inspect','result'].includes(args.action)&&(args.action==='list'||g.taskIds.includes(args.ticketId)))return;throw Error('Completed goal only permits inspection of its accepted results')}
+  if(g.state==='completed'){if(name==='router_goal'&&['list','inspect','complete'].includes(args.action)||name==='worker_manage'&&['list','inspect','result'].includes(args.action)&&(args.action==='list'||g.taskIds.includes(args.ticketId)))return;throw Error('Completed goal only permits inspection of its accepted results')}
   if(!['active','waiting'].includes(g.state))throw Error('Goal no longer accepts work in this turn')
   if(g.managed&&name==='worker_manage'&&['assign','send'].includes(args.action))throw Error('Goal tasks are scheduled and repaired by the host; inspect existing nodes')
-  if(!w)return
+  if(!w&&!this.host.webhooks.ownsTrigger(triggerId))return
+  if(name==='router_memory'&&!['search','read','inspect'].includes(args.action))throw Error('Autonomous goal input cannot mutate Agent memory')
+  if(name==='router_journal'&&args.action!=='read')throw Error('Autonomous goal input cannot change original requirements or commitments')
   if(name==='worker_manage'&&!['list','inspect','result','assign','send'].includes(args.action))throw Error('Goal wake cannot reconfigure Workers or change unrelated authority')
   if(name==='worker_manage'&&args.action!=='list'&&args.action!=='assign'&&!g.taskIds.includes(args.ticketId))throw Error('Goal wake can only use tasks owned by this goal')
   if(name==='router_manage')throw Error('Goal wake cannot change standing schedules or duties')
-  if(name==='router_goal'&&(!['list','inspect'].includes(args.action)&&args.id!==w.goalId||!['list','inspect','update','wait','complete'].includes(args.action)))throw Error('Goal wake is restricted to its existing goal')
+  if(name==='router_goal'&&(!['list','inspect'].includes(args.action)&&args.id!==g.id||!['list','inspect','update','wait','complete'].includes(args.action)))throw Error('Goal wake is restricted to its existing goal')
  }
  noteTask(triggerId:string,ticketId:string){const g=this.forInput(triggerId);if(g&&!g.taskIds.includes(ticketId)){const c=this.anchor(g).context;this.host.scopes.checkTask(ticketId,c,true);const assignment=this.host.store.get<any>('worker-assignment',ticketId);this.host.store.put('router-goal',g.id,{...g,taskIds:[...g.taskIds,ticketId],nodes:[...(g.nodes??[]),{id:ticketId,title:'Delegated task',instruction:this.host.store.tickets.get(ticketId)!.mandate.scope,workerId:assignment.workerId,dependsOn:[],criterionIds:g.criteria.map(cr=>cr.id),ticketId,state:'running',repairs:0,recoveries:0}]})}}
  finishTurn(triggerId:string,error?:unknown){
@@ -232,7 +234,7 @@ export class RouterGoals {
      if(n.state!=='pending'||occupied>=(g.maxParallel??2)||n.dependsOn.some(id=>nodes.find(d=>d.id===id)?.state!=='passed'))continue
      this.host.replanning.assertWorker(g,n.workerId)
      const dependencies=n.dependsOn.flatMap(id=>{const dep=nodes.find(d=>d.id===id)!;const round=this.host.store.get<VerificationRound>('goal-verification',dep.roundId!)!;return round.snapshot.evidence.filter(e=>e.kind!=='execution')})
-     const text=JSON.stringify({objective:g.objective,node:{title:n.title,instruction:n.instruction},criteria:this.host.verification.criteria(g,n),originalAcceptance:g.criteria,authorizationScope:g.contract?.mandate.scope,requirements:this.host.continuity.command({action:'read'},c).requirements,prerequisiteEvidence:dependencies})
+     const text=JSON.stringify({objective:g.objective,node:{title:n.title,instruction:n.instruction},criteria:this.host.verification.criteria(g,n),originalAcceptance:g.criteria,authorizationScope:g.contract?.mandate.scope,automationData:this.host.webhooks.inputData(g.triggerId),requirements:this.host.continuity.command({action:'read'},c).requirements,prerequisiteEvidence:dependencies})
      const packet=this.host.memory.build(c,{goalId:g.id,instruction:text},'goal-worker')
      const documentIds=[...new Set([...dependencies.filter(e=>e.kind==='document').map(e=>e.key),...g.criteria.flatMap(cr=>cr.documents??[])])]
      packet.manifest.knowledge=documentIds.flatMap(id=>this.host.knowledge.references(this.host.knowledge.command({action:'read',id},c),c))
@@ -287,8 +289,9 @@ export class RouterGoals {
   if(x.nodes&&x.action!=='start')throw Error('Direct graph replacement is not allowed; failure-driven plans require independent review')
   if(!x.operationId||x.expectedRevision===undefined)throw Error('Goal mutation requires operationId and expectedRevision')
   const human=c.trigger.human&&this.host.routerIngress.authority(c.trigger.id).strength==='explicit'
-  if(!human&&this.wake(c.trigger.id)?.goalId!==x.id)throw Error('Autonomous input may only change its own goal')
-  if(['start','pause','resume','cancel'].includes(x.action)||x.maxTurns!==undefined||x.maxParallel!==undefined||x.maxRepairs!==undefined||x.maxReplans!==undefined||x.nodes!==undefined)if(!human)throw Error('This goal change requires a current explicit human input')
+  const automation=x.action==='start'&&this.host.webhooks?.approvedStart(x,c)
+  if(!human&&!automation&&this.wake(c.trigger.id)?.goalId!==x.id)throw Error('Autonomous input may only change its own goal')
+  if(['start','pause','resume','cancel'].includes(x.action)||x.maxTurns!==undefined||x.maxParallel!==undefined||x.maxRepairs!==undefined||x.maxReplans!==undefined||x.nodes!==undefined)if(!human&&!automation)throw Error('This goal change requires a current explicit human input')
   const store=this.host.store,key=stableDigest([c.route.scopeId,c.route.entryId,c.actor,x.operationId]),fingerprint=stableDigest(x)
   return store.atomic(()=>{
    const receipt=store.get<any>('goal-receipt',key)
@@ -301,7 +304,7 @@ export class RouterGoals {
     if(new Set(x.criteria.map(c=>c.id)).size!==x.criteria.length||x.criteria.some(c=>c.id==='__goal__'))throw Error('Criterion IDs must be unique and not reserved')
     validateGraph(x.nodes??[],x.criteria)
     for(const n of x.nodes??[])if(!this.host.scopes.scope(c.route.scopeId).workerIds.includes(n.workerId))throw Error('Goal Worker is outside scope')
-    g={id:'goal-'+key,scopeId:c.route.scopeId,entryId:c.route.entryId,discussion:c.route.discussion,actor:c.actor,triggerId:c.trigger.id,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,revision:0,title:x.title,objective:x.objective,criteria:x.criteria,plan:x.plan??[],state:'active',taskIds:[],nextAction:x.nextAction??'Plan and execute the next unfinished step',nextAt:this.now()+60000,turns:0,maxTurns:x.maxTurns??200,failures:0,lastFingerprint:stableDigest([]),at:this.now(),nodes:x.nodes?.map(n=>({...n,state:'pending',repairs:0,recoveries:0})),maxParallel:x.maxParallel??2,maxRepairs:x.maxRepairs??2,managed:!!x.nodes,maxReplans:x.maxReplans??2,replans:0,planRevision:0,contract:{objective:x.objective,criteria:x.criteria,triggerId:c.trigger.id,triggerHash:stableDigest(c.trigger),mandate:this.host.routerIngress.authority(c.trigger.id),workerIds:[...this.host.scopes.scope(c.route.scopeId).workerIds],backendIds:[...this.host.scopes.scope(c.route.scopeId).backendIds]}}
+    g={id:'goal-'+key,scopeId:c.route.scopeId,entryId:c.route.entryId,discussion:c.route.discussion,actor:c.actor,triggerId:c.trigger.id,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,revision:0,title:x.title,objective:x.objective,criteria:x.criteria,plan:x.plan??[],state:'active',taskIds:[],nextAction:x.nextAction??'Plan and execute the next unfinished step',nextAt:this.now()+60000,turns:0,maxTurns:x.maxTurns??200,failures:0,lastFingerprint:stableDigest([]),at:this.now(),nodes:x.nodes?.map(n=>({...n,state:'pending',repairs:0,recoveries:0})),maxParallel:x.maxParallel??2,maxRepairs:x.maxRepairs??2,managed:!!x.nodes,maxReplans:x.maxReplans??2,replans:0,planRevision:0,contract:{objective:x.objective,criteria:x.criteria,triggerId:c.trigger.id,triggerHash:stableDigest(c.trigger),mandate:this.host.routerIngress.authority(c.trigger.id),workerIds:[...this.host.scopes.scope(c.route.scopeId).workerIds],backendIds:[...this.host.scopes.scope(c.route.scopeId).backendIds],...this.host.webhooks?.permissions(c.trigger.id)}}
    }else if(!g)throw Error('Goal unavailable')
    if(!this.sourcesValid(g)&&!['pause','cancel'].includes(x.action)){
     if(g.nodes?.length)throw Error('Changed structured goal sources require a new explicitly authorized goal; prior node instructions cannot be reused')
@@ -323,9 +326,13 @@ export class RouterGoals {
     g={...g,state:x.needsHuman?'needs_input':'waiting',reason:x.reason,nextAt:x.needsHuman?undefined:this.now()+(x.wakeAfterSeconds??60)*1000}
    }else{
     if(x.action==='resume'){
+     // A human may resume an automation, but cannot silently turn its machine
+     // identity into a new human anchor or bypass an expired/revoked grant.
+     const automationOrigin=g.contract?.triggerId&&this.host.webhooks.ownsTrigger(g.contract.triggerId)?g.contract.triggerId:undefined
+     if(automationOrigin)this.host.routerIngress.authority(automationOrigin)
      g.replanId=undefined
      for(const id of [g.finalRoundId,...(g.nodes??[]).map(n=>n.roundId)].filter((id):id is string=>!!id)){const round=store.get<VerificationRound>('goal-verification',id);if(round?.state==='errored'){store.put('goal-verification',id,{...round,state:'pending',error:undefined,finishedAt:undefined});store.jobState('goal-verify:'+id,'pending')}}
-     g={...g,triggerId:c.trigger.id,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,failures:0,turns:0,recovery:undefined,recoveryAttempts:0,nodes:g.nodes?.map(n=>n.state==='held'?{...n,state:n.ticketId?'running' as const:'pending' as const,reason:undefined,retryAt:undefined,recoveries:0,failure:undefined}:n)}
+     g={...g,triggerId:automationOrigin??c.trigger.id,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,failures:0,turns:0,recovery:undefined,recoveryAttempts:0,nodes:g.nodes?.map(n=>n.state==='held'?{...n,state:n.ticketId?'running' as const:'pending' as const,reason:undefined,retryAt:undefined,recoveries:0,failure:undefined}:n)}
     }
     g={...g,state:'active',reason:undefined,nextAt:this.now()+(x.wakeAfterSeconds??60)*1000}
    }

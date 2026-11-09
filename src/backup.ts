@@ -7,6 +7,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import {readRevocations} from './router-memory.ts'
 import {configSchema,type Config} from './config.ts'
 import {managedFiles,recoverManagedFiles,prepareManagedFiles,validateManagedSnapshot,atomicPrivateFile} from './managed-config.ts'
+import {MAX_DB_SCHEMA} from './store.ts'
 const hash=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex')
 const digest=(text:string)=>createHash('sha256').update(text).digest('hex')
 function captureManaged(state:string){const files=managedFiles(state);if(existsSync(files.journal))throw Error('Setup is changing; retry backup after configuration recovery');return {connections:existsSync(files.connections)?readFileSync(files.connections,'utf8'):undefined,secrets:existsSync(files.secrets)?readFileSync(files.secrets,'utf8'):undefined}}
@@ -54,7 +55,7 @@ export async function backupState(config:Config,destination:string,options:{hist
 }
 export function verifyBackup(directory:string){
  const manifest=JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8'))
- if(manifest.format!==1||![1,2,3,4,5,6,7].includes(manifest.schema))throw Error('Unsupported backup format or schema')
+ if(manifest.format!==1||!Number.isInteger(manifest.schema)||manifest.schema<1||manifest.schema>MAX_DB_SCHEMA)throw Error('Unsupported backup format or schema')
  const path=join(directory,'state.sqlite')
  if(hash(path)!==manifest.sha256)throw Error('Backup checksum mismatch')
  const db=new DatabaseSync(path,{readOnly:true})
@@ -94,7 +95,20 @@ export async function restoreState(config:Config,directory:string){
   if(existsSync(currentPath)){
    const live=new DatabaseSync(currentPath,{readOnly:true}),old=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
    try{
-    if(Number(live.prepare('PRAGMA user_version').get()!.user_version)>=6&&verified.schema<6)throw Error('Online downgrade cannot represent Router scopes; use forward repair or a reviewed offline rollback')
+    const liveSchema=Number(live.prepare('PRAGMA user_version').get()!.user_version)
+    if(liveSchema>=8&&verified.schema<8)throw Error('Downgrade cannot preserve Webhook authorization and delivery ledgers; reconcile before restore')
+    if(liveSchema>=6&&verified.schema<6)throw Error('Online downgrade cannot represent Router scopes; use forward repair or a reviewed offline rollback')
+    // Receipt ACKs, revocations, accepted results and callback attempts are
+    // durable external history even before a Worker ticket exists. Restoring an
+    // older ledger could lose an ACK or revive a grant/side effect.
+    const webhookRecords=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'webhook-*' ORDER BY kind,id").all()
+    const currentWebhookRecords=webhookRecords(live)
+    if(currentWebhookRecords.length&&JSON.stringify(currentWebhookRecords)!==JSON.stringify(webhookRecords(old)))throw Error('Webhook authorization advanced after backup; reconcile before restore')
+    for(const table of ['webhook_inbox','webhook_events','webhook_deliveries','webhook_attempts']){
+     const rows=(db:DatabaseSync)=>db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)?db.prepare('SELECT * FROM '+table+' ORDER BY '+(table==='webhook_attempts'?'delivery_id,attempt':'id')).all():[]
+     const current=rows(live)
+     if(current.length&&JSON.stringify(current)!==JSON.stringify(rows(old)))throw Error('Webhook receipts or callback effects advanced after backup; reconcile before restore')
+    }
     const head=live.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get(),required=head&&JSON.parse(String(head.body))
     if(required&&!ledger.some(r=>r.seq===required.seq&&r.hash===required.hash))throw Error('Latest revocation ledger is missing')
     for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('ticket','run','model-session','task-ownership','entry-binding')").all()){

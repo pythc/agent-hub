@@ -7,6 +7,14 @@ import {Store} from '../src/store.ts'
 import {backupState,verifyBackup,restoreState} from '../src/backup.ts'
 const roots:string[]=[]
 afterEach(()=>{for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true})})
+it('refuses a schema downgrade that would erase Webhook execution and receipt semantics',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'webhook-downgrade-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
+ const store=new Store(join(config.stateDir,'state.sqlite'));store.db.exec('PRAGMA user_version=7');store.close()
+ await backupState(config,join(root,'backup'))
+ const current=new Store(join(config.stateDir,'state.sqlite'));current.db.exec('PRAGMA user_version=8');current.close()
+ await expect(restoreState(config,join(root,'backup'))).rejects.toThrow('Downgrade cannot preserve Webhook')
+})
 it('backs up WAL state, verifies integrity and refuses restoring under a live host',async()=>{
  const root=mkdtempSync(join(tmpdir(),'agent-backup-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})

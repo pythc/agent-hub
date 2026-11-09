@@ -6,7 +6,7 @@ import {join,resolve} from 'node:path'
 import {randomUUID} from 'node:crypto'
 import {z} from 'zod'
 import {configSchema,type Config} from './config.ts'
-import {Store} from './store.ts'
+import {Store,MAX_DB_SCHEMA} from './store.ts'
 import {RouterScopes,scopeCommandSchema,type EntryBinding,type TaskOwnership} from './router-scope.ts'
 import {stableDigest} from './sources.ts'
 import {atomicPrivateFile} from './managed-config.ts'
@@ -86,7 +86,7 @@ export async function applyScopeMigration(config:Config,spec:unknown,expected:st
  try{
   const target=join(config.stateDir,'state.sqlite'),existing=new DatabaseSync(target,{readOnly:true})
   let completed:any
-  try{const version=Number(existing.prepare('PRAGMA user_version').get()!.user_version);if(version>7)throw Error('Database is newer than this program');if(version>=6){const r=existing.prepare("SELECT body FROM records WHERE kind='scope-migration' AND id='current'").get();completed=r&&JSON.parse(String(r.body))}}finally{existing.close()}
+  try{const version=Number(existing.prepare('PRAGMA user_version').get()!.user_version);if(version>MAX_DB_SCHEMA)throw Error('Database is newer than this program');if(version>=6){const r=existing.prepare("SELECT body FROM records WHERE kind='scope-migration' AND id='current'").get();completed=r&&JSON.parse(String(r.body))}}finally{existing.close()}
   if(completed){
    if(completed.operationId!==parsed.operationId||completed.specFingerprint!==stableDigest(parsed))throw Error('Database already migrated by another plan')
    const journal=existsSync(activation)?JSON.parse(readFileSync(activation,'utf8')):{}

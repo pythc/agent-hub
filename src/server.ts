@@ -33,6 +33,8 @@ import {chatPage,chatAsset} from './ui/chat-page.ts'
 import {ChatError} from './chat.ts'
 import {BrowserError} from './browser-contract.ts'
 import {browserRequest} from './browser-http.ts'
+import {serveWebhooks} from './webhook-http.ts'
+import {WebhookError} from './webhook-protocol.ts'
 import {enabledView,viewCatalog} from './workspace-view-package.ts'
 import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 
@@ -60,6 +62,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
     if(error instanceof MarketError){if(error.code==='market_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
+    if(error instanceof WebhookError){send(response,error.status,{code:error.code});return}
     if(error instanceof ChatError||error instanceof BrowserError){send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof AccountError){send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof OnboardingError){if(error.code==='setup_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
@@ -180,6 +183,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/webhooks'&&req.method==='GET'){send(res,200,runtime.webhooks.snapshot());return}
+    if(path==='/webhooks/grants'&&req.method==='POST'){send(res,201,runtime.webhooks.create(await body(req)));return}
+    if(path==='/webhooks/control'&&req.method==='POST'){send(res,200,runtime.webhooks.control(await body(req)));return}
     if(path==='/api/plugin-market'&&req.method==='GET'){send(res,200,{...market.snapshot(),platform:process.platform,settingsRevision:runtime.settings.current().revision});return}
     if(path==='/api/plugin-market/preview'&&req.method==='GET'){
       const query=z.object({catalog:z.string().max(80),plugin:z.string().max(64),index:z.coerce.number().int().min(0).max(3)}).strict().parse(Object.fromEntries(new URL(req.url!,'http://localhost').searchParams))
@@ -491,13 +497,16 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   }
   server.requestTimeout = 30_000
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(runtime.config.port, '127.0.0.1', resolve) })
+  let webhookListener:Awaited<ReturnType<typeof serveWebhooks>>|undefined
+  try{if(runtime.config.webhooks&&!options.configurationPreview)webhookListener=await serveWebhooks(()=>runtime,runtime.config.webhooks.port,()=>!changing&&!unavailable&&!runtimeClosed)}catch(error){server.close();throw error}
+  server.once('close',()=>{void webhookListener?.close().catch(()=>{})})
   const address = server.address() as { port: number }
   runtime.endpoint='http://127.0.0.1:'+address.port
   endpoint=runtime.endpoint
   sessions.bindOrigin(endpoint)
   try{atomicPrivateFile(connectionFile,JSON.stringify({application:'agent-hub',version:1,url:endpoint,accessToken:token},null,2)+'\n')}catch(error){await new Promise<void>(r=>server.close(()=>r()));throw error}
   runtime.start()
-  return {server,url:endpoint,operatorUrl:sessions.link(endpoint),tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await stopRuntime()}}
+  return {server,url:endpoint,webhookUrl:webhookListener?.url,operatorUrl:sessions.link(endpoint),tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await webhookListener?.close().catch(()=>{});await stopRuntime()}}
 }
 function send(response: ServerResponse, status: number, value: unknown) {
   if (!response.headersSent) response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })

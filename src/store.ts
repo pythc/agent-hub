@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Repositories, Trigger, TriggerDisposition, Thread, Ticket, Decision, OutboundMessage } from './vendor/dsh-core/index.ts'
+export const MAX_DB_SCHEMA=8
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
@@ -19,12 +20,13 @@ export interface Run {
 export class Store implements Repositories {
   readonly db: DatabaseSync
   bodyFilter?:(kind:string,id:string,value:any)=>any
+  readonly recordObservers=new Map<string,(id:string,value:any,previous:any)=>void>()
   private depth = 0
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version)
-    if (version > 7) {
+    if (version > MAX_DB_SCHEMA) {
       this.db.close()
       throw new Error('Database is newer than this program. Use the matching version.')
     }
@@ -66,8 +68,12 @@ export class Store implements Repositories {
   }
   prunePages(){this.db.prepare("DELETE FROM records WHERE kind='resource-page' AND id IN (SELECT id FROM records WHERE kind='resource-page' AND CAST(json_extract(body,'$.expires') AS INTEGER)<? LIMIT 1000)").run(Date.now())}
   put(kind: string, id: string, value: unknown): void {
+    const observe=this.recordObservers.get(kind)
+    if(observe&&!this.depth){this.atomic(()=>this.put(kind,id,value));return}
+    const previous=observe?this.get(kind,id):undefined,filtered=this.bodyFilter?.(kind,id,value)??value
     this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body')
-      .run(kind, id, JSON.stringify(this.bodyFilter?.(kind,id,value)??value))
+      .run(kind, id, JSON.stringify(filtered))
+    observe?.(id,filtered,previous)
   }
   list<T>(kind: string): T[] {
     return this.db.prepare('SELECT body FROM records WHERE kind=? ORDER BY rowid').all(kind).map(row => JSON.parse(String(row.body)) as T)
