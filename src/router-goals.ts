@@ -6,6 +6,7 @@ import type {RouterAdmission} from './router-ingress.ts'
 import type {ToolSpec} from './model.ts'
 import type {ContextManifest} from './router-memory.ts'
 import {stableDigest} from './sources.ts'
+import {repositoryEffectsSettled} from './repository-source.ts'
 import {criterionSchema,nodeSchema,validateGraph,classifyGoalFailure,classifyVerificationFailure,type GoalNode,type GoalFailure} from './goal-contract.ts'
 import type {GoalDelivery,VerificationRound} from './goal-verification.ts'
 import type {Run} from './store.ts'
@@ -123,6 +124,7 @@ export class RouterGoals {
  context(g:RouterGoal){return this.anchor(g).context}
  forTask(ticketId:string){return this.host.store.list<RouterGoal>('router-goal').find(g=>!terminal.has(g.state)&&g.taskIds?.includes(ticketId))}
  effectsSettled(ticketId:string){
+  if(!repositoryEffectsSettled(this.host.store,ticketId))return false
   const run=this.host.store.get<Run>('run',ticketId)
   return !run||run.phase==='idle'&&!this.host.activity.list().some(a=>a.ticketId===ticketId&&a.state==='running')&&!this.host.work.list(ticketId).some(w=>['starting','running'].includes(w.state))&&!this.host.toolConnections.receipts(ticketId).some(r=>r.state!=='complete')&&!this.host.store.deliveries().some(d=>d.ticketId===ticketId&&!['sent','dropped'].includes(d.status))
  }

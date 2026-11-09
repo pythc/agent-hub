@@ -44,6 +44,29 @@ it('intercepts a false ready report, repairs the same task, and publishes only i
  expect(f.rounds().filter(r=>r.state==='passed')).toHaveLength(2)
  const verifier=f.calls.filter(r=>JSON.parse(r.input).kind==='goal_verification');expect(verifier).toHaveLength(1);expect(verifier[0]!.threadId).toBeUndefined();expect(verifier[0]!.tools!.map(t=>t.name)).toEqual(['goal_evidence'])
 })
+it('exposes scoped host publication receipts to independent acceptance without trusting tool completion or another task',async()=>{
+ const seen:any[]=[]
+ const f=fixture(r=>{
+  const id=r.activity!.ticketId!;writeFileSync(join(r.cwd,'result.json'),'{"total":42}')
+  f.h.store.put('pr-delivery',id+':superagent/owned',{phase:'draft',ticketId:id,sourceId:'local',repository:'owner/repo',number:7,url:'https://github.com/owner/repo/pull/7',sha:'a'.repeat(40),draft:true,confirmedAt:42,secret:'must never be exposed'})
+  f.h.store.put('pr-delivery','other:superagent/foreign',{phase:'draft',number:999})
+  return ready()
+ },async(r,input)=>{
+  for(const e of input.evidence){const value:any=await r.onTool!('goal_evidence',{id:e.id},e.id);if(e.kind==='execution'){const envelope=JSON.parse(value.contentItems[0].text);seen.push(JSON.parse(envelope.content))}}
+  return {checks:input.criteria.map((cr:any)=>({criterionId:cr.id,verdict:'passed',explanation:'Read the provider receipt retained by the host',evidenceIds:input.evidence.filter((e:any)=>cr.id==='__goal__'||e.criterionIds.includes(cr.id)).map((e:any)=>e.id)}))}
+ })
+ f.start();await until(f,()=>f.goal().state==='completed')
+ expect(seen.length).toBeGreaterThan(0);expect(JSON.stringify(seen)).not.toContain('must never be exposed');expect(JSON.stringify(seen)).not.toContain('999')
+ expect(seen[0].repositoryPublications).toEqual([expect.objectContaining({phase:'draft',number:7,head:'a'.repeat(40),draft:true,confirmedAt:42})])
+})
+it('does not verify or automatically repair unknown repository effects, even after the run becomes idle',()=>{
+ const f=fixture(),id='retained-task';f.h.store.put('run',id,{phase:'idle'})
+ f.h.store.put('pr-delivery','other:branch',{phase:'uncertain'});expect(f.h.goals.effectsSettled(id)).toBe(true)
+ for(const phase of ['pushing','creating','uncertain']){f.h.store.put('pr-delivery',id+':branch',{phase});expect(f.h.goals.effectsSettled(id)).toBe(false)}
+ f.h.store.put('pr-delivery',id+':branch',{phase:'draft'});expect(f.h.goals.effectsSettled(id)).toBe(true)
+ f.h.store.put('merge-grant','repo:1',{ticketId:id});f.h.store.put('merge-attempt','repo:1',{id:'repo:1',phase:'uncertain'});expect(f.h.goals.effectsSettled(id)).toBe(false)
+ f.h.store.put('merge-attempt','repo:1',{id:'repo:1',phase:'merged'});f.h.store.put('review-action','review',{ticketId:id,phase:'pending'});expect(f.h.goals.effectsSettled(id)).toBe(false)
+})
 it('recovers a failed acceptance and automatic repair across a runtime restart without duplicate effects',async()=>{
  const f=fixture((r,n)=>{writeFileSync(join(r.cwd,'result.json'),JSON.stringify({total:n===1?0:42}));return ready()});f.start()
  await until(f,()=>f.rounds().some(r=>r.state==='failed'));const ticket=f.h.store.tickets.list()[0]!.id

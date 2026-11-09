@@ -33,7 +33,7 @@ export async function pluginCommand(args:string[]){
     if(!config.sources.some(s=>s.kind===pkg.manifest.kind))throw Error('Configure a source connection of this package kind first')
     const previous=config.sourcePlugins.filter(p=>'directory'in p&&readPluginPackage(p.directory,p.digest).manifest.kind===pkg.manifest.kind)
     config.sourcePlugins=config.sourcePlugins.filter(p=>!previous.includes(p))
-    config.sourcePlugins.push({directory:pkg.directory,digest:pkg.digest,replaceBuiltin:['local','webhook','github','wecom','feishu'].includes(pkg.manifest.kind),readPaths:previous.flatMap(p=>'directory'in p?p.readPaths:[])})
+    config.sourcePlugins.push({directory:pkg.directory,digest:pkg.digest,replaceBuiltin:new SourceRegistry().catalog().some(p=>p.kind===pkg.manifest.kind),readPaths:previous.flatMap(p=>'directory'in p?p.readPaths:[])})
     const temp=join(dirname(resolve(output)),'.plugin-config-'+randomUUID())
     try{writeFileSync(temp,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});renameSync(temp,resolve(output))}catch(error){throw error}
     return {staged:resolve(output),plugin:pkg.manifest.id,version:pkg.manifest.version,digest:pkg.digest,activation:'controlled_restart_required',rollback:'Stage the previous immutable package digest against the latest configuration; never restore task state.'}

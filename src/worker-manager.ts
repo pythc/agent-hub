@@ -3,6 +3,7 @@ import {taskView,allowNewTaskInputs,type TaskContinuation} from './task-context.
 import type {ScopeContext} from './router-scope.ts'
 import type {ContextManifest} from './router-memory.ts'
 import type {Runtime} from './runtime.ts'
+import {canContinueRepositoryTask} from './repository-source.ts'
 import {workerProfiles} from './worker-pool.ts'
 import {workerProfileSchema} from './backend-config.ts'
 import type {Run} from './store.ts'
@@ -17,6 +18,19 @@ interface Delegation {ticketId:string;workerId:string;discussion:string;source:s
 export class WorkerManager {
  private inFlight=new Set<string>()
  constructor(private host:Runtime){}
+ /** Observe the original native thread without granting the Worker a public
+  * reply channel or making task completion depend on an Issue being closed. */
+ restoreSubscriptions(){
+  for(const original of this.host.store.list<Delegation>('worker-assignment')){
+   const owner=this.host.taskAuthority(original.ticketId),ticket=this.host.store.tickets.get(original.ticketId)
+   if(owner?.mode!=='host'||!owner.parentTrigger||!ticket||ticket.ended)continue
+   try{
+    this.host.routerIngress.authority(owner.parentTrigger,owner.discussion)
+    const trigger=this.host.store.triggers.get(owner.parentTrigger)!,source=this.host.sources.get(owner.source)
+    for(const ref of trigger.threads)if(ref.source===owner.source&&(!source?.validThread||source.validThread(ref.id)))this.host.engine.followForContext(ticket.id,ref)
+   }catch{/* Revoked or held tasks must not acquire subscriptions during recovery. */}
+  }
+ }
  private runs(id:string){return this.host.store.list<Run>('run').filter(r=>r.workerId===id)}
  private tasks(id:string){return this.host.store.list<Delegation>('worker-assignment').filter(a=>a.workerId===id&& !this.host.store.tickets.get(a.ticketId)?.ended)}
  private active(id:string){return this.runs(id).filter(r=>['starting','running','background','human','delivering','merging'].includes(r.phase))}
@@ -37,6 +51,8 @@ export class WorkerManager {
  async call(value:unknown,context?:RouterContext):Promise<any>{
   const input=workerCommandSchema.parse(value),host=this.host
   const mandate=context?.trigger?host.routerIngress.authority(context.trigger.id,context.discussion):undefined
+  const continuation=context?.trigger&&host.routerIngress.get(context.trigger.id)?.assessment
+  if(continuation?.action==='attach'&&(input.action==='assign'||input.action==='send'&&input.ticketId!==continuation.targetTicketId))throw Error('The admitted continuation must use its existing target task')
   if(mandate?.strength==='inferred'&&!['list','inspect','result','assign','send'].includes(input.action))throw Error('Inferred work cannot change Worker configuration or stop tasks')
   if(input.action==='list')return this.list(context)
   if(input.action==='inspect'||input.action==='result'){
@@ -95,16 +111,21 @@ export class WorkerManager {
    if(!decision.ticketId)throw Error('Delegation was not accepted')
    const assignment:Delegation={ticketId:decision.ticketId,workerId:worker.id,discussion,source:source.id,actor,parentTrigger:context?.trigger?.id,mode:context?.trigger?'host':'client'}
    host.store.put('worker-assignment',decision.ticketId,assignment)
+   if(context?.trigger)for(const ref of origin.threads)if(ref.source===source.id)host.engine.followForContext(decision.ticketId,ref)
    if(context?.scoped){const owner=host.scopes.own(decision.ticketId,context.scoped,worker.backend);if(context.manifest)host.store.put('task-context',decision.ticketId,{manifest:{...context.manifest,taskOwners:[...context.manifest.taskOwners,{id:decision.ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}]}})}
    return complete({...assignment,status:'queued',revision:host.settings.current().revision})
   })
   if(input.action==='send')return host.store.atomic(()=>{
    if(!input.ticketId||!input.text)throw Error('Task and text required')
-   const a=host.store.get<Delegation>('worker-assignment',input.ticketId);if(!a)throw Error('Unknown delegated task');this.checkContext(a,context,true)
+   const a=host.store.get<Delegation>('worker-assignment',input.ticketId);if(!a)throw Error('Unknown delegated task')
+   const repositoryEvent=!!context?.scoped&&!!context.trigger&&!context.trigger.human&&continuation?.action==='attach'&&continuation.targetTicketId===input.ticketId&&canContinueRepositoryTask(host,context.trigger,input.ticketId)
+   this.checkContext(a,context,!repositoryEvent)
+   if(repositoryEvent)host.scopes.checkTaskEntry(host.scopes.ownership(input.ticketId)!,context!.scoped!.route.entryId,'request')
    const ticket=host.store.tickets.get(input.ticketId)!,origin=host.store.triggers.get(ticket.origin.triggerId)!,previousInputs=ticket.inputs.map(i=>i.id)
    if(context?.scoped){
     if(host.store.deliveries().some(d=>d.ticketId===input.ticketId&&!['sent','dropped'].includes(d.status)))throw Error('Reconcile pending task deliveries before changing the reply entry')
-    host.scopes.noteInput(input.ticketId,context.scoped);host.memory.moveTaskContext(input.ticketId,context.scoped)
+    // CI is evidence for the original task, not a new author or reply owner.
+    if(!repositoryEvent){host.scopes.noteInput(input.ticketId,context.scoped);host.memory.moveTaskContext(input.ticketId,context.scoped)}
     if(context.manifest){
      const owner=host.scopes.ownership(input.ticketId)!;context.manifest.taskOwners=[...context.manifest.taskOwners.filter(t=>t.id!==input.ticketId),{id:input.ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}]
      const saved=host.store.get<{manifest:ContextManifest}>('task-context',input.ticketId)

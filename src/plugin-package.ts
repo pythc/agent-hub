@@ -12,7 +12,10 @@ export const pluginManifestSchema=z.object({
   codeSha256:z.string().regex(/^[a-f0-9]{64}$/),
   configSchema:z.record(z.string(),z.unknown()),
   scopesPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),
-  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke'])),
+  methods:z.array(z.enum(['poll','start','close','identity','members','read','context','deliver','probe','invoke','repositoryPull','mergeSnapshot','reviewGraph','resolveReview','draft','mergeIdentity','merge'])),
+  threadSeparator:z.enum([':','#']).optional(),
+  observedPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/).optional(),
+  repository:z.object({idPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),remoteTemplates:z.array(z.string().min(1).max(500).refine(s=>s.split('{repository}').length===2&&!/[\r\n]/.test(s),'One repository placeholder is required')).min(1).max(10),pushCredentialPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/),pushUsername:z.string().regex(/^[a-zA-Z0-9_-]+$/).max(100)}).strict().optional(),
   commandPath:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/).optional(),
   cursorEncoding:z.enum(['iso','unix-seconds']).default('iso'),
   cursorMode:z.enum(['scope','source','none']).default('none'),
@@ -39,7 +42,7 @@ export function installPluginPackage(directory:string,stateDir:string,expectedDi
 export function activatePluginPackages(store:Store,config:Config,packages:PluginPackage[],previous?:Config){
   store.atomic(()=>{
     for(const old of store.list<any>('plugin-installation'))if(!config.sources.some(s=>s.id===old.sourceId))throw Error('Installed plugin source must be disabled, not silently removed')
-    const unfinished=()=>store.tickets.open().length>0||store.list<any>('router-goal').some(g=>!['completed','cancelled'].includes(g.state))||store.deliveries().some(d=>['pending','sending','uncertain','held'].includes(d.status))||store.list<any>('tool-receipt').some(r=>['running','uncertain'].includes(r.state))||store.db.prepare("SELECT 1 FROM jobs WHERE state IN ('pending','running') LIMIT 1").get()
+    const unfinished=()=>store.tickets.open().length>0||store.list<any>('router-goal').some(g=>!['completed','cancelled'].includes(g.state))||store.deliveries().some(d=>['pending','sending','uncertain','held'].includes(d.status))||store.list<any>('tool-receipt').some(r=>['running','uncertain'].includes(r.state))||store.list<any>('pr-delivery').some(r=>['pushing','creating','uncertain'].includes(r.phase))||store.list<any>('merge-attempt').some(r=>['submitting','uncertain'].includes(r.phase))||store.list<any>('review-action').some(r=>r.phase==='pending')||store.db.prepare("SELECT 1 FROM jobs WHERE state IN ('pending','running') LIMIT 1").get()
     for(const source of config.sources){
       const pkg=packages.find(p=>p.manifest.kind===source.kind),old=store.get<any>('plugin-installation',source.id)
       if(!pkg){if(old)throw Error('Installed plugin source cannot silently revert to a legacy adapter');continue}

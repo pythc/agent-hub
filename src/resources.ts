@@ -239,7 +239,13 @@ export class Resources {
  private sourcePermission(t:Ticket,source:string,resource:string){
   if(t.mandate.actor.source!==source&&!t.follows?.some(f=>f.thread.startsWith(source+':')))throw Error('Source is outside this worker')
   const adapter=this.host.sources.get(source)
-  if(adapter){this.host.sourceRegistry.authorizeRead(adapter.config,t,resource);adapter.authorizeRead?.(t,resource)}
+  if(adapter){
+   // A delegated task may read its admitted native conversation. This is a
+   // transient read projection, never a public Worker reply capability.
+   const owner=this.host.taskAuthority(t.id),parent=owner?.parentTrigger?this.host.store.triggers.get(owner.parentTrigger):undefined
+   if(owner?.mode==='host'&&parent?.source===source&&parent.channel){this.host.routerIngress.authority(parent.id,owner.discussion);t={...t,channels:[...t.channels,parent.channel]}}
+   this.host.sourceRegistry.authorizeRead(adapter.config,t,resource);adapter.authorizeRead?.(t,resource)
+  }
  }
 }
 export function imageResource(data:Buffer):ImageResource{

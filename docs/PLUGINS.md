@@ -1,8 +1,8 @@
 # Source plugins v2
 
-AgentHub now loads operator-installed source packages without adding source-kind branches to the core. Feishu, Slack and [Linear](LINEAR_PLUGIN.md) are reference packages; `examples/plugins/checkpoint-source.ts` is a third-party-shaped example used by the real-model acceptance run. This is a local developer interface, not a hosted marketplace or a signed publisher registry.
+AgentHub now loads operator-installed source packages without adding source-kind branches to the core. Feishu, Slack, [Linear](LINEAR_PLUGIN.md) and [GitHub](GITHUB_PLUGIN.md) are reference packages; `examples/plugins/checkpoint-source.ts` is a third-party-shaped example used by the real-model acceptance run. This is a local developer interface, not a hosted marketplace or a signed publisher registry.
 
-The Router retains task authority, goals, dependencies, re-planning, acceptance and reply ownership. Plugins transport verified messages, read authorized resources and deliver host outbox messages. They cannot directly create/complete tasks or change authorization and acceptance criteria. Native Worker tools are resource reads through existing reached-trigger, assignment and scope checks; writes remain Router-owned outbox actions.
+The Router retains task authority, goals, dependencies, re-planning, acceptance and reply ownership. Plugins transport verified messages, read authorized resources and deliver host outbox messages. They cannot directly create/complete tasks or change authorization and acceptance criteria. Native plugin tools are resource reads through existing reached-trigger, assignment and scope checks. Repository packages can additionally implement host-controlled draft publication, review resolution and exact-head merge methods; these are not arbitrary native Worker write tools.
 
 ## Package and connection
 
@@ -108,7 +108,7 @@ Outbound transport failure is `uncertain`, not success. Slack `client_msg_id` ai
    ```
 
    Staging installs bytes and writes a new private config. It does not restart the live host. Existing explicit `readPaths` are retained. Built-in replacement, including packaged Feishu, is explicit in configuration.
-3. Drain the host before activating a different digest: no open tasks, unfinished goals, pending/running jobs, pending/sending/held/uncertain deliveries or running/uncertain tool effects. This is intentionally a whole-host gate because tasks can depend on another connection's tools. A paused/held long task is still unfinished.
+3. Drain the host before activating a different digest: no open tasks, unfinished goals, pending/running jobs, pending/sending/held/uncertain deliveries or running/uncertain tool effects. Pending/uncertain repository publication, merge and review-resolution records also block changes. This is intentionally a whole-host gate because tasks can depend on another connection's tools. A paused/held long task is still unfinished.
 4. Stop and restart with the staged config through the normal deployment procedure. Settings and package activation are transactional; a refused activation leaves their previous durable revision intact.
 5. To roll back code, stage the prior reviewed digest against the latest config and restart again. Keep the current database, goal contracts, task IDs, acceptance evidence, authorization and effect receipts. **Do not restore an old task database to roll back plugin code.**
 

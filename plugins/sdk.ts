@@ -7,7 +7,8 @@ export type PluginStore=Pick<import('../src/store.ts').Store,'get'|'list'|'put'>
 export type SourceContext=Omit<import('../src/sources.ts').SourceContext,'store'> & {store:PluginStore}
 export type {Trigger,OutboundMessage} from '../src/vendor/dsh-core/index.ts'
 export type {PluginManifest} from '../src/plugin-package.ts'
-export interface PluginDefinition {create(config:import('../src/config.ts').SourceConfig):import('../src/sources.ts').Source}
+export type {RepositoryAccess,RepositoryMethods,RepositoryUpdate} from '../src/repository-source.ts'
+export interface PluginDefinition {create(config:import('../src/config.ts').SourceConfig,context?:SourceContext&{beforeRepositoryWrite():Promise<void>}):import('../src/sources.ts').Source}
 
 export {records,record,recordPages} from './records.ts'
 export type {RecordQuery,RecordPage} from '../src/sources.ts'
