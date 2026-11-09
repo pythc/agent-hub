@@ -94,3 +94,29 @@ it('binds native output to the acknowledged turn even when notifications share i
  expect(events.filter(e=>e.type==='delta').map(e=>e.text).join('')).toBe('correct')
  expect(JSON.stringify(events)).not.toContain('stale')
 })
+
+it('deduplicates native step identity across repeated snapshots and excludes other threads and stale turns',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-usage-'));roots.push(root);const binary=join(root,'codex'),usage:any[]=[]
+ const last={inputTokens:100,cachedInputTokens:80,cacheWriteInputTokens:0,outputTokens:10,reasoningOutputTokens:2,totalTokens:110}
+ writeFileSync(binary,'#!'+process.execPath+`\nconst send=x=>console.log(JSON.stringify(x));require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.id)return;if(m.method!=='turn/start')return send({id:m.id,result:m.method==='thread/resume'?{thread:{id:'native'}}:{}});const last=${JSON.stringify(last)},total={...last,inputTokens:1100,totalTokens:1110},event=(threadId,turnId)=>({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{last,total}}});send(event('native','turn'));send({id:m.id,result:{turn:{id:'turn'}}});send(event('native','turn'));send(event('foreign','turn'));send(event('native','stale'));send({method:'item/completed',params:{threadId:'native',turnId:'turn',item:{type:'agentMessage',text:'done'}}});send({method:'turn/completed',params:{threadId:'native',turn:{id:'turn',status:'completed'}}})})\n`,{mode:0o700})
+ const model=new CodexModel({codex:binary,effort:'medium',turnTimeoutMs:5000})
+ await model.run({cwd:root,threadId:'native',instructions:'test',input:'test',schema:{},onUsage:u=>usage.push(u)})
+ expect(usage).toHaveLength(2);expect(usage[0]).toEqual(usage[1]);expect(usage[0]).toMatchObject(last)
+})
+
+it('accounts owned early raw items once across disk lag, excluding foreign threads and stale turns',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-budget-owned-'));roots.push(root);const binary=join(root,'codex'),path=join(root,'history.jsonl'),receipts:any[]=[]
+ writeFileSync(path,JSON.stringify({type:'session_meta',payload:{base_instructions:'base',dynamic_tools:[]}})+'\n')
+ writeFileSync(binary,'#!'+process.execPath+`\nconst fs=require('node:fs'),send=x=>console.log(JSON.stringify(x)),file=${JSON.stringify(path)};require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.id)return;if(m.method!=='turn/start')return send({id:m.id,result:m.method==='thread/start'?{thread:{id:'owned',path:file}}:{}});const user={type:'message',id:'user',role:'user',content:[{type:'input_text',text:m.params.input[0].text}]},answer={type:'message',id:'answer',role:'assistant',content:[{type:'output_text',text:'done'}]},raw=(threadId,turnId,item)=>send({method:'rawResponseItem/completed',params:{threadId,turnId,item}});raw('other','current',{...answer,id:'foreign',content:[{text:'x'.repeat(20000)}]});raw('owned','stale',{...answer,id:'stale',content:[{text:'x'.repeat(20000)}]});raw('owned','current',user);send({id:m.id,result:{turn:{id:'current'}}});raw('owned','current',answer);for(const item of [user,answer])fs.appendFileSync(file,JSON.stringify({type:'response_item',payload:item})+'\\n');raw('owned','current',answer);send({method:'item/completed',params:{threadId:'owned',turnId:'current',item:{type:'agentMessage',text:'done'}}});send({method:'turn/completed',params:{threadId:'owned',turn:{id:'current',status:'completed'}}})})\n`,{mode:0o700})
+ const model=new CodexModel({codex:binary,effort:'medium',turnTimeoutMs:5000})
+ await expect(model.run({cwd:root,instructions:'mandate',input:'payload'.repeat(300),schema:{},contextBudget:scopeBudget(4096),onBudget:r=>receipts.push(r)})).resolves.toMatchObject({text:'done'})
+ const raw=receipts.filter(r=>r.phase==='native_item');expect(raw).toHaveLength(3);expect(raw[1].bytes).toBe(raw[2].bytes);expect(receipts.every(r=>r.status==='within_budget')).toBe(true)
+})
+
+it('interrupts at the real native protocol limit before executing a subsequent tool',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-budget-stop-'));roots.push(root);const binary=join(root,'codex');let effects=0
+ writeFileSync(binary,'#!'+process.execPath+`\nconst send=x=>console.log(JSON.stringify(x));require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id===999||m.method==='turn/interrupt'){if(m.method)send({id:m.id,result:{}});send({method:'turn/completed',params:{threadId:'owned',turn:{id:'turn',status:'interrupted'}}});return}if(!m.id)return;send({id:m.id,result:m.method==='thread/start'?{thread:{id:'owned'}}:m.method==='turn/start'?{turn:{id:'turn'}}:{}});if(m.method==='turn/start'){send({method:'rawResponseItem/completed',params:{threadId:'owned',turnId:'turn',item:{type:'message',id:'large',role:'assistant',content:[{text:'x'.repeat(10000)}]}}});send({id:999,method:'item/tool/call',params:{threadId:'owned',turnId:'turn',tool:'effect',arguments:{},callId:'effect-call'}})}})\n`,{mode:0o700})
+ const model=new CodexModel({codex:binary,effort:'medium',turnTimeoutMs:5000})
+ await expect(model.run({cwd:root,instructions:'mandate',input:'request',schema:{},contextBudget:scopeBudget(4096),onTool:async()=>{effects++;return {success:true,contentItems:[]}}})).rejects.toThrow('Context budget exceeded at native_item')
+ expect(effects).toBe(0)
+})

@@ -1,0 +1,128 @@
+"""Read-only stage, native response-gap and cold-input analysis of isolated trials."""
+import argparse
+import collections
+import datetime
+import json
+import sqlite3
+import re
+from pathlib import Path
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('root', type=Path)
+parser.add_argument('--native-index', type=Path, required=True)
+parser.add_argument('--native-log-index', type=Path, help='Optional native logs SQLite; read-only, owned thread/time only; no message bodies exported')
+args = parser.parse_args()
+root = args.root.resolve()
+db = sqlite3.connect(args.native_index.resolve().as_uri()+'?mode=ro', uri=True)
+logs = sqlite3.connect(args.native_log_index.resolve().as_uri()+'?mode=ro', uri=True) if args.native_log_index else None
+
+
+def milliseconds(timestamp):
+    return datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00')).timestamp()*1000
+
+
+def native_calls(call):
+    if not call.get('threadId') or not call.get('endedAt'):
+        return {'steps': [], 'toolRoundTripMs': [], 'largestResponseGaps': [], 'nativeRetries': None, 'coverage': 'unavailable'}
+    row = db.execute('SELECT rollout_path FROM threads WHERE id=?', (call['threadId'],)).fetchone()
+    if not row:
+        raise ValueError('Owned native thread missing')
+    result, responses, pending, tools, seen = [], [], {}, [], set()
+    for line in Path(row[0]).read_text().splitlines():
+        event = json.loads(line)
+        at, payload = milliseconds(event['timestamp']), event.get('payload', {})
+        if not call['startedAt'] <= at <= call['endedAt']:
+            continue
+        if event['type'] == 'token_usage_record':
+            key = payload['response_id']
+            if key not in seen:
+                seen.add(key)
+                usage = payload['usage']
+                result.append({'at': at, **{k: usage.get(k, 0) for k in
+                    ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens']}})
+        elif event['type'] == 'response_item':
+            kind = payload.get('type', '')
+            if kind in ['custom_tool_call', 'function_call', 'reasoning'] or kind == 'message' and payload.get('role') == 'assistant':
+                responses.append((at, kind))
+            if kind in ['custom_tool_call', 'function_call']:
+                pending[payload['call_id']] = at
+            elif kind in ['custom_tool_call_output', 'function_call_output']:
+                responses.append((at, kind))
+                begin = pending.pop(payload['call_id'], None)
+                if begin is not None:
+                    tools.append(at-begin)
+    gaps = [{'ms': b[0]-a[0], 'after': a[1], 'before': b[1]}
+            for a, b in zip(responses, responses[1:]) if b[0]-a[0] >= 1000]
+    retries = None
+    if logs:
+        retries = []
+        rows = logs.execute('SELECT ts,ts_nanos,level,target,feedback_log_body FROM logs WHERE thread_id=? AND ts>=? AND ts<=? ORDER BY ts,ts_nanos',
+                            (call['threadId'],call['startedAt']//1000,call['endedAt']//1000+1))
+        for ts, nanos, level, target, body in rows:
+            at = ts*1000+nanos/1000000
+            if not call['startedAt'] <= at <= call['endedAt']:
+                continue
+            if target.endswith('responses_retry') and re.search(r'\bretry(?:ing)?\b', body or '', re.I):
+                attempt = re.search(r'retrying[^\n]{0,25}?(\d+)\s*/\s*(\d+)',body or '',re.I)
+                backoff = re.search(r'\bin\s+(\d+)\s*ms',body or '',re.I)
+                retries.append({'at': at, 'level': level, 'target': target,
+                                'streamDisconnected': bool(re.search(r'stream disconnected',body or '',re.I)),
+                                'attempt': int(attempt[1]) if attempt else None,
+                                'retryLimit': int(attempt[2]) if attempt else None,
+                                'backoffMs': int(backoff[1]) if backoff else None,
+                                'httpStatusCodes': re.findall(r'(?:status(?: code)?|HTTP)\D{0,6}([45]\d\d)',body or '',re.I)})
+    return {'steps': result, 'toolRoundTripMs': tools, 'nativeRetries': retries, 'coverage': 'complete',
+            'largestResponseGaps': sorted(gaps, key=lambda x: x['ms'], reverse=True)[:3]}
+
+
+runs = {}
+try:
+    for path in sorted(root.glob('??-?/result.json')):
+        result = json.loads(path.read_text())
+        counts, calls = collections.Counter(), []
+        native_total = 0
+        for index, call in enumerate(result['calls']):
+            base = call.get('kind') or 'worker:'+str(call.get('workerId'))
+            counts[base] += 1
+            native = native_calls(call)
+            steps = native['steps']
+            native_total += sum(s['total_tokens'] for s in steps)
+            calls.append({'index': index, 'stage': base+':'+str(counts[base]),
+                          'startMs': call['startedAt']-result['startedAt'],
+                          'wallMs': call.get('endedAt',result['endedAt'])-call['startedAt'],
+                          'hostCallComplete': bool(call.get('endedAt')),
+                          'inputBytes': call['inputBytes'], 'hostTools': len(call['tools']),
+                          'inputTokens': sum(s['input_tokens'] for s in steps),
+                          'cachedInputTokens': sum(s['cached_input_tokens'] for s in steps),
+                          'uncachedInputTokens': sum(s['input_tokens']-s['cached_input_tokens'] for s in steps),
+                          'firstStepUncachedInput': steps[0]['input_tokens']-steps[0]['cached_input_tokens'] if steps else None,
+                          'firstStepMs': steps[0]['at']-call['startedAt'] if steps else None,
+                          'hostToolMs': sum(t['endedAt']-t['startedAt'] for t in call.get('toolTimings', [])) if 'toolTimings' in call else None,
+                          'native': native})
+        if native_total != result['usage']['tokens']['totalTokens']:
+            raise ValueError(path.parent.name+': native provider-step attribution differs from ledger')
+        runs[path.parent.name] = {'ok': result['ok'], 'wallMs': result['wallMs'], 'calls': calls, 'nativeParity': True,
+                                 'usageCoverage': 'complete' if all(c['native']['coverage']=='complete' for c in calls) else 'partial'}
+finally:
+    db.close()
+    if logs:
+        logs.close()
+
+comparison = json.loads((root/'comparison.json').read_text())
+by_role = {}
+for side in ['baseline', 'optimized']:
+    totals = collections.defaultdict(collections.Counter)
+    for pair in comparison['pairs']:
+        if not pair['bothAccepted']:
+            continue
+        result = json.loads((root/pair[side]/'result.json').read_text())
+        for group in result['usage']['groups']:
+            usage = group['tokens']
+            totals[group['purpose']].update(input=usage['inputTokens'], cached=usage['cachedInputTokens'],
+                uncached=usage['inputTokens']-usage['cachedInputTokens'], output=usage['outputTokens'])
+    by_role[side] = {key: dict(value) for key, value in totals.items()}
+
+output = {'method': 'Owned native provider-step records within each host call; exact reported total reconciled. Optional owned thread/time retry logs distinguish a recorded retry from an unexplained response gap; inner server cause and unreported failed-request usage remain unknown. Overlapping call durations are not added as end-to-end time.',
+          'runs': runs, 'matchedAcceptedPurposeTokens': by_role}
+(root/'performance-profile.json').write_text(json.dumps(output, ensure_ascii=False, indent=2)+'\n')
+print(json.dumps({'runs': len(runs), 'nativeParity': all(r['nativeParity'] for r in runs.values()), 'matchedAcceptedPurposeTokens': by_role}, ensure_ascii=False, indent=2))

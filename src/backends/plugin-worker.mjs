@@ -16,7 +16,7 @@ function request(raw){
  const {callbacks=[],...input}=raw
  controller=new AbortController()
  const r={...input,signal:controller.signal}
- const events={onThread:'thread',onTurn:'turn',onModel:'model',onConfiguration:'configuration',onCapabilities:'capabilities',onProgress:'progress',onOutput:'output',onBudget:'budget',onContextReady:'contextReady'}
+ const events={onThread:'thread',onTurn:'turn',onModel:'model',onConfiguration:'configuration',onCapabilities:'capabilities',onProgress:'progress',onOutput:'output',onBudget:'budget',onContextReady:'contextReady',onUsage:'usage'}
  for(const [key,name] of Object.entries(events))if(callbacks.includes(key))r[key]=value=>event(name,value)
  r.onActive=value=>{control=value;event('active',{steering:typeof value.steer==='function',refresh:typeof value.refresh==='function'})}
  if(callbacks.includes('onTool'))r.onTool=(name,args,callId)=>ask('tool',{name,args,callId})

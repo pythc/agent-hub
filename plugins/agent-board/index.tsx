@@ -1,3 +1,4 @@
+import {TeamUsage} from './usage.tsx'
 import {useEffect,useRef,useState,type CSSProperties} from 'react'
 import {createRoot} from 'react-dom/client'
 import {Network,Cpu,RefreshCw,ArrowUpRight,ChevronRight,X,Inbox,Search,Radio,Layers,GitBranch,Sparkles,Check,Clock3,Activity,ShieldCheck} from 'lucide-react'
@@ -70,7 +71,7 @@ function Board(){
       </>:tab==='tasks'?<>
         {renderTasks({items:data.tasks.items})}<div className="pagination"><span>{data.tasks.total?`${data.tasks.offset+1}–${Math.min(data.tasks.offset+data.tasks.limit,data.tasks.total)} / ${data.tasks.total}`:L('No matching tasks','没有匹配的任务')}</span><div className="pagination-actions"><button className="text-button" disabled={!data.tasks.offset||connection==='loading'} onClick={()=>update({offset:Math.max(0,data.tasks.offset-data.tasks.limit)})}>{L('Previous','上一页')}</button><button className="text-button" disabled={!data.tasks.more||connection==='loading'} onClick={()=>update({offset:data.tasks.offset+data.tasks.limit})}>{L('Next','下一页')}</button></div></div>
       </>:<>
-        <div className="listening-layout"><section><h2>{L('Recent message handling','近期消息处理')}</h2><div className="flow-steps">{[
+        <TeamUsage usage={data.usage} language={language}/><div className="listening-layout"><section><h2>{L('Recent message handling','近期消息处理')}</h2><div className="flow-steps">{[
           {Icon:Radio,n:data.listening.admissions.length,label:L('Messages checked','已检查消息'),note:L(`Up to ${data.listening.limit} recent message checks, including messages waiting for a decision.`,`最近 ${data.listening.limit} 条消息的检查记录，包含等待进一步判断的消息。`)},
           {Icon:Layers,n:data.listening.batches.length,label:L('Message groups','批量检查（组）'),note:L('Up to 50 recent groups of messages collected for a shared decision. This counts groups, not individual messages.','最近 50 组集中判断的消息，按组计数，不是消息条数。')},
           {Icon:GitBranch,n:data.listening.admissions.filter(a=>a.state==='ignored'||a.state==='observed').length,label:L('No action for now','暂不处理'),note:L('Messages skipped or kept under observation within the recent checks.','近期检查中，已略过或继续观察的消息。')},

@@ -1,5 +1,6 @@
 /** Bundle this contract with the adapter. No host store or task-control API is passed to plugins. */
 export type {ModelRequest,ModelResult,Model,NativeControl,ToolSpec,ToolContent} from '../src/model.ts'
+export type {ModelUsage} from '../src/model-usage.ts'
 export type {BackendCapabilities,BackendManifest,BackendErrorCode} from '../src/backends/plugin-contract.ts'
 import type {Model} from '../src/model.ts'
 export interface BackendPlugin {

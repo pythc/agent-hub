@@ -5,7 +5,7 @@ import type {Mandate,Ticket} from './vendor/dsh-core/index.ts'
 import {validateGraph,classifyGoalFailure,type GoalCriterion,type GoalNode} from './goal-contract.ts'
 import {stableDigest} from './sources.ts'
 import {scopeBudget} from './context-budget.ts'
-import {evidenceAccess,type GoalEvidence} from './goal-evidence.ts'
+import {inlineEvidenceBudget,evidenceAccess,type GoalEvidence} from './goal-evidence.ts'
 import {allowNewTaskInputs} from './task-context.ts'
 import {workerProfiles} from './worker-pool.ts'
 import type {ContextManifest} from './router-memory.ts'
@@ -142,12 +142,14 @@ export class GoalReplanning {
   try{
    let g=this.current(r)
    const run=async(mode:'plan'|'review')=>{
-    const access=evidenceAccess(r!.snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{this.current(r!)})
     // Old persisted rounds did not carry this field. Preserve their original
     // snapshot hash while checking a fresh capability view around each call.
     const capabilities=r!.snapshot.workerCapabilities??this.snapshot(g).workerCapabilities!
-    const result=await this.host.runGoalPlanner(g,r!,mode,{input:JSON.stringify({kind:mode==='plan'?'goal_replanning':'goal_plan_review',contract:r!.snapshot.contract,originalRequest:this.host.store.triggers.get(r!.snapshot.contract.triggerId)!.text,planRevision:r!.snapshot.planRevision,replanningPolicy:{samePlanRepairsPerNode:g.maxRepairs??2,successfulReplansUsed:g.replans??0,maxSuccessfulReplans:g.maxReplans??0,stoppedTasksAllowed:false},workerCapabilities:capabilities,nodes:r!.snapshot.nodes,failedNodeIds:r!.snapshot.failureNodeIds,evidence:r!.snapshot.evidence.map(({content,...meta})=>meta),...(mode==='review'?{proposal:r!.proposal}:{})}),schema:mode==='plan'?proposalOutput:reviewOutput,tools:access.tools,onTool:access.onTool})
+    const modelInput={kind:mode==='plan'?'goal_replanning':'goal_plan_review',contract:r!.snapshot.contract,originalRequest:this.host.store.triggers.get(r!.snapshot.contract.triggerId)!.text,planRevision:r!.snapshot.planRevision,replanningPolicy:{samePlanRepairsPerNode:g.maxRepairs??2,successfulReplansUsed:g.replans??0,maxSuccessfulReplans:g.maxReplans??0,stoppedTasksAllowed:false},workerCapabilities:capabilities,nodes:r!.snapshot.nodes,failedNodeIds:r!.snapshot.failureNodeIds,evidence:r!.snapshot.evidence.map(({content,...meta})=>meta),requiredEvidenceIds:r!.snapshot.evidence.map(e=>e.id),...(mode==='review'?{proposal:r!.proposal}:{})}
+    const access=evidenceAccess(r!.snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{this.current(r!)},inlineEvidenceBudget(modelInput,this.host.goalEvidenceBudget(g)))
+    const result=await this.host.runGoalPlanner(g,r!,mode,{input:access.input(modelInput),schema:mode==='plan'?proposalOutput:reviewOutput,tools:access.tools,onTool:access.onTool})
     this.current(r!)
+    access.confirmInline()
     if(!r!.snapshot.workerCapabilities&&stableDigest(this.snapshot(g).workerCapabilities)!==stableDigest(capabilities))throw Error('Worker capabilities changed during legacy plan review')
     save({contextIds:[...new Set([...(r!.contextIds??[]),result.contextId])]})
     return {result,read:access.read}

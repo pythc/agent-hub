@@ -1,3 +1,4 @@
+import {backendDefinition} from '../src/backend-config.ts'
 import {it,expect,afterEach} from 'vitest'
 import {mkdtempSync,writeFileSync,rmSync,symlinkSync,readFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
@@ -27,7 +28,7 @@ function fixture(worker?:(r:ModelRequest,attempt:number)=>any,verify?:(r:ModelRe
   return {threadId,turnId,text:JSON.stringify(output)}
  }}
  const open=()=>{h=new Runtime(config,{model,clock:()=>now});hosts.push(h)};open()
- h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',managers:[JSON.stringify(['local','alice'])],workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
+ h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:[JSON.stringify(['local','alice'])],workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
  h.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'test',history:'group'})
  const input=h.receive('local','alice',{id:'request',thread:'test',scope:'test',text:'Continuously build, verify and repair the requested deliverable. Never deploy.',addressed:true}) as any
  const context=()=>{const t=h.store.triggers.get(input.triggerId)!;return h.scopes.context(t,'local:test')!}
@@ -103,7 +104,7 @@ it('rechecks changed artifacts instead of accepting a verifier result for an old
  expect(f.goal().state).not.toBe('completed');expect(f.h.store.tickets.list()[0]!.ended).toBeUndefined()
 })
 it('rejects a verifier verdict which cites evidence it never read',async()=>{
- const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(_r,input)=>({checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Trust me',evidenceIds:input.evidence.map((e:any)=>e.id)}))}));f.start()
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),JSON.stringify({total:42,padding:'x'.repeat(40000)}));return ready()},async(_r,input)=>{expect(input.inlineEvidence.some((e:any)=>e.id===input.evidence.find((e:any)=>e.kind==='file').id)).toBe(false);return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Trust me',evidenceIds:input.evidence.map((e:any)=>e.id)}))}});f.start()
  await until(f,()=>f.goal().state==='held');expect(f.rounds().some(r=>r.error?.includes('did not inspect'))).toBe(true);expect(f.h.store.list('goal-release')).toHaveLength(0)
 })
 it('holds unresolved work after the configured repair limit',async()=>{
@@ -271,7 +272,7 @@ it('delivers complete Unicode evidence in pages below the native and API tool re
  });f.start({criteria:[{id:'sum',description:'Inspect all Unicode content',files:['result.txt']}]});await until(f,()=>f.goal().state==='completed');expect(pages).toBeGreaterThan(10)
 })
 it('rejects skipped or partial evidence pages without publishing or repeating the Worker',async()=>{
- const f=fixture(r=>{writeFileSync(join(r.cwd,'result.txt'),'large evidence '.repeat(2000));return ready()},async(r,input)=>{
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.txt'),'large evidence '.repeat(4000));return ready()},async(r,input)=>{
   for(const e of input.evidence){const result:any=await r.onTool!('goal_evidence',{id:e.id},e.id),page=JSON.parse(result.contentItems[0].text)
    if(page.nextOffset!==null)await expect(r.onTool!('goal_evidence',{id:e.id,offset:page.totalCharacters},'skip')).rejects.toThrow('without gaps')
   }
@@ -283,7 +284,7 @@ it('rejects skipped or partial evidence pages without publishing or repeating th
 it('retries a truncated overall evidence review without repeating work or changing acceptance',async()=>{
  let tries=0
  const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{
-  for(const e of input.evidence){let offset:number|null=0;do{const result:any=await r.onTool!('goal_evidence',{id:e.id,offset},e.id+':'+offset);offset=JSON.parse(result.contentItems[0].text).nextOffset}while(offset!==null)}
+  for(const e of input.evidence){let offset:number|null=0;do{const result:any=await r.onTool!('goal_evidence',{id:e.id,offset},e.id+':'+offset);offset=JSON.parse(result.contentItems[0]!.text!).nextOffset}while(offset!==null)}
   const truncated=++tries===1
   return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:truncated?'insufficient':'passed',explanation:truncated?'Combined evidence output was truncated':'Inspected complete evidence',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
  })
@@ -309,11 +310,11 @@ it('retains insufficient verification after bounded retries instead of releasing
 
 it('retries an incomplete evidence read before repairing or replanning the work',async()=>{
  let tries=0
- const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'full evidence');return ready()},async(r,input)=>{
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'full evidence '.repeat(3000));return ready()},async(r,input)=>{
   tries++
-  const evidence=input.evidence.filter((e:any)=>tries!==1||e.kind!=='execution')
-  for(const e of evidence)await r.onTool!('goal_evidence',{id:e.id},e.id)
-  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:tries===1?'insufficient':'passed',explanation:tries===1?'Execution records were not inspected':'All evidence inspected',evidenceIds:evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+  const evidence=input.evidence.filter((e:any)=>tries!==1||e.kind!=='file')
+  for(const e of evidence){let offset:number|null=0;do{const result=await r.onTool!('goal_evidence',{id:e.id,offset},e.id+':'+offset);offset=JSON.parse(result.contentItems[0]!.text!).nextOffset}while(offset!==null)}
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:tries===1?'insufficient':'passed',explanation:tries===1?'Fallback file was not inspected':'All evidence inspected',evidenceIds:evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
  })
  const original=f.start({maxRepairs:0,criteria:[{id:'sum',description:'Inspect the artifact and execution',files:['result.json']}]})
  await until(f,()=>f.goal().state==='completed')
@@ -349,7 +350,7 @@ it('resumes an interrupted read-only verification after restart without spending
  const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{
   tries++
   if(tries===2){interrupted=true;await new Promise<void>((_resolve,reject)=>r.signal!.addEventListener('abort',()=>reject(Error('Host stopped')),{once:true}))}
-  for(const e of input.evidence){let offset:number|null=0;do{const result:any=await r.onTool!('goal_evidence',{id:e.id,offset},e.id+':'+offset);offset=JSON.parse(result.contentItems[0].text).nextOffset}while(offset!==null)}
+  for(const e of input.evidence){let offset:number|null=0;do{const result:any=await r.onTool!('goal_evidence',{id:e.id,offset},e.id+':'+offset);offset=JSON.parse(result.contentItems[0]!.text!).nextOffset}while(offset!==null)}
   return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:tries===1?'insufficient':'passed',explanation:tries===1?'Combined evidence output was truncated':'Inspected every page',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
  })
  f.start();await until(f,()=>interrupted)
@@ -357,4 +358,26 @@ it('resumes an interrupted read-only verification after restart without spending
  await f.restart();await until(f,()=>f.goal().state==='completed')
  expect(tries).toBe(3);expect(f.rounds().find(r=>!r.nodeId)?.attempts).toBe(2)
  expect(f.h.store.list('goal-verification-attempt')).toHaveLength(1);expect([...f.attempts.values()]).toEqual([1]);expect(f.h.store.list('goal-release')).toHaveLength(1)
+})
+
+
+it('accepts a complete inline original without redundant page calls and still requires exact evidence citations',async()=>{
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(_r,input)=>{
+  expect(input.inlineEvidence.find((e:any)=>e.id===input.evidence.find((e:any)=>e.kind==='file').id).content).toBe('{"total":42}')
+  expect(input.inlineEvidence.length).toBe(input.evidence.length)
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Inspected the full original snapshots in the input',evidenceIds:input.evidence.filter((e:any)=>c.id==='__goal__'||e.criterionIds.includes(c.id)).map((e:any)=>e.id)}))}
+ })
+ const original=f.start();await until(f,()=>f.goal().state==='completed')
+ expect(f.goal().contract).toEqual(original.contract);expect(f.calls.filter(r=>JSON.parse(r.input).kind==='goal_verification')).toHaveLength(1)
+ expect(f.h.activity.list().filter(c=>c.name==='goal_evidence')).toHaveLength(0)
+})
+
+
+it('limits inline evidence by the selected API backend wire budget as well as its scope',()=>{
+ const f=fixture(),goal=f.start()
+ f.h.config.backends.small=backendDefinition.parse({kind:'openai-responses',baseUrl:'http://127.0.0.1:9/v1',model:'fixture',maxContextBytes:32768})
+ f.h.config.execution.router!.backend='small'
+ expect(f.h.goalEvidenceBudget(goal)).toBe(32768)
+ f.h.config.execution.router!.backend='codex'
+ expect(f.h.goalEvidenceBudget(goal)).toBe(128000)
 })

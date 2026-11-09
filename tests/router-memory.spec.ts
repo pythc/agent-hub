@@ -262,7 +262,9 @@ it('C01/C02 session keys isolate audiences and expire on revocation',()=>{
  expect(f.memory.build(f.context(),{request:'budget'},'api').manifest.sessionKey).not.toBe(a.manifest.sessionKey)
 })
 it('C05 enforces byte budgets without truncating the required request',()=>{
- const f=fixture();expect(()=>f.memory.build(f.context(),{request:'字'.repeat(100000)},'api')).toThrow('budget')
+ const f=fixture(),{routerId,revision,epoch,...scope}=f.scopes.scope('p1')
+ f.scopes.command({action:'scope.put',operationId:'small-budget',expectedRevision:revision,scope:{...scope,contextBytes:256000}})
+ expect(()=>f.memory.build(f.context(),{request:'字'.repeat(100000)},'api')).toThrow('budget')
  const p=f.memory.build(f.context(),{request:'keep'},'api');expect(JSON.parse(p.input).request).toBe('keep');expect(p.manifest.bytes).toBe(Buffer.byteLength(p.input))
 })
 it('C05 explicit budget rebuild retains task, pending inputs, backend and effect receipts without scheduling work',async()=>{
