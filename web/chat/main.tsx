@@ -914,6 +914,7 @@ function Chat(p: ChatProps) {
     "tasks/history": L("Tasks", "任务"),
     attention: L("Needs your attention", "待处理"),
     execution: L("Agent team", "Agent 团队"),
+    deployments: L("Deployments", "部署"),
     models: L("Model connections", "模型连接"),
     connections: L("Conversation entries", "会话入口"),
     integrations: L("Plugins & tools", "插件与工具"),

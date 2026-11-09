@@ -1,0 +1,21 @@
+.deployment-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px}
+.deployment-list{display:grid;gap:12px}
+.deployment-card{min-width:0;padding:20px;border:1px solid color-mix(in srgb,currentColor 16%,transparent);border-radius:14px;display:flex;flex-direction:column;gap:12px}
+.deployment-card h2,.deployment-card h3,.deployment-card h4,.deployment-card p{margin:0}
+.deployment-card .actions{display:flex;flex-wrap:wrap;gap:8px}
+.deployment-card textarea{width:100%;min-height:80px;box-sizing:border-box}
+.deployment-field{display:flex;flex-direction:column;gap:6px}
+.deployment-field input{width:100%;box-sizing:border-box}
+.deployment-checks{display:flex;gap:12px;flex-wrap:wrap}
+.deployment-checks label{display:flex;align-items:center;gap:6px}
+.delegation-evidence{display:grid;gap:12px;min-width:0}
+.deployment-identity{font-size:12px;overflow-wrap:anywhere;color:var(--muted)}
+.delegation-evidence pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto}
+.team-remote-list{display:grid;gap:10px;margin-top:16px}
+.delegation-nodes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px;padding:0;margin:0;list-style:none}
+.delegation-node{border:1px solid color-mix(in srgb,currentColor 14%,transparent);border-radius:10px;padding:14px;min-width:0;display:grid;gap:8px;overflow-wrap:anywhere}
+.deployment-node-kind{font-size:12px;color:var(--muted)}
+.delegation-verification{display:grid;gap:10px;overflow-wrap:anywhere}
+.delegation-verification summary{cursor:pointer;font-weight:600}
+.delegation-verification[open]>:not(summary){margin-top:10px}
+@media(max-width:600px){.deployment-card{padding:14px}.deployment-card .actions>*{flex:1 1 auto}}

@@ -69,3 +69,9 @@ macOS supports the standalone Seatbelt command sandbox; Linux uses Bubblewrap an
 The host binds to loopback. Remote access, TLS, backups, and service supervision are deployment responsibilities. A personal local account is not a tenant isolation boundary. Windows browser and command-sandbox acceptance is not yet complete.
 
 For help, open a [discussion](https://github.com/pythc/agent-hub/discussions) with redacted diagnostics rather than your state directory.
+
+## Same-machine team delegation
+
+Optional managed-team delegation uses isolated local instances and a separate signed loopback service. Cross-machine delegation and a Worker directly coordinating another instance are outside the final scope. See [delegation operation and recovery](DELEGATION.md). Enabling it raises the database barrier to 10 (11 for remote goal nodes); Webhook protocol activation remains independent. Preserve the instance identity, stop the supervisor before restore, and review the incompatible-version gate before switching code. The database backup is still not a complete installation backup.
+
+The dated [deployment inventory](DEPLOYMENT_STATUS_2026-11-09.md) separates the verified local LaunchAgent deployment from reusable startup commands, service templates and acceptance-only images.

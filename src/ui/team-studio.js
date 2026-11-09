@@ -128,6 +128,10 @@ function teamGraph() {
   addWorker.disabled = workers.length >= 10
   graph.append(source, el('div', 'team-trunk'), router, line,
     add(el('div', 'team-pool-heading'), el('h2', '', L('Workers', '执行者')), el('span', 'team-capacity', workers.length + ' / 10'), addWorker), list)
+  const remote=el('div','team-remote-list')
+  remote.append(add(el('div','team-pool-heading'),el('h2','',L('Child teams','子团队')),opButton(L('Connect a team','连接子团队'),()=>opNavigate('deployments'),'button','plus')))
+  for(const target of S.draft.execution.teamTargets||[])remote.append(add(opButton('',()=>opNavigate('deployments'),'team-node'),el('strong','',target.label),el('span','team-node-role',L('Independent team coordination','由子团队独立统筹')),el('span','team-node-state',target.state==='paused'?L('Intake paused','暂停接单'):L('Accepting work','接收任务'))))
+  graph.append(remote)
   return graph
 }
 function teamField(id, label, value, change, options = {}) {

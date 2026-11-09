@@ -8,7 +8,8 @@ import type {Runtime} from './runtime.ts'
 import type {ScopeContext} from './router-scope.ts'
 import type {Mandate,Trigger} from './vendor/dsh-core/index.ts'
 import {goalCommandSchema,type RouterGoal} from './router-goals.ts'
-import {validateGraph} from './goal-contract.ts'
+import {validateGraph,nodeSchema} from './goal-contract.ts'
+import {webhookProtocol} from './webhook-schema.ts'
 import type {VerificationRound} from './goal-verification.ts'
 import {stableDigest} from './sources.ts'
 import {callbackURL,cloudEventSchema,postWebhook,secretFromEnv,signWebhook,verifyWebhook,WebhookError,type CloudEvent} from './webhook-protocol.ts'
@@ -21,7 +22,10 @@ const parameter=z.discriminatedUnion('type',[
  z.object({type:z.literal('number'),min:z.number().finite(),max:z.number().finite()}).strict(),
  z.object({type:z.literal('boolean')}).strict(),
 ])
-export const automationTemplateSchema=goalCommandSchema.pick({title:true,objective:true,criteria:true,nodes:true,plan:true,nextAction:true,maxTurns:true,maxParallel:true,maxRepairs:true,maxReplans:true}).required({title:true,objective:true,criteria:true,nodes:true})
+// Automation grants retain their reviewed local-Worker scope. Adding team
+// targets to Router goals must not expand an existing grant template.
+const automationNodeSchema=nodeSchema.safeExtend({workerId:nodeSchema.shape.workerId.unwrap(),teamTargetId:z.never().optional()})
+export const automationTemplateSchema=goalCommandSchema.pick({title:true,objective:true,criteria:true,nodes:true,plan:true,nextAction:true,maxTurns:true,maxParallel:true,maxRepairs:true,maxReplans:true}).required({title:true,objective:true,criteria:true,nodes:true}).extend({nodes:z.array(automationNodeSchema).min(1).max(100)})
 export const webhookGrantSchema=z.object({
  transport:z.discriminatedUnion('kind',[z.object({kind:z.literal('standard')}).strict(),z.object({kind:z.literal('github-workflow'),repositoryId:z.number().int().positive(),repository:z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)}).strict()]).default({kind:'standard'}),normalizerSourceId:z.string().min(1).optional(),
  protocolVersion:z.union([z.literal(1),z.literal(2)]).default(1),continuations:z.array(continuationRuleSchema).max(20).default([]),
@@ -264,6 +268,7 @@ export class Webhooks {
   }
  }
  private observe(kind:string,id:string,value:any,old:any){
+  if(value?.deleted||kind!=='router-goal'&&typeof value?.goalId!=='string')return
   const goal:RouterGoal|undefined=kind==='router-goal'?value:this.host.goals?.get(value.goalId)
   if(!goal)return
   const triggerId=goal.contract?.triggerId??goal.triggerId;if(typeof triggerId!=='string')return
@@ -287,7 +292,7 @@ export class Webhooks {
   if(g.callback.events.includes(type))this.host.store.db.prepare("INSERT INTO webhook_deliveries(id,event_id,grant_id,goal_id,state,body,payload_hash,target,secret_env,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run('dlv_'+stableDigest([eventId,g.id]),eventId,g.id,goal.id,'pending',body,stableDigest(body),g.callback.url,this.outboundKey(g),this.now())
  }
  delivery(id:string):WebhookDelivery|undefined {return this.host.store.db.prepare('SELECT * FROM webhook_deliveries WHERE id=?').get(id) as unknown as WebhookDelivery|undefined}
- snapshot(){return {protocol:Number(this.host.store.db.prepare('PRAGMA user_version').get()!.user_version)>=9?2:1,waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
+ snapshot(){return {protocol:webhookProtocol(this.host.store.db),waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
  flush(){
   if(this.closing||this.host.isPaused)return
   for(const row of this.host.store.db.prepare("SELECT d.id FROM webhook_deliveries d JOIN records g ON g.kind='webhook-grant' AND g.id=d.grant_id WHERE d.state='pending' AND d.next_at<=? AND json_extract(g.body,'$.deliveryPaused')=0 ORDER BY d.created_at LIMIT 20").all(this.now())){
@@ -340,10 +345,9 @@ export class Webhooks {
   return {grant:g,receipts:receipts.slice(-200),goals:[...goalIds].map(id=>this.host.goals.get(id)),events:this.host.store.db.prepare("SELECT e.body FROM webhook_events e JOIN webhook_inbox i ON i.id=json_extract(e.body,'$.data.receiptId') WHERE i.grant_id=? ORDER BY e.rowid DESC LIMIT 200").all(id).map(r=>JSON.parse(String(r.body)))}
  }
  requireV2(fresh=false){
-  const version=Number(this.host.store.db.prepare('PRAGMA user_version').get()!.user_version)
-  if(version>=9)return
+  if(webhookProtocol(this.host.store.db)===2)return
   if(!fresh||this.host.store.list('webhook-grant').length)throw new WebhookError(409,'webhook_protocol_upgrade_required')
-  this.host.store.db.exec('PRAGMA user_version=9')
+  this.host.store.db.exec('PRAGMA user_version='+Math.max(9,Number(this.host.store.db.prepare('PRAGMA user_version').get()!.user_version)))
   this.host.store.put('webhook-protocol','current',{version:2,activatedAt:this.now(),fresh:true})
  }
  replay(value:unknown){

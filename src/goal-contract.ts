@@ -13,9 +13,9 @@ export const criterionSchema=z.object({
  ]).optional(),
 }).strict()
 export type GoalCriterion=z.infer<typeof criterionSchema>
-export const nodeSchema=z.object({id,title:z.string().min(1).max(300),instruction:z.string().min(1).max(16000),workerId:id,dependsOn:z.array(id).max(100).default([]),criterionIds:z.array(id).max(50),derivedFrom:id.optional(),supports:z.array(id).min(1).max(50).optional(),outputs:z.array(path).min(1).max(20).optional()}).strict()
+export const nodeSchema=z.object({id,title:z.string().min(1).max(300),instruction:z.string().min(1).max(16000),workerId:id.optional(),teamTargetId:id.optional(),dependsOn:z.array(id).max(100).default([]),criterionIds:z.array(id).max(50),derivedFrom:id.optional(),supports:z.array(id).min(1).max(50).optional(),outputs:z.array(path).min(1).max(20).optional()}).strict().refine(n=>!!n.workerId!==!!n.teamTargetId,'A node needs exactly one workerId or teamTargetId')
 export interface GoalNode extends z.infer<typeof nodeSchema> {
- ticketId?:string;state:'pending'|'running'|'verifying'|'passed'|'held'|'waiting_dependency';roundId?:string;
+ ticketId?:string;delegationId?:string;state:'pending'|'running'|'verifying'|'passed'|'held'|'waiting_dependency';roundId?:string;
  repairs:number;recoveries:number;repairStart?:number;refreshFrom?:string;retryAt?:number;failure?:GoalFailure;reason?:string;
 }
 export interface GoalFailure {kind:'transient'|'quota'|'environment'|'uncertain'|'quality'|'protocol';reason:string;retryAt?:number}

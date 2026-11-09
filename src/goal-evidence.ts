@@ -2,7 +2,7 @@ import {z} from 'zod'
 import {protocolBytes} from './context-budget.ts'
 import type {ModelRequest,ToolSpec} from './model.ts'
 
-export interface GoalEvidence {id:string;kind:'file'|'document'|'report'|'execution';ticketId:string;key:string;content:string;hash:string;missing?:boolean;revision?:number;criterionIds:string[]}
+export interface GoalEvidence {id:string;kind:'file'|'document'|'report'|'execution';ticketId?:string;delegationId?:string;sourceInstance?:string;key:string;content:string;hash:string;missing?:boolean;revision?:number;criterionIds:string[]}
 
 /** A citation becomes usable only after gap-free delivery of the complete snapshot. */
 export function evidenceAccess(evidence:GoalEvidence[],pageBytes:number,current:()=>void){

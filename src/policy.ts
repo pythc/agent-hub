@@ -13,7 +13,7 @@ export function makePolicy(config: Config, paused: () => boolean,registry:Source
   const find = (id: string) => config.sources.find(s => s.id === id)
   function authorized(mandate: Mandate): boolean {
     const source = find(mandate.actor.source)
-    if (!source?.enabled||!source.capabilities.events) return false
+    if (!source?.enabled||!source.capabilities.events||source.kind==='delegation') return false
     const row = mandate.basis.row ?? 'default'
     if (source.listenScopes && !source.listenScopes.includes(row)) return false
     if (mandate.basis.via === 'followup') return true
@@ -32,6 +32,7 @@ export function makePolicy(config: Config, paused: () => boolean,registry:Source
     gate(trigger,thread,tickets) {
       const source = find(trigger.source)
       if (!source?.enabled||!source.capabilities.events) return { admissible:false,reason:'sourceDisabled' }
+      if(source.kind==='delegation')return {admissible:false,reason:'verifiedDelegationRequired'}
       const row = String(trigger.meta.scope ?? 'default')
       const observed=registry.observed(source)
       const listed = source.allowedActors.includes(trigger.actor.id)

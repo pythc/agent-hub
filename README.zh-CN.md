@@ -124,6 +124,7 @@ Roppo **优先服务个人，仍在持续开发**，每个部署对应一个本�
 | --- | --- |
 | [模型与连接](docs/MODELS.md) · English | [后端协议](docs/BACKENDS.md) |
 | [运维与备份](docs/OPERATIONS.md) · English | [来源与工具](docs/INTEGRATIONS.md) |
+| [同机实例与子团队委派](docs/DELEGATION.md) | [部署与委派改造方案](docs/DEPLOYMENT_AND_DELEGATION_PLAN_2026-11-09.md) |
 | [本地账号](docs/PERSONAL_ACCOUNT.md) | [MCP 客户端](docs/clients/README.md) |
 | [对话工作空间](docs/CHAT.md) | [核心语义与对齐](docs/PARITY.md) |
 | [Agent 看板](plugins/agent-board/README.md) · English | [工作区页面插件](docs/WORKSPACE_VIEWS.md) · English |

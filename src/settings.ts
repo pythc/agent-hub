@@ -49,6 +49,7 @@ export class Settings {
   current():SettingsVersion{return this.store.get<SettingsVersion>('settings','current')!}
   save(expected:number,patch:unknown):SettingsVersion{
     const update=patchSchema.parse(patch)
+    if(update.execution&&this.config.execution.teamTargets!==undefined&&!Object.hasOwn((patch as any).execution,'teamTargets'))update.execution.teamTargets=this.config.execution.teamTargets
     const next=this.store.atomic(()=>{
       const previous=this.current()
       if(previous.revision!==expected)throw new SettingsError('settings_conflict','Settings conflict. Read current revision before saving.',409)

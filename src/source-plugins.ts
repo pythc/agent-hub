@@ -29,6 +29,7 @@ export class SourceRegistry {
   constructor(){
     for(const [kind,label,create] of [
       ['local','Local operator',(c:SourceConfig)=>new MessageSource(c)],
+      ['delegation','Delegated team',(c:SourceConfig)=>new MessageSource(c)],
       ['webhook','HTTP events',(c:SourceConfig)=>new MessageSource(c)],
       ['wecom','WeCom',(c:SourceConfig)=>new WecomSource(c)],
     ] as const)this.register({apiVersion:1,kind,label,create,...(kind==='wecom'?{scopes:(c:SourceConfig)=>c.wecom?.chats.length?c.wecom.chats:undefined}:{})})

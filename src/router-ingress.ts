@@ -30,10 +30,12 @@ export class RouterIngress {
  ruleExecutionAllowed?: (ids:readonly string[])=>boolean
  defer?: (record:RouterAdmission,trigger:Trigger)=>boolean
  scheduledAuthority?: (id:string)=>Mandate|undefined
+ delegatedAuthority?: (id:string)=>Mandate|undefined
+ delegatedRevalidate?: (mandate:Mandate)=>boolean|undefined
  automationRevalidate?: (mandate:Mandate)=>boolean|undefined
  constructor(private config:Config,private store:Store,private registry:SourceRegistry,private scopes?:RouterScopes){}
  rules(trigger?:Trigger){return this.rulesFor?.(trigger)??this.config.rules}
- policy(trigger?:Trigger){const p=makePolicy({...this.config,rules:this.rules(trigger)},()=>false,this.registry);return {...p,admitsInferred:(ids:readonly string[])=>p.admitsInferred(ids)&&(this.ruleExecutionAllowed?.(ids)??true),revalidate:(m:Mandate)=>this.automationRevalidate?.(m)??(p.revalidate(m)&&(m.strength==='explicit'||(this.ruleExecutionAllowed?.(m.basis.rules??[])??true)))}}
+ policy(trigger?:Trigger){const p=makePolicy({...this.config,rules:this.rules(trigger)},()=>false,this.registry);return {...p,admitsInferred:(ids:readonly string[])=>p.admitsInferred(ids)&&(this.ruleExecutionAllowed?.(ids)??true),revalidate:(m:Mandate)=>this.delegatedRevalidate?.(m)??this.automationRevalidate?.(m)??(p.revalidate(m)&&(m.strength==='explicit'||(this.ruleExecutionAllowed?.(m.basis.rules??[])??true)))}}
  get(id:string){return this.store.get<RouterAdmission>('router-admission',id)}
  private discussion(trigger:Trigger){return trigger.source+':'+trigger.threads[0]!.id}
  private gate(trigger:Trigger,anchor?:RouterAdmission):GateResult{
@@ -58,6 +60,8 @@ export class RouterIngress {
   if(this.config.execution.router?.mode!=='host')throw Error('Host Router is not enabled')
   const scheduled=this.scheduledAuthority?.(id)
   if(scheduled){if(discussion&&this.get(id)?.discussion!==discussion)throw Error('Schedule discussion mismatch');return scheduled}
+  const delegated=this.delegatedAuthority?.(id)
+  if(delegated){if(discussion&&this.get(id)?.discussion!==discussion)throw Error('Delegation discussion mismatch');return delegated}
   const record=this.get(id)
   if(!record||discussion&&record.discussion!==discussion||!this.valid(record))throw Error('Router authorization withdrawn or input not admitted')
   for(const dependency of this.store.get<{triggerIds:string[]}>('router-input-set',id)?.triggerIds??[])if(dependency!==id)this.authority(dependency)
@@ -88,6 +92,15 @@ export class RouterIngress {
   return record
  }
  private enqueue(record:RouterAdmission){this.store.enqueue('router:'+record.triggerId,'router',{discussion:record.discussion,triggerId:record.triggerId})}
+ /** Only the host's authenticated delegation adapter can establish this derived authority. */
+ admitDelegated(trigger:Trigger){
+  this.store.triggers.save(trigger)
+  const mandate=this.delegatedAuthority?.(trigger.id)
+  if(!mandate||trigger.human)throw Error('Verified service delegation required')
+  this.scopes?.assertTrigger(trigger);this.scopes?.route(trigger,this.discussion(trigger))
+  const record=this.save({triggerId:trigger.id,discussion:this.discussion(trigger),policyVersion:mandate.policyVersion,state:'accepted',reason:'verifiedDelegation',at:new Date().toISOString(),mandate})
+  this.enqueue(record);return record
+ }
  receive(trigger:Trigger){
   if(this.get(trigger.id))return {disposition:'duplicate',triggerId:trigger.id,discussion:this.discussion(trigger),thread:trigger.threads[0]!.id,related:[]}
   const record=this.admit(trigger)

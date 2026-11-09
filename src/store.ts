@@ -2,7 +2,11 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Repositories, Trigger, TriggerDisposition, Thread, Ticket, Decision, OutboundMessage } from './vendor/dsh-core/index.ts'
-export const MAX_DB_SCHEMA=9
+// 8/9 are reserved for Webhook grants/continuations. Delegation must fence
+// Webhook-only releases from reopening service-authorized delegated work.
+export const DELEGATION_DB_SCHEMA=10
+export const DELEGATED_GOALS_DB_SCHEMA=11
+export const MAX_DB_SCHEMA=DELEGATED_GOALS_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }

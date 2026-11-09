@@ -15,7 +15,7 @@ const opPages = () => ({
   activity: L('Tasks', '任务'), catalog: L('Conversation entries', '会话入口'),
   catalogue: L('New connection', '新建接入'), detail: entryName(entryState.selected),
   models: L('Model connections', '模型连接'), 'model-new': L('New model connection', '新建模型连接'),
-  integrations: L('Tools and apps', '工具与应用'), execution: L('Agent team', 'Agent 团队'), prompts: L('Shared instructions', '共享指令'),
+  deployments: L('Deployments', '部署'), integrations: L('Tools and apps', '工具与应用'), execution: L('Agent team', 'Agent 团队'), prompts: L('Shared instructions', '共享指令'),
   usage: L('Usage guide', '使用指引'), advanced: L('Advanced settings', '高级设置')
 })
 function opButton(text,callback,kind='button',glyph){const button=action(text,callback,kind,glyph);if(kind.includes('icon-button')&&glyph){button.setAttribute('aria-label',text);button.title=text;button.replaceChildren(icon(glyph))}return button}
@@ -322,7 +322,7 @@ function renderOperatorWorkspace(){
   rail.append(add(el('div','brand'),el('span','roppo-brand-mark'),el('span','','Roppo'),el('span','version',S.health?.version||'0.10')),close,workspaceTrigger())
   const nav=el('nav');nav.setAttribute('aria-label',L('Main navigation','主导航'))
   const chatLink=add(el('a','operator-nav-link'),icon('prompts'),el('span','',L('Conversations','对话')));chatLink.href='/chat';nav.append(chatLink)
-  for(const [page,glyph]of [['home','overview'],['activity','work'],['attention','inbox'],['execution','execution'],['models','cpu'],['catalog','sources'],['integrations','work'],['prompts','prompts']]){
+  for(const [page,glyph]of [['home','overview'],['activity','work'],['attention','inbox'],['execution','execution'],['models','cpu'],['deployments','monitor'],['catalog','sources'],['integrations','work'],['prompts','prompts']]){
     if(page==='execution')nav.append(el('span','nav-group',L('Configuration','配置')))
     const b=opButton('',()=>opNavigate(page,'',page==='execution'?{view:'configuration'}:undefined),'operator-nav-link');b.replaceChildren(icon(glyph),el('span','',opPages()[page]));if(page===entryState.page||page==='catalog'&&['detail','catalogue'].includes(entryState.page)||page==='models'&&entryState.page==='model-new')b.setAttribute('aria-current','page');if(page==='attention'&&operator.work?.attentionTotal)b.append(el('span','nav-count',operator.work.attentionTotal));nav.append(b)
   }
@@ -347,7 +347,7 @@ function renderOperatorWorkspace(){
   const views = {
     home: workspaceHome, activity: opTasks, attention: opAttention, catalog: opCatalogue, catalogue: opCatalogue,
     detail: opConnection, models: opModels, 'model-new': opModels, execution: controlExecution,
-    integrations: controlIntegrations, prompts: controlPrompts, usage: opUsage, advanced: renderWorkspaceSettings
+    deployments: renderDeployments, integrations: controlIntegrations, prompts: controlPrompts, usage: opUsage, advanced: renderWorkspaceSettings
   }
   if (S.latest) main.append(conflictPanel())
   if (entryState.page === 'advanced' && S.statusError) main.append(el('p','alert warning',L('Host status is unavailable. Refresh in Host status.','宿主状态暂不可用，请在宿主状态中刷新。')))

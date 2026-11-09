@@ -14,7 +14,7 @@ import {agentOptionsSchema} from './backend-config.ts'
 import {mergeOptions} from './agent-options.ts'
 import {workerSpecs} from './worker-tools.ts'
 
-export interface GoalContract {objective:string;criteria:GoalCriterion[];triggerId:string;triggerHash:string;mandate:Mandate;workerIds:string[];backendIds:string[]}
+export interface GoalContract {objective:string;criteria:GoalCriterion[];triggerId:string;triggerHash:string;mandate:Mandate;workerIds:string[];backendIds:string[];teamTargets?:{id:string;policyHash:string}[]}
 export class ReplanningInterrupted extends Error {}
 const id=z.string().min(1).max(200),instruction=z.string().min(1).max(16000)
 const change=z.object({id,instruction,dependsOn:z.array(id).max(100)}).strict()
@@ -51,7 +51,8 @@ export class GoalReplanning {
  active(g:RouterGoal){return !!g.replanId&&activeStates.has(this.host.store.get<ReplanRound>('goal-replan',g.replanId)?.state??'')}
  contexts(goalId:string){return this.host.store.list<ReplanRound>('goal-replan').filter(r=>r.goalId===goalId).flatMap(r=>r.contextIds??[])}
  list(g:RouterGoal){this.host.goals.context(g);return this.host.store.list<ReplanRound>('goal-replan').filter(r=>r.goalId===g.id).map(({snapshot,...r})=>(r.contextIds??[]).every(id=>this.host.continuity.validContext(id))?({...r,planRevision:snapshot.planRevision,contractHash:stableDigest(snapshot.contract),failureNodeIds:snapshot.failureNodeIds}):({id:r.id,goalId:r.goalId,state:'stale',at:r.at,error:'Replanning sources changed; derived content is unavailable'}))}
- assertWorker(g:RouterGoal,workerId:string){
+ assertWorker(g:RouterGoal,workerId:string|undefined){
+  if(!workerId)throw Error('A local Worker target is required')
   const c=g.contract;if(!c)return
   const worker=workerProfiles(this.host.config).find(w=>w.id===workerId),scope=this.host.scopes.scope(g.scopeId)
   if(!worker||!c.workerIds.includes(workerId)||!scope.workerIds.includes(workerId)||!c.backendIds.includes(worker.backend)||!scope.backendIds.includes(worker.backend))throw Error('Plan Worker or backend exceeds original authorization')
@@ -82,6 +83,9 @@ export class GoalReplanning {
   return g
  }
  consider(g:RouterGoal):boolean {
+  // Remote contracts are immutable and have no safe amendment/resume protocol yet.
+  // Retain a failed mixed graph for explicit review instead of duplicating effects.
+  if(g.nodes?.some(n=>n.teamTargetId))return false
   if(!g.contract||(g.replans??0)>=(g.maxReplans??0)||g.replanId)return false
   const failures=g.nodes?.filter(n=>n.state==='held')??[]
   if(!failures.length)return false

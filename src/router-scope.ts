@@ -8,7 +8,7 @@ import {executionSchema} from './backend-config.ts'
 import {builtinSources,type SourceRegistry} from './source-plugins.ts'
 
 const id=z.string().min(1).max(300)
-const scopeInput=z.object({id,tenantId:id,name:id,managers:z.array(id).min(1),workerIds:z.array(id),sourceIds:z.array(id),backendIds:z.array(id),dataEntryIds:z.array(id).default([]),router:executionSchema.unwrap().shape.router.optional(),memoryEnabled:z.boolean().default(true),contextBytes:z.number().int().min(4096).max(1000000).default(256000)}).strict()
+const scopeInput=z.object({id,tenantId:id,name:id,managers:z.array(id).min(1),workerIds:z.array(id),teamTargetIds:z.array(id).optional(),sourceIds:z.array(id),backendIds:z.array(id),dataEntryIds:z.array(id).default([]),router:executionSchema.unwrap().shape.router.optional(),memoryEnabled:z.boolean().default(true),contextBytes:z.number().int().min(4096).max(1000000).default(256000)}).strict()
 export type ManagementScope=z.infer<typeof scopeInput>&{routerId:string;revision:number;epoch:number}
 export interface EntryBinding {id:string;tenantId:string;sourceId:string;provider:string;accountNamespace:string;nativeId:string;scopeId:string;revision:number;active:boolean;history:'unknown'|'group';privateActor?:string}
 export interface RouterRoute {triggerId:string;discussion:string;entryId:string;tenantId:string;scopeId:string;routerId:string;epoch:number;bindingRevision:number;taskId?:string;ownerEpoch?:number}

@@ -1,3 +1,5 @@
+import {serveDelegation} from './delegation/server.ts'
+import {DelegationError} from './delegation/contract.ts'
 import {PluginMarket,MarketError} from './plugin-market.ts'
 import {PluginGitHub} from './plugin-github.ts'
 import {Ajv2020} from 'ajv/dist/2020.js'
@@ -44,15 +46,16 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const connectionFile=join(runtime.config.stateDir,'connection.json')
   const account=new PersonalAccount(runtime.config.stateDir)
   let changing=false,unavailable=false,runtimeClosed=false,endpoint='',stopping=false,closingRuntime:Promise<void>|undefined
+  let delegationServer:Awaited<ReturnType<typeof serveDelegation>>|undefined
   const onboarding=new Onboarding(()=>runtime,options.configurationPreview===true)
   const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
-  async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=runtime.close()}await closingRuntime}
+  async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=(async()=>{await delegationServer?.close();delegationServer=undefined;await runtime.close()})()}await closingRuntime}
   const market=new PluginMarket(()=>runtime,options.pluginGitHub)
   async function rebuild(config:Config,activationId?:string){
     await stopRuntime()
     if(stopping)throw Error('Host is stopping')
     const next=await (options.createRuntime?options.createRuntime(configSchema.parse(config),activationId):Runtime.create(configSchema.parse(config),{pluginActivation:activationId}))
-    runtime=next;runtimeClosed=false;closingRuntime=undefined;runtime.endpoint=endpoint;runtime.start()
+    runtime=next;runtimeClosed=false;closingRuntime=undefined;runtime.endpoint=endpoint;delegationServer=runtime.delegation.enabled?await serveDelegation(runtime.delegation,runtime.delegation.preferredPort):undefined;runtime.start()
   }
   let token: string
   try { token = readFileSync(tokenPath, 'utf8').trim() }
@@ -67,6 +70,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(error instanceof ChatError||error instanceof BrowserError){send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof AccountError){send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof OnboardingError){if(error.code==='setup_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
+    if(error instanceof DelegationError){send(response,error.status,{error:error.code,code:error.code});return}
     if(error instanceof SettingsError){send(response,error.status,{error:error.message,code:error.code,...(error.code==='settings_conflict'?{currentRevision:runtime.settings.current().revision}:{})});return}
     if(error instanceof z.ZodError){send(response,400,{error:'Configuration or request validation failed',code:'validation_error',issues:error.issues.map(issue=>({path:issue.path,message:issue.message}))});return}
     send(response,400,{error:String(error).slice(0,500),code:'request_failed'})
@@ -193,6 +197,12 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(path==='/webhooks/reconcile'&&req.method==='POST'){runtime.webhooks.reconcile(true);send(res,200,runtime.webhooks.snapshot().reconciliation);return}
     if(path==='/webhooks/grants'&&req.method==='POST'){send(res,201,runtime.webhooks.create(await body(req)));return}
     if(path==='/webhooks/control'&&req.method==='POST'){send(res,200,runtime.webhooks.control(await body(req)));return}
+    if(path==='/deployments'&&req.method==='GET'){send(res,200,runtime.delegation.snapshot());return}
+    if(path==='/deployments/pairing'&&req.method==='POST'){send(res,200,runtime.delegation.pairing(await body(req)));return}
+    if(path==='/deployments/connect'&&req.method==='POST'){send(res,200,await runtime.delegation.connect(await body(req)));return}
+    if(path==='/deployments/command'&&req.method==='POST'){send(res,200,await runtime.delegation.command(await body(req)));return}
+    if(path==='/deployments/recover'&&req.method==='POST'){const result=await runtime.delegation.recover(await body(req));delegationServer=await serveDelegation(runtime.delegation,runtime.delegation.preferredPort);send(res,200,result);return}
+    if(path==='/deployments/revoke'&&req.method==='POST'){const input=z.object({id:z.string()}).strict().parse(await body(req));send(res,200,await runtime.delegation.revoke(input.id));return}
     if(path==='/api/plugin-market'&&req.method==='GET'){send(res,200,{...market.snapshot(),platform:process.platform,settingsRevision:runtime.settings.current().revision});return}
     if(path==='/api/plugin-market/preview'&&req.method==='GET'){
       const query=z.object({catalog:z.string().max(80),plugin:z.string().max(64),index:z.coerce.number().int().min(0).max(3)}).strict().parse(Object.fromEntries(new URL(req.url!,'http://localhost').searchParams))
@@ -512,6 +522,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   endpoint=runtime.endpoint
   sessions.bindOrigin(endpoint)
   try{atomicPrivateFile(connectionFile,JSON.stringify({application:'agent-hub',version:1,url:endpoint,accessToken:token},null,2)+'\n')}catch(error){await new Promise<void>(r=>server.close(()=>r()));throw error}
+  try{delegationServer=runtime.delegation.enabled?await serveDelegation(runtime.delegation,runtime.delegation.preferredPort):undefined}catch(error){await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime.close();throw error}
   runtime.start()
   return {server,url:endpoint,webhookUrl:webhookListener?.url,operatorUrl:sessions.link(endpoint),tokenPath,connectionFile,get runtime(){return runtime},async closeRuntime(){stopping=true;await webhookListener?.close().catch(()=>{});await stopRuntime()}}
 }

@@ -20,11 +20,12 @@ import {upgradeWebhooks} from '../src/webhook-upgrade.ts'
 const cleanups:(()=>Promise<void>)[]=[]
 afterEach(async()=>{for(const cleanup of cleanups.splice(0).reverse())await cleanup()})
 async function receiver(handler:(req:IncomingMessage,res:ServerResponse)=>void){const server=createServer(handler);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+(server.address() as any).port;cleanups.push(async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))});return url}
-function fixture(url='https://example.com/callback',failFirst=false,onWorker?:(request:Parameters<Model['run']>[0])=>Promise<void>,backendPackage?:BackendPackage){
+function fixture(url='https://example.com/callback',failFirst=false,onWorker?:(request:Parameters<Model['run']>[0])=>Promise<void>,backendPackage?:BackendPackage,prepareDelegation=false){
  const root=mkdtempSync(join(tmpdir(),'webhook-test-')),suffix=randomBytes(5).toString('hex'),inEnv='WH_IN_'+suffix,outEnv='WH_OUT_'+suffix
  process.env[inEnv]='whsec_'+randomBytes(32).toString('base64');process.env[outEnv]='whsec_'+randomBytes(32).toString('base64')
  let now=Date.now(),count=0,workerCalls=0,h:Runtime,closed=false
  const backend=backendPackage?'external':'codex',config=configSchema.parse({stateDir:join(root,'state'),...(backendPackage?{backendPlugins:[{directory:backendPackage.directory,digest:backendPackage.digest}],backends:{external:{kind:'plugin',plugin:backendPackage.manifest.id}}}:{}),webhooks:{port:0,loopbackCallbackOrigins:url.startsWith('http:')?[new URL(url).origin]:[]},work:{sandboxDriver:'disabled'},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend}]},sources:[{id:'local',kind:'local',cwd:root,sandbox:'workspace-write',workspace:{mode:'source'},allowedActors:['alice']}]})
+ if(prepareDelegation)config.sources.push(configSchema.shape.sources.element.parse({id:'delegation',kind:'delegation',cwd:root,sandbox:'read-only',workspace:{mode:'directory'}}))
  const model:Model={async run(r){const input=JSON.parse(r.input);let output:any={reply:''}
   if(input.kind==='goal_verification'){
    for(const e of input.evidence)await r.onTool!('goal_evidence',{id:e.id},'read-'+e.id)
@@ -284,4 +285,27 @@ it('wires the operator APIs and separate ingress listener without exposing manag
  expect((await fetch(api.webhookUrl+'/settings',{headers})).status).toBe(404)
  const signature=f.signed();expect((await fetch(api.webhookUrl+'/webhooks/'+f.grant.id,{method:'POST',headers:signature.headers,body:signature.body})).status).toBe(202)
  const state=await fetch(api.url+'/webhooks',{headers});expect(state.status).toBe(200);expect((await state.json() as any).receipts).toHaveLength(1)
+})
+
+it('keeps legacy Webhook activation independent from the delegation DB barrier',async()=>{
+ const f=fixture(undefined,false,undefined,undefined,true),grant=JSON.stringify(f.h.webhooks.grant(f.grant.id))
+ expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(8)
+ f.config.delegation=configSchema.shape.delegation.parse({enabled:true});await f.restart()
+ expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10)
+ expect(f.h.webhooks.snapshot().protocol).toBe(1)
+ expect(JSON.stringify(f.h.webhooks.grant(f.grant.id))).toBe(grant)
+ expect(()=>f.h.webhooks.requireV2()).toThrow('webhook_protocol_upgrade_required')
+ await f.offline(()=>upgradeWebhooks(f.config,join(f.root,'reviewed-webhook-upgrade')))
+ expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10)
+ expect(f.h.webhooks.snapshot().protocol).toBe(2)
+ expect(JSON.stringify(f.h.webhooks.grant(f.grant.id))).toBe(grant)
+})
+it('retains Webhook v2 activation when enabling delegation and rejects remote automation nodes',async()=>{
+ const f=fixture(undefined,false,undefined,undefined,true)
+ await f.offline(()=>upgradeWebhooks(f.config,join(f.root,'v2-before-delegation')))
+ f.config.delegation=configSchema.shape.delegation.parse({enabled:true});await f.restart()
+ expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10)
+ expect(f.h.webhooks.snapshot().protocol).toBe(2)
+ const {workerId,...node}=f.spec.template.nodes[0]!
+ expect(()=>f.h.webhooks.create({...f.spec,operationId:'remote-template',template:{...f.spec.template,nodes:[{...node,teamTargetId:'another-team'}]}})).toThrow()
 })

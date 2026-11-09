@@ -7,7 +7,7 @@ import type {Store} from './store.ts'
 import type {Config} from './config.ts'
 import {hostPrivateFiles} from './private-files.ts'
 
-export interface WorkOwner {ticketId:string;assignmentId:string;cwd:string;sandbox:'read-only'|'workspace-write';agentId?:string;depth:number}
+export interface WorkOwner {ticketId:string;assignmentId:string;cwd:string;sandbox:'read-only'|'workspace-write';agentId?:string;depth:number;network?:boolean}
 export interface WorkItem extends WorkOwner {
  id:string;kind:'shell'|'agent';state:'starting'|'running'|'completed'|'failed'|'cancelled'|'interrupted';
  createdAt:number;endedAt?:number;pid?:number;command?:string;prompt?:string;threadId?:string;
@@ -71,7 +71,7 @@ export class WorkManager {
    let gitDirectory:string|undefined
    try{gitDirectory=resolve(owner.cwd,execFileSync('git',['rev-parse','--git-common-dir'],{cwd:owner.cwd,encoding:'utf8',timeout:2000,stdio:['ignore','pipe','ignore']}).trim())}catch{}
    const attachments=this.store.list<any>('asset').filter(a=>a.ticketId===owner.ticketId).map(a=>a.path)
-   writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,sandboxDriver:this.config.work.sandboxDriver,network:this.config.work.network,privateState:this.config.stateDir,privatePaths:hostPrivateFiles(),gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
+   writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,sandboxDriver:this.config.work.sandboxDriver,network:owner.network??this.config.work.network,privateState:this.config.stateDir,privatePaths:hostPrivateFiles(),gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
    try{
     const child=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),runner,spec],{detached:process.platform!=='win32',stdio:'ignore',shell:false})
     this.runners.set(item.id,child)

@@ -124,6 +124,7 @@ Local-first means local workspace storage; model requests still go to your provi
 | --- | --- |
 | [Models and connections](docs/MODELS.md) | [Backend protocols](docs/BACKENDS.md) · 中文 |
 | [Operations and backups](docs/OPERATIONS.md) | [Sources and tools](docs/INTEGRATIONS.md) · 中文 |
+| [Local instance delegation](docs/DELEGATION.md) · 中文 | [Deployment and delegation plan](docs/DEPLOYMENT_AND_DELEGATION_PLAN_2026-11-09.md) · 中文 |
 | [Local accounts](docs/PERSONAL_ACCOUNT.md) · 中文 | [MCP clients](docs/clients/README.md) · 中文 |
 | [Conversations](docs/CHAT.md) · 中文 | [Core semantics and parity](docs/PARITY.md) · 中文 |
 | [Agent board](plugins/agent-board/README.md) | [Workspace view plugins](docs/WORKSPACE_VIEWS.md) |

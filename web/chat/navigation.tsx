@@ -3,6 +3,7 @@ import {
   History,
   Inbox,
   Link2,
+  Server,
   LayoutDashboard,
   MessageSquare,
   PanelLeftClose,
@@ -72,6 +73,12 @@ export function FeatureNavigation({
         label: L("Agent team", "Agent 团队"),
         Icon: Users,
         current: configuring && hash.startsWith("execution"),
+      },
+      {
+        href: "/configure#deployments",
+        label: L("Deployments", "部署"),
+        Icon: Server,
+        current: configuring && hash === "deployments",
       },
       {
         href: "/configure#models",

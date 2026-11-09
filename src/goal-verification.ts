@@ -10,11 +10,12 @@ import type {Run} from './store.ts'
 import {stableDigest} from './sources.ts'
 import {scopeBudget} from './context-budget.ts'
 import {evidenceAccess,type GoalEvidence as Evidence} from './goal-evidence.ts'
+import type {DelegationBinding} from './delegation/goals.ts'
 
 export interface GoalDelivery {id:string;goalId:string;ticketId:string;triggerId:string;scopeId:string;assignmentId:string;report:WorkerReport;reply?:string;inputRevision:number;at:number}
-interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];evidence:Evidence[]}
+interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];delegations?:DelegationBinding[];evidence:Evidence[]}
 export interface VerificationCheck {criterionId:string;verdict:'passed'|'failed'|'insufficient';explanation:string;evidenceIds:string[];method:'program'|'agent'}
-export interface VerificationRound {id:string;goalId:string;nodeId?:string;triggerId:string;scopeId:string;entryId:string;ticketIds:string[];state:'pending'|'running'|'passed'|'failed'|'insufficient'|'errored'|'stale';snapshot:Snapshot;checks:VerificationCheck[];attempts:number;error?:string;at:number;finishedAt?:number;threadId?:string}
+export interface VerificationRound {id:string;goalId:string;nodeId?:string;triggerId:string;scopeId:string;entryId:string;ticketIds:string[];delegationIds?:string[];state:'pending'|'running'|'passed'|'failed'|'insufficient'|'errored'|'stale';snapshot:Snapshot;checks:VerificationCheck[];attempts:number;error?:string;at:number;finishedAt?:number;threadId?:string}
 const verdict=z.object({checks:z.array(z.object({criterionId:z.string(),verdict:z.enum(['passed','failed','insufficient']),explanation:z.string().min(1).max(8000),evidenceIds:z.array(z.string()).min(1)}).strict()).min(1)}).strict()
 const operational=(e:Evidence)=>e.kind==='execution'||e.kind==='report'&&e.key==='watchdog-observation'
 
@@ -117,9 +118,29 @@ export class GoalVerification {
    for(const owner of owners)for(const id of closure([owner]))if(id!==owner)ancestors.add(id)
    return {id:cr.id,ancestors}
   })
-  const tasks:Snapshot['tasks']=[],evidence:Evidence[]=[];let evidenceBytes=0
+  const tasks:Snapshot['tasks']=[],delegations:DelegationBinding[]=[],evidence:Evidence[]=[];let evidenceBytes=0
   const add=(value:Omit<Evidence,'id'|'hash'>)=>{const hash=stableDigest(value),id='evidence-'+hash,item={...value,id,hash};evidenceBytes+=Buffer.byteLength(JSON.stringify(item));if(evidenceBytes>512*1024)throw Error('Acceptance evidence exceeds 512 KiB; declare smaller artifacts');evidence.push(item)}
+  if(nodes.some(n=>n.teamTargetId)){
+   const receipt=this.host.store.db.prepare("SELECT body FROM records WHERE kind='goal-receipt' AND json_extract(body,'$.goalId')=? ORDER BY rowid LIMIT 1").get(g.id)
+   const created=receipt&&JSON.parse(String(receipt.body))
+   if(!created?.result?.contract||stableDigest(created.result.contract)!==stableDigest(g.contract))throw Error('Parent goal creation receipt is unavailable or changed')
+   add({kind:'execution',key:'goal-controller',criterionIds:criteria.map(cr=>cr.id),content:JSON.stringify({basis:'Parent host goal-controller receipts; not a Router self-report',goalId:g.id,contractHash:stableDigest(g.contract),creation:{triggerId:created.triggerId,fingerprint:created.fingerprint,action:'router_goal.start'},
+    nodes:g.nodes?.map(n=>({id:n.id,kind:n.teamTargetId?'team':'worker',targetId:n.teamTargetId??n.workerId,dependsOn:n.dependsOn,criterionIds:n.criterionIds})),
+    ...(!node?{acceptedNodes:g.nodes?.map(n=>{const r=n.roundId?this.host.store.get<VerificationRound>('goal-verification',n.roundId):undefined;return {nodeId:n.id,roundId:r?.id,state:r?.state,snapshotHash:r?stableDigest(r.snapshot):undefined,checks:r?.checks.map(c=>({criterionId:c.criterionId,verdict:c.verdict,method:c.method,evidenceIds:c.evidenceIds}))}})}:{}),
+   })})
+  }
   for(const n of nodes){
+   if(n.teamTargetId){
+    const remote=this.host.delegation.goalTasks.evidence(g,n),assigned=this.criteria(g,n)
+    delegations.push(remote.binding)
+    for(const e of remote.evidence)add({...e,criterionIds:[...new Set([...e.criterionIds,...semanticAncestors.filter(cr=>cr.ancestors.has(n.id)).map(cr=>cr.id)])]})
+    for(const documentId of [...new Set(assigned.flatMap(cr=>cr.documents??[]))]){
+     const doc=this.host.knowledge.command({action:'read',id:documentId,limit:100},c)
+     if(doc.nextOffset!==null)throw Error('Declared document exceeds acceptance evidence limit; declare a smaller document')
+     add({kind:'document',delegationId:n.delegationId,sourceInstance:this.host.delegation.identity.id,key:documentId,content:doc.content,revision:doc.revision,criterionIds:assigned.filter(cr=>cr.documents?.includes(documentId)).map(cr=>cr.id)})
+    }
+    continue
+   }
    if(!n.ticketId)throw Error('Goal evidence task is missing')
    this.host.scopes.checkTask(n.ticketId,c)
    const manifest=this.host.store.get<any>('task-context',n.ticketId)?.manifest;if(manifest)this.host.memory.validate(manifest)
@@ -147,7 +168,7 @@ export class GoalVerification {
    }
   }
   if(Buffer.byteLength(JSON.stringify(evidence))>512*1024)throw Error('Acceptance evidence exceeds 512 KiB; declare smaller artifacts')
-  return {contract:stableDigest({objective:g.objective,criteria:g.criteria,nodes:nodes.map(n=>({id:n.id,instruction:n.instruction,criterionIds:n.criterionIds,supports:n.supports,outputs:n.outputs,dependsOn:n.dependsOn,prerequisites:n.dependsOn.map(id=>{const dep=g.nodes?.find(d=>d.id===id);return {id,state:dep?.state,roundId:dep?.roundId}})}))}),tasks,evidence}
+  return {contract:stableDigest({objective:g.objective,criteria:g.criteria,nodes:nodes.map(n=>({id:n.id,instruction:n.instruction,criterionIds:n.criterionIds,supports:n.supports,outputs:n.outputs,dependsOn:n.dependsOn,...(n.teamTargetId?{teamTargetId:n.teamTargetId}:{}),prerequisites:n.dependsOn.map(id=>{const dep=g.nodes?.find(d=>d.id===id);return {id,state:dep?.state,roundId:dep?.roundId}})}))}),tasks,...(delegations.length?{delegations}:{}),evidence}
  }
  current(round:VerificationRound,g:RouterGoal):boolean {
   try{return stableDigest(this.snapshot(g,round.nodeId?g.nodes?.find(n=>n.id===round.nodeId):undefined,false))===stableDigest(round.snapshot)}catch{return false}
@@ -156,7 +177,7 @@ export class GoalVerification {
   const snapshot=this.snapshot(g,node,false),id='verify-'+stableDigest([g.id,node?.id??'goal',snapshot])
   const prior=this.host.store.get<VerificationRound>('goal-verification',id);if(prior){if(prior.state==='pending')this.host.store.db.prepare("UPDATE jobs SET state='pending' WHERE id=? AND state IN ('done','failed')").run('goal-verify:'+id);return prior}
   if(snapshot.tasks.some(t=>!this.host.goals.effectsSettled(t.ticketId)))throw Error('Task has unfinished or uncertain effects')
-  const round:VerificationRound={id,goalId:g.id,nodeId:node?.id,triggerId:g.triggerId,scopeId:g.scopeId,entryId:g.entryId,ticketIds:snapshot.tasks.map(t=>t.ticketId),snapshot,state:'pending',checks:[],attempts:0,at:this.now()}
+  const round:VerificationRound={id,goalId:g.id,nodeId:node?.id,triggerId:g.triggerId,scopeId:g.scopeId,entryId:g.entryId,ticketIds:snapshot.tasks.map(t=>t.ticketId),...(snapshot.delegations?{delegationIds:snapshot.delegations.map(t=>t.delegationId)}:{}),snapshot,state:'pending',checks:[],attempts:0,at:this.now()}
   this.host.store.atomic(()=>{this.host.store.put('goal-verification',id,round);this.host.store.enqueue('goal-verify:'+id,'goal-verify',{roundId:id,goalId:g.id,triggerId:g.triggerId,discussion:g.discussion})})
   return round
  }
@@ -195,7 +216,7 @@ export class GoalVerification {
     const access=evidenceAccess(snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{const current=this.host.goals.get(g.id);if(!current||!this.current(round!,current))throw Error('Acceptance evidence or authority changed')})
     const read=access.read
     const result=await this.host.runGoalVerifier(g,id,{
-     input:JSON.stringify({kind:'goal_verification',objective:g.objective,criteria:semantic,programChecks:checks,evidence:snapshot.evidence.map(({content,...meta})=>meta)}),
+     input:JSON.stringify({kind:'goal_verification',objective:g.objective,originalRequest:g.contract?this.host.store.triggers.get(g.contract.triggerId)?.text:undefined,authorizationScope:g.contract?.mandate.scope,criteria:semantic,programChecks:checks,evidence:snapshot.evidence.map(({content,...meta})=>meta)}),
      schema:{type:'object',properties:{checks:{type:'array',minItems:semantic.length,maxItems:semantic.length,items:{type:'object',properties:{criterionId:{type:'string',enum:semantic.map(c=>c.id)},verdict:{type:'string',enum:['passed','failed','insufficient']},explanation:{type:'string'},evidenceIds:{type:'array',items:{type:'string'}}},required:['criterionId','verdict','explanation','evidenceIds'],additionalProperties:false}}},required:['checks'],additionalProperties:false},
      tools:access.tools,onTool:access.onTool,
     })

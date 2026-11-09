@@ -1,4 +1,5 @@
 import {backendPackageReferences} from './backends/plugin-contract.ts'
+import {delegationConfigSchema} from './delegation/contract.ts'
 import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { z } from 'zod'
@@ -62,6 +63,7 @@ export const configSchema = z.object({
   sourcePlugins:sourcePluginsSchema,
   viewPlugins:viewPluginsSchema,
   toolConnections:toolConnectionsSchema,
+  delegation:z.union([z.undefined(),delegationConfigSchema]).optional(),
   browser:browserConfigSchema,
   model: z.string().optional(),
   models:z.object({router:z.string().optional(),worker:z.string().optional(),subagent:z.string().optional()}).strict().prefault({}),

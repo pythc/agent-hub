@@ -90,7 +90,7 @@ function entrySafeDetail(value) {
 const workspacePages = {
   tasks: 'home', 'tasks/history': 'activity', attention: 'attention', connections: 'catalog',
   'connections/new': 'catalogue', models: 'models', 'models/new': 'model-new',
-  integrations: 'integrations', execution: 'execution', prompts: 'prompts', usage: 'usage'
+  deployments: 'deployments', integrations: 'integrations', execution: 'execution', prompts: 'prompts', usage: 'usage'
 }
 const advancedPages = ['host', 'intake', 'runtime', 'delivery', 'json', 'revisions']
 function workspaceHash() {
