@@ -28,7 +28,9 @@ Installing a connector does not authorize every group or grant every Worker its 
 
 ## Publish a plugin
 
-The default source is `pythc/agent-hub/plugins/catalog.json`. It indexes published Agent board, Slack and Linear packages. Agent board retains versions 0.1.0 and 0.1.1 for compatible updates and rollback; Slack and Linear start at 1.0.0. See [GitHub releases](https://github.com/pythc/agent-hub/releases). Bundled descriptions are discovery hints, **not proof of availability**: a fresh host resolves the remote catalog before offering installation. Source-only directories have no install action.
+The default source is `pythc/agent-hub/plugins/catalog.json`. It indexes published Agent board, Slack and Linear packages. Agent board lists current and earlier releases for compatible update paths; Slack and Linear start at 1.0.0. See [GitHub releases](https://github.com/pythc/agent-hub/releases). Bundled descriptions are discovery hints, **not proof of availability**: a fresh host resolves the remote catalog before offering installation. Source-only directories have no install action.
+
+The [first release acceptance](PLUGIN-MARKETPLACE-RELEASE-2026-11-09.md) records real GitHub downloads and Agent board install, update, rollback and restart verification on an existing host.
 
 The schema is in `src/plugin-market-contract.ts`. Each published version includes:
 
@@ -65,4 +67,4 @@ The browser fixture uses the real host, sessions, database, package installer, s
 
 更新检查是自动的，安装更新需手动确认。有未完成任务或未确认的外部操作时，连接器更新会等待宿主空闲；不会替你停止任务。回退只切换插件代码，不回滚消息、任务或投递记录。
 
-首批已发布 Agent 看板 0.1.0 / 0.1.1、Slack 1.0.0 和 Linear 1.0.0。刷新默认来源后即可查看与安装。未发布的插件仍显示“尚未发布安装包”。安装连接器不会自动授权账号或群聊，需单独完成配置。
+Agent 看板可选择当前版本及已发布的历史版本；首批连接器为 Slack 1.0.0 和 Linear 1.0.0。刷新默认来源后即可查看与安装。未发布的插件仍显示“尚未发布安装包”。安装连接器不会自动授权账号或群聊，需单独完成配置。

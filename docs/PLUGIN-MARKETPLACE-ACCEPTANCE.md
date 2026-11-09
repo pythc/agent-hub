@@ -2,7 +2,7 @@
 
 Implementation checkout: `work/roppo-agent-board-20261108`, branch `codex/agent-board-plugin-20261108`. Existing Agent board changes are retained. This record covers the marketplace addition, not a production deployment or user visual approval.
 
-This is the initial, pre-publication acceptance record. For subsequent public packages, see the [marketplace guide](PLUGIN-MARKETPLACE.md) and [GitHub releases](https://github.com/pythc/agent-hub/releases); the evidence boundaries below describe that initial test run.
+This is the initial, pre-publication acceptance record. For the subsequent public packages and real host install/update/rollback checks, see [first release and live acceptance](PLUGIN-MARKETPLACE-RELEASE-2026-11-09.md). The evidence boundaries below describe that initial test run.
 
 ## Implemented
 
