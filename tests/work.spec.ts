@@ -29,6 +29,13 @@ it('keeps a command after its caller returns, deduplicates starts and sends one 
  expect(f.manager.read(f.owner,first.id).output).toContain('hello')
  await expect(f.manager.shell(f.owner,'different','same',0)).rejects.toThrow('reused')
 })
+it.each([[true,false,false],[false,true,false],[true,true,true],[undefined,false,false],[undefined,true,true]] as const)('intersects a retained network cap %s with current global policy %s',async(retained,current,expected)=>{
+ const f=fixture();f.manager.config.work.network=current
+ const owner={...f.owner,network:retained},item=await f.manager.shell(owner,'printf policy','network-policy',0)
+ const spec=JSON.parse(readFileSync(join(f.manager.directory,item.id+'.spec.json'),'utf8'))
+ expect(spec.network).toBe(expected)
+ expect((await settle(f,item.id)).state).toBe('completed')
+})
 it('holds a review server without a slot or completion wake after handoff',async()=>{
  const f=fixture(100)
  const item=await f.manager.shell(f.owner,'sleep 0.5; printf done','review',0)

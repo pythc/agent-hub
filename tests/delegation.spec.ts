@@ -272,6 +272,29 @@ it('persists a cancellation tombstone before a delayed original submission',asyn
  a.delegation.pump=pump
 })
 
+it('does not let a fresh pairing retrieve a retained task from an earlier grant through duplicate submit',async()=>{
+ const calls:ModelRequest[]=[],a=await start(),b=await start(config(),fixture('child',calls))
+ a.pause(true);b.pause(true);await pair(a,b)
+ a.delegation.pump=()=>{}
+ a.receive('local','operator',{id:'grant-history',thread:'manual',text:'Delegate this bounded objective',addressed:true})
+ const trigger=a.store.triggers.get('local:grant-history')!
+ const created=await a.delegation.command({action:'assign',targetId:b.delegation.identity.id,operationId:'retained-task',expectedRevision:a.settings.current().revision,text:'Check the result',acceptance:'2',artifacts:[]},{trigger,discussion:'local:manual'}) as any
+ const task=a.store.get<OutboundTask>('delegation-outbound',created.id)!
+ let connection=a.store.get<any>('delegation-connection',task.connectionId)
+ const rpc=(operation:string,payload:unknown)=>b.delegation.receive(packet(a.delegation.identity,b.delegation.identity.id,operation,{grantId:connection.grantId,payload})) as Promise<RemoteTask>
+ const submitted=await rpc('submit',{contract:task.contract,leaseUntil:Date.now()+2000})
+ expect(submitted.replies).toEqual([])
+ expect((await rpc('submit',{contract:task.contract,leaseUntil:Date.now()+2000})).id).toBe(submitted.id)
+ const retained=b.store.get<RemoteTask>('delegation-inbound',task.id)!
+ b.store.put('delegation-inbound',task.id,{...retained,state:'ready',replies:[{id:'unobserved-result',kind:'reply',channel:{source:'delegation',thread:'retained',address:{}},text:'Result produced after the previous parent observation'}]})
+ await b.delegation.revoke(a.delegation.identity.id);await pair(a,b)
+ const oldGrant=connection.grantId;connection=a.store.get<any>('delegation-connection',task.connectionId)
+ expect(connection.grantId).not.toBe(oldGrant)
+ await expect(rpc('status',{id:task.id})).rejects.toThrow('task_grant_revoked')
+ await expect(rpc('submit',{contract:task.contract,leaseUntil:Date.now()+2000})).rejects.toThrow('task_grant_revoked')
+ expect(calls).toHaveLength(0)
+})
+
 it('cannot spoof derived authority through an ordinary human source event',async()=>{
  const calls:ModelRequest[]=[],c=config()
  c.sources[1]!.allowedActors=['operator']

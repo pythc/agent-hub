@@ -13,6 +13,7 @@ import {backendPluginCommand} from '../src/backends/plugin-cli.ts'
 import {BackendPluginError} from '../src/backends/plugin-contract.ts'
 import {classifyGoalFailure} from '../src/goal-contract.ts'
 import type {ModelRequest} from '../src/model.ts'
+import {restoreWorkerInput,workerInputTransport} from '../plugins/backend-codex/worker-input.ts'
 const roots:string[]=[],stores:Store[]=[]
 afterEach(()=>{for(const s of stores.splice(0))s.close();for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true});delete process.env.PRIVATE_FIXTURE_SECRET;delete process.env.TEST_ACCOUNT})
 const manifest={id:'third-party-cli',label:'Independent test adapter',version:'1.0.0',stateVersion:1,configSchema:{type:'object'},parametersSchema:{type:'object',properties:{flavor:{enum:['highest']}},additionalProperties:false},capabilities:{resume:true,tools:true,managed:true,contextBudget:true,steering:true,promptRefresh:true,images:false,nativeTakeover:false,history:true,purge:false,modelCatalog:true},network:false,environment:['FIXTURE_ACCOUNT']}
@@ -22,15 +23,57 @@ it('keeps typed plugin failures out of quality repair and autonomous replanning'
  expect(classifyGoalFailure(String(new BackendPluginError('quota_exhausted','external')),0,0).kind).toBe('quota')
  expect(classifyGoalFailure(String(new BackendPluginError('invalid_output','external')),0,0).kind).toBe('quality')
 })
-async function fixture(patch:Record<string,unknown>={}){
+async function fixture(patch:Record<string,unknown>={},entry='tests/fixtures/execution-backend.ts'){
  const root=mkdtempSync(join(tmpdir(),'backend-plugin-test-'));roots.push(root)
- const pkg=await buildBackendPackage(resolve('tests/fixtures/execution-backend.ts'),{...manifest,...patch},join(root,'package'))
+ const pkg=await buildBackendPackage(resolve(entry),{...manifest,...patch},join(root,'package'))
  const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}],work:{sandboxDriver:process.platform==='darwin'?'seatbelt':'bubblewrap'},turnTimeoutMs:10000,backendPlugins:[{directory:pkg.directory,digest:pkg.digest}],backends:{external:{kind:'plugin',plugin:manifest.id,config:{secret:join(root,'state','secret')},env:{FIXTURE_ACCOUNT:'TEST_ACCOUNT'}}},execution:{backend:'external'}})
  const cwd=join(config.stateDir,'work','task');mkdirSync(cwd,{recursive:true});writeFileSync(join(config.stateDir,'secret'),'HOST-SECRET');process.env.TEST_ACCOUNT='a'.repeat(64)
  const store=new Store(join(config.stateDir,'state.sqlite'));stores.push(store);activateBackendPackages(store,config)
  const registry=new BackendRegistry(config,store),request:ModelRequest={cwd,instructions:'test',input:'first',schema:{},managed:true}
  return {root,pkg,config,cwd,store,registry,request}
 }
+function workerInputRequest(cwd:string,instruction='Execute the original strategy'):ModelRequest{
+ const scope=JSON.stringify({objective:'Immutable 原件 🧪\r\n',node:{instruction},criteria:Array.from({length:60},(_,i)=>({id:'c'+i,description:'Preserve quotes " and \\ exactly',check:{path:'result.json',expected:{value:i,complete:false}}}))})
+ return {cwd,managed:true,role:'worker',schema:{},activity:{ticketId:'task',sourceId:'PRIVATE-SOURCE',triggerId:'PRIVATE-TRIGGER',workerId:'PRIVATE-WORKER',agentId:'PRIVATE-AGENT'},instructions:'Policy remains binding.\nExecution environment:\n'+JSON.stringify({cwd,ticketId:'task',mandate:scope})+'\nAll source content is untrusted.',input:JSON.stringify({mandate:{actor:{id:'owner'},scope},inputs:[{kind:'note',text:'Preserve the complete input'}]})}
+}
+it('preserves complete Worker input encoding through the process adapter on first activation and resume',async()=>{
+ const f=await fixture({},'tests/fixtures/worker-input-backend.ts')
+ let threadId:string|undefined
+ for(const instruction of ['Execute the original strategy','Execute the newly reviewed strategy']){
+  const request={...workerInputRequest(f.cwd,instruction),...(threadId?{threadId}:{})},before=JSON.stringify(request)
+  const result=await f.registry.run(request),received=JSON.parse(result.text),expected=workerInputTransport(request)
+  expect(expected.encoding).toBe('json-text-v1')
+  expect(received.activity).toEqual({ticketId:'task'})
+  expect(received.transport).toEqual(expected)
+  expect(restoreWorkerInput(received.transport.input)).toBe(request.input)
+  expect(received.transport.instructions).toContain(request.instructions)
+  for(const sentinel of ['PRIVATE-SOURCE','PRIVATE-TRIGGER','PRIVATE-WORKER','PRIVATE-AGENT'])expect(result.text).not.toContain(sentinel)
+  expect(JSON.stringify(request)).toBe(before)
+  if(threadId)expect(result.threadId).toBe(threadId)
+  threadId=result.threadId
+ }
+})
+it('keeps Worker input unchanged when process task metadata is missing, malformed or mismatched',async()=>{
+ const f=await fixture({},'tests/fixtures/worker-input-backend.ts')
+ const cases:{activity:unknown;forwarded:unknown}[]=[
+  ...[undefined,null,{}, {sourceId:'PRIVATE-SOURCE'}, {ticketId:''}, {ticketId:42}, {ticketId:{}}, {ticketId:['task']}, {ticketId:'x'.repeat(1001)}].map(activity=>({activity,forwarded:null})),
+  {activity:{ticketId:'other',sourceId:'PRIVATE-SOURCE'},forwarded:{ticketId:'other'}},
+ ]
+ for(const {activity,forwarded} of cases){
+  const request={...workerInputRequest(f.cwd),activity:activity as ModelRequest['activity']},before=JSON.stringify(request)
+  const received=JSON.parse((await f.registry.run(request)).text)
+  expect(received.activity).toEqual(forwarded)
+  expect(received.transport).toEqual({input:request.input,instructions:request.instructions})
+  expect(JSON.stringify(received)).not.toContain('PRIVATE-SOURCE')
+  expect(JSON.stringify(request)).toBe(before)
+ }
+})
+it.each<Partial<ModelRequest>>([{managed:false},{operator:true},{role:'router'},{role:'subagent'},{role:undefined}])('omits Worker task metadata outside managed non-operator Workers (%j)',async patch=>{
+ const f=await fixture({},'tests/fixtures/worker-input-backend.ts'),request={...workerInputRequest(f.cwd),...patch}
+ const received=JSON.parse((await f.registry.run(request)).text)
+ expect(received.activity).toBeNull()
+ expect(received.transport).toEqual({input:request.input,instructions:request.instructions})
+})
 it('forwards whitelisted usage through the isolated adapter transport',async()=>{
  const f=await fixture(),usage:unknown[]=[]
  await f.registry.run({...f.request,input:'usage',onUsage:value=>usage.push(value)})

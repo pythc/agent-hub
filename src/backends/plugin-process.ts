@@ -16,7 +16,7 @@ import {stableDigest} from '../sources.ts'
 import {ContextBudgetExceeded,type BudgetReceipt} from '../context-budget.ts'
 import {TransientModelError} from '../model.ts'
 import {normalizeUsage} from '../model-usage.ts'
-import {backendEnvelope,backendResult,backendDiagnosticSchema,BackendPluginError,type BackendDiagnostic} from './plugin-contract.ts'
+import {backendEnvelope,backendResult,backendDiagnosticSchema,backendWorkerActivitySchema,BackendPluginError,type BackendDiagnostic} from './plugin-contract.ts'
 import {installBackendPackage,readBackendPackage,backendObjects,validatePluginValue,type BackendPackage} from './plugin-package.ts'
 
 interface Thread {id:string;backendId:string;pluginId:string;digest:string;stateVersion:number;nativeId?:string;cwd:string;identity:string;accountIdentity?:string;state:'running'|'completed'|'failed'|'interrupted';effectIds:string[];turnId?:string;lastFailure?:{at:number;code:string;diagnostic?:BackendDiagnostic}}
@@ -66,7 +66,9 @@ export class ProcessBackend implements Model {
    record.accountIdentity=health.accountIdentity;record.state='running';this.save(record)
    const callbacks=['onThread','onTurn','onConfiguration','onBudget','onActive',...Object.keys(request).filter(k=>k.startsWith('on')&&typeof (request as any)[k]==='function'),...(request.retainToolResult?['retainToolResult']:[])]
    const input=Object.fromEntries(Object.entries(request).filter(([k,v])=>typeof v!=='function'&&!['signal','threadId','activity'].includes(k)))
-   const result=backendResult.parse(await transport.call('run',{...input,model:request.model??this.definition.model,threadId:record.nativeId,callbacks}))
+   // Keep activity private except the bounded task ID needed to match the full Worker input.
+   const activity=request.managed===true&&!request.operator&&request.role==='worker'?backendWorkerActivitySchema.safeParse({ticketId:request.activity?.ticketId}):undefined
+   const result=backendResult.parse(await transport.call('run',{...input,...(activity?.success?{activity:activity.data}:{}),model:request.model??this.definition.model,threadId:record.nativeId,callbacks}))
    if(record.effectIds.some(id=>this.store.get<Effect>('backend-plugin-tool',id)?.state==='running'))throw new BackendPluginError('outcome_unknown',this.id)
    if(!record.nativeId||result.threadId!==record.nativeId||result.turnId!==record.turnId)throw new BackendPluginError('invalid_output',this.id)
    if(Object.keys(request.schema).length){let output:unknown;try{output=JSON.parse(result.text)}catch{throw new BackendPluginError('invalid_output',this.id)}if(!ajv.compile(request.schema)(output))throw new BackendPluginError('invalid_output',this.id)}

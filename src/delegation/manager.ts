@@ -235,7 +235,7 @@ export class Delegations {
   requireDelegation(c.issuer===peer.id&&c.target===this.identity.id,'contract_identity_mismatch',403)
   requireDelegation(c.ancestors.length===1&&c.ancestors[0]===peer.id&&!c.ancestors.includes(this.identity.id),'delegation_hop_limit')
   const hash=stableDigest(c),existing=this.host.store.get<RemoteTask>('delegation-inbound',c.delegationId)
-  if(existing){requireDelegation(existing.peerId===peer.id&&existing.hash===hash,'submission_conflict',409);return this.project(existing)}
+  if(existing){requireDelegation(existing.peerId===peer.id&&existing.hash===hash,'submission_conflict',409);requireDelegation(existing.grantId===peer.ticketId,'task_grant_revoked',403);return this.project(existing)}
   requireDelegation(c.createdAt<=Date.now()+30000&&c.deadline>Date.now()&&c.deadline<=c.createdAt+peer.policy.limits.durationMs,'invalid_deadline')
   requireDelegation(c.limits.maxActivations<=peer.policy.limits.maxActivations&&c.limits.maxConcurrent<=peer.policy.limits.maxConcurrent,'quota_not_authorized',403)
   for(const k of Object.keys(c.permissions) as (keyof DelegationPermissions)[])requireDelegation(!c.permissions[k]||peer.policy.permissions[k],'permission_not_authorized',403)

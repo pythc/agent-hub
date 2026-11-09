@@ -1,6 +1,8 @@
 import {z} from 'zod'
 const id=z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)
 const jsonObject=z.record(z.string(),z.unknown())
+/** Host task identity for input consistency checks only; carries no authority. */
+export const backendWorkerActivitySchema=z.object({ticketId:z.string().min(1).max(1000)}).strict()
 export const backendPackageReferences=z.array(z.object({directory:z.string().min(1),digest:z.string().regex(/^[a-f0-9]{64}$/)}).strict()).default([])
 export const backendCapabilitiesSchema=z.object({
  resume:z.boolean(),tools:z.boolean(),managed:z.boolean(),contextBudget:z.boolean(),
