@@ -7,7 +7,7 @@ interface History {baseInstructions?:unknown;dynamicTools?:unknown;items:Entry[]
 const identity=(item:Item)=>typeof item.id==='string'?'id:'+item.type+':'+item.id:typeof item.call_id==='string'?'call:'+item.type+':'+item.call_id:undefined
 const texts=(item:Item)=>Array.isArray(item.content)?item.content.flatMap((p:any)=>typeof p.text==='string'?[p.text]:[]):[]
 const ordered=(v:any):any=>Array.isArray(v)?v.map(ordered):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,ordered(v[k])])):v
-const containsDeclaration=(value:any,declaration:string):boolean=>!!value&&typeof value==='object'&&(JSON.stringify(ordered(value))===declaration||Object.values(value).some(v=>containsDeclaration(v,declaration)))
+const containsDeclaration=(value:any,declaration:string):boolean=>Array.isArray(value)?value.some(v=>containsDeclaration(v,declaration)):!!value&&typeof value==='object'&&(JSON.stringify(ordered(value))===declaration||value.type==='namespace'&&Array.isArray(value.tools)&&containsDeclaration(value.tools,declaration))
 
 /** Only actual response items survive; compaction replaces the live context. */
 export function readNativeHistory(path:string):History{

@@ -75,6 +75,8 @@ it('does not assume that a native-only catalog covers configured dynamic tool de
  writeFileSync(f.path,JSON.stringify({type:'session_meta',payload:{dynamic_tools:[tool]}})+'\n'+record({type:'additional_tools',id:'native-only',tools:[{type:'function',name:'native_tool'}]}))
  const context=new NativeContext({instructions:'mandate',input:'x',schema:{},tools:[tool]});context.setPath(f.path);context.begin()
  expect(context.envelope().tools).toEqual([tool]);expect(protocolBytes(context.envelope())).toBeGreaterThan(12000)
+ f.append({type:'additional_tools',id:'example-only',tools:[{type:'function',name:'different_tool',inputSchema:{const:tool}}]})
+ expect(context.envelope().tools).toEqual([tool]) // A schema example is not a declaration.
  f.append({type:'additional_tools',id:'host-declarations',tools:[tool]})
  expect(context.envelope().tools).toBeUndefined()
 })
