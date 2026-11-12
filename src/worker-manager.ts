@@ -150,6 +150,7 @@ export class WorkerManager {
    }
    if(context?.trigger&&!context.scoped)host.store.put('worker-assignment',input.ticketId,{...a,parentTrigger:context.trigger.id})
    allowNewTaskInputs(host.store,input.ticketId,previousInputs)
+   if(context?.scoped&&!repositoryEvent&&host.goals.forTask(input.ticketId))host.store.db.prepare("DELETE FROM records WHERE kind='goal-delivery' AND id=?").run(input.ticketId)
    return complete({ticketId:input.ticketId,status:'queued',revision:host.settings.current().revision})
   })
   if(input.action==='rebuild')return host.store.atomic(()=>{

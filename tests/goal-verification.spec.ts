@@ -203,11 +203,50 @@ it('rejects missing dependencies, cycles, uncovered criteria and out-of-scope Wo
   const f=fixture();expect(()=>f.start({nodes:nodes.map(n=>({...n,title:n.id,instruction:'Work'}))})).toThrow();expect(f.h.store.tickets.list()).toHaveLength(0)
  }
 })
-it('does not read evidence through symlinks or parent paths',async()=>{
- for(const path of ['../outside.txt','alias.txt']){
-  const f=fixture(r=>{writeFileSync(join(r.cwd,'private.txt'),'secret');symlinkSync('private.txt',join(r.cwd,'alias.txt'));return ready()});f.start({criteria:[{id:'sum',description:'Evidence',check:{kind:'file_exists',path}}]})
-  await until(f,()=>f.goal().state==='held');expect(f.rounds()).toHaveLength(0);expect(f.goal().reason).toMatch(/workspace|symlink/)
+it('rejects unusable evidence paths before committing a plan and still checks symlinks at read time',async()=>{
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'private.txt'),'secret');symlinkSync('private.txt',join(r.cwd,'alias.txt'));return ready()})
+ for(const path of ['../outside.txt',join(f.root,'report.txt')]){
+  expect(()=>f.start({criteria:[{id:'sum',description:'Evidence',check:{kind:'file_exists',path}}]})).toThrow(/relative to the task workspace/)
  }
+ expect(f.h.store.tickets.list()).toHaveLength(0)
+ expect(f.h.store.list('router-goal')).toHaveLength(0)
+ const planned=f.start({title:undefined,criteria:[{id:'sum',description:'Evidence',check:{kind:'file_exists',path:'alias.txt'}}]})
+ expect(planned.title).toBe(planned.objective)
+ await until(f,()=>f.goal().state==='held')
+ expect(f.rounds()).toHaveLength(0);expect(f.goal().reason).toMatch(/symlink/)
+})
+
+it('dispatches an explicit resume of a settled blocked Worker with the human clarification, once',async()=>{
+ const f=fixture((r,n)=>{
+  if(n===1)return {...ready(),state:'blocked',summary:'Need to identify the requested worksheet',question:'Which worksheet?',reply:''}
+  expect(r.input).toContain('Use the new worksheet')
+  writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()
+ });f.start()
+ await until(f,()=>f.goal().state==='held')
+ const g=f.goal(),message=f.h.receive('local','alice',{id:'clarification',thread:'test',scope:'test',text:'Use the new worksheet and continue',addressed:true}) as any
+ const ctx=f.h.scopes.context(f.h.store.triggers.get(message.triggerId)!,'local:test')!
+ const command={action:'resume',id:g.id,expectedRevision:g.revision,operationId:'resume-once'}
+ f.h.goals.command(command,ctx);f.h.goals.command(command,ctx)
+ await until(f,()=>f.goal().state==='completed')
+ expect(f.goal().taskIds).toEqual(g.taskIds)
+ expect([...f.attempts.values()]).toEqual([2])
+})
+
+it.each(['ready','blocked'] as const)('processes a same-entry follow-up before releasing an obsolete %s report',async state=>{
+ let release!:()=>void,entered=false
+ const f=fixture(async(r,attempt)=>{
+  if(attempt===1){entered=true;await new Promise<void>(done=>{release=done});return {...ready('outdated answer'),state}}
+  expect(r.input).toContain('Use the new measurement')
+  writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready('verified the new measurement')
+ });f.start()
+ await until(f,()=>entered)
+ const id=f.goal().taskIds[0]!,message=f.h.receive('local','alice',{id:'new-evidence',thread:'test',scope:'test',text:'Use the new measurement',addressed:true}) as any
+ const trigger=f.h.store.triggers.get(message.triggerId)!,scoped=f.h.scopes.context(trigger,'local:test')!
+ await f.h.manager.call({action:'send',ticketId:id,text:trigger.text,requestId:'forward-evidence',revision:f.h.settings.current().revision},{discussion:'local:test',trigger,scoped})
+ release()
+ await until(f,()=>f.goal().state==='completed')
+ expect(f.h.store.list<any>('goal-delivery').map(d=>d.reply)).toEqual(['verified the new measurement'])
+ expect([...f.attempts.values()]).toEqual([2])
 })
 it('classifies recoverable provider faults separately from uncertain effects and environment problems',()=>{
  expect(classifyGoalFailure('HTTP 503 temporarily unavailable',1000,0)).toMatchObject({kind:'transient',retryAt:121000})

@@ -1,21 +1,25 @@
+import {isAbsolute,normalize} from 'node:path'
 import {z} from 'zod'
 
 const id=z.string().min(1).max(200)
 export const skillRefSchema=z.object({id,version:z.number().int().positive()}).strict()
-const path=z.string().min(1).max(1000)
+export const evidencePath=z.string().min(1).max(1000).refine(
+ value=>!isAbsolute(value)&&!value.split(/[\\/]/).includes('..')&&normalize(value)!=='.',
+ 'Use a file path relative to the task workspace, without parent traversal',
+)
 export const criterionSchema=z.object({
  id,description:z.string().min(1).max(4000),
- files:z.array(path).max(20).default([]),
+ files:z.array(evidencePath).max(20).default([]),
  documents:z.array(id).max(20).default([]),
  check:z.discriminatedUnion('kind',[
-  z.object({kind:z.literal('file_exists'),path}).strict(),
-  z.object({kind:z.literal('xlsx_cell_equals'),path,sheet:id,cell:z.string().regex(/^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$/i),expected:z.union([z.string(),z.number(),z.boolean()]),sumRange:z.string().regex(/^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}:\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$/i).optional()}).strict(),
-  z.object({kind:z.literal('text_contains'),path,text:z.string().min(1).max(16000)}).strict(),
-  z.object({kind:z.literal('json_equals'),path,pointer:z.string().max(1000).refine(p=>p===''||p.startsWith('/'),'JSON pointer must be empty or start with /'),expected:z.unknown().refine(v=>v!==undefined,'expected is required')}).strict(),
+  z.object({kind:z.literal('file_exists'),path:evidencePath}).strict(),
+  z.object({kind:z.literal('xlsx_cell_equals'),path:evidencePath,sheet:id,cell:z.string().regex(/^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$/i),expected:z.union([z.string(),z.number(),z.boolean()]),sumRange:z.string().regex(/^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}:\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}$/i).optional()}).strict(),
+  z.object({kind:z.literal('text_contains'),path:evidencePath,text:z.string().min(1).max(16000)}).strict(),
+  z.object({kind:z.literal('json_equals'),path:evidencePath,pointer:z.string().max(1000).refine(p=>p===''||p.startsWith('/'),'JSON pointer must be empty or start with /'),expected:z.unknown().refine(v=>v!==undefined,'expected is required')}).strict(),
  ]).optional(),
 }).strict()
 export type GoalCriterion=z.infer<typeof criterionSchema>
-export const nodeSchema=z.object({id,title:z.string().min(1).max(300),instruction:z.string().min(1).max(16000),workerId:id.optional(),teamTargetId:id.optional(),dependsOn:z.array(id).max(100).default([]),criterionIds:z.array(id).max(50),derivedFrom:id.optional(),supports:z.array(id).min(1).max(50).optional(),outputs:z.array(path).min(1).max(20).optional()}).strict().refine(n=>!!n.workerId!==!!n.teamTargetId,'A node needs exactly one workerId or teamTargetId')
+export const nodeSchema=z.object({id,title:z.string().min(1).max(300),instruction:z.string().min(1).max(16000),workerId:id.optional(),teamTargetId:id.optional(),dependsOn:z.array(id).max(100).default([]),criterionIds:z.array(id).max(50),derivedFrom:id.optional(),supports:z.array(id).min(1).max(50).optional(),outputs:z.array(evidencePath).min(1).max(20).optional()}).strict().refine(n=>!!n.workerId!==!!n.teamTargetId,'A node needs exactly one workerId or teamTargetId')
 export interface GoalNode extends z.infer<typeof nodeSchema> {
  ticketId?:string;delegationId?:string;state:'pending'|'running'|'verifying'|'passed'|'held'|'waiting_dependency';roundId?:string;
  repairs:number;recoveries:number;repairStart?:number;refreshFrom?:string;retryAt?:number;failure?:GoalFailure;reason?:string;
@@ -42,5 +46,6 @@ export function validateGraph(nodes:z.infer<typeof nodeSchema>[],criteria:GoalCr
  const visiting=new Set<string>(),done=new Set<string>()
  const visit=(id:string)=>{if(visiting.has(id))throw Error('Cyclic goal dependency');if(done.has(id))return;visiting.add(id);for(const d of byId.get(id)!.dependsOn)visit(d);visiting.delete(id);done.add(id)}
  for(const id of byId.keys())visit(id)
- if(nodes.length&&criteria.some(c=>!nodes.some(n=>n.criterionIds.includes(c.id))))throw Error('Every goal criterion needs a task node')
+ const uncovered=criteria.filter(c=>!nodes.some(n=>n.criterionIds.includes(c.id)))
+ if(nodes.length&&uncovered.length)throw Error('Assign these acceptance criteria to at least one goal node: '+uncovered.map(c=>c.id).join(', '))
 }

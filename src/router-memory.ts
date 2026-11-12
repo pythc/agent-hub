@@ -416,6 +416,16 @@ export class RouterMemory {
   for(const ref of manifest.facts){const f=this.fact(ref.id);if(!f||!this.visible(f,context)||f.revision!==ref.revision||f.state!=='active'||f.expiresAt!==undefined&&f.expiresAt<=Date.now()||!this.supported(f))throw Error('Context fact expired')}
   for(const t of manifest.taskOwners){const owner=this.scopes.ownership(t.id);if(!owner||owner.ownerEpoch!==t.epoch||owner.routerId!==manifest.routerId)throw Error('Task owner changed');if((owner.dataRevision??1)!==(t.dataRevision??1))throw Error('Task input changed');this.scopes.checkTaskEntry(owner,manifest.entryId,'context');this.scopes.checkTaskEntry(owner,manifest.entryId,'result')}
  }
+ /** A same-entry follow-up advances this ticket's input revision while its Worker is running. */
+ validateWorkerTurn(ticketId:string,started:ContextManifest){
+  const saved=this.store.get<{manifest:ContextManifest}>('task-context',ticketId)?.manifest
+  const original=started.taskOwners.find(t=>t.id===ticketId),current=saved?.taskOwners.find(t=>t.id===ticketId)
+  if(!original||!current||original.dataRevision===current.dataRevision){this.validate(started);return false}
+  if(!saved||saved.id!==started.id||saved.entryId!==started.entryId||saved.actor!==started.actor||current.epoch!==original.epoch)throw Error('Task context changed during execution')
+  this.validate(saved)
+  this.validate({...started,taskOwners:started.taskOwners.map(t=>t.id===ticketId?{...t,dataRevision:current.dataRevision}:t)})
+  return true
+ }
  moveTaskContext(ticketId:string,c:ScopeContext){
   const previous=this.store.get<{manifest:ContextManifest}>('task-context',ticketId)
   if(!previous)return

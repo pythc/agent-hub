@@ -2,7 +2,7 @@ import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {RouterGoal} from './router-goals.ts'
 import type {Mandate,Ticket} from './vendor/dsh-core/index.ts'
-import {validateGraph,classifyGoalFailure,type GoalCriterion,type GoalNode} from './goal-contract.ts'
+import {validateGraph,classifyGoalFailure,evidencePath,type GoalCriterion,type GoalNode} from './goal-contract.ts'
 import {stableDigest} from './sources.ts'
 import {scopeBudget} from './context-budget.ts'
 import {inlineEvidenceBudget,evidenceAccess,type GoalEvidence} from './goal-evidence.ts'
@@ -18,7 +18,7 @@ export interface GoalContract {skill?:{id:string;version:number};objective:strin
 export class ReplanningInterrupted extends Error {}
 const id=z.string().min(1).max(200),instruction=z.string().min(1).max(16000)
 const change=z.object({id,instruction,dependsOn:z.array(id).max(100)}).strict()
-const addition=z.object({id,title:z.string().min(1).max(300),instruction,workerId:id,dependsOn:z.array(id).max(100),derivedFrom:id,supports:z.array(id).min(1).max(50),outputs:z.array(z.string().min(1).max(1000)).min(1).max(20)}).strict()
+const addition=z.object({id,title:z.string().min(1).max(300),instruction,workerId:id,dependsOn:z.array(id).max(100),derivedFrom:id,supports:z.array(id).min(1).max(50),outputs:z.array(evidencePath).min(1).max(20)}).strict()
 export const replanProposalSchema=z.object({reason:z.string().min(1).max(4000),evidenceIds:z.array(id).min(1).max(200),changes:z.array(change).min(1).max(100),additions:z.array(addition).max(20)}).strict()
 type Proposal=z.infer<typeof replanProposalSchema>
 const reviewSchema=z.object({approved:z.boolean(),explanation:z.string().min(1).max(4000),evidenceIds:z.array(id).min(1).max(200)}).strict()
