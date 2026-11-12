@@ -463,3 +463,16 @@ it('limits inline evidence by the selected API backend wire budget as well as it
  f.h.config.execution.router!.backend='codex'
  expect(f.h.goalEvidenceBudget(goal)).toBe(128000)
 })
+
+it('accepts absolute, lowercase and uppercase addresses against a real xlsx',async()=>{
+ const f=fixture(async r=>{
+  const book=XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([[null,null],[null,1],[null,2],[null,3],[null,6]]),'Sheet1')
+  writeFileSync(join(r.cwd,'addresses.xlsx'),XLSX.write(book,{type:'buffer',bookType:'xlsx'}))
+  return ready()
+ })
+ const criteria=['$B$5','b5','B5'].map((cell,i)=>({id:`c${i}`,description:'check workbook',check:{kind:'xlsx_cell_equals',path:'addresses.xlsx',sheet:'Sheet1',cell,expected:6,sumRange:['$B$2:$B$4','b2:b4','B2:B4'][i]}}))
+ f.start({criteria,nodes:[{id:'build',title:'Build',instruction:'Create workbook',workerId:'one',criterionIds:criteria.map(c=>c.id)}]})
+ await until(f,()=>f.goal().state==='completed')
+ expect(f.rounds().some(r=>r.state==='passed')).toBe(true)
+})

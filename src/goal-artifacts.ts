@@ -43,11 +43,11 @@ function workbookObservation(bytes:Buffer,checks:CellCheck[]){
   if(bytes.readUInt16BE(0)!==0x504b)throw Error('Expected an XLSX workbook')
   const workbook=XLSX.read(bytes,{type:'buffer',sheets:[...new Set(checks.map(c=>c.sheet))],cellFormula:false})
   const cells=checks.map(check=>{
-    const sheet=workbook.Sheets[check.sheet],cell=sheet?.[check.cell]
+    const sheet=workbook.Sheets[check.sheet],cell=sheet?.[check.cell.replace(/\$/g,'').toUpperCase()]
     const value=cell&&['s','n','b'].includes(cell.t)?cell.v:null
     let sum:number|null=null
     if(check.sumRange&&sheet){
-      const {s,e}=XLSX.utils.decode_range(check.sumRange)
+      const {s,e}=XLSX.utils.decode_range(check.sumRange.replace(/\$/g,'').toUpperCase())
       const valid=e.r>=s.r&&e.c>=s.c&&e.r<1048576&&e.c<16384
       if(valid){
         sum=0
