@@ -163,6 +163,43 @@ realSandbox('hands off actual commits, repairs a merge and failed clean test, an
  }finally{server.server.closeAllConnections();await new Promise<void>(done=>server.server.close(()=>done()))}
 },120000)
 
+realSandbox('recovers a missing pending review notice after restart without duplicating it or resetting the human wait',async()=>{
+ const f=project(true)
+ f.h.goals.notice=()=>{}
+ await f.until(()=>f.goal().project?.review?.state==='pending')
+ const review=structuredClone(f.goal().project!.review!)
+ expect(f.h.store.deliveries().some(d=>d.text.includes('验收通过 '+review.id))).toBe(false)
+ f.advance(60000)
+ await f.restart()
+ await f.until(()=>f.h.store.deliveries().some(d=>d.text.includes('验收通过 '+review.id)&&d.status==='sent'))
+ await f.h.goals.advance();await f.h.flush()
+ expect(f.h.store.deliveries().filter(d=>d.text.includes('验收通过 '+review.id))).toHaveLength(1)
+ expect(f.goal().project!.review).toEqual(review)
+},90000)
+
+realSandbox('delivers goal notices after task input advances while retaining ownership checks',async()=>{
+ const f=project(true)
+ await f.until(()=>f.goal().project?.review?.state==='pending')
+ const g=f.goal(),context=f.h.goals.context(g),ticketId=g.taskIds[0]!
+ const {manifest}=f.h.memory.build(context,{},'codex')
+ const owner=f.h.scopes.ownership(ticketId)!
+ manifest.taskOwners=[{id:ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}]
+ f.h.store.put('context-manifest',manifest.id,manifest)
+ g.contextIds=[...(g.contextIds??[]),manifest.id]
+ f.h.store.put('router-goal',g.id,g)
+ f.h.scopes.noteInput(ticketId,context)
+ expect(()=>f.h.memory.validate(manifest)).toThrow('Task input changed')
+ f.h.goals.notice(g,'Review the retained commit',true)
+ const notice=()=>f.h.store.deliveries().find(d=>d.text==='Review the retained commit')
+ expect(notice()?.status).toBe('pending')
+ await f.h.flush()
+ expect(notice()?.status).toBe('sent')
+ expect(f.h.store.get<any>('context-manifest',manifest.id).taskOwners[0].dataRevision).toBe(1)
+ f.h.store.put('task-ownership',ticketId,{...f.h.scopes.ownership(ticketId)!,ownerEpoch:owner.ownerEpoch+1})
+ f.h.goals.notice(g,'Ownership changed',true)
+ expect(f.h.store.deliveries().some(d=>d.text==='Ownership changed')).toBe(false)
+},90000)
+
 realSandbox('returns scheduled and webhook project reviews to the person and thread that authorized them',async()=>{
  const f=project(true),initial=f.goal()
  await f.until(()=>f.goal().project?.review?.state==='pending')

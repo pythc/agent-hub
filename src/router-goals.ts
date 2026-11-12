@@ -1,5 +1,5 @@
 import {z} from 'zod'
-import {startCodeProject,type GoalProject} from './project-code.ts'
+import {startCodeProject,type GoalProject,type CodeReceipt} from './project-code.ts'
 import {projectBudget} from './project-budget.ts'
 import type {Runtime} from './runtime.ts'
 import type {ScopeContext} from './router-scope.ts'
@@ -112,7 +112,12 @@ export class RouterGoals {
    const channel=g.project?this.projectRequester(g)?.channel:trigger.channel
    if(!channel||g.project&&!this.host.proactive.notify(g.triggerId))return
    const ids=[...new Set([...(g.contextIds??[]),...this.host.replanning.contexts(g.id)])]
-   const manifests=ids.map(id=>{const manifest=this.host.store.get<ContextManifest>('context-manifest',id);if(!manifest)throw Error('Goal context unavailable');this.host.memory.validate(manifest);return manifest})
+   const manifests=ids.map(id=>{
+    const saved=this.host.store.get<ContextManifest>('context-manifest',id);if(!saved)throw Error('Goal context unavailable')
+    // Historical goal context survives task progress, as in continuity.validContext.
+    const manifest={...saved,taskOwners:saved.taskOwners.map(t=>({...t,dataRevision:this.host.scopes.ownership(t.id)?.dataRevision??1}))}
+    this.host.memory.validate(manifest);return manifest
+   })
    const id='goal-notice:'+stableDigest([g.id,g.revision,text])
    // The run remains the authority for delayed delivery to its original requester's channel.
    this.host.store.put('router-reply-owner',id,{discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests})
@@ -186,9 +191,12 @@ export class RouterGoals {
   p.review={id,head:code.head,roundId:round.id,deliveryId:delivery.id,state:'pending',at:this.now()}
   g.state='needs_input';g.nextAt=undefined;g.nextAction='等待人工验收';g.reason='等待人工验收';this.save(g)
   this.host.store.put('project-review',id,{goalId:g.id,...p.review})
-  const prefix=this.host.sources.get(p.sourceId)?.verificationCommand,command=prefix?prefix+' ':''
-  this.notice(g,['请验收「'+g.title+'」。','提交 '+code.head,'通过 '+code.test.command,code.diffStat,'通过请回复「'+command+'验收通过 '+id+'」，需修改请回复「'+command+'退回 '+id+' 修改意见」。也可在控制面查看补丁和测试输出。'].filter(Boolean).join('\n'),true)
+  this.reviewNotice(g,code)
   return false
+ }
+ private reviewNotice(g:RouterGoal,code:CodeReceipt){
+  const p=g.project!,id=p.review!.id,prefix=this.host.sources.get(p.sourceId)?.verificationCommand,command=prefix?prefix+' ':''
+  this.notice(g,['请验收「'+g.title+'」。','提交 '+code.head,'通过 '+code.test!.command,code.diffStat,'通过请回复「'+command+'验收通过 '+id+'」，需修改请回复「'+command+'退回 '+id+' 修改意见」。也可在控制面查看补丁和测试输出。'].filter(Boolean).join('\n'),true)
  }
  operatorReview(id:string){
   const record=this.host.store.get<{goalId:string}>('project-review',id),g=record&&this.get(record.goalId)
@@ -310,6 +318,10 @@ export class RouterGoals {
    if(!saved.nodes?.length&&saved.taskIds?.length){saved={...saved,nodes:saved.taskIds.map(ticketId=>({id:ticketId,title:'Retained task',instruction:this.host.store.tickets.get(ticketId)?.mandate.scope??'',workerId:this.host.store.get<any>('worker-assignment',ticketId)?.workerId??'',criterionIds:saved.criteria.map(c=>c.id),dependsOn:[],ticketId,state:'running' as const,repairs:0,recoveries:0}))};this.save(saved)}
    const reviewRound=saved.project?.review?.state==='pending'&&saved.finalRoundId?this.host.store.get<VerificationRound>('goal-verification',saved.finalRoundId):undefined
    const refreshReview=saved.state==='needs_input'&&!!reviewRound&&!reviewRound.snapshot.finalCommit
+   if(saved.state==='needs_input'&&reviewRound?.snapshot.finalCommit){
+    const code=this.host.projectCode.receipt(saved.project!.review!.deliveryId)
+    if(code)this.reviewNotice(saved,code)
+   }
    const runnable=['active','waiting'].includes(saved.state)||refreshReview
    if(!runnable||!saved.objective||!saved.nodes?.length)continue
    if(saved.project&&this.holdBudget(saved))continue
