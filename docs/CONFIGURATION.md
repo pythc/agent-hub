@@ -52,6 +52,25 @@ Workers reserve slots while managed background jobs are active. Excess new tasks
 
 Existing deployments without an explicit pool derive Workers from their previous concurrency and Worker role/model settings. The advanced JSON shape is documented in [backends](BACKENDS.md).
 
+### Let a Worker commit a local fix for review
+
+For a Feishu or local entry that handles repository tasks, set its `cwd` to the source repository and apply these fields to the entry once. Use the absolute path of the [preparation script](../examples/prepare-git-repo.sh) in your Roppo installation.
+
+```json
+{
+  "sandbox": "workspace-write",
+  "workspace": {
+    "mode": "directory",
+    "prepare": {
+      "command": "/bin/sh",
+      "args": ["/absolute/path/to/roppo/examples/prepare-git-repo.sh"]
+    }
+  }
+}
+```
+
+Each ticket starts with a local clone in `repo/` at the source repository's committed HEAD. The Worker can edit, build, test and commit on its own branch. Follow-ups on the same ticket see the same checkout. Ask for the commit and test results in the original conversation for human acceptance. Allow `work.network` on the host and network access in the assignment when tests need a server or dependency downloads. The local-review clone has its own Git objects and no configured remote. For draft PR delivery, see the [GitHub entry](GITHUB_PLUGIN.md).
+
 ## Software connections and prompts
 
 **Software connections → New connection** adds a named office/repository instance even if that platform is already connected. Feishu can reuse the host bot or connect another bot. Existing instances keep their scopes and allowed senders; each office instance has its own verification observation. A personal MCP client entry is the actual installed bridge profile, not an extra artificial software instance.

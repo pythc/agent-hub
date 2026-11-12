@@ -6,7 +6,10 @@ import {configSchema} from '../src/config.ts'
 import {Store} from '../src/store.ts'
 import {WorkManager,type WorkOwner} from '../src/work.ts'
 import {sandboxCommand} from '../src/sandbox.ts'
+import {prepareWorkspace} from '../src/workspace.ts'
 import {createServer} from 'node:http'
+import {execFileSync} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
 const roots:string[]=[],managers:WorkManager[]=[],stores:Store[]=[]
 const supported=process.platform==='darwin'||process.platform==='linux'
 const driver=process.platform==='linux'?'bubblewrap':'seatbelt'
@@ -21,6 +24,55 @@ function fixture(sandbox:'read-only'|'workspace-write'='workspace-write'){
  return {root,cwd,config,store,manager,owner}
 }
 async function settle(f:ReturnType<typeof fixture>,id:string){for(let i=0;i<100;i++){await f.manager.tick();const item=f.store.get<any>('work',id);if(!['starting','running'].includes(item.state))return item;await new Promise(r=>setTimeout(r,20))}throw Error('Command did not finish')}
+const git=(cwd:string,...args:string[])=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim()
+function seedRepository(cwd:string){
+ git(cwd,'init','-b','main')
+ writeFileSync(join(cwd,'version.txt'),'original\n')
+ git(cwd,'add','version.txt')
+ git(cwd,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-m','Seed')
+ return git(cwd,'rev-parse','HEAD')
+}
+it.skipIf(!supported)('prepares one Git checkout per ticket and lets the offline Worker review and commit its fix',async()=>{
+ const f=fixture(),base=seedRepository(f.cwd),source=f.config.sources[0]!
+ source.sandbox='workspace-write'
+ source.workspace={mode:'directory',prepare:{command:'/bin/sh',args:[fileURLToPath(new URL('../examples/prepare-git-repo.sh',import.meta.url))]}}
+ const cwd=await prepareWorkspace(f.config,source,f.owner.ticketId),owner={...f.owner,cwd}
+ const job=await f.manager.shell(owner,[
+  'set -e','cd repo','git rev-parse HEAD','printf "patched\\n" > version.txt','git diff --check','git diff -- version.txt',
+  'git add version.txt','git commit -m "Patch in Worker"','git status --short','git rev-parse HEAD'
+ ].join('\n'),'local-commit',0)
+ const ended=await settle(f,job.id),output=f.manager.read(owner,job.id).output
+ expect(ended.exitCode,output).toBe(0)
+ const repo=join(cwd,'repo'),head=git(repo,'rev-parse','HEAD')
+ expect(output).toContain(base);expect(output).toContain('+patched');expect(output).toContain(head);expect(output).not.toContain('xcrun_db')
+ expect(git(repo,'rev-parse','HEAD^')).toBe(base)
+ expect(git(repo,'status','--porcelain')).toBe('')
+ expect(git(repo,'branch','--show-current')).toMatch(/^superagent\/[a-f0-9]{20}$/)
+ expect(git(repo,'remote')).toBe('')
+ expect(git(f.cwd,'rev-parse','HEAD')).toBe(base);expect(git(f.cwd,'status','--porcelain')).toBe('')
+ // A host that stopped after publishing the checkout can finish preparing the same ticket.
+ rmSync(join(cwd,'.superagent-prepared'))
+ expect(await prepareWorkspace(f.config,source,f.owner.ticketId)).toBe(cwd)
+ expect(git(repo,'rev-parse','HEAD')).toBe(head)
+})
+it.skipIf(process.platform!=='darwin')('reads a linked checkout with Apple Git while keeping its shared refs read-only',async()=>{
+ const f=fixture(),base=seedRepository(f.cwd),linked=join(f.root,'linked')
+ git(f.cwd,'worktree','add','-b','fix',linked,'HEAD')
+ const owner={...f.owner,cwd:linked}
+ const command=['set -e','/usr/bin/git --version','git rev-parse HEAD','git status --short','git diff --stat',
+  'if git update-ref refs/heads/outside HEAD 2>/dev/null; then exit 11; fi'].join('\n')
+ const job=await f.manager.shell(owner,command,'linked-git',0),ended=await settle(f,job.id),output=f.manager.read(owner,job.id).output
+ expect(ended.exitCode,output).toBe(0);expect(output).toContain(base)
+ expect(git(f.cwd,'branch','--list','outside')).toBe('')
+})
+it.skipIf(process.platform!=='darwin')('gives the macOS Codex driver read access to the selected developer tools',()=>{
+ const f=fixture('read-only')
+ const selected=execFileSync('/usr/bin/xcode-select',['--print-path'],{encoding:'utf8',env:{}}).trim()
+ const launch=sandboxCommand({codex:'codex',sandboxDriver:'codex',cwd:f.cwd,scratch:f.root,sandbox:'read-only',network:false,command:'git status'})
+ const filesystem=launch.args.find(arg=>arg.startsWith('permissions.superagent-managed.filesystem='))
+ expect(filesystem).toContain(JSON.stringify(selected)+'="read"')
+ expect(launch.developerBin).toBe(join(selected,'usr','bin'))
+})
 it.skipIf(!supported)('runs a real sandboxed command without Codex and denies private state/outside writes/credential environment',async()=>{
  const f=fixture();process.env.AGENTHUB_FIXTURE_KEY='must-not-be-inherited'
  const outside=join(f.root,'outside');writeFileSync(outside,'outside-original-private')

@@ -1,7 +1,7 @@
 import {existsSync,realpathSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs'
 import {resolve,delimiter,relative,sep,join} from 'node:path'
 import {tmpdir} from 'node:os'
-import {execFile} from 'node:child_process'
+import {execFile,spawnSync} from 'node:child_process'
 import {promisify} from 'node:util'
 import {hostPrivateFiles} from './private-files.ts'
 export type SandboxDriver='codex'|'seatbelt'|'bubblewrap'|'disabled'
@@ -9,19 +9,27 @@ export interface CommandSpec {sandboxDriver?:SandboxDriver;codex:string;cwd:stri
 const canon=(p:string)=>existsSync(p)?realpathSync(p):resolve(p)
 const q=(p:string)=>JSON.stringify(canon(p))
 const nested=(parent:string,p:string)=>{const r=relative(canon(parent),canon(p));return !!r&&r!=='..'&&!r.startsWith('..'+sep)&&!r.startsWith(sep)}
-export function sandboxCommand(s:CommandSpec,platform=process.platform):{command:string;args:string[];profile?:string}{
+export function sandboxCommand(s:CommandSpec,platform=process.platform):{command:string;args:string[];profile?:string;developerBin?:string}{
  const driver=s.sandboxDriver??'codex'
  if(driver==='disabled')throw Error('Managed shell is disabled; configure an installed sandbox driver')
  const shell=platform==='win32'?['cmd.exe','/d','/s','/c',s.command]:['/bin/sh','-c',s.command]
+ let developerDir:string|undefined
+ if(platform==='darwin'&&(driver==='seatbelt'||driver==='codex')){
+  // Apple's /usr/bin tools load libraries from the system-selected CLT or Xcode installation.
+  const selection=spawnSync('/usr/bin/xcode-select',['--print-path'],{encoding:'utf8',env:{},timeout:2000})
+  if(selection.status===0)developerDir=selection.stdout.trim()
+ }
+ const developerBin=developerDir&&join(developerDir,'usr','bin')
  if(driver==='codex'){
   const profile='superagent-managed',entries:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[s.cwd]:s.sandbox==='read-only'?'read':'write'}
+  if(developerDir)entries[developerDir]='read'
   if(s.privateState)entries[s.privateState]='deny';if(s.gitDirectory)entries[s.gitDirectory]='read';for(const p of s.attachments??[])entries[p]='read';for(const p of s.writablePaths??[])entries[p]='write'
   for(const p of s.privatePaths??[])entries[p]='deny'
-  return {command:s.codex,args:['sandbox','-P',profile,'-c','permissions.'+profile+'.extends='+JSON.stringify(s.sandbox==='read-only'?':read-only':':workspace'),'-c','permissions.'+profile+'.network.enabled='+String(s.network),'-c','permissions.'+profile+'.filesystem={'+Object.entries(entries).map(([p,a])=>JSON.stringify(p)+'='+JSON.stringify(a)).join(',')+'}','-C',s.cwd,'--',...shell]}
+  return {command:s.codex,args:['sandbox','-P',profile,'-c','permissions.'+profile+'.extends='+JSON.stringify(s.sandbox==='read-only'?':read-only':':workspace'),'-c','permissions.'+profile+'.network.enabled='+String(s.network),'-c','permissions.'+profile+'.filesystem={'+Object.entries(entries).map(([p,a])=>JSON.stringify(p)+'='+JSON.stringify(a)).join(',')+'}','-C',s.cwd,'--',...shell],developerBin}
  }
  if(driver==='seatbelt'){
   if(platform!=='darwin')throw Error('Seatbelt sandbox requires macOS')
-  const reads=['/System','/usr','/bin','/sbin','/opt/homebrew','/private/etc','/dev/null','/dev/random','/dev/urandom',s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[]),...(s.writablePaths??[])].filter(existsSync)
+  const reads=['/System','/usr','/bin','/sbin','/opt/homebrew','/private/etc','/dev/null','/dev/random','/dev/urandom',...(developerDir?[developerDir]:[]),s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[]),...(s.writablePaths??[])].filter(existsSync)
   const rules=['(version 1)','(deny default)','(import "system.sb")','(allow process-exec process-fork)','(allow signal (target self) (target children))','(allow sysctl-read)','(allow file-read-metadata)','(allow file-read* '+reads.map(p=>'(subpath '+q(p)+')').join(' ')+')','(allow file-write* (literal "/dev/null") (subpath '+q(s.scratch)+')'+(s.sandbox==='workspace-write'?' (subpath '+q(s.cwd)+')':'')+(s.writablePaths??[]).map(p=>' (subpath '+q(p)+')').join('')+')']
   if(s.network){
    rules.push('(allow network*)')
@@ -36,7 +44,7 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
    rules.push('(deny file-read* file-write* '+(exceptions.length?'(require-all '+hidden+' '+exceptions.join(' ')+')':hidden)+')')
   }
   for(const p of s.privatePaths??[])rules.push('(deny file-read* file-write* (literal '+q(p)+'))')
-  return {command:'/usr/bin/sandbox-exec',args:['-p',rules.join('\n'),...shell],profile:rules.join('\n')}
+  return {command:'/usr/bin/sandbox-exec',args:['-p',rules.join('\n'),...shell],profile:rules.join('\n'),developerBin}
  }
  if(platform!=='linux')throw Error('Bubblewrap sandbox requires Linux')
  const args=['--die-with-parent','--new-session','--unshare-all',...(s.network?['--share-net']:[]),'--proc','/proc','--dev','/dev','--tmpfs','/tmp']
