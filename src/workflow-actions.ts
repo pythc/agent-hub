@@ -76,7 +76,8 @@ export class WorkflowActions {
     if(!trigger?.channel||trigger.channel.address.routerInbox)return
     const id='workflow-action:'+item.id+':'+item.state
     const description=item.view.label+' · '+item.view.current.name+' → '+item.next.name
-    const text=item.state==='pending'?'待确认 '+description+'（账号 '+item.view.account+'）。在本会话回复「批准 '+item.id.slice(0,16)+'」或「拒绝 '+item.id.slice(0,16)+'」，也可打开 Roppo「待我处理」。':description+' · '+({applied:'已写入并回读',observed:'已回读目标状态，写入方未确认',declined:'已拒绝',stale:'事项已变化，请重新提案',uncertain:'写入结果待核对',applying:'正在提交'}[item.state])
+    const prefix=this.host.sources.get(trigger.source)?.verificationCommand,command=prefix?prefix+' ':''
+    const text=item.state==='pending'?'待确认 '+description+'（账号 '+item.view.account+'）。在本会话回复「'+command+'批准 '+item.id.slice(0,16)+'」或「'+command+'拒绝 '+item.id.slice(0,16)+'」，也可打开 Roppo「待我处理」。':description+' · '+({applied:'已写入并回读',observed:'已回读目标状态，写入方未确认',declined:'已拒绝',stale:'事项已变化，请重新提案',uncertain:'写入结果待核对',applying:'正在提交'}[item.state])
     const manifest=this.host.store.get<{manifest:ContextManifest}>('task-context',item.ticketId)?.manifest
     this.host.store.put('router-reply-owner',id,{discussion:trigger.source+':'+trigger.threads[0]!.id,triggerId:trigger.id,inputs:[...new Set([origin,trigger.id])],...(manifest?{manifest}:{})})
     this.host.store.outbox.send({id,channel:trigger.channel,kind:'reply',text})

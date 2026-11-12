@@ -44,7 +44,7 @@ export class RouterGoals {
  private rawList(c:ScopeContext){this.host.scopes.assertCurrent(c);return this.host.store.list<RouterGoal>('router-goal').filter(g=>this.belongs(g,c)&&g.objective&&!this.host.memory.cleanup.blocked('router-goal',g.id,g))}
  list(c:ScopeContext){return this.rawList(c).map(g=>this.sourcesValid(g)?g:{...g,state:terminal.has(g.state)?g.state:'held' as const,title:'Goal needs source review',objective:'Prior derived goal content is unavailable',criteria:[],nodes:undefined,project:undefined,contract:undefined,plan:[],checks:undefined,nextAction:'Resume with a current explicitly authorized objective, criteria and plan',reason:'Goal sources changed or were revoked',nextAt:undefined})}
  snapshot(){return this.host.store.list<RouterGoal>('router-goal').flatMap(g=>{
-  try{if(this.host.scopes.binding(g.entryId).privateActor)return [];const t=this.host.store.triggers.get(g.triggerId);if(!t)return [];this.host.routerIngress.authority(t.id);const c=this.host.scopes.context(t,g.discussion);const visible=c&&this.list(c).find(item=>item.id===g.id);return visible?[visible]:[]}catch{return []}
+  try{const binding=this.host.scopes.binding(g.entryId);if(binding.privateActor||binding.revision!==g.bindingRevision)return [];const t=this.host.store.triggers.get(g.triggerId);if(!t)return [];this.host.routerIngress.authority(t.id);const c=this.host.scopes.context(t,g.discussion);const visible=c&&this.list(c).find(item=>item.id===g.id);return visible?[visible]:[]}catch{return []}
  })}
  private anchor(g:RouterGoal){
   const t=this.host.store.triggers.get(g.triggerId);if(!t||!t.human&&!this.host.webhooks?.ownsTrigger(t.id)&&!this.host.proactive.runForTrigger(t.id)?.spec.skill)throw Error('Goal authorization source unavailable')
@@ -100,8 +100,24 @@ export class RouterGoals {
   this.host.store.put('router-goal',g.id,{...latest,turns,failures,state,reason,recovery,recoveryAttempts:error?(latest.recoveryAttempts??0)+1:0,nextAt:state==='held'?undefined:retriable?recovery.retryAt:latest.nextAt??this.now()+60000})
   if(state==='held')this.notice({...latest,state,reason},reason!)
  }
+ private projectRequester(g:RouterGoal){
+  const trigger=this.host.store.triggers.get(g.triggerId)
+  if(trigger?.human)return trigger
+  const run=this.host.proactive.runForTrigger(g.triggerId)
+  return run?this.host.store.triggers.get(run.spec.triggerId):this.host.webhooks.notificationAnchor(g.triggerId)
+ }
  notice(g:RouterGoal,text:string,review=false){
-  try{const {trigger}=this.anchor(g);if(!trigger.channel)return;const ids=[...new Set([...(g.contextIds??[]),...this.host.replanning.contexts(g.id)])],manifests=ids.map(id=>{const manifest=this.host.store.get<ContextManifest>('context-manifest',id);if(!manifest)throw Error('Goal context unavailable');this.host.memory.validate(manifest);return manifest});const id='goal-notice:'+stableDigest([g.id,g.revision,text]);this.host.store.put('router-reply-owner',id,{discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests});this.host.store.outbox.send({id,channel:trigger.channel,kind:'reply',text:review?text:'目标「'+g.title+'」尚未完成：'+text})}catch{}
+  try{
+   const {trigger}=this.anchor(g)
+   const channel=g.project?this.projectRequester(g)?.channel:trigger.channel
+   if(!channel||g.project&&!this.host.proactive.notify(g.triggerId))return
+   const ids=[...new Set([...(g.contextIds??[]),...this.host.replanning.contexts(g.id)])]
+   const manifests=ids.map(id=>{const manifest=this.host.store.get<ContextManifest>('context-manifest',id);if(!manifest)throw Error('Goal context unavailable');this.host.memory.validate(manifest);return manifest})
+   const id='goal-notice:'+stableDigest([g.id,g.revision,text])
+   // The run remains the authority for delayed delivery to its original requester's channel.
+   this.host.store.put('router-reply-owner',id,{discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests})
+   this.host.store.outbox.send({id,channel,kind:'reply',text:review?text:'目标「'+g.title+'」尚未完成：'+text})
+  }catch{}
  }
  tick(){
   for(let g of this.host.store.list<RouterGoal>('router-goal')){
@@ -210,7 +226,12 @@ export class RouterGoals {
   const match=(prefix&&text.startsWith(prefix+' ')?text.slice(prefix.length).trim():text).match(/^(验收通过|退回|approve commit|return commit)\s+([a-f0-9]{16})(?:\s+([\s\S]+))?$/i)
   if(!match)return false
   const [,verb,id,feedback]=match,c=this.host.scopes.context(t,t.source+':'+t.threads[0]!.id)
-  const g=c&&this.rawList(c).find(g=>g.project?.review?.id===id&&g.actor===c.actor&&g.discussion===c.route.discussion)
+  const record=this.host.store.get<{goalId:string}>('project-review',id!),candidate=record&&this.get(record.goalId)
+  let g:RouterGoal|undefined
+  if(c&&candidate&&candidate.project?.review?.id===id&&candidate.scopeId===c.route.scopeId&&candidate.entryId===c.route.entryId){
+   const requester=this.projectRequester(candidate)
+   if(requester?.human&&this.host.scopes.actor(requester)===c.actor&&requester.source+':'+requester.threads[0]!.id===c.route.discussion)g=candidate
+  }
   let message:string
   try{
    if(!g||this.host.routerIngress.authority(t.id).strength!=='explicit')throw Error('请在派活的原对话，以发起人的身份使用当前验收编号。')
@@ -405,7 +426,7 @@ export class RouterGoals {
       })
      }else if(['failed','insufficient'].includes(round.state)){
       const failedIds=new Set(round.checks.filter(ch=>ch.verdict!=='passed').map(ch=>ch.criterionId))
-      const target=g.nodes!.find(n=>n.criterionIds.some(id=>failedIds.has(id)))??g.nodes!.at(-1)!
+      const target=g.nodes!.find(n=>g.project?n.id===g.project.integration:n.criterionIds.some(id=>failedIds.has(id)))??g.nodes!.at(-1)!
       if((target.repairs-(target.repairStart??0))<(g.maxRepairs??2))this.repair(g,target,round)
       else{target.state='held';target.reason='Overall goal acceptance did not pass within the repair allowance';target.failure={kind:'quality',reason:target.reason};target.roundId=round.id;this.save(g);if(!this.host.replanning.consider(g)){g.state='held';g.reason=target.reason;this.save(g);this.notice(g,g.reason)}}
      }else if(round.state==='errored'){
@@ -490,7 +511,12 @@ export class RouterGoals {
    }else if(x.action==='pause'||x.action==='cancel'){
     g={...g,state:x.action==='pause'?'paused':'cancelled',nextAt:undefined,reason:x.reason??'User requested '+x.action}
     if(x.action==='pause'&&store.list<import('./delegation/manager.ts').OutboundTask>('delegation-outbound').some(t=>t.goal?.goalId===g!.id&&t.desired==='running'&&!['ready','cancelled'].includes(t.remote?.state??'unknown')))throw Error('Remote execution pause is unsupported; cancel the goal or wait for the candidate before pausing verification')
-    if(g.project)this.host.stopProject(g,'User requested '+x.action)
+    if(g.project){
+     if(x.action==='pause')for(const node of g.nodes??[]){
+      if(node.ticketId&&this.host.executionActive(node.ticketId))node.pausedAssignment=store.get<Run>('run',node.ticketId)?.assignmentId
+     }
+     this.host.stopProject(g,'User requested '+x.action)
+    }
     if(x.action==='cancel')this.host.delegation.goalTasks.cancel(g.id)
     if(x.action==='cancel')for(const ticketId of g.taskIds)if(!store.tickets.get(ticketId)?.ended){this.host.scopes.checkTask(ticketId,c,true);this.host.engine.stopTicket(ticketId,'Goal cancelled by user')}
    }else if(x.action==='wait'){
@@ -505,6 +531,20 @@ export class RouterGoals {
      if(g.project&&!g.project.triggerIds.includes(c.trigger.id))g.project.triggerIds.push(c.trigger.id)
      g.replanId=undefined
      for(const node of g.nodes??[]){
+      const run=node.ticketId?store.get<Run>('run',node.ticketId):undefined
+      const pausedAssignment=node.pausedAssignment??(g.project&&g.state==='paused'&&node.state==='running'&&run?.phase==='idle'?run.assignmentId:undefined)
+      if(pausedAssignment&&node.ticketId){
+       const task=store.tickets.get(node.ticketId)
+       if(task&&!task.ended&&task.assignments.at(-1)?.id===pausedAssignment&&!store.get('goal-delivery',task.id)){
+        if(!this.effectsSettled(task.id))throw Error('Reconcile the current task or its effects before resuming')
+        this.host.scopes.checkTask(task.id,c,true)
+        const prior=task.inputs.map(i=>i.id)
+        this.host.engine.note(task.id,'The project resumed after this turn was paused. Inspect the retained workspace, thread and tool receipts before continuing the existing assignment.')
+        allowNewTaskInputs(store,task.id,prior)
+       }
+       delete node.pausedAssignment
+       continue
+      }
       if(node.state!=='held'||!node.ticketId)continue
       const task=store.tickets.get(node.ticketId),report=task?.assignments.at(-1)?.report
       if(!task||task.ended||!report||!['blocked','failed'].includes(report.state)||store.get('goal-delivery',task.id))continue

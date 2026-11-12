@@ -2,7 +2,9 @@ import {afterEach,expect,it} from 'vitest'
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {request} from 'node:http'
 import {execFileSync} from 'node:child_process'
+import {randomBytes} from 'node:crypto'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import type {Model} from '../src/model.ts'
@@ -13,12 +15,13 @@ import {operatorWorkspace} from '../src/operator-workspace.ts'
 import {serve} from '../src/server.ts'
 import {backupState,verifyBackup,restoreState} from '../src/backup.ts'
 import {projectBudget} from '../src/project-budget.ts'
+import {secretFromEnv,signWebhook} from '../src/webhook-protocol.ts'
 
 const git=(cwd:string,...args:string[])=>execFileSync('git',['-c','core.hooksPath=/dev/null',...args],{cwd,encoding:'utf8'}).trim()
 const cleanups:(()=>Promise<void>|void)[]=[]
 afterEach(async()=>{for(const fn of cleanups.splice(0).reverse())await fn()})
 const realSandbox=it.skipIf(!['darwin','linux'].includes(process.platform)||process.platform==='linux'&&!process.env.PATH?.split(':').some(p=>existsSync(join(p,'bwrap'))))
-function project(chain=false){
+function project(chain=false,testCommand='sh verify.sh',onWorker?:(r:Parameters<Model['run']>[0])=>Promise<void>,semanticFile=false){
  const root=mkdtempSync(join(tmpdir(),'roppo-project-test-')),repo=join(root,'source'),stateDir=join(root,'state')
  cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(repo)
  git(repo,'init','-q');git(repo,'config','user.email','project@example.com');git(repo,'config','user.name','Project')
@@ -26,7 +29,7 @@ function project(chain=false){
  writeFileSync(join(repo,'verify.sh'),'set -e\ngrep -Fx both mode.txt\ntest -f one.txt && test -f two.txt\necho integrated-passed\n')
  git(repo,'add','.');git(repo,'commit','-qm','Initial project')
  const base=git(repo,'rev-parse','HEAD'),now=Date.now()
- const config=configSchema.parse({port:0,stateDir,acceptMode:'auto',work:{network:false,sandboxDriver:process.platform==='darwin'?'seatbelt':'bubblewrap'},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:2},workers:[{id:'one',backend:'codex'},{id:'two',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:repo,workspace:{mode:'directory',project:{testCommand:'sh verify.sh',budget:{maxMinutes:10}}},sandbox:'workspace-write',allowedActors:['alice','bob']}]})
+ const config=configSchema.parse({port:0,stateDir,acceptMode:'auto',work:{network:false,sandboxDriver:process.platform==='darwin'?'seatbelt':'bubblewrap'},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:2},workers:[{id:'one',backend:'codex'},{id:'two',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:repo,workspace:{mode:'directory',project:{testCommand,budget:{maxMinutes:10}}},sandbox:'workspace-write',allowedActors:['alice','bob']}]})
  let h:Runtime,clock=now,seq=0,conflicts=0
  const workerDirectories=new Set<string>()
  const model:Model={async run(r){
@@ -34,11 +37,16 @@ function project(chain=false){
   r.onThread?.(threadId);r.onTurn?.(turnId);r.onUsage?.({id:turnId,inputTokens:20,outputTokens:10})
   const input=JSON.parse(r.input);let output:any={reply:''}
   if(input.kind==='goal_verification'){
-   for(const e of input.evidence)await r.onTool!('goal_evidence',{id:e.id},e.id)
-   output={checks:input.criteria.map((cr:any)=>({criterionId:cr.id,verdict:'passed',explanation:'Read the retained commit, tests and declared files.',evidenceIds:input.evidence.filter((e:any)=>cr.id==='__goal__'||e.criterionIds.includes(cr.id)).map((e:any)=>e.id)}))}
+   let finalFile:string|undefined
+   for(const e of input.evidence){
+    const result=await r.onTool!('goal_evidence',{id:e.id},e.id)
+    if(semanticFile&&input.stage.finalCommit&&e.commit===input.stage.finalCommit&&e.key==='one.txt')finalFile=JSON.parse(result.contentItems[0]!.text!).content
+   }
+   output={checks:input.criteria.map((cr:any)=>({criterionId:cr.id,verdict:semanticFile&&input.stage.kind==='overall'&&cr.id==='one'&&finalFile!=='published\n'?'failed':'passed',explanation:'Read the retained commit, tests and declared files.',evidenceIds:input.evidence.filter((e:any)=>cr.id==='__goal__'||e.criterionIds.includes(cr.id)).map((e:any)=>e.id)}))}
   }else if(r.role==='worker'){
    const ticketId=r.activity!.ticketId!,g=h.goals.forTask(ticketId)!,node=g.nodes!.find(n=>n.ticketId===ticketId)!
    workerDirectories.add(r.cwd)
+   await onWorker?.(r)
    const run=async(command:string)=>{
     const raw=await r.onTool!('superagent_shell',{command,requestId:'shell-'+turnId,yieldMs:10000},turnId)
     const value=JSON.parse(raw.contentItems[0]!.text!)
@@ -46,7 +54,10 @@ function project(chain=false){
     return value
    }
    if(node.id==='one'||node.id==='two'){
-    if(chain&&node.id==='two'){
+    if(semanticFile){
+     const edit=node.id==='one'||node.repairs>=2?'echo published > one.txt':node.repairs===0?'echo replaced > one.txt':'rm one.txt'
+     await run('set -e; '+edit+'; touch '+node.id+'.txt; git add -A; git commit -qm edit')
+    }else if(chain&&node.id==='two'){
      await run('set -e; test -f one.txt; git merge-base --is-ancestor refs/project/'+h.projectCode.parents(g,node).at(-1)+' HEAD; printf "both\\\\n" > mode.txt; touch two.txt; git add .; git commit -qm two')
     }else await run('set -e; printf "%s\\n" '+node.id+' > mode.txt; touch '+node.id+'.txt; git add .; git commit -qm '+node.id)
    }else{
@@ -64,12 +75,13 @@ function project(chain=false){
  }}
  const open=()=>{h=new Runtime(config,{model,clock:()=>clock})}
  open();cleanups.push(async()=>{await h.close()})
- h!.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:[JSON.stringify(['local','alice'])],workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
+ h!.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:['alice','bob'].map(id=>JSON.stringify(['local',id])),workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
  for(const entry of ['test','elsewhere'])h!.scopes.command({action:'entry.bind',operationId:'bind-'+entry,expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:entry,history:'group'})
- const receive=(id:string,text:string,actor='alice',thread='test')=>h.receive('local',actor,{id,thread,scope:thread,text,addressed:true}) as {triggerId:string}
+ const receive=(id:string,text:string,actor='alice',thread='test',scope=thread)=>h.receive('local',actor,{id,thread,scope,text,addressed:true}) as {triggerId:string}
  const original=receive('original','Please fix the repository together and bring me the tested commit.')
  const trigger=h!.store.triggers.get(original.triggerId)!,context=h!.scopes.context(trigger,'local:test')!
- const g:RouterGoal=h!.goals.command({action:'start',operationId:'project',expectedRevision:0,authorizationQuote:'fix the repository together',objective:'Integrate both edits and pass the repository test.',criteria:['one','two'].map(id=>({id,description:'Deliver '+id+'.txt',check:{kind:'file_exists',path:id+'.txt'}})),nodes:['one','two'].map(id=>({id,workerId:id,title:id,instruction:'Implement '+id,dependsOn:chain&&id==='two'?['one']:[],criterionIds:[id]}))},context)
+ const criteria=['one','two'].map(id=>semanticFile&&id==='one'?{id,description:'one.txt must contain published',files:['one.txt']}:{id,description:'Deliver '+id+'.txt',check:{kind:'file_exists',path:id+'.txt'}})
+ const g:RouterGoal=h!.goals.command({action:'start',operationId:'project',expectedRevision:0,authorizationQuote:'fix the repository together',objective:'Integrate both edits and pass the repository test.',criteria,nodes:['one','two'].map(id=>({id,workerId:id,title:id,instruction:'Implement '+id,dependsOn:chain&&id==='two'?['one']:[],criterionIds:[id]}))},context)
  const goal=()=>h.goals.get(g.id)!
  async function until(predicate:()=>boolean){
   const end=Date.now()+55000
@@ -78,6 +90,21 @@ function project(chain=false){
  }
  return {get h(){return h},config,repo,base,goal,receive,until,workerDirectories,get conflicts(){return conflicts},advance:(ms:number)=>{clock+=ms},restart:async()=>{await h.close();open()}}
 }
+
+realSandbox('rechecks changed and deleted upstream files at the final commit and repairs the integration worker',async()=>{
+ const f=project(true,'test -f two.txt',undefined,true)
+ await f.until(()=>f.goal().state==='needs_input')
+ const g=f.goal(),review=g.project!.review!
+ expect(g.nodes!.map(n=>n.repairs)).toEqual([0,2])
+ const rounds=f.h.store.list<VerificationRound>('goal-verification').filter(r=>!r.nodeId)
+ const [changed,deleted,accepted]=rounds
+ expect(rounds.map(r=>r.state)).toEqual(['failed','failed','passed'])
+ expect(changed!.snapshot.evidence.filter(e=>e.key==='one.txt').map(e=>e.content.trim())).toEqual(['published','replaced'])
+ expect(changed!.checks.find(c=>c.criterionId==='one')).toMatchObject({verdict:'failed',method:'agent'})
+ expect(deleted!.checks.find(c=>c.criterionId==='one')).toMatchObject({verdict:'failed',method:'program'})
+ expect(accepted!.snapshot.finalCommit).toBe(review.head)
+ expect(f.h.projectCode.blob(g,review.head,'one.txt',100)?.toString()).toBe('published\n')
+},90000)
 
 realSandbox('hands off actual commits, repairs a merge and failed clean test, and releases only the reviewed revision',async()=>{
  const f=project()
@@ -112,12 +139,77 @@ realSandbox('hands off actual commits, repairs a merge and failed clean test, an
   git(f.repo,'fetch',file,'refs/heads/commits/'+second.head)
   expect(git(f.repo,'show','FETCH_HEAD:mode.txt')).toBe('both')
   expect(git(f.repo,'show','FETCH_HEAD:release-note')).toBe('reviewed')
+  const signup=await fetch(server.url+'/account/setup',{method:'POST',headers:{...auth,origin:server.url,'content-type':'application/json'},body:JSON.stringify({username:'project-owner',displayName:'Owner',password:'project review fixture password'})})
+  expect(signup.status).toBe(201)
+  const cookie=signup.headers.get('set-cookie')!.split(';')[0]!
+  const received=new Promise<void>(resolve=>server.server.once('request',()=>resolve()))
+  const pending=request(server.url+path,{method:'POST',headers:{origin:server.url,cookie,'content-type':'application/json'}})
+  const reply=new Promise<number>((resolve,reject)=>{
+   pending.once('response',res=>{res.resume();resolve(res.statusCode!)})
+   pending.once('error',reject)
+  })
+  pending.write('{"decision":')
+  await received
+  expect((await fetch(server.url+'/account/logout',{method:'POST',headers:{origin:server.url,cookie}})).status).toBe(200)
+  pending.end('"approve"}')
+  expect(await reply).toBe(401)
+  expect(f.goal().project!.review!.state).toBe('pending')
   expect((await fetch(server.url+path,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({decision:'approve'})})).status).toBe(200)
   await f.until(()=>f.goal().state==='completed')
   expect(f.goal().project!.review).toMatchObject({head:second.head,state:'approved',by:'operator:local-operator'})
   expect(f.goal().taskIds.every(id=>!!f.h.store.tickets.get(id)?.ended)).toBe(true)
   expect(git(f.repo,'rev-parse','HEAD')).toBe(f.base)
  }finally{server.server.closeAllConnections();await new Promise<void>(done=>server.server.close(()=>done()))}
+},120000)
+
+realSandbox('returns scheduled and webhook project reviews to the person and thread that authorized them',async()=>{
+ const f=project(true),initial=f.goal()
+ await f.until(()=>f.goal().project?.review?.state==='pending')
+ f.receive('approve-original','验收通过 '+f.goal().project!.review!.id)
+ await f.until(()=>f.goal().state==='completed')
+ const draft=f.h.skills.command({action:'draft',goalId:initial.id})
+ const saved=f.h.skills.command({action:'save',goalId:initial.id,expectedVersion:0,template:draft.template}),skill={id:saved.id,version:saved.version}
+ const prompt='Repeat this repository fix and send me the tested commit.'
+ const {triggerId}=f.receive('authorize',prompt,'alice','request','test')
+ f.h.proactive.command({action:'schedule.put',scopeId:'team',operationId:'schedule',expectedRevision:0,schedule:{id:'code',name:'Code',triggerId,prompt,skill,timing:{kind:'once',startAt:new Date(Date.now()+86400000).toISOString(),timezone:'UTC'},mode:'standalone',notification:'always'}})
+ const run=f.h.proactive.command({action:'schedule.run',scopeId:'team',operationId:'run',expectedRevision:1,id:'code'}) as {id:string}
+ f.h.proactive.runSkill(run.id)
+ const scheduled=f.h.store.get<{goalId:string}>('router-schedule-run',run.id)!.goalId
+
+ const suffix=randomBytes(5).toString('hex'),inKey='CODE_IN_'+suffix,outKey='CODE_OUT_'+suffix
+ for(const name of [inKey,outKey])process.env[name]='whsec_'+randomBytes(32).toString('base64')
+ cleanups.push(()=>{delete process.env[inKey];delete process.env[outKey]})
+ const origin='http://127.0.0.1:18086'
+ f.config.webhooks={port:0,loopbackCallbackOrigins:[origin]}
+ const grant=f.h.webhooks.create({operationId:'hook',triggerId,authorizationQuote:prompt,namespace:'code',eventSource:origin,eventTypes:['code.request'],secretEnvs:[inKey],parameters:{},template:saved.template,expiresAt:Date.now()+86400000,maxEvents:1,callback:{url:origin+'/callback',secretEnv:outKey,idempotent:true}})
+ f.h.webhooks.control({id:grant.id,action:'pause_delivery',operationId:'pause-callback'})
+ const body=Buffer.from(JSON.stringify({specversion:'1.0',id:'build',source:origin,type:'code.request',data:{}})),timestamp=String(Math.floor(Date.now()/1000))
+ const receipt=f.h.webhooks.receive(grant.id,{'webhook-id':'build','webhook-timestamp':timestamp,'webhook-signature':signWebhook(secretFromEnv(inKey),'build',timestamp,body)},body)
+ f.h.webhooks.dispatch()
+ const webhook=f.h.webhooks.receipt(receipt.receiptId)!.goalId!
+ for(const goalId of [scheduled,webhook]){
+  const goal=()=>f.h.goals.get(goalId)!
+  expect(goal().project?.base).toBe(f.base)
+  expect(goal().project?.policy.budget?.maxMinutes).toBe(10)
+  await f.until(()=>goal().project?.review?.state==='pending')
+  const review=goal().project!.review!,command='验收通过 '+review.id
+  await f.until(()=>f.h.store.deliveries().some(d=>d.text.includes(command)&&d.channel.thread==='request'&&d.status==='sent'))
+  f.receive(goalId+'-wrong-person',command,'bob','request','test')
+  f.receive(goalId+'-wrong-thread',command,'alice','unrelated','test')
+  expect(goal().project!.review!.state).toBe('pending')
+  f.receive(goalId+'-owner',command,'alice','request','test')
+  await f.until(()=>goal().state==='completed')
+  expect(goal().project?.review).toMatchObject({state:'approved',by:JSON.stringify(['local','alice'])})
+ }
+ const finished=f.h.goals.get(webhook)!,reviewId=finished.project!.review!.id
+ f.h.goals.notice(finished,'Delayed project notice',true)
+ const notice=()=>f.h.store.deliveries().find(d=>d.text==='Delayed project notice')
+ expect(notice()?.status).toBe('pending')
+ f.h.webhooks.control({id:grant.id,action:'revoke',operationId:'revoke'})
+ await f.h.flush()
+ expect(notice()?.status).toBe('dropped')
+ const replay=f.receive('revoked-grant','验收通过 '+reviewId,'alice','request','test')
+ expect(f.h.store.deliveries().find(d=>d.id==='project-review-input:'+replay.triggerId)?.text).toContain('automation_grant_revoked_or_expired')
 },120000)
 
 realSandbox('preserves a sequential handoff and approved Git artifacts through backup and restore',async()=>{
@@ -156,6 +248,40 @@ realSandbox('preserves a sequential handoff and approved Git artifacts through b
  const patch=Object.keys(manifest.projectFiles).find(file=>file.endsWith('.patch'))!
  writeFileSync(join(archive,patch),'broken')
  expect(()=>verifyBackup(archive)).toThrow('checksum mismatch')
+},90000)
+
+realSandbox('compares the tested files against trusted Git metadata even if the test changes its index',async()=>{
+ const f=project(true,[
+  'set -e','sh verify.sh','git update-index --assume-unchanged mode.txt',
+  'printf "evil\\n" > mode.txt','git diff --quiet HEAD --','grep -Fx evil mode.txt',
+ ].join('\n'))
+ await f.until(()=>f.h.store.list<CodeReceipt>('project-commit').some(r=>r.error?.includes('The test changed tracked code')))
+ expect(f.goal().project?.review).toBeUndefined()
+},90000)
+
+realSandbox.each([false,true])('resumes a project paused during a Worker turn on the same retained task, legacy %s',async legacy=>{
+ let calls=0,ticketId=''
+ const f=project(true,'sh verify.sh',async r=>{
+  if(calls++>0)return
+  ticketId=r.activity!.ticketId!
+  await new Promise<void>((_,reject)=>r.signal!.addEventListener('abort',()=>reject(r.signal!.reason),{once:true}))
+ })
+ const command=(action:'pause'|'resume')=>{
+  const g=f.goal(),receipt=f.receive(action,'Please '+action+' this project.')
+  const context=f.h.scopes.context(f.h.store.triggers.get(receipt.triggerId)!,'local:test')!
+  return f.h.goals.command({action,id:g.id,operationId:action,expectedRevision:g.revision},context)
+ }
+ await f.until(()=>!!ticketId)
+ const assignment=f.h.store.tickets.get(ticketId)!.assignments.at(-1)!.id
+ command('pause')
+ await f.until(()=>f.h.store.get<{phase:string}>('run',ticketId)?.phase==='idle')
+ if(legacy){const g=f.goal();for(const node of g.nodes!)delete node.pausedAssignment;f.h.store.put('router-goal',g.id,g)}
+ await f.restart()
+ command('resume')
+ await expect.poll(async()=>{await f.h.tick();return calls},{timeout:4000}).toBeGreaterThan(1)
+ await f.until(()=>f.goal().project?.review?.state==='pending')
+ expect(f.goal().nodes!.find(n=>n.id==='one')?.ticketId).toBe(ticketId)
+ expect(f.h.store.tickets.get(ticketId)!.assignments.at(-1)!.id).toBe(assignment)
 },90000)
 
 it('charges only project activity, counts reported tokens once and stops before starting work past either limit',async()=>{

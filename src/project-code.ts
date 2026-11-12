@@ -51,13 +51,13 @@ export function checkProjectGraph(g:RouterGoal,nodes:GoalNode[]){
  if(leaves.length!==1||leaves[0]!==g.project.integration)throw Error('Every code project step must feed the final integration step')
 }
 
-interface GitOptions {attachments?:string[];outputFile?:string;signal:AbortSignal;timeout:number}
+interface GitOptions {gitDirectory?:string;attachments?:string[];outputFile?:string;signal:AbortSignal;timeout:number}
 async function sandboxGit(config:Config,cwd:string,command:string,o:GitOptions){
  o.signal.throwIfAborted()
  const scratch=mkdtempSync(join(tmpdir(),'roppo-project-'))
  let fd:number|undefined
  try{
-  const launch=sandboxCommand({sandboxDriver:config.work.sandboxDriver,codex:config.codex,cwd,sandbox:'workspace-write',privateState:config.stateDir,privatePaths:hostPrivateFiles(),attachments:o.attachments,network:false,command,scratch})
+  const launch=sandboxCommand({sandboxDriver:config.work.sandboxDriver,codex:config.codex,cwd,sandbox:'workspace-write',privateState:config.stateDir,privatePaths:hostPrivateFiles(),gitDirectory:o.gitDirectory,attachments:o.attachments,network:false,command,scratch})
   if(o.outputFile)fd=openSync(o.outputFile,'wx',0o600)
   const signal=AbortSignal.any([o.signal,AbortSignal.timeout(o.timeout)])
   const env={...sandboxEnvironment(scratch,launch.developerBin),GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'}
@@ -201,10 +201,24 @@ export class ProjectCode {
   try{
    const packs=[...new Set([p.base,head])],setup=[git+' init -q --template= '+(p.base.length===64?'--object-format=sha256':''),...packs.map(sha=>git+' fetch -q --no-tags '+quote(this.pack(g,sha))+' '+ref(sha)+':refs/project/'+sha),git+' checkout --detach -q '+head]
    checked(await sandboxGit(this.config,clean,setup.join(' && '),{...opts,attachments:packs.map(sha=>this.pack(g,sha))}))
+   // Compare the checkout's actual bytes, modes and symlink targets across the test, including files with Git checkout conversions.
+   // A fresh index uses the proposed commit's tracked paths. Its private attributes disable clean filters controlled by the test.
+   const fingerprint=async()=>{
+    const reference=git+' -c core.filemode=true --git-dir="$TMPDIR/verification.git" --work-tree='+quote(clean)
+    const commands=['set -e','test "$('+git+' rev-parse HEAD)" = '+head+' || { echo "The test changed HEAD"; exit 1; }',
+     git+' init --bare -q --template= '+(head.length===64?'--object-format=sha256 ':'')+'"$TMPDIR/verification.git"',
+     'mkdir -p "$TMPDIR/verification.git/info"',
+     'printf "%s\\n" '+quote('* -text -crlf -filter -ident !working-tree-encoding !eol')+' > "$TMPDIR/verification.git/info/attributes"',
+     'printf "%s\\n" '+quote(JSON.stringify(join(bare,'objects')))+' > "$TMPDIR/verification.git/objects/info/alternates"',
+     reference+' read-tree '+head,reference+' add --update --',reference+' write-tree']
+    const output=checked(await sandboxGit(this.config,clean,commands.join('\n'),{...opts,gitDirectory:bare}))
+    return commit(output.split('\n').at(-1)!)
+   }
+   const before=await fingerprint()
    const test=await integratedTest(this.config,clean,p.policy.testCommand,signal)
    result.test={command:p.policy.testCommand,exit:test.exit,output:compact(test.output)}
    if(test.exit!==0){result.error='Integrated test failed at '+head+' (exit '+test.exit+'). '+compact(test.output);return result}
-   checked(await sandboxGit(this.config,clean,'test "$('+git+' rev-parse HEAD)" = '+head+' && '+git+' diff --quiet '+head+' -- || { echo "The test changed tracked code or HEAD"; exit 1; }',opts))
+   if(await fingerprint()!==before)throw Error('The test changed tracked code')
    return result
   }finally{rmSync(clean,{recursive:true,force:true})}
  }

@@ -11,10 +11,10 @@ import {fileURLToPath} from 'node:url'
 import {configSchema} from '../src/config.ts'
 import {buildPluginPackage} from '../src/plugin-package.ts'
 import {Runtime} from '../src/runtime.ts'
-import {MessageSource,stableDigest} from '../src/sources.ts'
+import {stableDigest} from '../src/sources.ts'
+import {FeishuSource} from '../plugins/feishu/feishu.ts'
 import {operatorWorkspace} from '../src/operator-workspace.ts'
 import type {Model} from '../src/model.ts'
-import type {OutboundMessage} from '../src/vendor/dsh-core/index.ts'
 import {serveWebhooks} from '../src/webhook-http.ts'
 
 const clean:(()=>Promise<void>)[]=[]
@@ -47,12 +47,18 @@ async function scenario(){
   clean.push(async()=>{provider.closeAllConnections();await new Promise<void>(r=>provider.close(()=>r()))})
   const url='http://127.0.0.1:'+String((provider.address() as {port:number}).port)
   const pkg=await buildPluginPackage(fileURLToPath(new URL('../plugins/linear/index.ts',import.meta.url)),JSON.parse(readFileSync(new URL('../plugins/linear/manifest.json',import.meta.url),'utf8')),join(root,'plugin'))
-  const entryId=stableDigest(['test','feishu','feishu:bot:test-app','oc_ci']),messages:OutboundMessage[]=[]
+  const accountNamespace='feishu:bot:ou_test',entryId=stableDigest(['test','feishu',accountNamespace,'oc_ci'])
+  const incoming=new Map<string,string>(),messages:{text:string}[]=[]
   const config=configSchema.parse({port:0,stateDir:join(root,'state'),webhooks:{port:0,loopbackCallbackOrigins:[url]},work:{sandboxDriver:process.platform==='darwin'?'seatbelt':'bubblewrap'},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'diagnosis',backend:'codex'}]},
     sourcePlugins:[{directory:pkg.directory,digest:pkg.digest}],sources:[
-      {id:'chat',kind:'feishu',cwd:root,workspace:{mode:'source'},allowedActors:['alice'],feishu:{cli:'lark-cli',chats:['oc_ci']}},
+      {id:'chat',kind:'feishu',cwd:root,workspace:{mode:'source'},allowedActors:['alice'],admission:{oc_ci:{listedUnaddressed:'ignore'}},feishu:{cli:'lark-cli',chats:['oc_ci'],command:'/ci'}},
       {id:'tracker',kind:'linear',cwd:root,options:{workspaceId:workspace,teams:[team],tokenEnv:secretEnv,issueIds:[issue],command:'/agent',apiBase:url+'/graphql',statusTargets:[{key:'ci-issue',entryId,issueId:issue,teamId:team}]}}]})
-  const chat=new class extends MessageSource{async identity(){return {id:'test-app',type:'bot',verified:true}} async deliver(m:OutboundMessage){messages.push(m)}}(config.sources[0]!)
+  const chat=new FeishuSource(config.sources[0]!,async(method,path,body)=>{
+    if(path==='bot/v3/info')return {bot:{open_id:'ou_test'}}
+    if(method==='POST'&&path.endsWith('/reply')){messages.push(JSON.parse((body as {content:string}).content));return {}}
+    const messageId=path.split('/').at(-1)!,text=incoming.get(messageId)
+    return {items:text?[{chat_id:'oc_ci',message_id:messageId,root_id:'om_authorize',sender:{id:'alice',sender_type:'user'},body:{content:JSON.stringify({text})}}]:[]}
+  })
   let host:Runtime,turn=0
   const model:Model={async run(r){
     const input=JSON.parse(r.input),threadId=r.threadId??randomUUID(),turnId=String(++turn)
@@ -73,10 +79,17 @@ async function scenario(){
   clean.push(async()=>{await host.close()})
   host!.scopes.command({action:'scope.put',operationId:'team',expectedRevision:0,scope:{id:'team',tenantId:'test',name:'CI',managers:[JSON.stringify(['chat','alice'])],workerIds:['diagnosis'],sourceIds:['chat','tracker'],backendIds:['codex']}})
   await host!.scopeCommand({action:'source.verify',operationId:'account',expectedRevision:0,sourceId:'chat'})
-  host!.scopes.command({action:'entry.bind',operationId:'chat',expectedRevision:0,scopeId:'team',sourceId:'chat',accountNamespace:'feishu:bot:test-app',nativeId:'oc_ci',history:'group'})
-  const say=(id:string,text:string)=>host.receive('chat','alice',{id,thread:'oc_ci',scope:'oc_ci',text,addressed:true})
-  say('authorize','Authorize this CI diagnosis workflow. Propose changes to the linked issue.')
-  const repository='test/ci',spec={protocolVersion:2,operationId:'ci-grant',triggerId:'chat:authorize',authorizationQuote:'Authorize this CI diagnosis workflow',namespace:'ci',eventSource:'https://github.com/'+repository,eventTypes:['github.workflow_run.completed.failure'],transport:{kind:'github-workflow',repositoryId:123,repository},secretEnvs:[secretEnv],parameters:{repository:{type:'string'},runId:{type:'string'},attempt:{type:'number',min:1,max:100},sha:{type:'string'},conclusion:{type:'string'},status:{type:'string'}},
+  host!.scopes.command({action:'entry.bind',operationId:'chat',expectedRevision:0,scopeId:'team',sourceId:'chat',accountNamespace,nativeId:'oc_ci',history:'group'})
+  const say=async(id:string,text:string)=>{
+    const messageId='om_'+id
+    incoming.set(messageId,text)
+    let triggerId:string|undefined
+    await chat.receiveEvent({type:'im.message.receive_v1',chat_id:'oc_ci',chat_type:'group',message_id:messageId},{store:host.store,receive(t){triggerId=t.id;return host.ingest(t)},bind(){},closed(){}})
+    if(!triggerId)throw Error('Feishu message was not received')
+    return triggerId
+  }
+  const triggerId=await say('authorize','/ci Authorize this CI diagnosis workflow. Propose changes to the linked issue.')
+  const repository='test/ci',spec={protocolVersion:2,operationId:'ci-grant',triggerId,authorizationQuote:'Authorize this CI diagnosis workflow',namespace:'ci',eventSource:'https://github.com/'+repository,eventTypes:['github.workflow_run.completed.failure'],transport:{kind:'github-workflow',repositoryId:123,repository},secretEnvs:[secretEnv],parameters:{repository:{type:'string'},runId:{type:'string'},attempt:{type:'number',min:1,max:100},sha:{type:'string'},conclusion:{type:'string'},status:{type:'string'}},
     template:{title:'CI diagnosis',objective:'Diagnose CI and record the verified issue state',criteria:[{id:'state',description:'Retain the confirmed Linear state',check:{kind:'json_equals',path:'result.json',pointer:'/state',expected:started.id}}],nodes:[{id:'diagnose',title:'Diagnose',instruction:'Diagnose CI and propose the status change',workerId:'diagnosis',criterionIds:['state']}]},expiresAt:now+7*86400000,maxEvents:10,callback:{url:url+'/callback',secretEnv:callbackEnv,idempotent:true}}
   const grant=host!.webhooks.create(spec)
   const listener=await serveWebhooks(()=>host,0);clean.push(()=>listener.close())
@@ -111,8 +124,10 @@ it.each(['approved','concurrent','declined','interrupted','stale','uncertain','r
  expect(f.writes).toBe(0);expect(operatorWorkspace(f.h).workflowActions[0]?.view.label).toContain('OPS-7')
  await f.restart();expect(f.h.workflows.list()[0]?.state).toBe('pending')
  const decide=()=>f.h.workflows.decide({id:p.id,decision:'approve'})
+ const instructions=f.messages.find(m=>m.text.includes('待确认'))!.text
+ const reply=(verb:string)=>instructions.match(new RegExp('「([^」]*'+verb+' [a-f0-9]{16})」'))![1]!
  if(mode==='declined'){
-   f.say('no','拒绝 '+p.id.slice(0,16))
+   await f.say('no',reply('拒绝'))
    await f.until(()=>f.h.workflows.list()[0]?.state==='declined')
    expect((await decide()).state).toBe('declined');expect(f.writes).toBe(0);return
  }
@@ -131,12 +146,17 @@ it.each(['approved','concurrent','declined','interrupted','stale','uncertain','r
    expect((await decide()).state).toBe('uncertain');await decide()
    expect((await f.h.workflows.decide({id:p.id,decision:'reconcile'})).state).toBe('observed');expect(f.writes).toBe(1);return
  }
+ let decisionId:string|undefined
  if(mode==='concurrent')await Promise.all([decide(),decide()])
- else{f.say('decision','批准 '+p.id.slice(0,16));f.say('decision','批准 '+p.id.slice(0,16))}
+ else{
+   const ignored=await f.say('bare','批准 '+p.id.slice(0,16))
+   expect(f.h.routerIngress.get(ignored)?.state).toBe('ignored')
+   decisionId=await f.say('decision',reply('批准'));await f.say('decision',reply('批准'))
+ }
  await f.until(()=>f.h.goals.snapshot().some(g=>g.state==='completed'))
  await Promise.all([decide(),decide()])
  expect(f.h.workflows.list()[0]).toMatchObject({state:'applied',receipt:{issue,state:started.id}})
- expect(f.h.workflows.list()[0]?.decision).toMatchObject(mode==='approved'?{kind:'approve',via:'conversation',actorId:'alice',triggerId:'chat:decision'}:{kind:'approve',via:'operator'})
+ expect(f.h.workflows.list()[0]?.decision).toMatchObject(mode==='approved'?{kind:'approve',via:'conversation',actorId:'alice',triggerId:decisionId}:{kind:'approve',via:'operator'})
  expect(f.writes).toBe(1);expect(f.h.store.tickets.list()).toHaveLength(1)
  expect(f.messages.filter(m=>m.text.includes('已写入并回读'))).toHaveLength(1)
  const goal=f.h.goals.snapshot()[0]!,draft=f.h.skills.command({action:'draft',goalId:goal.id})

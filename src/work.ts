@@ -1,7 +1,7 @@
 import {execFileSync, type ChildProcess} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
-import {mkdirSync,readFileSync,writeFileSync,existsSync} from 'node:fs'
-import {join,resolve} from 'node:path'
+import {mkdirSync,readFileSync,writeFileSync,existsSync,lstatSync,realpathSync} from 'node:fs'
+import {dirname,join} from 'node:path'
 import {startSandboxRunner} from './sandbox.ts'
 import type {Store} from './store.ts'
 import type {Config} from './config.ts'
@@ -19,6 +19,19 @@ export interface WorkHooks {
  wake(item:WorkItem):void
  expired?(owner:WorkOwner,killed:string[],remaining:string[]):void
  agent(item:WorkItem,signal:AbortSignal):Promise<{threadId:string;result:unknown}>
+}
+/** A linked checkout is registered by both the worktree and the common repo. A gitfile alone grants nothing. */
+function linkedGitDirectory(cwd:string){
+ try{
+  if(lstatSync(cwd).isSymbolicLink()||!lstatSync(join(cwd,'.git')).isFile())return
+  const options={cwd,encoding:'utf8' as const,timeout:2000,stdio:['ignore','pipe','ignore'] as ['ignore','pipe','ignore']}
+  const locations=execFileSync('git',['rev-parse','--path-format=absolute','--git-dir','--git-common-dir'],options).trimEnd().split('\n')
+  if(locations.length!==2)return
+  const [worktree,common]=locations.map(location=>realpathSync(location))
+  if(dirname(worktree!)!==join(common!,'worktrees'))return
+  const registered=execFileSync('git',['--git-dir='+common,'worktree','list','--porcelain','-z'],options).split('\0')
+  if(registered.includes('worktree '+realpathSync(cwd)))return common
+ }catch{return undefined}
 }
 const terminal=(item:WorkItem)=>!['starting','running'].includes(item.state)
 /** Work survives a model turn. A process restart interrupts work rather than silently replaying it. */
@@ -69,8 +82,7 @@ export class WorkManager {
   const {item,fresh}=this.create(owner,'shell',requestId,{command})
   if(fresh){
    const spec=join(this.directory,item.id+'.spec.json')
-   let gitDirectory:string|undefined
-   if(owner.cwd!==projectWorkspace(this.config.stateDir,owner.ticketId))try{gitDirectory=resolve(owner.cwd,execFileSync('git',['rev-parse','--git-common-dir'],{cwd:owner.cwd,encoding:'utf8',timeout:2000,stdio:['ignore','pipe','ignore']}).trim())}catch{}
+   const gitDirectory=owner.cwd===projectWorkspace(this.config.stateDir,owner.ticketId)?undefined:linkedGitDirectory(owner.cwd)
    const attachments=this.store.list<any>('asset').filter(a=>a.ticketId===owner.ticketId).map(a=>a.path)
    writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,sandboxDriver:this.config.work.sandboxDriver,network:this.config.work.network&&(owner.network??true),privateState:this.config.stateDir,privatePaths:hostPrivateFiles(),gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
    try{

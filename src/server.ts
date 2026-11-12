@@ -93,6 +93,15 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Request body must be valid JSON')}
   }
+  function requireCurrentOperator(req: IncomingMessage) {
+    if(stopping||changing||unavailable)throw new OnboardingError('configuration_busy','The host is changing configuration.',503)
+    if(!authorized(req)&&!(account.configured?account.authorized(req):sessions.authorized(req)))throw new AccountError('operator_session_ended','Operator session ended',401)
+  }
+  async function operatorBody(req: IncomingMessage) {
+    const input=await body(req)
+    requireCurrentOperator(req)
+    return input
+  }
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const path = new URL(req.url!, 'http://localhost').pathname
     res.setHeader('cache-control', 'no-store')
@@ -277,17 +286,16 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
         const stream=createReadStream(file);stream.on('error',e=>res.destroy(e));res.on('close',()=>stream.destroy());stream.pipe(res);return
       }
       if(req.method==='POST'&&!kind){
-        const input=z.object({decision:z.enum(['approve','return']),feedback:z.string().trim().min(1).max(4000).optional()}).strict().parse(await body(req))
+        const input=z.object({decision:z.enum(['approve','return']),feedback:z.string().trim().min(1).max(4000).optional()}).strict().parse(await operatorBody(req))
         send(res,200,runtime.goals.decideOperator(id,input.decision,account.status(req).user?.id??'local-operator',input.feedback));return
       }
     }
     if(req.method==='POST'&&path==='/workflow-actions'){
       const operatorId=account.status(req).user?.id??'local-operator'
-      const authorize=()=>{if(stopping||changing||unavailable||(!authorized(req)&&!(account.configured?account.authorized(req):sessions.authorized(req))))throw Error('Operator session ended')}
-      send(res,200,await runtime.workflows.decide(await body(req),{operatorId,authorize}));return
+      send(res,200,await runtime.workflows.decide(await body(req),{operatorId,authorize:()=>requireCurrentOperator(req)}));return
     }
-    if(req.method==='POST'&&path==='/router-skills/read'){send(res,200,runtime.skills.read(await body(req)));return}
-    if(req.method==='POST'&&path==='/router-skills'){send(res,200,runtime.skills.command(await body(req)));return}
+    if(req.method==='POST'&&path==='/router-skills/read'){send(res,200,runtime.skills.read(await operatorBody(req)));return}
+    if(req.method==='POST'&&path==='/router-skills'){send(res,200,runtime.skills.command(await operatorBody(req)));return}
     if(req.method==='POST'&&path==='/router-proactive'){send(res,200,runtime.proactive.command(await body(req)));return}
     if(req.method==='GET'&&path==='/router-cleanup'){send(res,200,{items:runtime.memory.cleanup.receipts()});return}
     if(req.method==='POST'&&path==='/router-scopes'){send(res,200,await runtime.scopeCommand(await body(req)));return}

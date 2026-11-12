@@ -1,4 +1,4 @@
-import {existsSync,realpathSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs'
+import {existsSync,lstatSync,realpathSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs'
 import {resolve,delimiter,relative,sep,join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {execFile,spawn,spawnSync} from 'node:child_process'
@@ -13,6 +13,7 @@ const nested=(parent:string,p:string)=>{const r=relative(canon(parent),canon(p))
 export function sandboxCommand(s:CommandSpec,platform=process.platform):{command:string;args:string[];profile?:string;developerBin?:string}{
  const driver=s.sandboxDriver??'codex'
  if(driver==='disabled')throw Error('Managed shell is disabled; configure an installed sandbox driver')
+ if(lstatSync(s.cwd).isSymbolicLink())throw Error('Sandbox workspace root was replaced with a symbolic link')
  const shell=platform==='win32'?['cmd.exe','/d','/s','/c',s.command]:['/bin/sh','-c',s.command]
  let developerDir:string|undefined
  if(platform==='darwin'&&(driver==='seatbelt'||driver==='codex')){
@@ -32,6 +33,8 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
   if(platform!=='darwin')throw Error('Seatbelt sandbox requires macOS')
   const reads=['/System','/usr','/bin','/sbin','/opt/homebrew','/private/etc','/dev/null','/dev/random','/dev/urandom',...(developerDir?[developerDir]:[]),s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[]),...(s.writablePaths??[])].filter(existsSync)
   const rules=['(version 1)','(deny default)','(import "system.sb")','(allow process-exec process-fork)','(allow signal (target self) (target children))','(allow sysctl-read)','(allow file-read-metadata)','(allow file-read* '+reads.map(p=>'(subpath '+q(p)+')').join(' ')+')','(allow file-write* (literal "/dev/null") (subpath '+q(s.scratch)+')'+(s.sandbox==='workspace-write'?' (subpath '+q(s.cwd)+')':'')+(s.writablePaths??[]).map(p=>' (subpath '+q(p)+')').join('')+')']
+  // Keep the granted directory itself in place across managed commands. Its contents remain writable.
+  rules.push('(deny file-write-unlink (literal '+q(s.cwd)+'))')
   if(s.network){
    rules.push('(allow network*)')
    // TLS certificate evaluation and DNS require these platform services even

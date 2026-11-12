@@ -48,7 +48,7 @@ export function operatorTask(host:Runtime,id:string){
  if(source?.kind==='github'&&typeof rawUrl==='string')try{const url=new URL(rawUrl);if(url.origin==='https://github.com'&&url.pathname.startsWith('/'+source.repository+'/')&&!url.username&&!url.password)sourceUrl=url.href}catch{}
  const goal=host.goals.snapshot().find(g=>g.taskIds.includes(id))
  const acceptedGoal=goal?.state==='completed'&&goal.finalRoundId&&goal.nodes?.every(n=>n.workerId)?goal:undefined
- const artifacts=goal?host.store.list<ArtifactVersion>('goal-artifact').filter(a=>a.mime&&a.ticketId===id&&a.goalId===goal.id):[]
+ const artifacts=goal?.nodes?.length?host.store.list<ArtifactVersion>('goal-artifact').filter(a=>a.mime&&a.ticketId===id&&a.goalId===goal.id):[]
  const projectReview=goal?.project?.review?host.goals.reviewSummary(goal):undefined
  return {...summary,projectReview,artifacts,workflowActions:host.workflows.forOperator(id),...(acceptedGoal?{acceptedGoal:{id:acceptedGoal.id,scopeId:acceptedGoal.scopeId}}:{}),workerId:run?.workerId,model:run?.model,canStop:!ticket.ended,canRetry:!ticket.ended&&(canRetry(ticket)||run?.phase==='uncertain'),message:text(trigger?.text,8000),result:text(run?.result,12000),resultTruncated:typeof run?.result==='string'&&run.result.length>12000,resultResource:'ticket/'+id+'/result',...(sourceUrl?{sourceUrl}:{}),approvals:host.store.list<Approval>('approval').filter(a=>a.ticketId===id&&a.status==='pending'&&a.expiresAt>Date.now()).map(a=>({id:a.id,method:a.native.method,expiresAt:a.expiresAt,request:a.native.params}))}
 }

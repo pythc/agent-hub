@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx'
+import AdmZip from 'adm-zip'
 import {backendDefinition} from '../src/backend-config.ts'
 import {it,expect,afterEach} from 'vitest'
 import {mkdtempSync,writeFileSync,rmSync,symlinkSync,readFileSync} from 'node:fs'
@@ -40,6 +41,27 @@ function fixture(worker?:(r:ModelRequest,attempt:number)=>any,verify?:(r:ModelRe
  const start=(extra:any={})=>h.goals.command({action:'start',operationId:'start',expectedRevision:0,title:'Verified delivery',objective:'Produce a result whose total is 42. Never deploy.',authorizationQuote:'Continuously build, verify and repair',maxReplans:0,criteria:[{id:'sum',description:'result.json total equals 42',check:{kind:'json_equals',path:'result.json',pointer:'/total',expected:42}}],nodes:[{id:'build',title:'Build',instruction:'Produce result.json',workerId:'one',criterionIds:['sum']}],...extra},context()) as RouterGoal
  return {get h(){return h},root,config,calls,attempts,start,context,advance:(ms:number)=>{now+=ms},goal:()=>h.store.list<RouterGoal>('router-goal')[0]!,rounds:()=>h.store.list<VerificationRound>('goal-verification'),restart:async()=>{hosts.splice(hosts.indexOf(h),1);await h.close();open()}}
 }
+
+it('rejects oversized workbook members even when ZIP sizes understate the actual output',()=>{
+ const f=fixture(),file='ledger.xlsx',g=f.start({criteria:[{id:'sum',description:'Read A1',check:{kind:'xlsx_cell_equals',path:file,sheet:'Ledger',cell:'A1',expected:42}}]})
+ const book=XLSX.utils.book_new()
+ XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([[42]]),'Ledger')
+ const workbook=XLSX.write(book,{type:'buffer',bookType:'xlsx',compression:true}) as Buffer
+ const observe=(data:Buffer)=>{
+  writeFileSync(join(f.root,file),data)
+  return JSON.parse(f.h.artifacts.evidence(g,'build','fixture',f.root,file,g.criteria).content).observation
+ }
+ expect(observe(workbook).cells[0].value).toBe(42)
+ const archive=new AdmZip(workbook)
+ archive.addFile('padding.bin',Buffer.alloc(65*1024*1024))
+ const oversized=archive.toBuffer()
+ expect(oversized.length).toBeLessThan(128*1024)
+ expect(observe(oversized)).toMatchObject({error:expect.any(String)})
+ const forged=Buffer.from(oversized),central=forged.lastIndexOf('padding.bin')-46,local=forged.readUInt32LE(central+42)
+ expect(forged.readUInt32LE(central)).toBe(0x02014b50)
+ forged.writeUInt32LE(1,central+24);forged.writeUInt32LE(1,local+22)
+ expect(observe(forged)).toMatchObject({error:expect.any(String)})
+})
 
 it('hands a large versioned workbook to its dependent Worker and keeps earlier readbacks bound to their bytes',async()=>{
  const file='ledger.xlsx'
@@ -83,6 +105,13 @@ it('hands a large versioned workbook to its dependent Worker and keeps earlier r
  try{
   expect(Buffer.from(copy.prepare('SELECT bytes FROM goal_artifact_bytes WHERE id=?').get(versions[1]!.id)!.bytes as Uint8Array)).toEqual(f.h.artifacts.download(versions[1]!.id).bytes)
  }finally{copy.close()}
+ const acceptedGoal=f.goal()
+ f.h.store.put('router-goal',acceptedGoal.id,{...acceptedGoal,bindingRevision:acceptedGoal.bindingRevision-1})
+ expect(()=>f.h.artifacts.download(versions[1]!.id)).toThrow(/entry or ownership changed/i)
+ expect(operatorTask(f.h,versions[0]!.ticketId)?.artifacts).toEqual([])
+ f.h.store.put('router-goal',acceptedGoal.id,{...acceptedGoal,contextIds:[...(acceptedGoal.contextIds??[]),'revoked-context']})
+ expect(()=>f.h.artifacts.download(versions[1]!.id)).toThrow(/sources changed/i)
+ expect(operatorTask(f.h,versions[0]!.ticketId)?.artifacts).toEqual([])
  const cleanup=planHistory(f.h.store,f.config.stateDir,'team','erase-test',Date.now())
  f.h.memory.cleanup.apply(cleanup)
  expect(f.h.store.db.prepare('SELECT count(*) AS n FROM goal_artifact_bytes').get()?.n).toBe(0)

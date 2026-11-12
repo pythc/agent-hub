@@ -3,7 +3,7 @@ import {protocolBytes} from './context-budget.ts'
 import type {ModelRequest,ToolSpec} from './model.ts'
 import {inlineExecution,type InlineExecution} from './execution-output.ts'
 
-export interface GoalEvidence {id:string;kind:'file'|'document'|'report'|'execution';ticketId?:string;delegationId?:string;sourceInstance?:string;key:string;content:string;hash:string;artifact?:import('./goal-artifacts.ts').ArtifactVersion;missing?:boolean;revision?:number;criterionIds:string[]}
+export interface GoalEvidence {id:string;kind:'file'|'document'|'report'|'execution';ticketId?:string;delegationId?:string;sourceInstance?:string;key:string;content:string;hash:string;artifact?:import('./goal-artifacts.ts').ArtifactVersion;commit?:string;missing?:boolean;revision?:number;criterionIds:string[]}
 
 /** Fresh verifier/planner input stays below a quarter of the scope budget. */
 export function inlineEvidenceBudget(input:unknown,maxBytes:number){return Math.max(0,Math.min(512*1024,Math.floor(maxBytes/4)-protocolBytes(input)))}

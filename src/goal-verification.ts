@@ -13,7 +13,7 @@ import {inlineEvidenceBudget,evidenceAccess,type GoalEvidence as Evidence} from 
 import type {DelegationBinding} from './delegation/goals.ts'
 
 export interface GoalDelivery {id:string;goalId:string;ticketId:string;triggerId:string;scopeId:string;assignmentId:string;report:WorkerReport;reply?:string;inputRevision:number;at:number}
-interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];delegations?:DelegationBinding[];evidence:Evidence[]}
+interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];delegations?:DelegationBinding[];evidence:Evidence[];finalCommit?:string}
 export interface VerificationCheck {criterionId:string;verdict:'passed'|'failed'|'insufficient';explanation:string;evidenceIds:string[];method:'program'|'agent'}
 export interface VerificationRound {id:string;goalId:string;nodeId?:string;triggerId:string;scopeId:string;entryId:string;ticketIds:string[];delegationIds?:string[];state:'pending'|'running'|'passed'|'failed'|'insufficient'|'errored'|'stale';snapshot:Snapshot;checks:VerificationCheck[];attempts:number;error?:string;at:number;finishedAt?:number;threadId?:string}
 const verdict=z.object({checks:z.array(z.object({criterionId:z.string(),verdict:z.enum(['passed','failed','insufficient']),explanation:z.string().min(1).max(8000),evidenceIds:z.array(z.string()).min(1)}).strict()).min(1)}).strict()
@@ -117,7 +117,7 @@ export class GoalVerification {
    for(const owner of owners)for(const id of closure([owner]))if(id!==owner)ancestors.add(id)
    return {id:cr.id,ancestors}
   })
-  const tasks:Snapshot['tasks']=[],delegations:DelegationBinding[]=[],evidence:Evidence[]=[];let evidenceBytes=0
+  const tasks:Snapshot['tasks']=[],delegations:DelegationBinding[]=[],evidence:Evidence[]=[];let evidenceBytes=0,finalCommit:string|undefined
   const add=(value:Omit<Evidence,'id'|'hash'>)=>{const hash=stableDigest(value),id='evidence-'+hash,item={...value,id,hash};evidenceBytes+=Buffer.byteLength(JSON.stringify(item));if(evidenceBytes>512*1024)throw Error('Acceptance evidence exceeds 512 KiB; declare smaller artifacts');evidence.push(item)}
   if(nodes.some(n=>n.teamTargetId)){
    const receipt=this.host.store.db.prepare("SELECT body FROM records WHERE kind='goal-receipt' AND json_extract(body,'$.goalId')=? ORDER BY rowid LIMIT 1").get(g.id)
@@ -153,6 +153,7 @@ export class GoalVerification {
    const citeIds=(values:string[])=>[...new Set([...values,...semanticAncestors.filter(cr=>cr.ancestors.has(n.id)).map(cr=>cr.id)])]
    if(g.project){
     if(!code?.head||code.error)throw Error('Accepted project commit is missing')
+    if(!node&&n.id===g.project.integration)finalCommit=code.head
     add({kind:'execution',ticketId:n.ticketId,key:'project-commit',content:JSON.stringify({base:g.project.base,head:code.head,parents:code.parents,test:code.test,diffStat:code.diffStat,diff:code.diff}),criterionIds:citeIds(ids)})
    }
    add({kind:'execution',ticketId:n.ticketId,key:'host-execution',content:this.execution(n.ticketId),criterionIds:citeIds(ids)})
@@ -162,8 +163,14 @@ export class GoalVerification {
     add({kind:'report',ticketId:n.ticketId,key:'watchdog-observation',criterionIds:citeIds(ids),content:JSON.stringify({id:r.id,assignmentId:r.assignmentId,contractHash:r.contractHash,at:r.at,judgment:r.judgment,observation:r.observation??null})})
    }
    add({kind:'report',ticketId:n.ticketId,key:'delivery',content:JSON.stringify({report:proposal.report,reply:proposal.reply}),criterionIds:citeIds(ids)})
-   const files=[...new Set(assigned.flatMap(cr=>[...(cr.files??[]),...(cr.check?[cr.check.path]:[])]))]
-   for(const path of files){if(!run)throw Error('Task workspace is missing');add({kind:'file',ticketId:n.ticketId,key:path,...this.host.artifacts.evidence(g,n.id,n.ticketId,run.cwd,path,assigned,code?.head),criterionIds:citeIds(assigned.filter(cr=>cr.files?.includes(path)||cr.check?.path===path).map(cr=>cr.id))})}
+   // Overall acceptance also inspects the released bytes of files owned by earlier nodes.
+   const fileCriteria=!node&&n.id===g.project?.integration?g.criteria:assigned
+   const files=[...new Set(fileCriteria.flatMap(cr=>[...(cr.files??[]),...(cr.check?[cr.check.path]:[])]))]
+   for(const path of files){
+    if(!run)throw Error('Task workspace is missing')
+    const data=this.host.artifacts.evidence(g,n.id,n.ticketId,run.cwd,path,fileCriteria,code?.head)
+    add({kind:'file',ticketId:n.ticketId,key:path,...data,...(!node&&code?.head?{commit:code.head}:{}),criterionIds:citeIds(fileCriteria.filter(cr=>cr.files?.includes(path)||cr.check?.path===path).map(cr=>cr.id))})
+   }
    for(const documentId of [...new Set(assigned.flatMap(cr=>cr.documents??[]))]){
     const doc=this.host.knowledge.command({action:'read',id:documentId,limit:100},c)
     if(doc.nextOffset!==null)throw Error('Declared document exceeds acceptance evidence limit; declare a smaller document')
@@ -171,7 +178,7 @@ export class GoalVerification {
    }
   }
   if(Buffer.byteLength(JSON.stringify(evidence))>512*1024)throw Error('Acceptance evidence exceeds 512 KiB; declare smaller artifacts')
-  return {contract:stableDigest({objective:g.objective,criteria:g.criteria,nodes:nodes.map(n=>({id:n.id,instruction:n.instruction,criterionIds:n.criterionIds,supports:n.supports,outputs:n.outputs,dependsOn:n.dependsOn,...(n.teamTargetId?{teamTargetId:n.teamTargetId}:{}),prerequisites:n.dependsOn.map(id=>{const dep=g.nodes?.find(d=>d.id===id);return {id,state:dep?.state,roundId:dep?.roundId}})}))}),tasks,...(delegations.length?{delegations}:{}),evidence}
+  return {contract:stableDigest({objective:g.objective,criteria:g.criteria,nodes:nodes.map(n=>({id:n.id,instruction:n.instruction,criterionIds:n.criterionIds,supports:n.supports,outputs:n.outputs,dependsOn:n.dependsOn,...(n.teamTargetId?{teamTargetId:n.teamTargetId}:{}),prerequisites:n.dependsOn.map(id=>{const dep=g.nodes?.find(d=>d.id===id);return {id,state:dep?.state,roundId:dep?.roundId}})}))}),tasks,...(delegations.length?{delegations}:{}),evidence,...(finalCommit?{finalCommit}:{})}
  }
  current(round:VerificationRound,g:RouterGoal):boolean {
   try{return stableDigest(this.snapshot(g,round.nodeId?g.nodes?.find(n=>n.id===round.nodeId):undefined,false))===stableDigest(round.snapshot)}catch{return false}
@@ -219,11 +226,17 @@ export class GoalVerification {
    save({state:'running',attempts:round.state==='running'?round.attempts:round.attempts+1})
    const node=round.nodeId?g.nodes?.find(n=>n.id===round!.nodeId):undefined,criteria=this.criteria(g,node)
    const checks=criteria.filter(cr=>cr.check).map(cr=>this.program(cr,round!.snapshot))
-   const semantic=criteria.filter(cr=>!cr.check).map(cr=>({id:cr.id,description:cr.description}))
+   const semanticCriteria=criteria.filter(cr=>!cr.check)
+   const finalCommit=round.snapshot.finalCommit
+   if(finalCommit)for(const cr of semanticCriteria){
+    const missing=round.snapshot.evidence.filter(e=>e.kind==='file'&&e.commit===finalCommit&&e.missing&&cr.files.includes(e.key))
+    if(missing.length)checks.push({criterionId:cr.id,verdict:'failed',explanation:'Required file missing from final commit: '+missing.map(e=>e.key).join(', '),evidenceIds:missing.map(e=>e.id),method:'program'})
+   }
+   const semantic=semanticCriteria.map(cr=>({id:cr.id,description:cr.description}))
    if(!node)semantic.push({id:'__goal__',description:'The combined deliverables satisfy the original overall objective and every stated constraint: '+g.objective})
    if(semantic.length&&checks.every(c=>c.verdict==='passed')){
     const snapshot=round.snapshot
-    const stage=node?{kind:'node',node:{id:node.id,title:node.title,instruction:node.instruction},otherNodes:g.nodes?.filter(n=>n.id!==node.id).map(n=>({id:n.id,title:n.title,criterionIds:n.criterionIds}))}:{kind:'overall'}
+    const stage=node?{kind:'node',node:{id:node.id,title:node.title,instruction:node.instruction},otherNodes:g.nodes?.filter(n=>n.id!==node.id).map(n=>({id:n.id,title:n.title,criterionIds:n.criterionIds}))}:{kind:'overall',...(finalCommit?{finalCommit}:{})}
     // Use short round-local references on code projects. Ledger records retain the full evidence hashes.
     const presented=g.project?snapshot.evidence.map((e,i)=>({...e,id:'e'+(i+1)})):snapshot.evidence
     const toStored=new Map(presented.map((e,i)=>[e.id,snapshot.evidence[i]!.id])),toPresented=new Map([...toStored].map(([alias,stored])=>[stored,alias]))

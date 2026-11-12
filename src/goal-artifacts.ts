@@ -1,7 +1,8 @@
 import {createHash} from 'node:crypto'
 import {constants,closeSync,fstatSync,lstatSync,openSync,readSync,realpathSync} from 'node:fs'
 import {basename,extname,isAbsolute,join,relative,resolve,sep} from 'node:path'
-import * as XLSX from 'xlsx'
+import {spawnSync} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
 import type {Runtime} from './runtime.ts'
 import type {GoalCriterion} from './goal-contract.ts'
 import type {VerificationRound} from './goal-verification.ts'
@@ -39,31 +40,11 @@ export function evidenceBytes(cwd:string,path:string,limit:number):Buffer|undefi
   }catch(error:any){if(error.code==='ENOENT')return;throw error}
 }
 
+/** Keep workbook parsing and its memory growth outside the host process. */
 function workbookObservation(bytes:Buffer,checks:CellCheck[]){
-  if(bytes.readUInt16BE(0)!==0x504b)throw Error('Expected an XLSX workbook')
-  const workbook=XLSX.read(bytes,{type:'buffer',sheets:[...new Set(checks.map(c=>c.sheet))],cellFormula:false})
-  const cells=checks.map(check=>{
-    const sheet=workbook.Sheets[check.sheet],cell=sheet?.[check.cell.replace(/\$/g,'').toUpperCase()]
-    const value=cell&&['s','n','b'].includes(cell.t)?cell.v:null
-    let sum:number|null=null
-    if(check.sumRange&&sheet){
-      const {s,e}=XLSX.utils.decode_range(check.sumRange.replace(/\$/g,'').toUpperCase())
-      const valid=e.r>=s.r&&e.c>=s.c&&e.r<1048576&&e.c<16384
-      if(valid){
-        sum=0
-        for(const address of Object.keys(sheet)){
-          if(address.startsWith('!'))continue
-          const point=XLSX.utils.decode_cell(address)
-          if(point.r<s.r||point.r>e.r||point.c<s.c||point.c>e.c)continue
-          const item=sheet[address]!
-          if(item.t==='e'){sum=null;break}
-          if(item.t==='n')sum+=item.v
-        }
-      }
-    }
-    return {sheet:check.sheet,cell:check.cell,value,...(check.sumRange?{range:check.sumRange,sum}:{})}
-  })
-  return {sheets:workbook.SheetNames,cells}
+  const result=spawnSync(process.execPath,['--max-old-space-size=256',fileURLToPath(new URL('./goal-workbook-reader.mjs',import.meta.url)),JSON.stringify(checks)],{input:bytes,timeout:5000,maxBuffer:512*1024,encoding:'utf8'})
+  if(result.error||result.status!==0)throw Error('Workbook could not be read within the parsing limits')
+  return JSON.parse(result.stdout)
 }
 
 export class GoalArtifacts {
@@ -98,7 +79,7 @@ export class GoalArtifacts {
     const checks=criteria.flatMap(c=>c.check?.kind==='xlsx_cell_equals'&&c.check.path===path?[c.check]:[])
     let observation:unknown
     if(checks.length){
-      const cache=stableDigest([id,checks])
+      const cache=stableDigest(['bounded-workbook-process-v1',id,checks])
       observation=store.get<{observation:unknown}>('workbook-observation',cache)?.observation
       if(!observation){
         try{observation=workbookObservation(bytes,checks)}catch{observation={error:'Workbook could not be read'}}
