@@ -80,7 +80,12 @@ export class GoalReplanning {
  }
  private current(r:ReplanRound){
   const g=this.host.goals.get(r.goalId)
-  if(!g||g.replanId!==r.id||stableDigest(this.snapshot(g,r.snapshot.workerCapabilities!==undefined))!==r.snapshotHash)throw Error('Replanning input, goal state, Worker capabilities or authority changed')
+  if(!g||g.replanId!==r.id)throw Error('Replanning input, goal state, Worker capabilities or authority changed')
+  const snapshot=this.snapshot(g,r.snapshot.workerCapabilities!==undefined)
+  // Progress updates advance the optimistic-lock revision without changing plan inputs.
+  snapshot.goalRevision=r.snapshot.goalRevision
+  if(stableDigest(snapshot)!==r.snapshotHash)throw Error('Replanning input, goal state, Worker capabilities or authority changed')
+  if((g.replans??0)>=(g.maxReplans??(g.project?.policy.budget?Infinity:0)))throw Error('Replanning allowance changed')
   return g
  }
  consider(g:RouterGoal):boolean {

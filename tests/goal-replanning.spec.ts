@@ -163,6 +163,34 @@ it('does not let a stale plan hold a goal explicitly resumed during planning',as
  f=fixture({onPlan:async(_r,input)=>{if(input.kind==='goal_replanning'&&!resumed){resumed=true;let g=f.goal();f.h.goals.command({action:'pause',id:g.id,operationId:'pause',expectedRevision:g.revision},f.context());g=f.goal();f.h.goals.command({action:'resume',id:g.id,operationId:'resume',expectedRevision:g.revision},f.context())}}});f.start()
  await until(f,()=>f.plans()[0]?.state==='stale');expect(f.goal().state).toBe('active');expect(f.goal().replanId).toBeUndefined()
 })
+it('keeps a plan current while the Router updates progress during planning and review',async()=>{
+ let f!:ReturnType<typeof fixture>
+ f=fixture({onPlan:async(_r,input)=>{
+  const g=f.goal()
+  f.h.goals.command({action:'wait',id:g.id,operationId:input.kind,expectedRevision:g.revision,reason:'The revised strategy is being reviewed',needsHuman:false,nextAction:'Await the independently reviewed plan'},f.context())
+ }})
+ const original=f.start()
+ await until(f,()=>f.goal().state==='completed')
+ expect(f.plans()).toHaveLength(1)
+ expect(f.plans()[0]?.state).toBe('applied')
+ expect(f.goal().replans).toBe(1)
+ expect(f.goal().contract).toEqual(original.contract)
+ expect(f.goal().taskIds).toHaveLength(4)
+})
+it('honors a disabled replan allowance while a plan is being reviewed',async()=>{
+ let f!:ReturnType<typeof fixture>
+ f=fixture({onPlan:async(_r,input)=>{
+  if(input.kind!=='goal_plan_review')return
+  const g=f.goal()
+  f.h.goals.command({action:'update',id:g.id,operationId:'disable-replanning',expectedRevision:g.revision,maxReplans:0},f.context())
+ }})
+ f.start()
+ await until(f,()=>f.plans()[0]?.state==='stale')
+ expect(f.goal().state).toBe('held')
+ expect(f.goal().replans).toBe(0)
+ expect(f.goal().taskIds).toHaveLength(1)
+ expect(f.h.store.list('goal-plan-dispatch')).toHaveLength(0)
+})
 it('invalidates a planning result when a human pauses the goal during reasoning',async()=>{
  let f!:ReturnType<typeof fixture>,paused=false
  f=fixture({onPlan:async(_r,input)=>{if(input.kind==='goal_replanning'&&!paused){paused=true;const g=f.goal();f.h.goals.command({action:'pause',id:g.id,operationId:'pause',expectedRevision:g.revision},f.context())}}});f.start()
