@@ -308,12 +308,27 @@ export class RouterGoals {
  async advance(){
   for(let saved of this.host.store.list<RouterGoal>('router-goal')){
    if(!saved.nodes?.length&&saved.taskIds?.length){saved={...saved,nodes:saved.taskIds.map(ticketId=>({id:ticketId,title:'Retained task',instruction:this.host.store.tickets.get(ticketId)?.mandate.scope??'',workerId:this.host.store.get<any>('worker-assignment',ticketId)?.workerId??'',criterionIds:saved.criteria.map(c=>c.id),dependsOn:[],ticketId,state:'running' as const,repairs:0,recoveries:0}))};this.save(saved)}
-   if(!['active','waiting'].includes(saved.state)||!saved.objective||!saved.nodes?.length)continue
+   const reviewRound=saved.project?.review?.state==='pending'&&saved.finalRoundId?this.host.store.get<VerificationRound>('goal-verification',saved.finalRoundId):undefined
+   const refreshReview=saved.state==='needs_input'&&!!reviewRound&&!reviewRound.snapshot.finalCommit
+   const runnable=['active','waiting'].includes(saved.state)||refreshReview
+   if(!runnable||!saved.objective||!saved.nodes?.length)continue
    if(saved.project&&this.holdBudget(saved))continue
    if(this.host.replanning.active(saved))continue
    let g=saved
    try{
     const c=this.context(g)
+    if(refreshReview){
+     this.host.store.atomic(()=>{
+      const review=g.project!.review!
+      this.host.store.put('goal-verification',reviewRound!.id,{...reviewRound,state:'stale'})
+      this.host.store.db.prepare("DELETE FROM records WHERE kind='project-commit' AND id=?").run(review.deliveryId)
+      g.project!.reviewWaitMs+=Math.max(0,this.now()-review.at)
+      g.project!.review=undefined;g.finalRoundId=undefined
+      g.state='active';g.reason=undefined;g.nextAction='重新测试提交并更新验收证据'
+      this.save(g)
+     })
+     if(this.holdBudget(g))continue
+    }
     if(g.state==='waiting'&&g.nextAt&&g.nextAt>this.now()&&!g.nodes!.some(n=>n.ticketId||n.delegationId))continue
     const nodes=g.nodes!
     // A previously accepted upstream artifact changing invalidates downstream acceptance.

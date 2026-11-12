@@ -15,6 +15,7 @@ import {operatorWorkspace} from '../src/operator-workspace.ts'
 import {serve} from '../src/server.ts'
 import {backupState,verifyBackup,restoreState} from '../src/backup.ts'
 import {projectBudget} from '../src/project-budget.ts'
+import {stableDigest} from '../src/sources.ts'
 import {secretFromEnv,signWebhook} from '../src/webhook-protocol.ts'
 
 const git=(cwd:string,...args:string[])=>execFileSync('git',['-c','core.hooksPath=/dev/null',...args],{cwd,encoding:'utf8'}).trim()
@@ -211,6 +212,34 @@ realSandbox('returns scheduled and webhook project reviews to the person and thr
  const replay=f.receive('revoked-grant','验收通过 '+reviewId,'alice','request','test')
  expect(f.h.store.deliveries().find(d=>d.id==='project-review-input:'+replay.triggerId)?.text).toContain('automation_grant_revoked_or_expired')
 },120000)
+
+realSandbox('refreshes pending legacy review evidence after upgrading without charging the human wait',async()=>{
+ const f=project(true)
+ await f.until(()=>f.goal().project?.review?.state==='pending')
+ const g=f.goal(),review=g.project!.review!,round=f.h.store.get<VerificationRound>('goal-verification',g.finalRoundId!)!
+ const snapshot={...round.snapshot,evidence:round.snapshot.evidence.map(({commit,...e})=>e)}
+ delete snapshot.finalCommit
+ const roundId='verify-'+stableDigest([g.id,'goal',snapshot]),reviewId=stableDigest([g.id,roundId,review.deliveryId,review.head]).slice(0,16)
+ f.h.store.put('goal-verification',roundId,{...round,id:roundId,snapshot})
+ f.h.store.db.prepare("DELETE FROM records WHERE kind='goal-verification' AND id=?").run(round.id)
+ g.finalRoundId=roundId;g.project!.review={...review,id:reviewId,roundId}
+ f.h.store.put('router-goal',g.id,g);f.h.store.put('project-review',reviewId,{goalId:g.id,...g.project!.review})
+ expect(()=>f.h.goals.decideOperator(reviewId,'approve','reviewer')).toThrow(/evidence changed/)
+ const elapsed=f.h.goals.budget(g)!.elapsedMs
+ f.advance(20*60000)
+ await f.restart()
+ await f.h.goals.advance()
+ expect(f.goal().state).toBe('active')
+ expect(f.h.goals.budget(f.goal())!.elapsedMs).toBe(elapsed)
+ await f.until(()=>f.goal().project?.review?.state==='pending')
+ const fresh=f.goal().project!.review!
+ expect(fresh.id).not.toBe(reviewId)
+ expect(fresh.head).toBe(review.head)
+ expect(f.h.store.get<VerificationRound>('goal-verification',fresh.roundId)!.snapshot.finalCommit).toBe(fresh.head)
+ expect(()=>f.h.goals.decideOperator(reviewId,'approve','reviewer')).toThrow(/unavailable/)
+ f.receive('approve-upgrade','验收通过 '+fresh.id)
+ await f.until(()=>f.goal().state==='completed')
+},90000)
 
 realSandbox('preserves a sequential handoff and approved Git artifacts through backup and restore',async()=>{
  const f=project(true)
