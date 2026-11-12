@@ -1,5 +1,5 @@
 import {existsSync,lstatSync,realpathSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs'
-import {resolve,delimiter,relative,sep,join} from 'node:path'
+import {resolve,delimiter,relative,sep,join,dirname} from 'node:path'
 import {tmpdir} from 'node:os'
 import {execFile,spawn,spawnSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
@@ -22,16 +22,17 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
   if(selection.status===0)developerDir=selection.stdout.trim()
  }
  const developerBin=developerDir&&join(developerDir,'usr','bin')
+ const developerRoot=developerDir?.endsWith('/Contents/Developer')?dirname(developerDir):developerDir
  if(driver==='codex'){
   const profile='superagent-managed',entries:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[s.cwd]:s.sandbox==='read-only'?'read':'write'}
-  if(developerDir)entries[developerDir]='read'
+  if(developerRoot)entries[developerRoot]='read'
   if(s.privateState)entries[s.privateState]='deny';if(s.gitDirectory)entries[s.gitDirectory]='read';for(const p of s.attachments??[])entries[p]='read';for(const p of s.writablePaths??[])entries[p]='write'
   for(const p of s.privatePaths??[])entries[p]='deny'
   return {command:s.codex,args:['sandbox','-P',profile,'-c','permissions.'+profile+'.extends='+JSON.stringify(s.sandbox==='read-only'?':read-only':':workspace'),'-c','permissions.'+profile+'.network.enabled='+String(s.network),'-c','permissions.'+profile+'.filesystem={'+Object.entries(entries).map(([p,a])=>JSON.stringify(p)+'='+JSON.stringify(a)).join(',')+'}','-C',s.cwd,'--',...shell],developerBin}
  }
  if(driver==='seatbelt'){
   if(platform!=='darwin')throw Error('Seatbelt sandbox requires macOS')
-  const reads=['/System','/usr','/bin','/sbin','/opt/homebrew','/private/etc','/dev/null','/dev/random','/dev/urandom',...(developerDir?[developerDir]:[]),s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[]),...(s.writablePaths??[])].filter(existsSync)
+  const reads=['/System','/usr','/bin','/sbin','/opt/homebrew','/private/etc','/dev/null','/dev/random','/dev/urandom',...(developerRoot?[developerRoot]:[]),s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[]),...(s.writablePaths??[])].filter(existsSync)
   const rules=['(version 1)','(deny default)','(import "system.sb")','(allow process-exec process-fork)','(allow signal (target self) (target children))','(allow sysctl-read)','(allow file-read-metadata)','(allow file-read* '+reads.map(p=>'(subpath '+q(p)+')').join(' ')+')','(allow file-write* (literal "/dev/null") (subpath '+q(s.scratch)+')'+(s.sandbox==='workspace-write'?' (subpath '+q(s.cwd)+')':'')+(s.writablePaths??[]).map(p=>' (subpath '+q(p)+')').join('')+')']
   // Keep the granted directory itself in place across managed commands. Its contents remain writable.
   rules.push('(deny file-write-unlink (literal '+q(s.cwd)+'))')
@@ -72,7 +73,9 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
 export function sandboxEnvironment(scratch:string,developerBin?:string){
  const env=Object.fromEntries(['PATH','USER','LOGNAME','LANG','LC_ALL','SYSTEMROOT','SystemRoot'].filter(key=>process.env[key]!==undefined).map(key=>[key,process.env[key]!]))
  Object.assign(env,{HOME:scratch,TMPDIR:scratch,TMP:scratch,TEMP:scratch})
- // Apple's system shim writes outside the job's temp directory. Keep higher-priority tools first.
+ // Resolve Apple's shims against the selected installation without the per-user xcrun cache.
+ if(developerBin){env.DEVELOPER_DIR=dirname(dirname(developerBin));env.xcrun_nocache='1'}
+ // Keep higher-priority tools first.
  if(developerBin&&env.PATH){
   const paths=env.PATH.split(delimiter),systemBin=paths.indexOf('/usr/bin')
   if(systemBin>=0){paths.splice(systemBin,0,developerBin);env.PATH=paths.join(delimiter)}

@@ -1,11 +1,11 @@
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,rmSync,realpathSync,symlinkSync} from 'node:fs'
-import {join} from 'node:path'
+import {join,dirname} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach,it,expect} from 'vitest'
 import {configSchema} from '../src/config.ts'
 import {Store} from '../src/store.ts'
 import {WorkManager,type WorkOwner} from '../src/work.ts'
-import {sandboxCommand} from '../src/sandbox.ts'
+import {sandboxCommand,sandboxEnvironment} from '../src/sandbox.ts'
 import {prepareWorkspace} from '../src/workspace.ts'
 import {createServer} from 'node:http'
 import {execFileSync} from 'node:child_process'
@@ -91,8 +91,10 @@ it.skipIf(process.platform!=='darwin')('gives the macOS Codex driver read access
  const selected=execFileSync('/usr/bin/xcode-select',['--print-path'],{encoding:'utf8',env:{}}).trim()
  const launch=sandboxCommand({codex:'codex',sandboxDriver:'codex',cwd:f.cwd,scratch:f.root,sandbox:'read-only',network:false,command:'git status'})
  const filesystem=launch.args.find(arg=>arg.startsWith('permissions.superagent-managed.filesystem='))
- expect(filesystem).toContain(JSON.stringify(selected)+'="read"')
+ const root=selected.endsWith('/Contents/Developer')?dirname(selected):selected
+ expect(filesystem).toContain(JSON.stringify(root)+'="read"')
  expect(launch.developerBin).toBe(join(selected,'usr','bin'))
+ expect(sandboxEnvironment(f.root,launch.developerBin)).toMatchObject({DEVELOPER_DIR:selected,xcrun_nocache:'1'})
 })
 it.skipIf(!supported)('runs a real sandboxed command without Codex and denies private state/outside writes/credential environment',async()=>{
  const f=fixture();process.env.AGENTHUB_FIXTURE_KEY='must-not-be-inherited'
