@@ -93,6 +93,7 @@ it.skipIf(process.platform!=='darwin')('gives the macOS Codex driver read access
  const filesystem=launch.args.find(arg=>arg.startsWith('permissions.superagent-managed.filesystem='))
  const root=selected.endsWith('/Contents/Developer')?dirname(selected):selected
  expect(filesystem).toContain(JSON.stringify(root)+'="read"')
+ expect(filesystem).toContain('"/Library/Preferences/com.apple.dt.Xcode.plist"="read"')
  expect(launch.developerBin).toBe(join(selected,'usr','bin'))
  expect(sandboxEnvironment(f.root,launch.developerBin)).toMatchObject({DEVELOPER_DIR:selected,xcrun_nocache:'1'})
 })

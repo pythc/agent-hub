@@ -23,16 +23,17 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
  }
  const developerBin=developerDir&&join(developerDir,'usr','bin')
  const developerRoot=developerDir?.endsWith('/Contents/Developer')?dirname(developerDir):developerDir
+ const developerReads=developerRoot?[developerRoot,'/Library/Preferences/com.apple.dt.Xcode.plist']:[]
  if(driver==='codex'){
   const profile='superagent-managed',entries:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[s.cwd]:s.sandbox==='read-only'?'read':'write'}
-  if(developerRoot)entries[developerRoot]='read'
+  for(const path of developerReads)entries[path]='read'
   if(s.privateState)entries[s.privateState]='deny';if(s.gitDirectory)entries[s.gitDirectory]='read';for(const p of s.attachments??[])entries[p]='read';for(const p of s.writablePaths??[])entries[p]='write'
   for(const p of s.privatePaths??[])entries[p]='deny'
   return {command:s.codex,args:['sandbox','-P',profile,'-c','permissions.'+profile+'.extends='+JSON.stringify(s.sandbox==='read-only'?':read-only':':workspace'),'-c','permissions.'+profile+'.network.enabled='+String(s.network),'-c','permissions.'+profile+'.filesystem={'+Object.entries(entries).map(([p,a])=>JSON.stringify(p)+'='+JSON.stringify(a)).join(',')+'}','-C',s.cwd,'--',...shell],developerBin}
  }
  if(driver==='seatbelt'){
   if(platform!=='darwin')throw Error('Seatbelt sandbox requires macOS')
-  const reads=['/System','/usr','/bin','/sbin','/opt/homebrew','/private/etc','/dev/null','/dev/random','/dev/urandom',...(developerRoot?[developerRoot]:[]),s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[]),...(s.writablePaths??[])].filter(existsSync)
+  const reads=['/System','/usr','/bin','/sbin','/opt/homebrew','/private/etc','/dev/null','/dev/random','/dev/urandom',...developerReads,s.cwd,s.scratch,...(s.gitDirectory?[s.gitDirectory]:[]),...(s.attachments??[]),...(s.writablePaths??[])].filter(existsSync)
   const rules=['(version 1)','(deny default)','(import "system.sb")','(allow process-exec process-fork)','(allow signal (target self) (target children))','(allow sysctl-read)','(allow file-read-metadata)','(allow file-read* '+reads.map(p=>'(subpath '+q(p)+')').join(' ')+')','(allow file-write* (literal "/dev/null") (subpath '+q(s.scratch)+')'+(s.sandbox==='workspace-write'?' (subpath '+q(s.cwd)+')':'')+(s.writablePaths??[]).map(p=>' (subpath '+q(p)+')').join('')+')']
   // Keep the granted directory itself in place across managed commands. Its contents remain writable.
   rules.push('(deny file-write-unlink (literal '+q(s.cwd)+'))')
