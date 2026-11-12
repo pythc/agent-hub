@@ -23,7 +23,16 @@ function fixture(sandbox:'read-only'|'workspace-write'='workspace-write'){
  const owner:WorkOwner={ticketId:'test',assignmentId:'one',cwd,sandbox,depth:0}
  return {root,cwd,config,store,manager,owner}
 }
-async function settle(f:ReturnType<typeof fixture>,id:string){for(let i=0;i<100;i++){await f.manager.tick();const item=f.store.get<any>('work',id);if(!['starting','running'].includes(item.state))return item;await new Promise(r=>setTimeout(r,20))}throw Error('Command did not finish')}
+async function settle(f:ReturnType<typeof fixture>,id:string,timeoutMs=2000){
+ const deadline=Date.now()+timeoutMs
+ while(Date.now()<deadline){
+  await f.manager.tick()
+  const item=f.store.get<any>('work',id)
+  if(!['starting','running'].includes(item.state))return item
+  await new Promise(r=>setTimeout(r,20))
+ }
+ throw Error('Command did not finish: '+f.manager.read(f.owner,id).output)
+}
 const git=(cwd:string,...args:string[])=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim()
 function seedRepository(cwd:string){
  git(cwd,'init','-b','main')
@@ -61,10 +70,11 @@ it.skipIf(process.platform!=='darwin')('reads a linked checkout with Apple Git w
  const owner={...f.owner,cwd:linked}
  const command=['set -e','/usr/bin/git --version','git rev-parse HEAD','git status --short','git diff --stat',
   'if git update-ref refs/heads/outside HEAD 2>/dev/null; then exit 11; fi'].join('\n')
- const job=await f.manager.shell(owner,command,'linked-git',0),ended=await settle(f,job.id),output=f.manager.read(owner,job.id).output
+ // Cold Xcode startup on a hosted runner can outlast ordinary shell commands.
+ const job=await f.manager.shell(owner,command,'linked-git',0),ended=await settle(f,job.id,20000),output=f.manager.read(owner,job.id).output
  expect(ended.exitCode,output).toBe(0);expect(output).toContain(base)
  expect(git(f.cwd,'branch','--list','outside')).toBe('')
-})
+},30000)
 it.skipIf(!supported)('keeps a Worker gitfile from granting another repository to its shell',async()=>{
  const f=fixture(),external=join(f.root,'unassigned')
  mkdirSync(external);seedRepository(external)
