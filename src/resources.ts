@@ -7,7 +7,7 @@ import {stableDigest} from './sources.ts'
 import type {Runtime} from './runtime.ts'
 import type {Ticket,Trigger} from './vendor/dsh-core/index.ts'
 import type {Run} from './store.ts'
-import {builtins,promptStatus,compose,composeCoordinator} from './prompts.ts'
+import {builtins,promptStatus} from './prompts.ts'
 import {isHostPrivateFile} from './private-files.ts'
 
 export const readSchema=z.object({resource:z.string().min(1).max(2000),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(8000).default(4000),pageSize:z.number().int().min(1).max(50).default(20),cursor:z.string().optional()}).strict()
@@ -148,7 +148,7 @@ export class Resources {
    }
   }
   if(head==='agent-configuration'){this.admin(p);const value=store.get('agent-configuration',id!);if(!value)throw Error('No configuration receipt for this call');return value}
-  if(head==='prompt-preview'){this.admin(p);if(id==='worker'||id==='router')return {role:id,revision:this.host.settings.current().revision,text:(id==='router'&&this.host.config.execution.router?.mode==='host'?composeCoordinator(this.host.config,{preview:true,cwd:'<task directory>'}):compose(this.host.config,id,{preview:true,cwd:'<task directory>'},'preview'))+(id==='router'&&this.host.config.execution.router?.prompt?'\nAgent instructions:\n'+this.host.config.execution.router.prompt:'')};const preview=store.get('prompt-preview',id!);if(!preview)throw Error('Unknown prompt preview');return preview}
+  if(head==='prompt-preview'){this.admin(p);if(id==='worker'||id==='router')return {...this.host.previewPrompt({role:id}),revision:this.host.settings.current().revision};const preview=store.get('prompt-preview',id!);if(!preview)throw Error('Unknown prompt preview');return preview}
   if(head==='settings'){
    this.admin(p);const current=this.host.settings.current()
    if(!id)return {revision:current.revision,blocks:Object.keys(current.config),history:this.host.settings.history().map(x=>({revision:x.revision,at:x.at}))}

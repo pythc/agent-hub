@@ -85,6 +85,25 @@ it('serves authenticated APIs and connects a real stdio MCP client to the same h
     if(marker)expect(text).toContain(marker)
     expect(runtime.settings.current()).toEqual(after)
   }
+  const execution={...config.execution,workers:[{id:'draft-worker',backend:'codex',prompt:'Unsaved Worker profile'}]}
+  const scenario=await fetch(host.url+'/prompt-preview',{method:'POST',headers:auth,body:JSON.stringify({role:'worker',mode:'goal',workerId:'draft-worker',execution})})
+  const composed=await scenario.json() as any
+  expect(scenario.status).toBe(200)
+  expect(composed.text).toContain('Unsaved Worker profile')
+  expect(composed.sections.map((s:any)=>s.id)).toContain('runtime/worker/goal')
+  let snapshot='',offset=0,cursor:string|undefined
+  for(;;){
+    const retained=await client.callTool({name:'agent_read',arguments:{resource:composed.resource,limit:8000,offset,cursor}})
+    expect(retained.isError).toBe(false)
+    const page=JSON.parse((retained.content as {text:string}[])[0]!.text)
+    snapshot+=page.text
+    if(page.nextOffset===null)break
+    offset=page.nextOffset;cursor=page.cursor
+  }
+  expect(JSON.parse(snapshot).digest).toBe(composed.digest)
+  const helper=await client.callTool({name:'agent_prompt_preview',arguments:{role:'worker',mode:'subagent'}})
+  expect(JSON.parse((helper.content as {text:string}[])[0]!.text).sections.map((s:any)=>s.id)).toContain('runtime/subagent')
+  expect(runtime.settings.current()).toEqual(after)
   const spoof=await fetch(host.url+'/send',{method:'POST',headers:auth,body:JSON.stringify({source:'local',actor:'admin',event:{id:'bad',thread:'x',text:'bad'}})})
   expect(spoof.status).toBe(400)
 })

@@ -17,7 +17,8 @@ import { deliverDraft } from './delivery.ts'
 import {configSchema,type Config} from './config.ts'
 import {randomUUID} from 'node:crypto'
 import {readSchema} from './resources.ts'
-import {compose,composeCoordinator,promptStatus} from './prompts.ts'
+import {promptStatus} from './prompts.ts'
+import {previewModes} from './execution-prompts.ts'
 import {configurationSnapshot} from './configuration.ts'
 import {SettingsError,patchSchema} from './settings.ts'
 import {routerManagementPage} from './ui/router-management.ts'
@@ -441,10 +442,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/members-apply'){const input=z.object({id:z.string()}).strict().parse(await body(req));send(res,200,runtime.setup.applyMembers(input.id));return}
     if(req.method==='POST'&&path==='/read'){const {ticketId,...input}=readSchema.extend({ticketId:z.string().optional()}).parse(await body(req));send(res,200,await runtime.resources.read(input,ticketId?{ticketId}:{}));return}
     if(req.method==='POST'&&path==='/prompt-preview'){
-      const input=z.object({role:z.enum(['router','worker']),prompts:patchSchema.shape.prompts}).strict().parse(await body(req)),id=randomUUID()
-      const previewConfig={...runtime.config,...(input.prompts?{prompts:input.prompts}:{})}
-      const text=(input.role==='router'&&previewConfig.execution.router?.mode==='host'?composeCoordinator(previewConfig,{preview:true,cwd:'<task directory>'}):compose(previewConfig,input.role,{preview:true,cwd:'<task directory>',mandate:'<immutable task mandate>'},'preview'))+(input.role==='router'&&previewConfig.execution.router?.prompt?'\nAgent instructions:\n'+previewConfig.execution.router.prompt:'')
-      const result={id,role:input.role,text,revision:runtime.settings.current().revision,at:Date.now()};runtime.store.put('prompt-preview',id,result);send(res,200,{...result,resource:'prompt-preview/'+id});return
+      const input=z.object({role:z.enum(['router','worker']),mode:z.enum(previewModes).optional(),sourceId:z.string().optional(),workerId:z.string().optional(),prompts:patchSchema.shape.prompts,execution:patchSchema.shape.execution,backends:patchSchema.shape.backends}).strict().parse(await body(req)),id=randomUUID()
+      const previewConfig={...runtime.config,...(input.prompts?{prompts:input.prompts}:{}),...(input.execution?{execution:input.execution}:{}),...(input.backends?{backends:input.backends}:{})}
+      const result={id,...runtime.previewPrompt(input,previewConfig),revision:runtime.settings.current().revision,at:Date.now()};runtime.store.put('prompt-preview',id,result);send(res,200,{...result,resource:'prompt-preview/'+id});return
     }
     if(req.method==='GET'&&path==='/prompts'){send(res,200,{parts:promptStatus(runtime.config),history:runtime.store.list('prompt-use')});return}
     if(req.method==='POST'&&path==='/source-replay'){

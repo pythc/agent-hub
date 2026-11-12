@@ -3,6 +3,7 @@ import {backendPackages} from './plugin-package.ts'
 import type {Config} from '../config.ts'
 import {validateBackendSelection,type BackendDefinition,type AgentOptions} from '../backend-config.ts'
 import {mergeOptions,apiOptions} from '../agent-options.ts'
+import {appendAgentPrompt} from '../managed-instructions.ts'
 import {SubscriptionAccounts} from './subscription.ts'
 import {CodexModel,nativeContextProfile} from '../../plugins/backend-codex/model.ts'
 import type {BackendDescription,Model,ModelRequest,ModelResult} from '../model.ts'
@@ -51,7 +52,7 @@ export class BackendRegistry implements Model {
   const compact=legacyContext&&!r.skipContextCompaction
   let nativeThread=r.threadId
   r.onBackend?.(id)
-  try{return await this.model(id,options).run({...r,options,compactBeforeTurn:!!compact,onContextReady:()=>{if(definition.kind==='codex'&&r.managed&&nativeThread&&(!legacyContext||compact))this.store.put('native-context',nativeThread,{version:nativeContextProfile,at:Date.now(),compacted:!!compact});r.onContextReady?.()},instructions:r.instructions+(options.prompt?'\nAgent instructions:\n'+options.prompt:''),model:r.model??(!r.threadId&&role==='router'?this.config.execution.router?.model:undefined),onThread:threadId=>{nativeThread=threadId;if(!locked){locked=threadId;this.writers.add(threadId)}this.store.put('backend-binding',threadId,binding);r.onThread?.(threadId)}})}
+  try{return await this.model(id,options).run({...r,options,compactBeforeTurn:!!compact,onContextReady:()=>{if(definition.kind==='codex'&&r.managed&&nativeThread&&(!legacyContext||compact))this.store.put('native-context',nativeThread,{version:nativeContextProfile,at:Date.now(),compacted:!!compact});r.onContextReady?.()},instructions:appendAgentPrompt(r.instructions,options.prompt),model:r.model??(!r.threadId&&role==='router'?this.config.execution.router?.model:undefined),onThread:threadId=>{nativeThread=threadId;if(!locked){locked=threadId;this.writers.add(threadId)}this.store.put('backend-binding',threadId,binding);r.onThread?.(threadId)}})}
   finally{if(locked)this.writers.delete(locked)}
  }
  async probe(id:string){const model=this.model(id);if(!(model instanceof ProcessBackend))throw Error('Probe requires an execution backend package');return model.probe()}

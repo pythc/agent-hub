@@ -92,6 +92,29 @@ function project(chain=false,testCommand='sh verify.sh',onWorker?:(r:Parameters<
  return {get h(){return h},config,repo,base,goal,receive,until,workerDirectories,get conflicts(){return conflicts},advance:(ms:number)=>{clock+=ms},restart:async()=>{await h.close();open()}}
 }
 
+realSandbox('keeps project ownership and acceptance instructions when a running task refreshes prompts',async()=>{
+ let checked=false
+ const f=project(true,'sh verify.sh',async r=>{
+  if(checked)return
+  checked=true
+  expect(r.instructions).toContain('merge every listed prerequisite SHA locally')
+  expect(r.instructions).toContain('independent host acceptance')
+  let refreshed=''
+  r.onActive?.({interrupt:async()=>{},steer:async()=>{},refresh:async text=>{refreshed=text}})
+  const current=f.h.settings.current()
+  f.h.settings.save(current.revision,{prompts:{...f.config.prompts,shared:'Live updated team instructions'}})
+  const run=f.h.store.get<import('../src/store.ts').Run>('run',r.activity!.ticketId!)!
+  await f.h.refreshWork({ticketId:run.ticketId,assignmentId:run.assignmentId,cwd:run.cwd,sandbox:'workspace-write',depth:0})
+  expect(refreshed).toContain('Live updated team instructions')
+  expect(refreshed).toContain('merge every listed prerequisite SHA locally')
+  expect(refreshed).toContain('independent host acceptance')
+  expect(refreshed).toContain('"testCommand":"sh verify.sh"')
+  expect(refreshed).toContain('Router-delegated subtask')
+ })
+ await f.until(()=>f.goal().state==='needs_input')
+ expect(checked).toBe(true)
+},90000)
+
 realSandbox('rechecks changed and deleted upstream files at the final commit and repairs the integration worker',async()=>{
  const f=project(true,'test -f two.txt',undefined,true)
  await f.until(()=>f.goal().state==='needs_input')

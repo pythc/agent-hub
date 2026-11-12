@@ -573,15 +573,20 @@ async function loadPrompts() {
   })
 }
 async function previewPrompt() {
-  if ([...S.errors.keys()].some((p) => p === 'prompts' || p.startsWith('prompts.'))) {
-    setNotice('error', 'Correct the prompt JSON before previewing.', '请在生成预览前修正提示词 JSON。')
+  if ([...S.errors.keys()].some(p => ['prompts', 'execution', 'backends'].some(key => p === key || p.startsWith(key + '.')))) {
+    setNotice('error', 'Correct the prompt and Agent configuration before previewing.', '请在生成预览前修正提示词与 Agent 配置。')
     render()
     return
   }
   await run('preview', async () => {
-    const fromDraft = changed().includes('prompts')
+    const draftKeys = changed().filter(key => ['prompts', 'execution', 'backends'].includes(key))
+    const fromDraft = draftKeys.length > 0
     const result = await api('/prompt-preview', {
-      role: S.previewRole, ...(fromDraft ? { prompts: S.draft.prompts } : {})
+      role: S.previewRole,
+      ...(S.previewMode ? { mode: S.previewMode } : {}),
+      ...(S.previewSourceId ? { sourceId: S.previewSourceId } : {}),
+      ...(S.previewRole === 'worker' && S.previewWorkerId ? { workerId: S.previewWorkerId } : {}),
+      ...Object.fromEntries(draftKeys.map(key => [key, S.draft[key]]))
     })
     S.preview = { ...result, fromDraft, baseRevision: S.base.revision }
     setNotice('success', 'Effective instructions composed.', '已生成合成指令。')

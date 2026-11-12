@@ -142,6 +142,7 @@ export class ProjectCode {
    return saved.head
   })])]
  }
+ promptContext(g:RouterGoal,n:GoalNode){return {cwd:this.workspace(n.ticketId!),base:g.project!.base,prerequisites:this.parents(g,n).slice(1),testCommand:g.project!.policy.testCommand,integration:n.id===g.project!.integration}}
  async prepare(g:RouterGoal,n:GoalNode,signal:AbortSignal){
   await this.baseline(g)
   const cwd=this.workspace(n.ticketId!),base=g.project!.base,parents=this.parents(g,n)
@@ -155,7 +156,7 @@ export class ProjectCode {
    'if '+git+' rev-parse -q --verify MERGE_HEAD >/dev/null; then echo "Resolve the pending merge and commit it."; exit 0; fi']
   for(const head of parents.slice(1))lines.push('if ! '+git+' merge-base --is-ancestor '+head+' HEAD; then', 'if ! '+git+' merge --no-edit '+head+'; then', 'if '+git+' rev-parse -q --verify MERGE_HEAD >/dev/null; then echo "Resolve this merge and then merge remaining prerequisite commits."; exit 0; fi','exit 1','fi','fi')
   const output=checked(await sandboxGit(this.config,cwd,lines.join('\n'),{attachments:files,timeout:120000,signal}))
-  return {cwd,base,prerequisites:parents.slice(1),git:output,testCommand:g.project!.policy.testCommand,integration:n.id===g.project!.integration}
+  return {...this.promptContext(g,n),git:output}
  }
  /** Poll by immutable proposal. A slow test never blocks the host scheduler or another goal. */
  check(g:RouterGoal,n:GoalNode,d:GoalDelivery):CodeReceipt|undefined{

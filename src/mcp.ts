@@ -1,3 +1,4 @@
+import {previewModes} from './execution-prompts.ts'
 import { readFileSync } from 'node:fs'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -54,6 +55,6 @@ export async function startMcp(url: string, tokenFile: string,client='generic') 
   server.registerTool('agent_setup_check',{annotations:{readOnlyHint:true},description:'Check runtime prerequisites and connected account identities without changing them.',inputSchema:{}},async()=>api('/setup-check',{}))
   server.registerTool('agent_members_preview',{annotations:{readOnlyHint:true},description:'Read a configured source member directory and preview an allowed-list update. Does not grant access.',inputSchema:{source:z.string(),scope:z.string().optional()}},async args=>api('/members-preview',args))
   server.registerTool('agent_members_apply',{description:'Apply an operator-requested member preview at its original settings revision.',inputSchema:{id:z.string()}},async args=>api('/members-apply',args))
-  server.registerTool('agent_prompt_preview',{annotations:{readOnlyHint:true},description:'Preview the composed router or worker prompt without saving configuration.',inputSchema:{role:z.enum(['router','worker'])}},async args=>api('/prompt-preview',args))
+  server.registerTool('agent_prompt_preview',{annotations:{readOnlyHint:true},description:'Preview Roppo role instructions for a task mode and configured Worker, including runtime sections and the native managed base. Task input and backend protocol framing remain separate. Does not save configuration.',inputSchema:{role:z.enum(['router','worker']),mode:z.enum(previewModes).optional(),sourceId:z.string().optional(),workerId:z.string().optional()}},async args=>api('/prompt-preview',args))
   await server.connect(new StdioServerTransport())
 }

@@ -89,6 +89,9 @@ let S = {
   sourceId: '',
   advancedKey: 'execution',
   previewRole: 'router',
+  previewMode: '',
+  previewSourceId: '',
+  previewWorkerId: '',
   preview: null,
   promptIndex: null
 }
@@ -369,7 +372,7 @@ function inputField(path, title, spec = {}) {
       S.buffers.set(path, { type, text: form.value })
     if (problem) S.errors.set(path, problem)
     else set(S.draft, path, next)
-    if (path.startsWith('prompts')) {
+    if (['prompts', 'execution', 'backends', 'sources'].some(key => path === key || path.startsWith(key + '.'))) {
       S.preview = null
       document.getElementById('control-prompt-preview')?.remove()
     }

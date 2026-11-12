@@ -35,6 +35,7 @@ function executionDraft() {
   }
 }
 function editExecution(draft) {
+  S.preview = null
   const config = S.draft
   const execution = config.execution || S.base.config.execution
   const roles = { ...execution.roles }
@@ -98,14 +99,35 @@ function controlPrompts() {
   const preview = add(el('div', 'settings-stack'),
     selector('preview-role', L('Instruction role', '合成指令角色'), [['router', 'Router'], ['worker', 'Worker']], S.previewRole, role => {
       S.previewRole = role
+      S.previewMode = ''
       S.preview = null
       render()
     }),
-    opButton(L('Preview actual instructions', '查看生效指令'), previewPrompt, 'button'))
+    selector('preview-mode', L('Task mode', '任务模式'), [
+      ['', L('From entry configuration', '按入口配置')],
+      ['standalone', L('Standalone task', '独立任务')],
+      ...(S.previewRole === 'worker' ? [['delegated', L('Router delegation', 'Router 委派')]] : []),
+      ['goal', L('Managed goal', '受管理目标')],
+      ['project', L('Code project', '代码项目')],
+      ...(S.previewRole === 'worker' ? [['subagent', L('Worker helper', 'Worker 助手')]] : []),
+    ], S.previewMode, mode => { S.previewMode = mode; S.preview = null; render() }),
+    selector('preview-source', L('Saved entry', '已保存入口'), [['', L('Default entry', '默认入口')],
+      ...(S.base.config.sources || []).map(source => [source.id, source.label || source.id])
+    ], S.previewSourceId, id => { S.previewSourceId = id; S.preview = null; render() }),
+    S.previewRole === 'worker' ? selector('preview-worker', 'Worker', [['', L('Default Worker', '默认 Worker')],
+      ...executionDraft().workers.map(worker => [worker.id, worker.label || worker.id])
+    ], S.previewWorkerId, id => { S.previewWorkerId = id; S.preview = null; render() }) : null,
+    opButton(L('Preview complete role instructions', '预览完整角色指令'), previewPrompt, 'button'),
+    el('p', 'hint', L('Uses the selected configuration and task mode. Task-specific context uses placeholders.', '按所选配置与任务模式组装，具体任务上下文使用占位符。')))
   if (S.preview) {
     const output = detail(S.preview.fromDraft
       ? L('Draft instructions (based on r', '草稿合成指令（基于 r') + S.preview.baseRevision + ')'
-      : L('Saved instructions (r', '已保存的合成指令（r') + S.preview.revision + ')', raw(S.preview.text))
+      : L('Saved instructions (r', '已保存的合成指令（r') + S.preview.revision + ')', add(el('div', 'stack'),
+        el('p', 'hint', [S.preview.mode, S.preview.workerId, S.preview.backendId].filter(Boolean).join(' · ')),
+        S.preview.baseInstructions ? detail(L('Managed runtime base', '受管理运行基础指令'), raw(S.preview.baseInstructions)) : null,
+        ...(S.preview.sections || []).map(section => detail(section.id, add(el('div', 'stack'), el('p', 'hint', section.source), raw(section.text)))),
+        detail(L('Combined role text', '完整角色文本'), raw(S.preview.text)),
+        el('p', 'hint', L('Task input and output/tool schemas are supplied separately. Provider framing and platform-owned instructions are outside this preview.', '任务输入与输出、工具 schema 单独提供；此处不包含模型服务的协议封装和平台内部指令。'))))
     output.id = 'control-prompt-preview'
     output.open = true
     preview.append(output)
@@ -137,6 +159,7 @@ function controlPrompts() {
     onChange: value => {
       promptTarget = value
       if (value === 'router' || value === 'worker') S.previewRole = value
+      S.previewMode = ''
       S.preview = null
       render()
     }
