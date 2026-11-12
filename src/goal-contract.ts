@@ -1,6 +1,7 @@
 import {z} from 'zod'
 
 const id=z.string().min(1).max(200)
+export const skillRefSchema=z.object({id,version:z.number().int().positive()}).strict()
 const path=z.string().min(1).max(1000)
 export const criterionSchema=z.object({
  id,description:z.string().min(1).max(4000),
@@ -8,6 +9,7 @@ export const criterionSchema=z.object({
  documents:z.array(id).max(20).default([]),
  check:z.discriminatedUnion('kind',[
   z.object({kind:z.literal('file_exists'),path}).strict(),
+  z.object({kind:z.literal('xlsx_cell_equals'),path,sheet:id,cell:z.string().regex(/^[A-Z]{1,3}[1-9][0-9]{0,6}$/),expected:z.union([z.string(),z.number(),z.boolean()]),sumRange:z.string().regex(/^[A-Z]{1,3}[1-9][0-9]{0,6}:[A-Z]{1,3}[1-9][0-9]{0,6}$/).optional()}).strict(),
   z.object({kind:z.literal('text_contains'),path,text:z.string().min(1).max(16000)}).strict(),
   z.object({kind:z.literal('json_equals'),path,pointer:z.string().max(1000).refine(p=>p===''||p.startsWith('/'),'JSON pointer must be empty or start with /'),expected:z.unknown().refine(v=>v!==undefined,'expected is required')}).strict(),
  ]).optional(),

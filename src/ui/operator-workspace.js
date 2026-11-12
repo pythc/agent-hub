@@ -1,5 +1,5 @@
 // The expert's operator composition, connected to the existing same-origin host.
-const operator = {work:null,error:false,filter:'all',search:'',menu:false,drawer:null,answers:{},focus:'',offset:0,historySearch:'',historyState:''}
+const operator = {work:null,error:false,filter:'all',search:'',menu:false,drawer:null,workflowFeedback:'',answers:{},focus:'',offset:0,historySearch:'',historyState:''}
 Object.assign(icons, {
   inbox:'M4 4h16l2 12v4H2v-4L4 4zM2 15h6l2 3h4l2-3h6',
   activity:'M3 12h4l3-8 4 16 3-8h4',cpu:'M5 5h14v14H5zM9 9h6v6H9zM9 1v4m6-4v4m-6 14v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4',
@@ -129,6 +129,10 @@ function opAttentionCard(task) {
     add(el('div', 'item-heading'), el('h3', '', task.title), open),
     el('p', '', task.question || task.summary || label))
 }
+function workflowOutcome(p){
+  const states={pending:['Awaiting approval','待确认'],applying:['Submitting change…','正在提交'],applied:['Written and verified','已写入并回读'],declined:['Declined','已拒绝'],stale:['The issue changed. A new proposal is needed.','事项已变化，需要重新提案'],uncertain:['The write outcome is still unknown','写入结果仍待核对'],observed:['Target state observed. Writer unconfirmed.','已回读目标状态，写入方未确认']}
+  return p.view.label+' · '+L(...states[p.state])+(p.receipt?' · '+p.receipt.revision:'')
+}
 function opAttention() {
   const items = operator.work?.attention || []
   const result = [opHeading(L('Needs your attention', '待我处理'), null,
@@ -138,7 +142,25 @@ function opAttention() {
     [L('Needs confirmation', '需要确认'), items.filter(task => task.deliveryUncertain || task.approvalIds?.length)]
   ]) if (list.length) result.push(opSection(label, list.length),
     add(el('div', 'attention-list'), ...list.map(opAttentionCard)))
-  if (!items.length) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
+  if(operator.workflowFeedback){const feedback=el('p','message',operator.workflowFeedback);feedback.setAttribute('role','status');result.push(feedback)}
+  const proposals = operator.work?.workflowActions || []
+  if (proposals.length) {
+    result.push(opSection(L('External changes', '外部操作'), proposals.length))
+    for (const p of proposals) {
+      const card = add(el('article','attention-item'), el('h3','',p.view.label),
+        el('p','',p.view.current.name+' → '+p.next.name), el('small','',p.sourceId+' · '+p.view.account))
+      const decide = decision => entryRun('workflow',async()=>{
+        const result=await api('/workflow-actions',{id:p.id,decision})
+        operator.workflowFeedback=workflowOutcome(result)
+        await readOperatorWork()
+      })
+      if (p.state==='pending') card.append(opButton(L('Approve','批准'),()=>decide('approve'),'button'),opButton(L('Decline','拒绝'),()=>decide('decline'),'button'))
+      if (p.state==='uncertain') card.append(opButton(L('Check remote state','核对远端状态'),()=>decide('reconcile'),'button'))
+      if (p.state==='applying') card.append(el('p','',L('Submitting change…','正在提交变更…')))
+      result.push(card)
+    }
+  }
+  if (!items.length && !proposals.length) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
   return result
 }
 function opTasks() {
@@ -295,6 +317,16 @@ function opTaskDialog(){
   for(const [label,value]of [[L('Assistant needs your input','助手需要你补充'),task.question],[L('Latest progress','最新进展'),task.summary===task.question?'':task.summary],[L('Actual reply','实际回复'),task.result]])if(value)body.append(add(el('div','message'),el('small','',label),el('p','',value)))
   if(task.resultTruncated)body.append(el('p','flow-help',L('This result is shortened. Read the complete resource in advanced controls.','结果较长，此处已缩短。可在完整任务控制台读取全文。')))
   if(task.deliveryUncertain)body.append(el('p','alert warning',L('Delivery is uncertain. Inspect the original conversation before retrying.','回传结果不确定，请先核对原会话，再决定是否重试。')))
+  if(task.acceptedGoal){const link=el('a','button',L('Save as a skill','保存为技能'));link.href='/router-proactive?'+new URLSearchParams({goal:task.acceptedGoal.id,scope:task.acceptedGoal.scopeId});body.append(link)}
+  if(task.artifacts?.length){
+    body.append(el('h3','',L('File versions','文件版本')))
+    for(const file of task.artifacts){
+      const link=el('a','text-button',file.path+' · v'+file.version+' · '+(file.size/1024).toFixed(1)+' KiB · '+file.sha256.slice(0,12))
+      link.href='/goal-artifacts/'+encodeURIComponent(file.id)
+      body.append(add(el('p'),link))
+    }
+  }
+  for(const change of task.workflowActions||[])body.append(el('p','message',workflowOutcome(change)+' · '+change.view.current.name+' → '+change.next.name))
   for(const approval of task.approvals||[])body.append(opApproval(approval))
   if(task.model)body.append(el('p','task-model',L('Execution model: ','执行模型：')+task.model))
   body.append(add(el('div','drawer-actions'),task.sourceUrl?entryLink(L('Open original conversation','打开原讨论'),task.sourceUrl,'button primary'):null,task.canStop?opButton(L('Stop task','停止任务'),()=>controlTaskAction('stop',task.id),'button'):null,task.canRetry?opButton(L('Retry after review','核对后重试'),()=>controlTaskAction('retry',task.id),'button'):null))
@@ -393,9 +425,9 @@ document.addEventListener('keydown',event=>{
 let operatorPolling=false
 setInterval(async()=>{
   if(operatorPolling||document.hidden||S.surface!=='entries'||!S.authed||entryState.role!=='operator'||entryState.busy||S.busy||operator.drawer||operator.menu||!['home','attention','activity'].includes(entryState.page))return
-  const page=entryState.page,previous=JSON.stringify([operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error])
+  const page=entryState.page,previous=JSON.stringify([operator.work?.workflowActions,operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error])
   operatorPolling=true
-  try{await readOperatorWork();if(S.surface==='entries'&&page===entryState.page&&!operator.drawer&&!operator.menu&&!entryState.busy&&previous!==JSON.stringify([operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error]))render()}
+  try{await readOperatorWork();if(S.surface==='entries'&&page===entryState.page&&!operator.drawer&&!operator.menu&&!entryState.busy&&previous!==JSON.stringify([operator.work?.workflowActions,operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error]))render()}
   finally{operatorPolling=false}
 },10000)
 window.addEventListener('resize',()=>{if(operator.menu&&window.innerWidth>700)setOperatorMenu(false)})

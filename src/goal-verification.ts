@@ -1,5 +1,5 @@
-import {constants,closeSync,fstatSync,lstatSync,openSync,readSync,realpathSync} from 'node:fs'
-import {isAbsolute,join,relative,resolve,sep} from 'node:path'
+import {evidenceBytes} from './goal-artifacts.ts'
+
 import {z} from 'zod'
 import type {WatchdogRecovery} from './watchdog-contract.ts'
 import type {Runtime} from './runtime.ts'
@@ -21,15 +21,8 @@ const operational=(e:Evidence)=>e.kind==='execution'||e.kind==='report'&&e.key==
 
 /** Read only declared, bounded artifacts within this task's actual workspace. */
 function readArtifact(cwd:string,path:string):{content:string;missing?:boolean} {
- if(isAbsolute(path)||path.split(/[\\/]/).some(p=>p==='..'))throw Error('Evidence path must stay inside the task workspace')
- const root=realpathSync(cwd),file=resolve(root,path),rel=relative(root,file)
- if(!rel||rel.startsWith('..'+sep)||isAbsolute(rel))throw Error('Evidence path escapes workspace')
- try{
-  let part=root
-  for(const segment of rel.split(sep)){part=join(part,segment);if(lstatSync(part).isSymbolicLink())throw Error('Evidence symlinks are not allowed')}
-  const fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW)
-  try{const before=fstatSync(fd);if(!before.isFile()||before.size>128*1024)throw Error('Evidence must be a regular file no larger than 128 KiB');const data=Buffer.alloc(128*1024+1);let size=0,n=0;while(size<data.length&&(n=readSync(fd,data,size,data.length-size,size))>0)size+=n;if(size>128*1024)throw Error('Evidence exceeds the bounded read limit');const after=fstatSync(fd);if(before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw Error('Evidence changed while reading');const live=lstatSync(file);if(live.isSymbolicLink()||live.ino!==after.ino||live.dev!==after.dev||realpathSync(file)!==file)throw Error('Evidence path changed while reading');return {content:data.subarray(0,size).toString('utf8')}}finally{closeSync(fd)}
- }catch(error:any){if(error.code==='ENOENT')return {content:'',missing:true};throw error}
+ const bytes=evidenceBytes(cwd,path,128*1024)
+ return bytes?{content:bytes.toString('utf8')}:{content:'',missing:true}
 }
 
 export class GoalVerification {
@@ -41,7 +34,7 @@ export class GoalVerification {
   this.host.scopes.checkTask(ticketId,context,true)
   const criteria=this.criteria(g,node),evidence:Evidence[]=[]
   for(const path of new Set(criteria.flatMap(c=>[...c.files,...(c.check?[c.check.path]:[])]))){
-   const data=run?readArtifact(run.cwd,path):{content:'',missing:true}
+   const data=run?this.host.artifacts.evidence(g,node.id,ticketId,run.cwd,path,criteria):{content:'',missing:true}
    evidence.push({id:'artifact-'+stableDigest([ticketId,path]),kind:'file',ticketId,key:path,criterionIds:criteria.map(c=>c.id),...data,hash:stableDigest(data)})
   }
   for(const id of new Set(criteria.flatMap(c=>c.documents))){
@@ -49,7 +42,7 @@ export class GoalVerification {
    if(doc.nextOffset!==null)throw Error('Watchdog document evidence exceeds observation budget')
    evidence.push({id:'document-'+stableDigest([ticketId,id]),kind:'document',ticketId,key:id,criterionIds:criteria.map(c=>c.id),content:doc.content,hash:stableDigest(doc.content),revision:doc.revision})
   }
-  return {artifacts:evidence.map(({content,...meta})=>({...meta,bytes:Buffer.byteLength(content)})),checks:criteria.filter(c=>c.check).map(c=>this.program(c,{evidence}))}
+  return {artifacts:evidence.map(({content,...meta})=>({...meta,bytes:meta.artifact?.size??Buffer.byteLength(content)})),checks:criteria.filter(c=>c.check).map(c=>this.program(c,{evidence}))}
  }
  capture(ticketId:string,report:WorkerReport,reply?:string):boolean {
   if(report.state!=='ready')return false
@@ -77,11 +70,12 @@ export class GoalVerification {
    }catch{output={complete:false,reason:'Host output could not be captured within the bounded evidence limit'}}
    return {id:w.id,assignmentId:w.assignmentId,kind:w.kind,state:w.state,exitCode:w.exitCode,error:w.error?.slice(0,1000),command:w.command?.slice(0,16000),commandTruncated:(w.command?.length??0)>16000,commandHash:w.command?stableDigest(w.command):undefined,recordedPolicy:policy,output}
   })
+  const workflowActions=this.host.workflows.list().filter(a=>a.ticketId===ticketId).map(({id,state,receipt})=>({id,state,receipt}))
   const cap=this.host.store.get<any>('capabilities',ticketId)
   // These records are host-owned API receipts, not model-authored files or
   // opaque tool output. Preserve uncertain phases and scope by the record key.
   const prefix=ticketId+':',publications=this.host.store.db.prepare("SELECT body FROM records WHERE kind='pr-delivery' AND substr(id,1,?)=? ORDER BY id LIMIT 101").all(prefix.length,prefix).map(row=>{const r=JSON.parse(String(row.body));return {phase:r.phase,sourceId:r.sourceId,repository:r.repository,branch:r.branch,number:r.number,url:r.url,head:r.sha,draft:r.draft,confirmedAt:r.confirmedAt}})
-  return JSON.stringify({basis:'Host-managed execution ledger; not a Worker assertion',scope:'Task-side commands and tool calls. Configured model inference is outside task-side network policy. This is not an audit of unrelated OS processes.',complete:all.length<=100&&calls.length<=200&&receipts.length<=100&&publications.length<=100,jobs,toolCalls:calls.slice(0,200).map(a=>({id:a.id,name:a.name,state:a.state})),externalTools:receipts.slice(0,100).map(r=>({id:r.id,connection:r.connection,tool:r.tool,state:r.state})),repositoryPublications:publications.slice(0,100),publicationBasis:'Confirmed receipts describe provider readback at confirmedAt, not a fresh remote query; creating or uncertain phases do not prove success.',managedCapabilities:cap?{managed:cap.managed,mcpServers:cap.mcpServers}:null})
+  return JSON.stringify({basis:'Host-managed execution ledger; not a Worker assertion',scope:'Task-side commands and tool calls. Configured model inference is outside task-side network policy. This is not an audit of unrelated OS processes.',complete:all.length<=100&&calls.length<=200&&receipts.length<=100&&publications.length<=100,jobs,toolCalls:calls.slice(0,200).map(a=>({id:a.id,name:a.name,state:a.state})),externalTools:receipts.slice(0,100).map(r=>({id:r.id,connection:r.connection,tool:r.tool,state:r.state})),...(workflowActions.length?{workflowActions}:{}),repositoryPublications:publications.slice(0,100),publicationBasis:'Confirmed receipts describe provider readback at confirmedAt, not a fresh remote query; creating or uncertain phases do not prove success.',managedCapabilities:cap?{managed:cap.managed,mcpServers:cap.mcpServers}:null})
  }
  failureEvidence(g:RouterGoal):Evidence[]{
   const c=this.host.goals.context(g),items:Evidence[]=[];let bytes=0
@@ -101,7 +95,7 @@ export class GoalVerification {
    for(const r of this.host.store.list<WatchdogRecovery>('watchdog-recovery').filter(r=>r.goalId===g.id&&r.ticketId===n.ticketId&&r.state!=='stale')){
     add({kind:'report',ticketId:n.ticketId,key:'watchdog-observation',criterionIds,content:JSON.stringify({id:r.id,assignmentId:r.assignmentId,contractHash:r.contractHash,at:r.at,judgment:r.judgment,observation:r.observation??null})},r.id)
    }
-   for(const path of new Set(criteria.flatMap(c=>[...c.files,...(c.check?[c.check.path]:[])]))){if(!run)throw Error('Replanning workspace is unavailable');add({kind:'file',ticketId:n.ticketId,key:path,criterionIds,...readArtifact(run.cwd,path)})}
+   for(const path of new Set(criteria.flatMap(c=>[...c.files,...(c.check?[c.check.path]:[])]))){if(!run)throw Error('Replanning workspace is unavailable');add({kind:'file',ticketId:n.ticketId,key:path,criterionIds,...this.host.artifacts.evidence(g,n.id,n.ticketId,run.cwd,path,criteria)})}
    for(const id of new Set(criteria.flatMap(c=>c.documents))){const doc=this.host.knowledge.command({action:'read',id,limit:100},c);if(doc.nextOffset!==null)throw Error('Replanning document requires smaller evidence');add({kind:'document',ticketId:n.ticketId,key:id,criterionIds,content:doc.content,revision:doc.revision})}
   }
   return items
@@ -160,7 +154,7 @@ export class GoalVerification {
    }
    add({kind:'report',ticketId:n.ticketId,key:'delivery',content:JSON.stringify({report:proposal.report,reply:proposal.reply}),criterionIds:citeIds(ids)})
    const files=[...new Set(assigned.flatMap(cr=>[...(cr.files??[]),...(cr.check?[cr.check.path]:[])]))]
-   for(const path of files){if(!run)throw Error('Task workspace is missing');add({kind:'file',ticketId:n.ticketId,key:path,...readArtifact(run.cwd,path),criterionIds:citeIds(assigned.filter(cr=>cr.files?.includes(path)||cr.check?.path===path).map(cr=>cr.id))})}
+   for(const path of files){if(!run)throw Error('Task workspace is missing');add({kind:'file',ticketId:n.ticketId,key:path,...this.host.artifacts.evidence(g,n.id,n.ticketId,run.cwd,path,assigned),criterionIds:citeIds(assigned.filter(cr=>cr.files?.includes(path)||cr.check?.path===path).map(cr=>cr.id))})}
    for(const documentId of [...new Set(assigned.flatMap(cr=>cr.documents??[]))]){
     const doc=this.host.knowledge.command({action:'read',id:documentId,limit:100},c)
     if(doc.nextOffset!==null)throw Error('Declared document exceeds acceptance evidence limit; declare a smaller document')
@@ -186,6 +180,13 @@ export class GoalVerification {
   let passed=items.length>0,reason='Declared artifact matches the deterministic check'
   for(const e of items){
    if(e.missing){passed=false;reason='Required artifact is missing';continue}
+   if(check.kind==='xlsx_cell_equals'){
+    const cells=e.artifact&&JSON.parse(e.content).observation?.cells
+    const result=cells?.find((v:{sheet:string;cell:string;range?:string})=>v.sheet===check.sheet&&v.cell===check.cell&&v.range===check.sumRange)
+    if(!result||result.value!==check.expected||check.sumRange&&(typeof check.expected!=='number'||typeof result.sum!=='number'||result.sum.toPrecision(15)!==check.expected.toPrecision(15))){passed=false;reason='Workbook cell or range total differs from the acceptance contract'}
+    continue
+   }
+   if(e.artifact&&check.kind!=='file_exists'){passed=false;reason='Binary artifact requires a format-aware check';continue}
    if(check.kind==='text_contains'&&!e.content.includes(check.text)){passed=false;reason='Required literal text is absent'}
    if(check.kind==='json_equals')try{
     if(check.pointer!==''&&!check.pointer.startsWith('/'))throw Error('Invalid JSON pointer')

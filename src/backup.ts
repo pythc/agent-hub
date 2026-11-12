@@ -113,6 +113,8 @@ export async function restoreState(config:Config,directory:string){
      const current=rows(live)
      if(current.length&&JSON.stringify(current)!==JSON.stringify(rows(old)))throw Error('Webhook receipts or callback effects advanced after backup; reconcile before restore')
     }
+    const skillsSchedules=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE (kind='router-schedule' AND json_extract(body,'$.skill.id') IS NOT NULL) OR (kind='router-schedule-run' AND json_extract(body,'$.spec.skill.id') IS NOT NULL) ORDER BY kind,id").all()
+    if(JSON.stringify(skillsSchedules(live))!==JSON.stringify(skillsSchedules(old)))throw Error('Saved skill schedule or run advanced after backup; reconcile before restore')
     const head=live.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get(),required=head&&JSON.parse(String(head.body))
     if(required&&!ledger.some(r=>r.seq===required.seq&&r.hash===required.hash))throw Error('Latest revocation ledger is missing')
     for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('ticket','run','model-session','task-ownership','entry-binding') OR kind LIKE 'delegation-%' OR (kind='router-goal' AND EXISTS(SELECT 1 FROM json_each(records.body,'$.nodes') WHERE json_extract(value,'$.teamTargetId') IS NOT NULL))").all()){
@@ -121,7 +123,7 @@ export async function restoreState(config:Config,directory:string){
     }
     // External calls can finish without changing the task. Their intent/result
     // receipts are the replay fence, including running and uncertain outcomes.
-    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool')").all()){
+    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool','workflow-action')").all()){
      const previous=old.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(String(row.kind),String(row.id))
      if(!previous||previous.body!==row.body)throw Error('External tool or merge effects advanced after backup; reconcile before restore')
     }

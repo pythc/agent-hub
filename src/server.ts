@@ -262,6 +262,18 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='GET'&&path==='/router-scopes'){send(res,200,runtime.scopes.snapshot());return}
     if(req.method==='GET'&&path==='/router-proactive/state'){send(res,200,runtime.proactive.snapshot(new URL(req.url!,'http://localhost').searchParams.get('scopeId')??''));return}
+    if(req.method==='GET'&&path.startsWith('/goal-artifacts/')){
+      const {artifact,bytes}=runtime.artifacts.download(path.slice('/goal-artifacts/'.length))
+      res.writeHead(200,{'content-type':artifact.mime,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(artifact.path.split('/').at(-1)!),'cache-control':'no-store','x-content-type-options':'nosniff'})
+      res.end(bytes);return
+    }
+    if(req.method==='POST'&&path==='/workflow-actions'){
+      const operatorId=account.status(req).user?.id??'local-operator'
+      const authorize=()=>{if(stopping||changing||unavailable||(!authorized(req)&&!(account.configured?account.authorized(req):sessions.authorized(req))))throw Error('Operator session ended')}
+      send(res,200,await runtime.workflows.decide(await body(req),{operatorId,authorize}));return
+    }
+    if(req.method==='POST'&&path==='/router-skills/read'){send(res,200,runtime.skills.read(await body(req)));return}
+    if(req.method==='POST'&&path==='/router-skills'){send(res,200,runtime.skills.command(await body(req)));return}
     if(req.method==='POST'&&path==='/router-proactive'){send(res,200,runtime.proactive.command(await body(req)));return}
     if(req.method==='GET'&&path==='/router-cleanup'){send(res,200,{items:runtime.memory.cleanup.receipts()});return}
     if(req.method==='POST'&&path==='/router-scopes'){send(res,200,await runtime.scopeCommand(await body(req)));return}

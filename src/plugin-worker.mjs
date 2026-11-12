@@ -44,6 +44,7 @@ const context = {
   receive:trigger=>enqueue({type:'receive',trigger}),
   change:event=>enqueue({type:'change',event}),
   repositoryUpdate:update=>enqueue({type:'repository-update',update}),
+  beforeExternalWrite:()=>context.beforeRepositoryWrite(),
   beforeRepositoryWrite:async()=>{
     const id=++querySequence,promise=new Promise((resolve,reject)=>repositoryChecks.set(id,{resolve,reject}))
     emit({type:'repository-authorize',id});await promise

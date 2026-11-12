@@ -14,7 +14,7 @@ import {agentOptionsSchema} from './backend-config.ts'
 import {mergeOptions} from './agent-options.ts'
 import {workerSpecs} from './worker-tools.ts'
 
-export interface GoalContract {objective:string;criteria:GoalCriterion[];triggerId:string;triggerHash:string;mandate:Mandate;workerIds:string[];backendIds:string[];teamTargets?:{id:string;policyHash:string}[]}
+export interface GoalContract {skill?:{id:string;version:number};objective:string;criteria:GoalCriterion[];triggerId:string;triggerHash:string;mandate:Mandate;workerIds:string[];backendIds:string[];teamTargets?:{id:string;policyHash:string}[]}
 export class ReplanningInterrupted extends Error {}
 const id=z.string().min(1).max(200),instruction=z.string().min(1).max(16000)
 const change=z.object({id,instruction,dependsOn:z.array(id).max(100)}).strict()

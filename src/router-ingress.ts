@@ -28,6 +28,7 @@ export interface RouterAdmission {
 export class RouterIngress {
  rulesFor?: (trigger?:Trigger)=>Config['rules']
  ruleExecutionAllowed?: (ids:readonly string[])=>boolean
+ explicitCommand?: (trigger:Trigger)=>boolean
  defer?: (record:RouterAdmission,trigger:Trigger)=>boolean
  scheduledAuthority?: (id:string)=>Mandate|undefined
  delegatedAuthority?: (id:string)=>Mandate|undefined
@@ -86,6 +87,7 @@ export class RouterIngress {
   const record:RouterAdmission={...base,state:gate.strength==='explicit'?'accepted':'pending',reason:gate.strength==='explicit'?'explicit':'ruleAssessmentRequired',
    mandate:{strength:gate.strength,policyVersion:policy.version,basis:gate.basis,actor:trigger.actor,scope:trigger.text}}
   this.save(record)
+  if(record.state==='accepted'&&this.explicitCommand?.(trigger))return record
   if(this.defer?.(record,trigger))return record
   if(record.state==='accepted')this.enqueue(record)
   else this.store.enqueue('router-admit:'+bodyDigest([trigger.id,policy.version,record.revision]),'router-admit',{triggerId:trigger.id,policyVersion:policy.version,revision:record.revision})

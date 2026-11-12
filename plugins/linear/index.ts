@@ -1,7 +1,10 @@
 import {createHash} from 'node:crypto'
 import {MessageSource,UncertainDelivery,bodyDigest,record,type SourceContext,type SourceConfig,type Trigger,type OutboundMessage} from '../sdk.ts'
 
+import type {StatusTarget,TransitionView} from '../../src/workflow-actions.ts'
+
 interface Options {
+  statusTargets?:StatusTarget[]
   teams:string[]; workspaceId:string; tokenEnv:string; authType?:'api-key'|'oauth';
   issueIds?:string[]; command?:string; apiBase?:string; pageSize?:number
 }
@@ -23,7 +26,7 @@ export class LinearSource extends MessageSource {
   private api:Request
   private get options(){return this.config.options as unknown as Options}
   override get verificationCommand(){return this.options.command??'/agent'}
-  constructor(config:SourceConfig,api?:Request){super(config);this.api=api??this.request.bind(this)}
+  constructor(config:SourceConfig,api?:Request,private readonly beforeWorkflowWrite?:()=>Promise<void>){super(config);this.api=api??this.request.bind(this)}
 
   private async request(query:string,variables:Record<string,unknown>={}){
     if((this.current?.store.get<number>('plugin-state','retryAt')??0)>Date.now())throw Error('Linear retry window has not elapsed')
@@ -158,6 +161,22 @@ export class LinearSource extends MessageSource {
     const data=await this.api(`query AgentHubIssue($id:String!){issue(id:$id){${issueFields}}}`,{id})
     return this.assertIssue(data.issue,team,id)
   }
+  async workflowState(target:StatusTarget):Promise<TransitionView>{
+    if(!this.options.statusTargets?.some(t=>t.key===target.key&&t.entryId===target.entryId&&t.teamId===target.teamId&&t.issueId===target.issueId)||!this.allowed(target.teamId)||!this.allowedIssue(target.issueId))throw Error('Issue is outside configured status targets')
+    const account=await this.identity()
+    const {issue,team}=await this.api('query AgentHubWorkflowState($issue: String!, $team: String!){issue(id:$issue){id identifier title updatedAt archivedAt trashed team{id} state{id name}} team(id:$team){id states(first:250){nodes{id name}}}}',{issue:target.issueId,team:target.teamId})
+    this.assertIssue(issue,target.teamId,target.issueId)
+    if(team?.id!==target.teamId||!Array.isArray(team.states?.nodes)||!date(issue.updatedAt))throw Error('Issue workflow is unavailable')
+    return {account:account.id,issue:issue.id,label:issue.identifier+' '+issue.title,revision:issue.updatedAt,current:issue.state,states:team.states.nodes}
+  }
+  async applyWorkflowState(target:StatusTarget,expected:TransitionView,stateId:string):Promise<'updated'|'changed'>{
+    const latest=await this.workflowState(target)
+    if(latest.account!==expected.account||latest.issue!==expected.issue||latest.revision!==expected.revision||latest.current.id!==expected.current.id||!latest.states.some(s=>s.id===stateId))return 'changed'
+    if(this.beforeWorkflowWrite)await this.beforeWorkflowWrite()
+    const {issueUpdate}=await this.api('mutation AgentHubWorkflowUpdate($id:String!,$input:IssueUpdateInput!){issueUpdate(id:$id,input:$input){success issue{id state{id}}}}',{id:target.issueId,input:{stateId}})
+    if(issueUpdate?.success!==true||issueUpdate.issue?.id!==target.issueId||issueUpdate.issue.state?.id!==stateId)throw Error('Linear status mutation outcome is unknown')
+    return 'updated'
+  }
   private async anchor(trigger:Trigger){
     const {scope,issueId,entityId,entityType,messageId}=trigger.meta
     if(trigger.source!==this.config.id||!this.allowed(scope)||!this.allowedIssue(issueId)||!uuid(entityId)||!['issue','comment'].includes(String(entityType))||messageId!==entityType+':'+entityId)throw Error('An authorized Linear trigger is required')
@@ -215,4 +234,4 @@ export class LinearSource extends MessageSource {
     }catch{throw new UncertainDelivery('Linear reply outcome unknown; reconcile the deterministic comment ID before retry')}
   }
 }
-export default {create:(config:SourceConfig)=>new LinearSource(config)}
+export default {create:(config:SourceConfig,context:SourceContext)=>new LinearSource(config,undefined,context.beforeExternalWrite)}

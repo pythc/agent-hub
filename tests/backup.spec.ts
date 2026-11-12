@@ -15,6 +15,20 @@ it('refuses a schema downgrade that would erase Webhook execution and receipt se
  const current=new Store(join(config.stateDir,'state.sqlite'));current.db.exec('PRAGMA user_version=8');current.close()
  await expect(restoreState(config,join(root,'backup'))).rejects.toThrow('Downgrade cannot preserve Webhook')
 })
+
+it('keeps a paused skill routine from being reactivated by an old backup',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-routine-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
+ const file=join(config.stateDir,'state.sqlite'),store=new Store(file)
+ const value={id:'routine',skill:{id:'skill',version:1},active:true,revision:1}
+ store.requireWorkflowSchema();store.put('router-schedule','routine',value);store.close()
+ await backupState(config,join(root,'backup'))
+ expect(verifyBackup(join(root,'backup')).schema).toBe(12)
+ const live=new Store(file);live.put('router-schedule','routine',{...value,active:false,revision:2});live.close()
+ await expect(restoreState(config,join(root,'backup'))).rejects.toThrow('skill schedule or run advanced')
+ const reread=new Store(file)
+ try{expect(reread.get('router-schedule','routine')).toMatchObject({active:false,revision:2})}finally{reread.close()}
+})
 it('backs up WAL state, verifies integrity and refuses restoring under a live host',async()=>{
  const root=mkdtempSync(join(tmpdir(),'agent-backup-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
@@ -39,7 +53,7 @@ it('restores offline state and retains a backup of the previous database',async(
  const restored=new Store(join(config.stateDir,'state.sqlite'))
  try{expect(restored.get('sample','a')).toEqual({value:1})}finally{restored.close()}
 })
-it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool'])('refuses to erase new %s external-effect evidence on restore',async kind=>{
+it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool','workflow-action'])('refuses to erase new %s external-effect evidence on restore',async kind=>{
  const root=mkdtempSync(join(tmpdir(),'restore-effects-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]})
  const store=new Store(join(config.stateDir,'state.sqlite'));store.close()
@@ -51,7 +65,7 @@ it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool']
  try{expect(unchanged.get(kind,'write')).toEqual(receipt)}finally{unchanged.close()}
  expect(existsSync(join(config.stateDir,'host.lock'))).toBe(false)
 })
-it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool'])('preserves advanced %s evidence but permits an unchanged receipt',async kind=>{
+it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool','workflow-action'])('preserves advanced %s evidence but permits an unchanged receipt',async kind=>{
  const root=mkdtempSync(join(tmpdir(),'restore-effects-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]})
  const store=new Store(join(config.stateDir,'state.sqlite')),before={id:'write',state:'running',phase:'submitting'}

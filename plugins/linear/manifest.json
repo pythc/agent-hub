@@ -2,7 +2,7 @@
   "id": "agenthub-linear",
   "kind": "linear",
   "label": "Linear",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "stateVersion": 1,
   "scopesPath": "/options/teams",
   "commandPath": "/options/command",
@@ -15,6 +15,8 @@
     "members",
     "read",
     "context",
+    "workflowState",
+    "applyWorkflowState",
     "deliver",
     "probe",
     "close"
@@ -124,6 +126,20 @@
               "pattern": "^[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$"
             }
           },
+          "statusTargets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["key", "entryId", "teamId", "issueId"],
+              "properties": {
+                "key": {"type": "string", "minLength": 1},
+                "entryId": {"type": "string", "minLength": 1},
+                "teamId": {"type": "string", "format": "uuid"},
+                "issueId": {"type": "string", "format": "uuid"}
+              },
+              "additionalProperties": false
+            }
+          },
           "tokenEnv": {
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
@@ -153,7 +169,7 @@
     }
   },
   "setup": {
-    "description": "Use an API key or OAuth access token with read and comments:create access. Select an expected workspace UUID and explicit team UUIDs; optional issueIds further restricts access. Set authType to api-key or oauth and store credentials only in the named host environment variable. Polling resumes a persisted issues/comments update window. Issue workflow states do not complete AgentHub goals. This transport does not host webhook endpoints, manage OAuth renewal, create issues or mutate statuses.",
+    "description": "Use an API key or OAuth access token with read and comments:create access. Select an expected workspace UUID and explicit team UUIDs; optional issueIds further restricts access. Set authType to api-key or oauth and store credentials only in the named host environment variable. Polling resumes a persisted issues/comments update window. Issue workflow states do not complete AgentHub goals. Optional statusTargets link exact issues to Roppo entries. Give the token issue write permission only for approved status transitions.",
     "fields": [
       {
         "name": "token-env",

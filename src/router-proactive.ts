@@ -8,18 +8,20 @@ import type {ToolSpec} from './model.ts'
 import {assessment,type Assessment} from './schemas.ts'
 import {stableDigest,bodyDigest} from './sources.ts'
 import {taskView} from './task-context.ts'
+import {skillRefSchema} from './goal-contract.ts'
+import {goalCommandSchema} from './router-goals.ts'
 import {timingSchema,nextTime,latestDue,type Timing} from './schedule-time.ts'
 
 const id=z.string().min(1).max(300)
 const dutySchema=z.object({id,name:id,entryIds:z.array(id).min(1),instruction:z.string().min(1).max(16000),mode:z.enum(['off','observe','auto']).default('observe')}).strict()
 const settingsSchema=z.object({enabled:z.boolean(),debounceMs:z.number().int().min(0).max(30000).default(1500),maxWaitMs:z.number().int().min(1).max(60000).default(5000),cooldownMs:z.number().int().min(0).max(3600000).default(60000)}).strict().refine(x=>x.maxWaitMs>=x.debounceMs,'maxWaitMs must cover debounceMs')
-const scheduleSchema=z.object({id,name:id,triggerId:id,prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true)}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
+const scheduleSchema=z.object({id,name:id,triggerId:id,skill:skillRefSchema.optional(),prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true)}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
 export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.run','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional()}).strict()
 type Command=z.infer<typeof proactiveCommandSchema>
 type Duty=z.infer<typeof dutySchema>&{scopeId:string;revision:number}
 type Controls=z.infer<typeof settingsSchema>&{scopeId:string;revision:number}
 type Schedule=z.infer<typeof scheduleSchema>&{scopeId:string;revision:number;entryId:string;bindingRevision:number;nextAt?:number;createdAt:number}
-export interface ScheduledRun {id:string;scheduleId:string;scopeId:string;revision:number;scheduledAt:number;createdAt:number;triggerId?:string;triggerHash?:string;spec:Schedule;state:'queued'|'running'|'waiting'|'completed'|'failed'|'cancelled'|'skipped';taskIds:string[];delivery:'none'|'pending'|'sent'|'failed';reason?:string;finishedAt?:number}
+export interface ScheduledRun {goalId?:string;id:string;scheduleId:string;scopeId:string;revision:number;scheduledAt:number;createdAt:number;triggerId?:string;triggerHash?:string;spec:Schedule;state:'queued'|'running'|'waiting'|'completed'|'failed'|'cancelled'|'skipped';taskIds:string[];delivery:'none'|'pending'|'sent'|'failed';reason?:string;finishedAt?:number}
 export interface MessageBatch {id:string;scopeId:string;entryId:string;discussion:string;actor:string;strength:'explicit'|'inferred';policyVersion:string;settingsRevision:number;triggerIds:string[];firstAt:number;dueAt:number;state:'pending'|'evaluating'|'decided'|'failed';decision?:Intervention;manifest?:ContextManifest;reason?:string}
 export type Intervention=Assessment|{action:'clarify';reason:string;question:string}
 const terminal=new Set(['completed','failed','cancelled','skipped'])
@@ -54,7 +56,8 @@ export class RouterProactive {
   this.host.scopes.scope(scopeId)
   const inScope=(v:{scopeId:string})=>v.scopeId===scopeId
   const visible=(entryId:string)=>context?entryId===context.route.entryId:!this.host.scopes.bindings().find(e=>e.id===entryId)?.privateActor
-  return {settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:this.host.store.list<Schedule>('router-schedule').filter(p=>inScope(p)&&visible(p.entryId)),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r)})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
+  const acceptedGoals=context?[]:this.host.goals.snapshot().filter(g=>g.scopeId===scopeId&&g.state==='completed'&&g.finalRoundId&&g.nodes?.every(n=>n.workerId)).map(g=>({id:g.id,title:g.title,skill:g.contract?.skill}))
+  return {skills:this.host.skills.list(scopeId,context),acceptedGoals,settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:this.host.store.list<Schedule>('router-schedule').filter(p=>inScope(p)&&visible(p.entryId)),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r)})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
  }
  private requireManager(scopeId:string,context?:ScopeContext){
   this.host.scopes.scope(scopeId)
@@ -94,6 +97,8 @@ export class RouterProactive {
    this.checkControlEntry(run.spec.entryId,context)
    if(terminal.has(run.state)&&!this.unsettled(run))return run
    const taskIds=this.ownedTasks(run)
+   const goal=run.goalId&&this.host.goals.get(run.goalId)
+   if(goal&&!['completed','cancelled'].includes(goal.state))store.put('router-goal',goal.id,{...goal,state:'cancelled',revision:goal.revision+1,reason:'Scheduled run stopped by a person',nextAt:undefined})
    for(const id of taskIds){const t=store.tickets.get(id);if(t&&!t.ended)this.host.engine.stopTicket(id,'Scheduled run stopped by a person')}
    const next={...run,taskIds,state:'cancelled' as const,finishedAt:this.now()};store.put('router-schedule-run',run.id,next);if(run.triggerId)this.host.abortScheduledRun(run.triggerId);return next
   }
@@ -109,6 +114,7 @@ export class RouterProactive {
    if(context&&context.trigger.id!==anchor.id)throw Error('Use the current human authorization as schedule anchor')
    const entry=this.host.scopes.binding(c.route.entryId)
    if(entry.privateActor&&!context)throw Error('Operator cannot impersonate a private message author')
+   if(spec.skill){if(spec.mode!=='standalone')throw Error('Saved skills start a new goal');this.host.skills.resolve(spec.skill,x.scopeId,entry.id,c)}
    if(spec.ticketId){this.host.scopes.checkTask(spec.ticketId,c,true);this.host.scopes.checkTaskEntry(this.host.scopes.ownership(spec.ticketId)!,entry.id,'result')}
    const next:Schedule={...spec,scopeId:x.scopeId,entryId:entry.id,bindingRevision:entry.revision,revision:(old?.revision??0)+1,createdAt:old?.createdAt??this.now(),nextAt:nextTime(spec.timing,Math.max(this.now(),Date.parse(spec.timing.startAt)))}
    if(next.active&&next.nextAt===undefined)throw Error('No future occurrence in the selected time range')
@@ -128,7 +134,7 @@ export class RouterProactive {
   if(context&&context.route.entryId!==entryId||!context&&e.privateActor)throw Error('Use the authorized entry to manage this object')
  }
  private validatePlan(p:Schedule){
-  scheduleSchema.parse(Object.fromEntries(Object.entries(p).filter(([k])=>['id','name','triggerId','prompt','timing','mode','ticketId','notification','active'].includes(k))))
+  scheduleSchema.parse(Object.fromEntries(Object.entries(p).filter(([k])=>['id','name','triggerId','prompt','timing','mode','ticketId','notification','active','skill'].includes(k))))
   const trigger=this.host.store.triggers.get(p.triggerId)
   if(!trigger?.human||this.runForTrigger(p.triggerId))throw Error('Schedule authority unavailable')
   this.host.routerIngress.authority(p.triggerId)
@@ -137,6 +143,24 @@ export class RouterProactive {
   return {trigger,context:c,mandate:this.host.routerIngress.authority(trigger.id)}
  }
  runForTrigger(id:string){return this.host.store.list<ScheduledRun>('router-schedule-run').find(r=>r.triggerId===id)}
+ skillStart(input:unknown,context:ScopeContext){
+  const run=this.runForTrigger(context.trigger.id)
+  if(!run?.spec.skill)return false
+  const {template}=this.host.skills.resolve(run.spec.skill,run.scopeId,run.spec.entryId,context)
+  const expected=goalCommandSchema.parse({...template,action:'start',operationId:run.id,expectedRevision:0,authorizationQuote:run.spec.prompt})
+  return stableDigest(input)===stableDigest(expected)
+ }
+ runSkill(id:string){
+  const run=this.host.store.get<ScheduledRun>('router-schedule-run',id)!
+  if(run.state==='cancelled'||run.goalId)return
+  this.host.store.atomic(()=>{
+   this.beforeTurn(run.triggerId!)
+   const trigger=this.host.store.triggers.get(run.triggerId!)!
+   const context=this.host.scopes.context(trigger,trigger.source+':'+trigger.threads[0]!.id)!
+   const goal=this.host.skills.execute(run.spec.skill!,context,run.id,run.spec.prompt)
+   this.host.store.put('router-schedule-run',id,{...this.host.store.get<ScheduledRun>('router-schedule-run',id)!,state:'running',goalId:goal.id})
+  })
+ }
  private authority(id:string):Mandate|undefined{
   const run=this.runForTrigger(id);if(!run)return
   if(['cancelled','skipped','failed'].includes(run.state))throw Error('Scheduled run is no longer authorized')
@@ -206,12 +230,12 @@ export class RouterProactive {
    run.triggerId=trigger.id;run.triggerHash=stableDigest(trigger)
    store.put('router-schedule-run',id,run)
    store.put('router-admission',trigger.id,{triggerId:trigger.id,discussion,policyVersion:mandate.policyVersion,state:'accepted',reason:'Standing schedule authorization',at:trigger.at,mandate:{...mandate,scope:p.prompt}} satisfies RouterAdmission)
-   store.enqueue('router:schedule:'+id,p.mode==='continue'?'router-scheduled-followup':'router',{discussion,triggerId:trigger.id,runId:id})
+   store.enqueue('router:schedule:'+id,p.skill?'router-skill-run':p.mode==='continue'?'router-scheduled-followup':'router',{discussion,triggerId:trigger.id,runId:id})
    return run
   }catch(error){return skip(String(error))}
  }
  private ownedTasks(run:ScheduledRun){
-  return [...new Set([...(run.taskIds??[]),...[...this.host.store.list<any>('worker-assignment'),...this.host.store.list<any>('task-routing')].filter(a=>run.triggerId&&a.parentTrigger===run.triggerId).map(a=>String(a.ticketId))])]
+  return [...new Set([...(run.taskIds??[]),...(run.goalId?this.host.goals.get(run.goalId)?.taskIds??[]:[]),...[...this.host.store.list<any>('worker-assignment'),...this.host.store.list<any>('task-routing')].filter(a=>run.triggerId&&a.parentTrigger===run.triggerId).map(a=>String(a.ticketId))])]
  }
  private unsettled(run:ScheduledRun){
   if(!terminal.has(run.state))return true
@@ -239,6 +263,7 @@ export class RouterProactive {
    const tasks=r.taskIds.map(id=>store.tickets.get(id)),failed=jobs.some(j=>['failed','blocked','uncertain'].includes(String(j.state))),busy=pendingReports||jobs.some(j=>['pending','running'].includes(String(j.state)))
    let state=r.state
    if(failed)state='failed'
+   else if(r.goalId){const goal=this.host.goals.get(r.goalId);state=goal?.state==='completed'?'completed':goal?.state==='cancelled'?'cancelled':['held','needs_input','paused'].includes(goal?.state??'')?'waiting':'running'}
    else if(!busy&&jobs.length&&tasks.every(t=>!!t?.ended))state='completed'
    else if(tasks.some(t=>!t?.ended&&t?.attention))state='waiting'
    store.put('router-schedule-run',r.id,{...r,state,delivery,...(failed?{reason:String(jobs.find(j=>['failed','blocked','uncertain'].includes(String(j.state)))?.error??'Router execution requires review').slice(0,500)}:{}),...(terminal.has(state)?{finishedAt:r.finishedAt??this.now()}:{})})

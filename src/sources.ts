@@ -22,6 +22,7 @@ export type SourceChange=z.infer<typeof sourceChangeSchema>
 export interface RecordQuery {sourceId?:string;ids?:string[];cursor?:string;limit?:number;scope?:string;messageIds?:string[];subscribed?:boolean}
 export interface RecordPage<T=any> {items:{id:string;value:T}[];next?:string}
 export interface SourceContext {
+  beforeExternalWrite?():Promise<void>
   repositoryUpdate?(update:import('./repository-source.ts').RepositoryUpdate):unknown
   /** Source-scoped bounded history; list/get on the v2 store contains only local/control state. */
   records?(kind:string,query?:RecordQuery):Promise<RecordPage>
@@ -35,6 +36,8 @@ export interface SourceContext {
   closed(thread: string, outcome: 'merged'|'closed', at: string): void
 }
 export interface Source {
+  workflowState?(target:import('./workflow-actions.ts').StatusTarget):Promise<import('./workflow-actions.ts').TransitionView>
+  applyWorkflowState?(target:import('./workflow-actions.ts').StatusTarget,expected:import('./workflow-actions.ts').TransitionView,stateId:string,mayAct?:()=>boolean):Promise<'updated'|'changed'>
   readonly code?:import('./repository-source.ts').RepositoryAccess
   config: SourceConfig
   trigger(input: Incoming, actor: string, human?: boolean): Trigger

@@ -15,9 +15,9 @@ const same=(a:unknown,b:unknown):boolean=>JSON.stringify(normalize(a))===JSON.st
 function normalize(value:any):any{return Array.isArray(value)?value.map(normalize):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,normalize(value[k])])):value}
 const deployment=sourceDeployment
 export const managedFiles=(state:string)=>({directory:join(state,'setup'),connections:join(state,'setup','connections.json'),secrets:join(state,'setup','credentials.json'),journal:join(state,'setup','transaction.json')})
-export function atomicPrivateFile(path:string,text:string){
+export function atomicPrivateFile(path:string,text:string|Uint8Array,mode=0o600){
  mkdirSync(dirname(path),{recursive:true,mode:0o700})
- const temporary=path+'.'+randomUUID()+'.tmp',fd=openSync(temporary,'wx',0o600)
+ const temporary=path+'.'+randomUUID()+'.tmp',fd=openSync(temporary,'wx',mode)
  try{writeFileSync(fd,text);fsyncSync(fd)}finally{closeSync(fd)}
  try{renameSync(temporary,path)}catch(error){try{unlinkSync(temporary)}catch{}throw error}
 }

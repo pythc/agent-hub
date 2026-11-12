@@ -20,6 +20,22 @@ The latest message need not contain the entire request. One person can identify 
 
 Explicit authorized requests remain independent of proactive rules. Modes do not revoke explicit tasks or their in-scope follow-ups. A saved Router session by itself grants no authority over new conversation.
 
+## Reuse a completed goal
+
+Open a completed task in the operator workspace, choose **Save as a skill**, and review its objective, Worker assignments, prerequisites and acceptance checks. The editor starts from a goal whose final independent verification passed. Edits create a numbered version. Restoring an older template creates a new version and preserves existing bindings. The version list shows when an execution of that exact version has passed its final checks.
+
+From **Router management → Proactive Router**, select a version to run. Manual runs take the original entry's explicit request and the exact authorization quote. A standalone schedule pins a version to its standing instruction. **Bind event** opens the Webhook workbench with that version's plan fixed. Each occurrence starts a new goal in the same entry and uses the approved Workers and checks. The operator can inspect the goal, pause future occurrences, or cancel one running occurrence.
+
+For workbooks, `xlsx_cell_equals` verifies the stored cell value in the named worksheet. With `sumRange`, it also adds the numeric values in that range. The accepted predecessor supplies the downstream Worker with an immutable file version through `superagent_artifact_read`. Open the producing task's **File versions** to download the same bytes or inspect an earlier version. Each XLSX, PDF or MP4 artifact can be up to 32 MiB. PDF and MP4 receipts record the file identity. The XLSX check reads cached formula values and independently computes the specified sum.
+
+Run the matched local XLSX evaluation with a signed-in native Codex backend and a fresh output directory.
+
+```sh
+node --import tsx examples/personal-workflow-eval.ts /absolute/new/eval-directory
+```
+
+Both runs use the same workbook, model and workspace permissions. The benchmark checks all 900 input rows, the computed total, the JSON output and the final reply to the local requester. `comparison.json` records time to acceptance, time through delivery, reported token coverage, human follow-ups and public replies.
+
 ## Existing work and recovery
 
 Unmentioned human follow-ups on a task-owned discussion are relayed once to the existing Worker under its original mandate, using an internal Router channel. The external conversation is never added as a Worker reply channel. Up to 20 follow-ups are grouped into a turn in the same persistent Router, with host tools limited to reading those messages and honoring explicit human stop requests. An allowed API `backend_recall` can also retrieve earlier history from that same Router conversation. Ordinary follow-ups remain silent; this stop classification does consume model tokens. An out-of-scope follow-up returns to admission once all its currently valid task owners have handed it back. Ownership follows the task’s current authorized continuation; a stopped or revoked owner cannot hold that input indefinitely. A bot cannot reopen completed work, and a person-stopped task stays stopped. A terminal Worker report waits for the Router to finish classifying already-queued human follow-ups, so a fast `dropped` report cannot win the race against an explicit stop. Execution and message delivery remain concurrent. If classification fails, the report stays in the transcript and the task is blocked for reconciliation. If work was already completed before the follow-up arrived, its historical outcome is preserved rather than rewritten as a human stop.

@@ -2,13 +2,13 @@ import {createHash,createHmac,timingSafeEqual,randomUUID} from 'node:crypto'
 import {ProcessSource} from './plugin-process.ts'
 import {githubWorkflowEvent} from '../plugins/github-webhook/normalize.ts'
 import {WebhookContinuations,continuationRuleSchema} from './webhook-continuations.ts'
-import {workerProfiles} from './worker-pool.ts'
+import {workerPermissions,workerProfiles} from './worker-pool.ts'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {ScopeContext} from './router-scope.ts'
 import type {Mandate,Trigger} from './vendor/dsh-core/index.ts'
 import {goalCommandSchema,type RouterGoal} from './router-goals.ts'
-import {validateGraph,nodeSchema} from './goal-contract.ts'
+import {validateGraph,nodeSchema,skillRefSchema} from './goal-contract.ts'
 import {webhookProtocol} from './webhook-schema.ts'
 import type {VerificationRound} from './goal-verification.ts'
 import {stableDigest} from './sources.ts'
@@ -32,7 +32,7 @@ export const webhookGrantSchema=z.object({
  operationId:id,triggerId:z.string().min(1).max(300),authorizationQuote:z.string().min(1).max(16000),
  namespace:id,eventSource:z.string().url().max(1000),eventTypes:z.array(z.string().min(1).max(200)).min(1).max(30),subjects:z.array(z.string().max(1000)).min(1).max(100).optional(),
  secretEnvs:z.array(env).min(1).max(2),parameters:z.record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),parameter).refine(p=>Object.keys(p).length<=30),
- template:automationTemplateSchema,
+ template:automationTemplateSchema,skill:skillRefSchema.optional(),
  expiresAt:z.number().int().positive(),maxEvents:z.number().int().min(1).max(100000),maxConcurrent:z.number().int().min(1).max(10).default(1),perMinute:z.number().int().min(1).max(600).default(60),
  callback:z.object({url:z.string().url(),secretEnv:env,idempotent:z.literal(true),events:z.array(z.enum(eventTypes)).min(1).max(20).default(['goal.completed','goal.cancelled','goal.needs_input','goal.held']),resultFiles:z.array(z.string().min(1).max(1000)).max(10).default([]),maxAttempts:z.number().int().min(1).max(50).default(12)}).strict(),
 }).strict()
@@ -107,6 +107,7 @@ export class Webhooks {
   if(x.normalizerSourceId){const source=this.host.sources.get(x.normalizerSourceId);if(!(source instanceof ProcessSource)||!source.pkg.manifest.methods.includes('webhook')||source.pkg.manifest.network||Object.keys(source.pkg.manifest.credentials).length||source.pkg.manifest.methods.some(m=>!['webhook','close'].includes(m))||!this.host.scopes.scope(c.route.scopeId).sourceIds.includes(x.normalizerSourceId))throw new WebhookError(403,'invalid_webhook_normalizer')}
   if(x.transport.kind==='github-workflow'&&x.eventSource!=='https://github.com/'+x.transport.repository)throw new WebhookError(400,'github_source_mismatch')
   const scope=this.host.scopes.scope(c.route.scopeId)
+  if(x.skill&&stableDigest(this.host.skills.resolve(x.skill,c.route.scopeId,c.route.entryId,c).template)!==stableDigest(x.template))throw new WebhookError(409,'skill_version_changed')
   validateGraph(x.template.nodes,x.template.criteria)
   if(x.template.nodes.some(n=>!scope.workerIds.includes(n.workerId)))throw new WebhookError(403,'template_worker_outside_scope')
   if(new Set(x.template.criteria.map(cr=>cr.id)).size!==x.template.criteria.length||x.template.criteria.some(cr=>cr.id==='__goal__'))throw new WebhookError(400,'invalid_criteria')
@@ -124,6 +125,7 @@ export class Webhooks {
    if(x.protocolVersion===2)this.requireV2(true)
    else this.host.store.db.exec('PRAGMA user_version='+Math.max(8,Number(this.host.store.db.prepare('PRAGMA user_version').get()!.user_version)))
    this.host.store.put('webhook-grant',g.id,g);this.host.store.put('webhook-command',key,{fingerprint:stableDigest(x),grantId:g.id})
+   if(x.skill||x.template.criteria.some(cr=>cr.check?.kind==='xlsx_cell_equals'))this.host.store.requireWorkflowSchema()
    this.host.store.audit({type:'webhook.grant_created',id:g.id,triggerId:t.id,templateHash:stableDigest(g.template),actor:c.actor})
   })
   return g
@@ -215,7 +217,17 @@ export class Webhooks {
   for(const run of this.host.store.list<{ticketId:string;phase:string}>('run'))if(['starting','running','background'].includes(run.phase)&&!this.taskExecutionAllowed(run.ticketId))this.host.interruptForAutomation(run.ticketId)
   for(const [id,send] of this.sends){try{const g=this.grant(this.delivery(id)!.grant_id);this.approved(g);if(g.deliveryPaused||this.host.isPaused)throw Error('Delivery paused')}catch{send.controller.abort(Error('Delivery authorization stopped'))}}
  }
- permissions(id:string){const input=this.host.store.get<AutomationInput>('webhook-input',id);if(!input)return;const grant=this.grant(input.grantId),workerIds=[...new Set(grant.template.nodes.map(n=>n.workerId))];return {workerIds,backendIds:[...new Set(workerProfiles(this.host.config).filter(w=>workerIds.includes(w.id)).map(w=>w.backend))]}}
+ permissions(id:string){
+  const input=this.host.store.get<AutomationInput>('webhook-input',id)
+  if(!input)return
+  const grant=this.grant(input.grantId)
+  return {...workerPermissions(this.host.config,grant.template.nodes.map(n=>n.workerId)),...(grant.skill?{skill:grant.skill}:{})}
+ }
+ notificationAnchor(id:string){
+  const input=this.host.store.get<AutomationInput>('webhook-input',id)
+  const grant=input&&this.host.store.get<WebhookGrant>('webhook-grant',input.grantId)
+  return grant?this.host.store.triggers.get(grant.triggerId):undefined
+ }
  inputData(id:string){const input=this.host.store.get<AutomationInput>('webhook-input',id);return input?{trust:'untrusted_external_data',data:this.receipt(input.receiptId)?.event.data}:undefined}
  private authority(id:string):Mandate|undefined {
   const input=this.host.store.get<AutomationInput>('webhook-input',id);if(!input)return

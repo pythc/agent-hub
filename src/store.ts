@@ -6,7 +6,7 @@ import type { Repositories, Trigger, TriggerDisposition, Thread, Ticket, Decisio
 // Webhook-only releases from reopening service-authorized delegated work.
 export const DELEGATION_DB_SCHEMA=10
 export const DELEGATED_GOALS_DB_SCHEMA=11
-export const MAX_DB_SCHEMA=DELEGATED_GOALS_DB_SCHEMA
+export const MAX_DB_SCHEMA=12
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
@@ -70,6 +70,8 @@ export class Store implements Repositories {
     const row = this.db.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(kind, id)
     return row ? JSON.parse(String(row.body)) as T : undefined
   }
+  /** An older verifier would ignore an unknown check and could release a waiting goal. */
+  requireWorkflowSchema(){this.db.exec('PRAGMA user_version='+MAX_DB_SCHEMA)}
   prunePages(){this.db.prepare("DELETE FROM records WHERE kind='resource-page' AND id IN (SELECT id FROM records WHERE kind='resource-page' AND CAST(json_extract(body,'$.expires') AS INTEGER)<? LIMIT 1000)").run(Date.now())}
   put(kind: string, id: string, value: unknown): void {
     const observe=this.recordObservers.get(kind)

@@ -1,3 +1,4 @@
+import type {StatusTarget,TransitionView} from './workflow-actions.ts'
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process'
 import {mkdtempSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
@@ -236,6 +237,11 @@ export class ProcessSource extends MessageSource {
       if(!c.capabilities.replies||m.channel.source!==c.id||!this.validThread(m.channel.thread))throw Error('Reply access revoked')
     }
     if(method==='members'&&!this.scopes().includes(String(args[0])))throw Error('Member scope access revoked')
+    if(method==='workflowState'||method==='applyWorkflowState'){
+      const target=args[0] as StatusTarget
+      const configured=(c.options?.statusTargets as StatusTarget[]|undefined)?.find(t=>t.key===target.key&&t.entryId===target.entryId)
+      if(!c.capabilities.resources||!c.capabilities.replies||!configured||stableDigest(configured)!==stableDigest(target)||!this.scopes().includes(target.teamId))throw Error('Status target permission changed')
+    }
     if(method==='context'&&!this.validThread(String(args[0])))throw Error('Thread access revoked')
     if(method==='read'){
       const t=(args[0] as any)?.trigger
@@ -253,7 +259,7 @@ export class ProcessSource extends MessageSource {
         this.guard(method,args)
       }
       const authorize=()=>{this.guard(method,args);if(mayAct&&!mayAct())throw Error('Repository operation authority ended')}
-      if(['resolveReview','draft','merge'].includes(method)){authorize();this.repositoryAuthority=authorize}
+      if(['resolveReview','draft','merge','applyWorkflowState'].includes(method)){authorize();this.repositoryAuthority=authorize}
       try{const result=await this.request({type:'call',method,args,config:this.effectiveConfig(),snapshot:this.pkg.manifest.methods.includes('webhook')?[]:this.snapshot(),stateAck:this.stateAck});this.guard(method,args);return result}
       finally{this.repositoryAuthority=undefined}
     })
@@ -262,6 +268,8 @@ export class ProcessSource extends MessageSource {
   async start(context:SourceContext){this.sourceContext=context;this.hostStore=context.store;if(this.pkg.manifest.methods.includes('start'))await this.invoke('start')}
   async poll(context:SourceContext){this.sourceContext=context;this.hostStore=context.store;if(this.pkg.manifest.methods.includes('poll'))await this.invoke('poll')}
   identity(){return this.invoke('identity')}
+  workflowState(target:StatusTarget){return this.call('workflowState',[target])}
+  applyWorkflowState(target:StatusTarget,expected:TransitionView,stateId:string,mayAct?:()=>boolean){return this.call('applyWorkflowState',[target,expected,stateId],mayAct)}
   probe(){return this.invoke('probe')}
   repositoryPull(number:number){return this.invoke('repositoryPull',number)}
   mergeSnapshot(number:number){return this.invoke('mergeSnapshot',number)}

@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx'
 import {backendDefinition} from '../src/backend-config.ts'
 import {it,expect,afterEach} from 'vitest'
 import {mkdtempSync,writeFileSync,rmSync,symlinkSync,readFileSync} from 'node:fs'
@@ -10,6 +11,10 @@ import type {RouterGoal} from '../src/router-goals.ts'
 import type {VerificationRound} from '../src/goal-verification.ts'
 import {classifyGoalFailure} from '../src/goal-contract.ts'
 import {protocolBytes} from '../src/context-budget.ts'
+import {operatorTask} from '../src/operator-workspace.ts'
+import {backupState,verifyBackup} from '../src/backup.ts'
+import {planHistory} from '../src/history-cleanup.ts'
+import {DatabaseSync} from 'node:sqlite'
 
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true})})
@@ -35,6 +40,83 @@ function fixture(worker?:(r:ModelRequest,attempt:number)=>any,verify?:(r:ModelRe
  const start=(extra:any={})=>h.goals.command({action:'start',operationId:'start',expectedRevision:0,title:'Verified delivery',objective:'Produce a result whose total is 42. Never deploy.',authorizationQuote:'Continuously build, verify and repair',maxReplans:0,criteria:[{id:'sum',description:'result.json total equals 42',check:{kind:'json_equals',path:'result.json',pointer:'/total',expected:42}}],nodes:[{id:'build',title:'Build',instruction:'Produce result.json',workerId:'one',criterionIds:['sum']}],...extra},context()) as RouterGoal
  return {get h(){return h},root,config,calls,attempts,start,context,advance:(ms:number)=>{now+=ms},goal:()=>h.store.list<RouterGoal>('router-goal')[0]!,rounds:()=>h.store.list<VerificationRound>('goal-verification'),restart:async()=>{hosts.splice(hosts.indexOf(h),1);await h.close();open()}}
 }
+
+it('hands a large versioned workbook to its dependent Worker and keeps earlier readbacks bound to their bytes',async()=>{
+ const file='ledger.xlsx'
+ let opened='',wrongTotal=true
+ const makeWorkbook=(total:number)=>{
+  const book=XLSX.utils.book_new(),sheet=XLSX.utils.aoa_to_sheet([[20],[22],[total]])
+  XLSX.utils.book_append_sheet(book,sheet,'Ledger')
+  XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(Array.from({length:1700},(_,i)=>[String(i).padEnd(120,'x')])),'Details')
+  return XLSX.write(book,{type:'buffer',bookType:'xlsx',compression:false}) as Buffer
+ }
+ const f=fixture(async r=>{
+  const ticketId=r.activity!.ticketId!,goal=f.goal(),node=goal.nodes!.find(n=>n.ticketId===ticketId)!
+  if(node.id==='make'){
+   writeFileSync(join(r.cwd,file),makeWorkbook(wrongTotal?41:42));wrongTotal=false
+  }else{
+   const dependency=f.rounds().find(round=>round.nodeId==='make'&&round.state==='passed')!
+   const ref=dependency.snapshot.evidence.find(e=>e.artifact)!.artifact!
+   const result=await r.onTool!('superagent_artifact_read',{id:ref.id},'open-accepted-version')
+   const attachment=JSON.parse((result.contentItems[0] as any).text);opened=attachment.sha256
+   const book=XLSX.read(readFileSync(attachment.path),{type:'buffer'})
+   writeFileSync(join(r.cwd,'review.json'),JSON.stringify({verified:book.Sheets.Ledger!.A3!.v}))
+  }
+  return ready()
+ })
+ f.start({criteria:[
+  {id:'sum',description:'Verify the original sheet and its total',check:{kind:'xlsx_cell_equals',path:file,sheet:'Ledger',cell:'A3',expected:42,sumRange:'A1:A2'}},
+  {id:'review',description:'Check the handed-off workbook',check:{kind:'json_equals',path:'review.json',pointer:'/verified',expected:42}}],
+  nodes:[{id:'make',workerId:'one',title:'Ledger',instruction:'Make workbook',criterionIds:['sum']},{id:'check',workerId:'two',title:'Review',instruction:'Check the original passed workbook',dependsOn:['make'],criterionIds:['review']}]})
+ await until(f,()=>f.goal().state==='completed')
+ const versions=f.h.store.list<import('../src/goal-artifacts.ts').ArtifactVersion>('goal-artifact')
+ expect(versions.map(x=>x.version)).toEqual([1,2]);expect(versions[0]!.size).toBeGreaterThan(128*1024)
+ expect(operatorTask(f.h,versions[0]!.ticketId)?.artifacts.map(a=>a.sha256)).toEqual(versions.map(a=>a.sha256))
+ expect(opened).toBe(versions[1]!.sha256);expect(f.h.artifacts.download(versions[0]!.id).bytes.equals(f.h.artifacts.download(versions[1]!.id).bytes)).toBe(false)
+ const first=f.rounds().find(r=>r.state==='failed')!,accepted=f.rounds().find(r=>r.state==='passed'&&r.nodeId==='make')!
+ expect(f.h.verification.current(first,f.goal())).toBe(false)
+ writeFileSync(join(f.root,file),makeWorkbook(40));expect(f.h.verification.current(accepted,f.goal())).toBe(false)
+ await f.restart();expect(f.h.artifacts.download(versions[1]!.id).artifact.sha256).toBe(opened)
+ const backup=join(f.root,'artifact-backup');await backupState(f.config,backup)
+ expect(verifyBackup(backup).schema).toBe(12)
+ const copy=new DatabaseSync(join(backup,'state.sqlite'),{readOnly:true})
+ try{
+  expect(Buffer.from(copy.prepare('SELECT bytes FROM goal_artifact_bytes WHERE id=?').get(versions[1]!.id)!.bytes as Uint8Array)).toEqual(f.h.artifacts.download(versions[1]!.id).bytes)
+ }finally{copy.close()}
+ const cleanup=planHistory(f.h.store,f.config.stateDir,'team','erase-test',Date.now())
+ f.h.memory.cleanup.apply(cleanup)
+ expect(f.h.store.db.prepare('SELECT count(*) AS n FROM goal_artifact_bytes').get()?.n).toBe(0)
+ expect(()=>f.h.artifacts.download(versions[1]!.id)).toThrow()
+})
+
+it('saves audited methods, pins the selected version to a scheduled goal and manually runs with a fresh request',async()=>{
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()})
+ const original=f.start({maxTurns:9})
+ expect(()=>f.h.skills.command({action:'draft',goalId:original.id})).toThrow('passed final acceptance')
+ await until(f,()=>f.goal().state==='completed')
+ const draft=f.h.skills.command({action:'draft',goalId:original.id}),save=(expectedVersion:number,template:any)=>f.h.skills.command({action:'save',goalId:original.id,expectedVersion,template})
+ const v1=save(0,draft.template),ref={id:v1.id,version:1},v2=save(1,{...v1.template,title:'Revised method'})
+ expect(v2.version).toBe(2)
+ const entry=f.context().route.entryId
+ expect(()=>f.h.skills.resolve(ref,'team','another-entry')).toThrow('unavailable')
+ expect(f.h.skills.read({id:v1.id,version:1,entryId:entry,scopeId:'team'}).template.title).toBe(original.title)
+ const grant=f.h.receive('local','alice',{id:'authorize',thread:'test',scope:'test',addressed:true,text:'Run the ledger method next week and when I explicitly start it.'}) as any
+ const anchor=grant.triggerId as string
+ const plan={scopeId:'team',operationId:'plan',expectedRevision:0,action:'schedule.put',schedule:{id:'weekly',name:'Ledger',triggerId:anchor,prompt:'Run the ledger method',skill:ref,timing:{kind:'interval',startAt:new Date(Date.now()+3600000).toISOString(),intervalSeconds:3600,timezone:'UTC'},mode:'standalone',notification:'silent'}}
+ f.h.proactive.command(plan);await f.restart()
+ const run=f.h.proactive.command({scopeId:'team',operationId:'run-once',expectedRevision:1,action:'schedule.run',id:'weekly'}) as any
+ await until(f,()=>f.h.store.get<any>('router-schedule-run',run.id)?.state==='completed')
+ const result=f.h.goals.get(f.h.store.get<any>('router-schedule-run',run.id).goalId)!
+ expect(result.title).toBe(v1.template.title);expect(result.nodes?.[0]?.workerId).toBe('one')
+ expect(result.maxTurns).toBe(9);expect(result.contract).toMatchObject({skill:ref,workerIds:['one'],backendIds:['codex']})
+ expect(()=>f.h.goals.toolAllowed(result.triggerId,'worker_manage',{action:'assign'})).toThrow('Completed goal only permits inspection')
+ expect(f.h.proactive.snapshot('team').acceptedGoals.find(g=>g.id===result.id)?.skill).toEqual(ref)
+ const manual=f.h.skills.command({action:'run',skill:{id:v1.id,version:2},triggerId:anchor,authorizationQuote:'when I explicitly start it',operationId:'manual-run'})
+ expect(manual.title).toBe('Revised method')
+ await until(f,()=>f.h.goals.get(manual.id)?.state==='completed')
+ const restored=save(2,v1.template);expect(restored.version).toBe(3)
+ expect(f.h.goals.get(result.id)?.title).toBe(v1.template.title)
+})
 
 it('intercepts a false ready report, repairs the same task, and publishes only independently accepted evidence',async()=>{
  const f=fixture((r,n)=>{writeFileSync(join(r.cwd,'result.json'),JSON.stringify({total:n===1?41:42}));return ready(n===1?'Everything is correct: total is 42':'Corrected total is 42')});f.start()
