@@ -27,7 +27,7 @@ function readArtifact(cwd:string,path:string):{content:string;missing?:boolean} 
 
 export class GoalVerification {
  constructor(private host:Runtime,private now:()=>number=Date.now){}
- criteria(g:RouterGoal,node?:GoalNode):GoalCriterion[]{return node?node.criterionIds.length?g.criteria.filter(c=>node.criterionIds.includes(c.id)):[{id:'__step__:'+node.id,description:'Verify this intermediate contribution toward '+node.supports?.join(', ')+': '+node.instruction,files:node.outputs??[],documents:[]}]:g.criteria}
+ criteria(g:RouterGoal,node?:GoalNode):GoalCriterion[]{if(node&&node.id===g.project?.integration)return g.criteria.filter(cr=>node.criterionIds.includes(cr.id)||!!cr.check);return node?node.criterionIds.length?g.criteria.filter(c=>node.criterionIds.includes(c.id)):[{id:'__step__:'+node.id,description:'Verify this intermediate contribution toward '+node.supports?.join(', ')+': '+node.instruction,files:node.outputs??[],documents:[]}]:g.criteria}
  /** Observation only: a live artifact check never releases a goal or replaces acceptance. */
  observe(g:RouterGoal,node:GoalNode){
   const context=this.host.goals.context(g),ticketId=node.ticketId!,run=this.host.store.get<Run>('run',ticketId)
@@ -89,6 +89,11 @@ export class GoalVerification {
    if(!this.host.goals.effectsSettled(n.ticketId))throw Error('Replanning requires settled effects')
    const criteria=this.criteria(g,n),criterionIds=criteria.map(c=>c.id),round=n.roundId?this.host.store.get<VerificationRound>('goal-verification',n.roundId):undefined
    add({kind:'report',ticketId:n.ticketId,key:n.id,criterionIds,content:JSON.stringify({nodeId:n.id,report:task.assignments.at(-1)?.report,assignmentId:task.assignments.at(-1)?.id,inputRevision:this.host.scopes.ownership(n.ticketId)?.dataRevision,failedRound:round?{id:round.id,state:round.state,checks:round.checks,error:round.error}:undefined})})
+   if(g.project){
+    const delivery=this.host.store.get<GoalDelivery>('goal-delivery',n.ticketId)
+    const code=delivery&&this.host.projectCode.receipt(delivery.id)
+    if(code)add({kind:'execution',ticketId:n.ticketId,key:'project-commit',content:JSON.stringify(code),criterionIds})
+   }
    add({kind:'execution',ticketId:n.ticketId,key:'host-execution',criterionIds,content:this.execution(n.ticketId)})
    // Reports cite this exact ID. Keep the immutable observation in the host cleanup domain
    // and expose it through the same paged evidence tool as every other failure artifact.
@@ -142,10 +147,14 @@ export class GoalVerification {
    if(!proposal||proposal.assignmentId!==task.assignments.at(-1)?.id||proposal.inputRevision!==(this.host.scopes.ownership(n.ticketId)?.dataRevision??1))throw Error('Delivery no longer matches the current task input')
    if(requireSettled&&!this.host.goals.effectsSettled(n.ticketId))throw Error('Task has unfinished or uncertain effects')
    tasks.push({ticketId:n.ticketId,assignmentId:proposal.assignmentId,reportHash:stableDigest(proposal),inputRevision:proposal.inputRevision})
-   const assigned=this.criteria(g,n),ids=assigned.map(cr=>cr.id)
+   const assigned=this.criteria(g,n),ids=assigned.map(cr=>cr.id),code=g.project?this.host.projectCode.receipt(proposal.id):undefined
    // Ancestor artifacts support downstream semantic claims. Keep deterministic
    // file-check ownership unchanged, including same-named files in other tasks.
    const citeIds=(values:string[])=>[...new Set([...values,...semanticAncestors.filter(cr=>cr.ancestors.has(n.id)).map(cr=>cr.id)])]
+   if(g.project){
+    if(!code?.head||code.error)throw Error('Accepted project commit is missing')
+    add({kind:'execution',ticketId:n.ticketId,key:'project-commit',content:JSON.stringify({base:g.project.base,head:code.head,parents:code.parents,test:code.test,diffStat:code.diffStat,diff:code.diff}),criterionIds:citeIds(ids)})
+   }
    add({kind:'execution',ticketId:n.ticketId,key:'host-execution',content:this.execution(n.ticketId),criterionIds:citeIds(ids)})
    // Final acceptance needs the same immutable failure observation the planner
    // received. Exclude mutable recovery status so resolving it cannot stale a review.
@@ -154,7 +163,7 @@ export class GoalVerification {
    }
    add({kind:'report',ticketId:n.ticketId,key:'delivery',content:JSON.stringify({report:proposal.report,reply:proposal.reply}),criterionIds:citeIds(ids)})
    const files=[...new Set(assigned.flatMap(cr=>[...(cr.files??[]),...(cr.check?[cr.check.path]:[])]))]
-   for(const path of files){if(!run)throw Error('Task workspace is missing');add({kind:'file',ticketId:n.ticketId,key:path,...this.host.artifacts.evidence(g,n.id,n.ticketId,run.cwd,path,assigned),criterionIds:citeIds(assigned.filter(cr=>cr.files?.includes(path)||cr.check?.path===path).map(cr=>cr.id))})}
+   for(const path of files){if(!run)throw Error('Task workspace is missing');add({kind:'file',ticketId:n.ticketId,key:path,...this.host.artifacts.evidence(g,n.id,n.ticketId,run.cwd,path,assigned,code?.head),criterionIds:citeIds(assigned.filter(cr=>cr.files?.includes(path)||cr.check?.path===path).map(cr=>cr.id))})}
    for(const documentId of [...new Set(assigned.flatMap(cr=>cr.documents??[]))]){
     const doc=this.host.knowledge.command({action:'read',id:documentId,limit:100},c)
     if(doc.nextOffset!==null)throw Error('Declared document exceeds acceptance evidence limit; declare a smaller document')
@@ -214,22 +223,29 @@ export class GoalVerification {
    if(!node)semantic.push({id:'__goal__',description:'The combined deliverables satisfy the original overall objective and every stated constraint: '+g.objective})
    if(semantic.length&&checks.every(c=>c.verdict==='passed')){
     const snapshot=round.snapshot
-    const modelInput={kind:'goal_verification',objective:g.objective,originalRequest:g.contract?this.host.store.triggers.get(g.contract.triggerId)?.text:undefined,authorizationScope:g.contract?.mandate.scope,criteria:semantic,programChecks:checks,evidence:snapshot.evidence.map(({content,...meta})=>meta)}
-    const access=evidenceAccess(snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{const current=this.host.goals.get(g.id);if(!current||!this.current(round!,current))throw Error('Acceptance evidence or authority changed')},inlineEvidenceBudget(modelInput,this.host.goalEvidenceBudget(g)))
-    const read=access.read
+    const stage=node?{kind:'node',node:{id:node.id,title:node.title,instruction:node.instruction},otherNodes:g.nodes?.filter(n=>n.id!==node.id).map(n=>({id:n.id,title:n.title,criterionIds:n.criterionIds}))}:{kind:'overall'}
+    // Use short round-local references on code projects. Ledger records retain the full evidence hashes.
+    const presented=g.project?snapshot.evidence.map((e,i)=>({...e,id:'e'+(i+1)})):snapshot.evidence
+    const toStored=new Map(presented.map((e,i)=>[e.id,snapshot.evidence[i]!.id])),toPresented=new Map([...toStored].map(([alias,stored])=>[stored,alias]))
+    const requested=g.project?semantic.map(cr=>({...cr,allowedEvidenceIds:presented.filter(e=>cr.id==='__goal__'||e.criterionIds.includes(cr.id)).map(e=>e.id)})):semantic
+    const previous=g.project&&round.attempts>1?this.host.store.get<{error?:string}>('goal-verification-attempt',round.id+':'+(round.attempts-1))?.error:undefined
+    const modelInput={kind:'goal_verification',stage,...(previous?{previousResponseError:previous}:{}),objective:g.objective,originalRequest:g.contract?this.host.store.triggers.get(g.contract.triggerId)?.text:undefined,authorizationScope:g.contract?.mandate.scope,criteria:requested,programChecks:checks.map(ch=>({...ch,evidenceIds:ch.evidenceIds.map(id=>toPresented.get(id)!)})),evidence:presented.map(({content,...meta})=>meta)}
+    const access=evidenceAccess(presented,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{const current=this.host.goals.get(g.id);if(!current||!this.current(round!,current))throw Error('Acceptance evidence or authority changed')},inlineEvidenceBudget(modelInput,this.host.goalEvidenceBudget(g)))
     const result=await this.host.runGoalVerifier(g,id,{
      input:access.input(modelInput),
-     schema:{type:'object',properties:{checks:{type:'array',minItems:semantic.length,maxItems:semantic.length,items:{type:'object',properties:{criterionId:{type:'string',enum:semantic.map(c=>c.id)},verdict:{type:'string',enum:['passed','failed','insufficient']},explanation:{type:'string'},evidenceIds:{type:'array',items:{type:'string'}}},required:['criterionId','verdict','explanation','evidenceIds'],additionalProperties:false}}},required:['checks'],additionalProperties:false},
+     schema:{type:'object',properties:{checks:{type:'array',minItems:semantic.length,maxItems:semantic.length,items:{type:'object',properties:{criterionId:{type:'string',enum:semantic.map(c=>c.id)},verdict:{type:'string',enum:['passed','failed','insufficient']},explanation:{type:'string'},evidenceIds:{type:'array',minItems:1,items:{type:'string'}}},required:['criterionId','verdict','explanation','evidenceIds'],additionalProperties:false}}},required:['checks'],additionalProperties:false},
      tools:access.tools,onTool:access.onTool,
     })
     if(this.host.shuttingDown)return false
     const afterReview=this.host.goals.get(g.id)
     if(!afterReview||!this.current(round,afterReview)){save({state:'stale',finishedAt:this.now()});return}
     access.confirmInline()
+    const read=new Set([...access.read].map(id=>toStored.get(id)!))
     let parsed:z.infer<typeof verdict>
     try{parsed=verdict.parse(JSON.parse(result.text))}catch(error){throw Error('Verification protocol: '+String(error))}
     if(parsed.checks.length!==semantic.length||semantic.some(cr=>parsed.checks.filter(ch=>ch.criterionId===cr.id).length!==1))throw Error('Verification protocol: Verifier must decide every requested criterion exactly once')
     for(const ch of parsed.checks){
+     ch.evidenceIds=ch.evidenceIds.map(id=>toStored.get(id)??'')
      if(ch.evidenceIds.some(id=>!read.has(id)||ch.criterionId!=='__goal__'&&!snapshot.evidence.find(e=>e.id===id)?.criterionIds.includes(ch.criterionId)))throw Error('Verification protocol: Verifier cited evidence it did not inspect for this criterion')
      const required=snapshot.evidence.filter(e=>(e.kind==='file'||e.kind==='document'||operational(e)&&ch.criterionId==='__goal__')&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId)))
      if(ch.verdict==='passed'&&required.some(e=>e.missing||!read.has(e.id)||!ch.evidenceIds.includes(e.id)))throw Error('Verification protocol: Verifier skipped required artifact evidence')

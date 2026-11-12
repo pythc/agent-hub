@@ -1,7 +1,8 @@
 import {existsSync,realpathSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs'
 import {resolve,delimiter,relative,sep,join} from 'node:path'
 import {tmpdir} from 'node:os'
-import {execFile,spawnSync} from 'node:child_process'
+import {execFile,spawn,spawnSync} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
 import {promisify} from 'node:util'
 import {hostPrivateFiles} from './private-files.ts'
 export type SandboxDriver='codex'|'seatbelt'|'bubblewrap'|'disabled'
@@ -64,6 +65,21 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
  args.push('--chdir',canon(s.cwd),'--',...shell)
  const command=(process.env.PATH??'').split(delimiter).map(p=>resolve(p,'bwrap')).find(existsSync)??'bwrap'
  return {command,args}
+}
+export function sandboxEnvironment(scratch:string,developerBin?:string){
+ const env=Object.fromEntries(['PATH','USER','LOGNAME','LANG','LC_ALL','SYSTEMROOT','SystemRoot'].filter(key=>process.env[key]!==undefined).map(key=>[key,process.env[key]!]))
+ Object.assign(env,{HOME:scratch,TMPDIR:scratch,TMP:scratch,TEMP:scratch})
+ // Apple's system shim writes outside the job's temp directory. Keep higher-priority tools first.
+ if(developerBin&&env.PATH){
+  const paths=env.PATH.split(delimiter),systemBin=paths.indexOf('/usr/bin')
+  if(systemBin>=0){paths.splice(systemBin,0,developerBin);env.PATH=paths.join(delimiter)}
+ }
+ return env
+}
+export function startSandboxRunner(specPath:string){
+ const runner=fileURLToPath(new URL('./work-runner.ts',import.meta.url))
+ const loader=fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url))
+ return spawn(process.execPath,['--import',loader,runner,specPath],{detached:process.platform!=='win32',stdio:'ignore',shell:false})
 }
 /** Check actual namespace/process startup, rather than just finding bwrap on PATH. */
 export async function probeSandbox(driver:SandboxDriver,codex:string){

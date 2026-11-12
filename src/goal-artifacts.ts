@@ -75,9 +75,10 @@ export class GoalArtifacts {
       CREATE TRIGGER IF NOT EXISTS delete_goal_artifact AFTER DELETE ON records WHEN OLD.kind='goal-artifact'
       BEGIN DELETE FROM goal_artifact_bytes WHERE id=OLD.id; END;`)
   }
-  evidence(goal:RouterGoal,nodeId:string,ticketId:string,cwd:string,path:string,criteria:GoalCriterion[]){
+  evidence(goal:RouterGoal,nodeId:string,ticketId:string,cwd:string,path:string,criteria:GoalCriterion[],head?:string){
     const mime=mimeTypes[extname(path).toLowerCase()]
-    const bytes=evidenceBytes(cwd,path,mime?32*1024*1024:128*1024)
+    const limit=mime?32*1024*1024:128*1024
+    const bytes=head?this.host.projectCode.blob(goal,head,path,limit):evidenceBytes(cwd,path,limit)
     if(!bytes)return {content:'',missing:true}
     if(!mime)return {content:bytes.toString('utf8')}
     const sha256=createHash('sha256').update(bytes).digest('hex'),id=stableDigest([goal.id,nodeId,path,sha256])

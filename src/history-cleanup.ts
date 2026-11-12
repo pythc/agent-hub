@@ -1,6 +1,7 @@
 import {existsSync,lstatSync,rmSync} from 'node:fs'
 import {join,resolve,relative,sep,dirname} from 'node:path'
 import type {Store} from './store.ts'
+import {stableDigest} from './sources.ts'
 import type {Model} from './model.ts'
 
 export interface HistoryPlan {
@@ -84,6 +85,10 @@ function expandPlan(store:Store,stateDir:string,plan:HistoryPlan):HistoryPlan {
    const cwd=r.body.cwd??r.body.from?.cwd??all.find(x=>x.kind==='run'&&x.id===r.body.ticketId)?.body.cwd??all.find(x=>x.kind==='settings'&&x.id==='current')?.body.config?.sources?.find((s:any)=>s.id===sourceId)?.cwd
    for(const threadId of [r.body.threadId,r.body.from?.threadId,r.body.previousThread,...(['backend-thread','backend-plugin-thread'].includes(r.kind)?[r.id]:[])])if(typeof threadId==='string'){if(cwd)sessions.set(threadId,{threadId,cwd});else unresolved.add(threadId)}
   }
+  if(r.kind==='router-goal'&&r.body.project?.base){
+   files.add(join(stateDir,'code-projects',stableDigest(r.id)))
+   for(const ticket of r.body.taskIds)files.add(join(stateDir,'work',stableDigest(['code-project',ticket])))
+  }
   if(r.kind==='asset'&&r.body.path)files.add(dirname(r.body.path))
   if(r.kind==='work')for(const suffix of ['.spec.json','.output','.result.json'])files.add(join(stateDir,'jobs',r.id+suffix))
  }
@@ -160,7 +165,7 @@ export class HistoryCleanup {
     save({phase:'files'})
     for(const path of plan.files){
      const rel=relative(resolve(this.stateDir),resolve(path))
-     if(rel.startsWith('..'+sep)||!['assets','jobs'].includes(rel.split(sep)[0]!))throw Error('Deletion file is outside managed history storage')
+     if(rel.startsWith('..'+sep)||!['assets','jobs'].includes(rel.split(sep)[0]!)&&!/^(code-projects|work)[\\/]([a-f0-9]{64})$/.test(rel))throw Error('Deletion file is outside managed history storage')
      // Reject symlink ancestors; never traverse into a user workspace.
      const parts=rel.split(sep);for(let n=1;n<parts.length;n++){const parent=join(this.stateDir,...parts.slice(0,n));if(existsSync(parent)&&lstatSync(parent).isSymbolicLink())throw Error('Managed history path contains a symlink')}
      rmSync(path,{force:true,recursive:true});if(existsSync(path))throw Error('Managed file deletion readback failed')

@@ -26,6 +26,7 @@ export function operatorWorkspace(host:Runtime,offset=0,limit=25,filter:{state?:
   const label=host.store.get<any>('entry-label',trigger?.source??'')
   return {id:ticket.id,title:text(ticket.title,200),state,createdAt:ticket.createdAt,updatedAt:ticket.updatedAt,entryId:client??source?.kind??'generic',context:text(label?.location??source?.repository??'',180),summary:text(ticket.attention?.question??report?.summary,400),question:text(ticket.attention?.question),replySent:sent,replyRead:read,deliveryUncertain:uncertain,approvalIds:pending.map(a=>a.id)}
  }
+ const projectReviews=host.goals.snapshot().flatMap(g=>g.state==='needs_input'&&g.project?.review?.state==='pending'?[host.goals.reviewSummary(g)!]:[])
  const workflowActions=host.workflows.forOperator()
  const all=tickets.map(project).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)),attention=all.filter(t=>t.state==='attention')
  const represented=new Set(tickets.flatMap(t=>t.origin.triggerIds)),evaluating=new Set(host.store.threads.list().flatMap(t=>t.evaluating?.triggerIds??[]))
@@ -35,7 +36,7 @@ export function operatorWorkspace(host:Runtime,offset=0,limit=25,filter:{state?:
  const filtered=all.filter(task=>(!filter.state||task.state===filter.state)&&
   (!query||[task.title,task.context,task.entryId,task.summary].some(value=>value.toLowerCase().includes(query))))
  return {at:Date.now(),architecture,paused:status.paused,active:status.active,total:filtered.length,offset,limit,more:offset+limit<filtered.length,
-  workflowActions,tasks:filtered.slice(offset,offset+limit),activeTasks:activeTasks.slice(0,100),activeTotal:activeTasks.length,attention:attention.slice(0,50),attentionTotal:attention.length+workflowActions.length,understanding:understanding.slice(0,25),counts:{running:all.filter(t=>t.state==='running').length,replied:all.filter(t=>t.state==='replied').length,attention:attention.length+workflowActions.length},sources:host.store.list('source-health'),liveSources:host.store.list('source-live')}
+  projectReviews,workflowActions,tasks:filtered.slice(offset,offset+limit),activeTasks:activeTasks.slice(0,100),activeTotal:activeTasks.length,attention:attention.slice(0,50),attentionTotal:attention.length+workflowActions.length+projectReviews.length,understanding:understanding.slice(0,25),counts:{running:all.filter(t=>t.state==='running').length,replied:all.filter(t=>t.state==='replied').length,attention:attention.length+workflowActions.length+projectReviews.length},sources:host.store.list('source-health'),liveSources:host.store.list('source-live')}
 }
 export function operatorTask(host:Runtime,id:string){
  const ticket=host.store.tickets.get(id);if(!ticket)return undefined
@@ -48,5 +49,6 @@ export function operatorTask(host:Runtime,id:string){
  const goal=host.goals.snapshot().find(g=>g.taskIds.includes(id))
  const acceptedGoal=goal?.state==='completed'&&goal.finalRoundId&&goal.nodes?.every(n=>n.workerId)?goal:undefined
  const artifacts=goal?host.store.list<ArtifactVersion>('goal-artifact').filter(a=>a.mime&&a.ticketId===id&&a.goalId===goal.id):[]
- return {...summary,artifacts,workflowActions:host.workflows.forOperator(id),...(acceptedGoal?{acceptedGoal:{id:acceptedGoal.id,scopeId:acceptedGoal.scopeId}}:{}),workerId:run?.workerId,model:run?.model,canStop:!ticket.ended,canRetry:!ticket.ended&&(canRetry(ticket)||run?.phase==='uncertain'),message:text(trigger?.text,8000),result:text(run?.result,12000),resultTruncated:typeof run?.result==='string'&&run.result.length>12000,resultResource:'ticket/'+id+'/result',...(sourceUrl?{sourceUrl}:{}),approvals:host.store.list<Approval>('approval').filter(a=>a.ticketId===id&&a.status==='pending'&&a.expiresAt>Date.now()).map(a=>({id:a.id,method:a.native.method,expiresAt:a.expiresAt,request:a.native.params}))}
+ const projectReview=goal?.project?.review?host.goals.reviewSummary(goal):undefined
+ return {...summary,projectReview,artifacts,workflowActions:host.workflows.forOperator(id),...(acceptedGoal?{acceptedGoal:{id:acceptedGoal.id,scopeId:acceptedGoal.scopeId}}:{}),workerId:run?.workerId,model:run?.model,canStop:!ticket.ended,canRetry:!ticket.ended&&(canRetry(ticket)||run?.phase==='uncertain'),message:text(trigger?.text,8000),result:text(run?.result,12000),resultTruncated:typeof run?.result==='string'&&run.result.length>12000,resultResource:'ticket/'+id+'/result',...(sourceUrl?{sourceUrl}:{}),approvals:host.store.list<Approval>('approval').filter(a=>a.ticketId===id&&a.status==='pending'&&a.expiresAt>Date.now()).map(a=>({id:a.id,method:a.native.method,expiresAt:a.expiresAt,request:a.native.params}))}
 }

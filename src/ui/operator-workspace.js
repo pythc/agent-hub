@@ -133,6 +133,35 @@ function workflowOutcome(p){
   const states={pending:['Awaiting approval','待确认'],applying:['Submitting change…','正在提交'],applied:['Written and verified','已写入并回读'],declined:['Declined','已拒绝'],stale:['The issue changed. A new proposal is needed.','事项已变化，需要重新提案'],uncertain:['The write outcome is still unknown','写入结果仍待核对'],observed:['Target state observed. Writer unconfirmed.','已回读目标状态，写入方未确认']}
   return p.view.label+' · '+L(...states[p.state])+(p.receipt?' · '+p.receipt.revision:'')
 }
+function projectReviewCard(review,editable) {
+  const card = add(el('article','attention-item'),el('h3','',review.title),
+    el('code','',review.head),el('p','',L('Base commit','起始提交')+' '+review.base),
+    el('p','',L('Passed','测试通过')+' · '+review.test.command))
+  if(review.diffStat)card.append(el('pre','message',review.diffStat))
+  if(review.diff?.text)card.append(detail(review.diff.truncated?L('Patch preview (truncated)','补丁预览（已截断）'):L('View changes','查看改动'),el('pre','message',review.diff.text)))
+  if(review.test.output)card.append(detail(L('Test output','测试输出'),el('pre','message',review.test.output)))
+  const download = kind => {
+    const link=el('a','text-button',kind==='patch'?L('Download patch','下载补丁'):L('Download Git bundle','下载 Git 提交包'))
+    link.href=workspacePath('/project-reviews/'+review.id+'/'+kind,false,workspaceContext.activeId)
+    return link
+  }
+  card.append(add(el('p','actions'),download('patch'),download('bundle')))
+  if(review.budget?.policy.maxMinutes!==undefined)card.append(el('p','hint',L('Project time','项目用时')+' '+(review.budget.elapsedMs/60000).toFixed(1)+' / '+review.budget.policy.maxMinutes+' '+L('min','分钟')))
+  if(review.budget?.estimatedUsd!==undefined)card.append(el('p','hint',L('Estimated model cost','模型估算费用')+' $'+review.budget.estimatedUsd.toFixed(4)+' / $'+review.budget.policy.cost.maxUsd))
+  if(!editable)return card
+  const feedback=el('textarea'),label=el('label','',L('Changes requested','退回修改意见'))
+  label.htmlFor=feedback.id='feedback-'+review.id
+  feedback.maxLength=4000;feedback.rows=2
+  const decide=decision=>entryRun('workflow',async()=>{
+    if(decision==='return'&&!feedback.value.trim()){feedback.setCustomValidity(L('Describe the requested change.','请填写修改意见。'));feedback.reportValidity();return}
+    await api('/project-reviews/'+review.id,{decision,...(decision==='return'?{feedback:feedback.value.trim()}:{})})
+    operator.workflowFeedback=decision==='return'?L('Returned for changes.','已退回修改。'):L('Commit approved.','已通过该提交。')
+    await readOperatorWork()
+  })
+  feedback.addEventListener('input',()=>feedback.setCustomValidity(''))
+  card.append(label,feedback,add(el('div','actions'),opButton(L('Approve commit','验收通过'),()=>decide('approve'),'button'),opButton(L('Return for changes','退回修改'),()=>decide('return'),'button')))
+  return card
+}
 function opAttention() {
   const items = operator.work?.attention || []
   const result = [opHeading(L('Needs your attention', '待我处理'), null,
@@ -143,6 +172,8 @@ function opAttention() {
   ]) if (list.length) result.push(opSection(label, list.length),
     add(el('div', 'attention-list'), ...list.map(opAttentionCard)))
   if(operator.workflowFeedback){const feedback=el('p','message',operator.workflowFeedback);feedback.setAttribute('role','status');result.push(feedback)}
+  const reviews = operator.work?.projectReviews || []
+  if(reviews.length)result.push(opSection(L('Code projects','代码项目验收'),reviews.length),...reviews.map(review=>projectReviewCard(review,true)))
   const proposals = operator.work?.workflowActions || []
   if (proposals.length) {
     result.push(opSection(L('External changes', '外部操作'), proposals.length))
@@ -160,7 +191,7 @@ function opAttention() {
       result.push(card)
     }
   }
-  if (!items.length && !proposals.length) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
+  if (!items.length && !proposals.length && !reviews.length) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
   return result
 }
 function opTasks() {
@@ -318,6 +349,7 @@ function opTaskDialog(){
   if(task.resultTruncated)body.append(el('p','flow-help',L('This result is shortened. Read the complete resource in advanced controls.','结果较长，此处已缩短。可在完整任务控制台读取全文。')))
   if(task.deliveryUncertain)body.append(el('p','alert warning',L('Delivery is uncertain. Inspect the original conversation before retrying.','回传结果不确定，请先核对原会话，再决定是否重试。')))
   if(task.acceptedGoal){const link=el('a','button',L('Save as a skill','保存为技能'));link.href='/router-proactive?'+new URLSearchParams({goal:task.acceptedGoal.id,scope:task.acceptedGoal.scopeId});body.append(link)}
+  if(task.projectReview)body.append(projectReviewCard(task.projectReview,false))
   if(task.artifacts?.length){
     body.append(el('h3','',L('File versions','文件版本')))
     for(const file of task.artifacts){
@@ -422,12 +454,14 @@ document.addEventListener('keydown',event=>{
   if(event.key==='Escape'){event.preventDefault();setOperatorMenu(false)}
   if(event.key==='Tab'){const items=[...document.querySelectorAll('#operator-sidebar button:not(:disabled),#operator-sidebar a[href]')].filter(n=>n.getClientRects().length);const first=items[0],last=items.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}
 })
+const editingProjectReview=()=>[...document.querySelectorAll('textarea[id^="feedback-"]')].some(field=>field===document.activeElement||field.value.trim())
 let operatorPolling=false
 setInterval(async()=>{
   if(operatorPolling||document.hidden||S.surface!=='entries'||!S.authed||entryState.role!=='operator'||entryState.busy||S.busy||operator.drawer||operator.menu||!['home','attention','activity'].includes(entryState.page))return
-  const page=entryState.page,previous=JSON.stringify([operator.work?.workflowActions,operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error])
+  if(entryState.page==='attention'&&editingProjectReview())return
+  const page=entryState.page,previous=JSON.stringify([operator.work?.projectReviews,operator.work?.workflowActions,operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error])
   operatorPolling=true
-  try{await readOperatorWork();if(S.surface==='entries'&&page===entryState.page&&!operator.drawer&&!operator.menu&&!entryState.busy&&previous!==JSON.stringify([operator.work?.workflowActions,operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error]))render()}
+  try{await readOperatorWork();if(S.surface==='entries'&&page===entryState.page&&!operator.drawer&&!operator.menu&&!entryState.busy&&!editingProjectReview()&&previous!==JSON.stringify([operator.work?.projectReviews,operator.work?.workflowActions,operator.work?.tasks,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error]))render()}
   finally{operatorPolling=false}
 },10000)
 window.addEventListener('resize',()=>{if(operator.menu&&window.innerWidth>700)setOperatorMenu(false)})

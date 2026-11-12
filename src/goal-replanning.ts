@@ -2,6 +2,7 @@ import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {RouterGoal} from './router-goals.ts'
 import type {Mandate,Ticket} from './vendor/dsh-core/index.ts'
+import {checkProjectGraph} from './project-code.ts'
 import {validateGraph,classifyGoalFailure,evidencePath,type GoalCriterion,type GoalNode} from './goal-contract.ts'
 import {stableDigest} from './sources.ts'
 import {scopeBudget} from './context-budget.ts'
@@ -86,12 +87,14 @@ export class GoalReplanning {
   // Remote contracts are immutable and have no safe amendment/resume protocol yet.
   // Retain a failed mixed graph for explicit review instead of duplicating effects.
   if(g.nodes?.some(n=>n.teamTargetId))return false
-  if(!g.contract||(g.replans??0)>=(g.maxReplans??0)||g.replanId)return false
+  if(!g.contract||(g.replans??0)>=(g.maxReplans??(g.project?.policy.budget?Infinity:0))||g.replanId)return false
   const failures=g.nodes?.filter(n=>n.state==='held')??[]
   if(!failures.length)return false
   for(const n of failures){
    const task=n.ticketId?this.host.store.tickets.get(n.ticketId):undefined
    if(!task||task.ended||!this.host.goals.effectsSettled(task.id))return false
+   const delivery=n.ticketId?this.host.store.get<{id:string}>('goal-delivery',n.ticketId):undefined
+   if(g.project&&delivery&&this.host.projectCode.receipt(delivery.id)?.error)continue
    const round=n.roundId?this.host.store.get<any>('goal-verification',n.roundId):undefined
    if(round&&['failed','insufficient'].includes(round.state))continue
    const report=task.assignments.at(-1)?.report
@@ -125,6 +128,7 @@ export class GoalReplanning {
   nodes.push(...additions)
   if(nodes.length>100)throw Error('Replanned graph exceeds 100 nodes')
   validateGraph(nodes,g.criteria)
+  checkProjectGraph(g,nodes)
   const ancestors=(id:string,seen=new Set<string>()):Set<string>=>{for(const dep of nodes.find(n=>n.id===id)!.dependsOn)if(!seen.has(dep)){seen.add(dep);ancestors(dep,seen)}return seen}
   for(const n of additions)if(!ancestors(n.derivedFrom).has(n.id))throw Error('Intermediate step must contribute to its original parent')
   const shape=(ns:GoalNode[])=>ns.map(n=>({id:n.id,instruction:n.instruction,dependsOn:n.dependsOn,workerId:n.workerId,criterionIds:n.criterionIds,supports:n.supports,outputs:n.outputs}))
@@ -145,7 +149,7 @@ export class GoalReplanning {
     // Old persisted rounds did not carry this field. Preserve their original
     // snapshot hash while checking a fresh capability view around each call.
     const capabilities=r!.snapshot.workerCapabilities??this.snapshot(g).workerCapabilities!
-    const modelInput={kind:mode==='plan'?'goal_replanning':'goal_plan_review',contract:r!.snapshot.contract,originalRequest:this.host.store.triggers.get(r!.snapshot.contract.triggerId)!.text,planRevision:r!.snapshot.planRevision,replanningPolicy:{samePlanRepairsPerNode:g.maxRepairs??2,successfulReplansUsed:g.replans??0,maxSuccessfulReplans:g.maxReplans??0,stoppedTasksAllowed:false},workerCapabilities:capabilities,nodes:r!.snapshot.nodes,failedNodeIds:r!.snapshot.failureNodeIds,evidence:r!.snapshot.evidence.map(({content,...meta})=>meta),requiredEvidenceIds:r!.snapshot.evidence.map(e=>e.id),...(mode==='review'?{proposal:r!.proposal}:{})}
+    const modelInput={kind:mode==='plan'?'goal_replanning':'goal_plan_review',contract:r!.snapshot.contract,originalRequest:this.host.store.triggers.get(r!.snapshot.contract.triggerId)!.text,planRevision:r!.snapshot.planRevision,replanningPolicy:{samePlanRepairsPerNode:g.maxRepairs??2,successfulReplansUsed:g.replans??0,maxSuccessfulReplans:g.maxReplans??(g.project?.policy.budget?'within project budget':0),stoppedTasksAllowed:false},workerCapabilities:capabilities,nodes:r!.snapshot.nodes,failedNodeIds:r!.snapshot.failureNodeIds,evidence:r!.snapshot.evidence.map(({content,...meta})=>meta),requiredEvidenceIds:r!.snapshot.evidence.map(e=>e.id),...(mode==='review'?{proposal:r!.proposal}:{})}
     const access=evidenceAccess(r!.snapshot.evidence,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{this.current(r!)},inlineEvidenceBudget(modelInput,this.host.goalEvidenceBudget(g)))
     const result=await this.host.runGoalPlanner(g,r!,mode,{input:access.input(modelInput),schema:mode==='plan'?proposalOutput:reviewOutput,tools:access.tools,onTool:access.onTool})
     this.current(r!)

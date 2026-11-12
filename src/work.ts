@@ -1,10 +1,11 @@
-import {spawn,execFileSync, type ChildProcess} from 'node:child_process'
+import {execFileSync, type ChildProcess} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
 import {mkdirSync,readFileSync,writeFileSync,existsSync} from 'node:fs'
 import {join,resolve} from 'node:path'
-import {fileURLToPath} from 'node:url'
+import {startSandboxRunner} from './sandbox.ts'
 import type {Store} from './store.ts'
 import type {Config} from './config.ts'
+import {projectWorkspace} from './project-code.ts'
 import {hostPrivateFiles} from './private-files.ts'
 
 export interface WorkOwner {ticketId:string;assignmentId:string;cwd:string;sandbox:'read-only'|'workspace-write';agentId?:string;depth:number;network?:boolean}
@@ -67,13 +68,13 @@ export class WorkManager {
   if(this.config.work.sandboxDriver==='bubblewrap'&&process.platform!=='linux')throw Error('Bubblewrap sandbox requires Linux')
   const {item,fresh}=this.create(owner,'shell',requestId,{command})
   if(fresh){
-   const spec=join(this.directory,item.id+'.spec.json'),runner=fileURLToPath(new URL('./work-runner.ts',import.meta.url))
+   const spec=join(this.directory,item.id+'.spec.json')
    let gitDirectory:string|undefined
-   try{gitDirectory=resolve(owner.cwd,execFileSync('git',['rev-parse','--git-common-dir'],{cwd:owner.cwd,encoding:'utf8',timeout:2000,stdio:['ignore','pipe','ignore']}).trim())}catch{}
+   if(owner.cwd!==projectWorkspace(this.config.stateDir,owner.ticketId))try{gitDirectory=resolve(owner.cwd,execFileSync('git',['rev-parse','--git-common-dir'],{cwd:owner.cwd,encoding:'utf8',timeout:2000,stdio:['ignore','pipe','ignore']}).trim())}catch{}
    const attachments=this.store.list<any>('asset').filter(a=>a.ticketId===owner.ticketId).map(a=>a.path)
    writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,sandboxDriver:this.config.work.sandboxDriver,network:this.config.work.network&&(owner.network??true),privateState:this.config.stateDir,privatePaths:hostPrivateFiles(),gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
    try{
-    const child=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),runner,spec],{detached:process.platform!=='win32',stdio:'ignore',shell:false})
+    const child=startSandboxRunner(spec)
     this.runners.set(item.id,child)
     child.once('error',()=>{this.put({...this.store.get<WorkItem>('work',item.id)!,state:'failed',endedAt:Date.now(),error:'Unable to start managed command'})})
     child.once('exit',()=>{this.runners.delete(item.id);const current=this.store.get<WorkItem>('work',item.id);if(current&&['starting','running'].includes(current.state)&&!existsSync(join(this.directory,item.id+'.result.json')))this.put({...current,state:'interrupted',endedAt:Date.now(),error:'Managed runner exited without a durable receipt; inspect retained output before retrying'})})

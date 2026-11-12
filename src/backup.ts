@@ -1,3 +1,4 @@
+import {backupProjectFiles,verifyProjectFiles,restoreProjectFiles} from './project-archive.ts'
 import {captureDelegationIdentity,verifyDelegationIdentity,prepareDelegationRestore} from './delegation/backup.ts'
 import {captureMarketPackages,verifyMarketPackages,restoreMarketPackages} from './plugin-market-backup.ts'
 import {exportHistoryIndex,verifyHistoryIndex,type HistoryReader} from './history-backup.ts'
@@ -41,15 +42,15 @@ export async function backupState(config:Config,destination:string,options:{hist
  const db=new DatabaseSync(join(config.stateDir,'state.sqlite'),{readOnly:true})
  const target=join(directory,'state.sqlite')
  let schema:number
- try{schema=Number(db.prepare('PRAGMA user_version').get()!.user_version);await backup(db,target)}finally{db.close()}
+ try{await backup(db,target)}finally{db.close()}
  chmodSync(target,0o600)
  const after=captureManaged(config.stateDir);if(JSON.stringify(managed)!==JSON.stringify(after))throw Error('Setup changed during backup; retry backup')
- const snapshot=new DatabaseSync(target,{readOnly:true});let effective:Config|undefined,delegationIdentity:string|undefined,history:Awaited<ReturnType<typeof exportHistoryIndex>>
- try{effective=checkManaged(snapshot,managed,config);captureMarketPackages(snapshot,config.stateDir,directory);delegationIdentity=captureDelegationIdentity(snapshot,config.stateDir,directory);history=await exportHistoryIndex(snapshot,directory,options.historyReader)}finally{snapshot.close()}
+ const snapshot=new DatabaseSync(target,{readOnly:true});let projectFiles:Record<string,string>|undefined,effective:Config|undefined,delegationIdentity:string|undefined,history:Awaited<ReturnType<typeof exportHistoryIndex>>
+ try{schema=Number(snapshot.prepare('PRAGMA user_version').get()!.user_version);effective=checkManaged(snapshot,managed,config);captureMarketPackages(snapshot,config.stateDir,directory);projectFiles=backupProjectFiles(snapshot,config.stateDir,directory);delegationIdentity=captureDelegationIdentity(snapshot,config.stateDir,directory);history=await exportHistoryIndex(snapshot,directory,options.historyReader)}finally{snapshot.close()}
  const hashes:Record<string,string>={}
  for(const name of ['connections','secrets'] as const)if(managed[name]!==undefined){atomicPrivateFile(join(directory,'setup',name==='connections'?'connections.json':'credentials.json'),managed[name]!);hashes[name]=digest(managed[name]!)}
  const ledger=readRevocations(config.stateDir);if(ledger.length)atomicPrivateFile(join(directory,'memory-revocations.jsonl'),ledger.map(r=>JSON.stringify(r)).join('\n')+'\n')
- const manifest={format:1,history,...(delegationIdentity?{delegationIdentity}:{}),application:'0.10.0',...(ledger.length?{revocations:hash(join(directory,'memory-revocations.jsonl'))}:{}),schema,at:new Date().toISOString(),sha256:hash(target),...(Object.keys(hashes).length?{managed:hashes}:{})}
+ const manifest={format:1,history,...(projectFiles?{projectFiles}:{}),...(delegationIdentity?{delegationIdentity}:{}),application:'0.10.0',...(ledger.length?{revocations:hash(join(directory,'memory-revocations.jsonl'))}:{}),schema,at:new Date().toISOString(),sha256:hash(target),...(Object.keys(hashes).length?{managed:hashes}:{})}
  writeFileSync(join(directory,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{mode:0o600})
  writeFileSync(join(directory,'config.json'),JSON.stringify(effective??config,null,2)+'\n',{mode:0o600})
  return {directory,...manifest}
@@ -63,6 +64,7 @@ export function verifyBackup(directory:string){
  try{
   if(Number(db.prepare('PRAGMA user_version').get()!.user_version)!==manifest.schema||db.prepare('PRAGMA integrity_check').get()!.integrity_check!=='ok')throw Error('Backup failed SQLite verification')
   checkManaged(db,backupManaged(directory,manifest));verifyMarketPackages(db,directory);verifyDelegationIdentity(db,directory,manifest.delegationIdentity)
+  verifyProjectFiles(db,directory,manifest.projectFiles)
   if(manifest.history)verifyHistoryIndex(directory,manifest.history)
   const head=db.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get()
   if(manifest.revocations&&hash(join(directory,'memory-revocations.jsonl'))!==manifest.revocations)throw Error('Revocation ledger checksum mismatch')
@@ -97,6 +99,7 @@ export async function restoreState(config:Config,directory:string){
    const live=new DatabaseSync(currentPath,{readOnly:true}),old=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
    try{
     const liveSchema=Number(live.prepare('PRAGMA user_version').get()!.user_version)
+    if(liveSchema>=13&&verified.schema<13)throw Error('Downgrade cannot preserve code project reviews and commits')
     if(liveSchema>=9&&verified.schema<9)throw Error('Downgrade cannot preserve Webhook continuation and key protocols')
     if(liveSchema>=8&&verified.schema<8)throw Error('Downgrade cannot preserve Webhook authorization and delivery ledgers; reconcile before restore')
     if(liveSchema>=6&&verified.schema<6)throw Error('Online downgrade cannot represent Router scopes; use forward repair or a reviewed offline rollback')
@@ -117,7 +120,7 @@ export async function restoreState(config:Config,directory:string){
     if(JSON.stringify(skillsSchedules(live))!==JSON.stringify(skillsSchedules(old)))throw Error('Saved skill schedule or run advanced after backup; reconcile before restore')
     const head=live.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get(),required=head&&JSON.parse(String(head.body))
     if(required&&!ledger.some(r=>r.seq===required.seq&&r.hash===required.hash))throw Error('Latest revocation ledger is missing')
-    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('ticket','run','model-session','task-ownership','entry-binding') OR kind LIKE 'delegation-%' OR (kind='router-goal' AND EXISTS(SELECT 1 FROM json_each(records.body,'$.nodes') WHERE json_extract(value,'$.teamTargetId') IS NOT NULL))").all()){
+    for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('ticket','run','model-session','task-ownership','entry-binding') OR kind LIKE 'delegation-%' OR kind IN ('project-base','project-commit','project-review','project-review-input') OR (kind='router-goal' AND json_extract(body,'$.project.base') IS NOT NULL) OR (kind='router-goal' AND EXISTS(SELECT 1 FROM json_each(records.body,'$.nodes') WHERE json_extract(value,'$.teamTargetId') IS NOT NULL))").all()){
      const previous=old.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(String(row.kind),String(row.id))
      if(!previous||previous.body!==row.body)throw Error('Task, native thread or ownership advanced after backup; reconcile before restore')
     }
@@ -148,6 +151,8 @@ export async function restoreState(config:Config,directory:string){
   let replaced=false
   try{
    for(const suffix of ['-wal','-shm'])if(existsSync(target+suffix))unlinkSync(target+suffix)
+   const archive=new DatabaseSync(temporary,{readOnly:true})
+   try{restoreProjectFiles(archive,directory,config.stateDir,verified.projectFiles)}finally{archive.close()}
    prepareDelegationRestore(config.stateDir,directory,verified.delegationIdentity)
    renameSync(temporary,target);replaced=true;files.finish()
   }catch(error){if(!replaced)files.rollback();throw error}

@@ -1,25 +1,15 @@
 import {spawn} from 'node:child_process'
 import {readFileSync,writeFileSync,renameSync,openSync,writeSync,closeSync,mkdtempSync,rmSync} from 'node:fs'
-import {delimiter,join} from 'node:path'
+import {join} from 'node:path'
 import {tmpdir} from 'node:os'
-import {sandboxCommand} from './sandbox.ts'
+import {sandboxCommand,sandboxEnvironment} from './sandbox.ts'
 const spec=JSON.parse(readFileSync(process.argv[2]!,'utf8'))
 const output=openSync(join(spec.directory,spec.id+'.output'),'a',0o600)
 let bytes=0,droppedBytes=0,stopping=false,killTimer:ReturnType<typeof setTimeout>|undefined
 const scratch=mkdtempSync(join(tmpdir(),'agenthub-job-'))
 let launch:ReturnType<typeof sandboxCommand>
 try{launch=sandboxCommand({...spec,scratch})}catch(error){closeSync(output);rmSync(scratch,{recursive:true,force:true});throw error}
-const env=Object.fromEntries(['PATH','USER','LOGNAME','LANG','LC_ALL','SYSTEMROOT','SystemRoot'].filter(key=>process.env[key]!==undefined).map(key=>[key,process.env[key]!]))
-Object.assign(env,{HOME:scratch,TMPDIR:scratch,TMP:scratch,TEMP:scratch})
-// Keep higher-priority tools and bypass Apple's shim, which writes a cache outside the job's temp directory.
-if(launch.developerBin&&env.PATH){
- const paths=env.PATH.split(delimiter)
- const systemBin=paths.indexOf('/usr/bin')
- if(systemBin>=0){
-  paths.splice(systemBin,0,launch.developerBin)
-  env.PATH=paths.join(delimiter)
- }
-}
+const env=sandboxEnvironment(scratch,launch.developerBin)
 const child=spawn(launch.command,launch.args,{cwd:spec.cwd,env,stdio:['ignore','pipe','pipe'],shell:false})
 
 const append=(chunk:Buffer)=>{const count=Math.min(chunk.length,Math.max(0,spec.maxOutputBytes-bytes));if(count)writeSync(output,chunk.subarray(0,count));bytes+=count;droppedBytes+=chunk.length-count}

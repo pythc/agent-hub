@@ -71,6 +71,31 @@ For a Feishu or local entry that handles repository tasks, set its `cwd` to the 
 
 Each ticket starts with a local clone in `repo/` at the source repository's committed HEAD. The Worker can edit, build, test and commit on its own branch. Follow-ups on the same ticket see the same checkout. Ask for the commit and test results in the original conversation for human acceptance. Allow `work.network` on the host and network access in the assignment when tests need a server or dependency downloads. The local-review clone has its own Git objects and no configured remote. For draft PR delivery, see the [GitHub entry](GITHUB_PLUGIN.md).
 
+### Code projects with a final human review
+
+On a repository entry with a scoped host Router, set `cwd` to the Git repository root. Add `project` to the writable directory workspace. Use the repository’s own reproducible test command. This example installs locked npm dependencies in the clean test checkout.
+
+```json
+{
+  "sandbox": "workspace-write",
+  "workspace": {
+    "mode": "directory",
+    "project": {
+      "testCommand": "npm ci && npm test",
+      "budget": { "maxMinutes": 60 }
+    }
+  }
+}
+```
+
+Structured goals on that entry pin the current committed HEAD. Each Worker works at the root of its own checkout. A dependent Worker receives its predecessors’ accepted commits. Parallel branches feed an integration Worker, which can resolve conflicts and retry tests. A linear plan uses its last Worker for integration. The existing `prepare` hook still applies to tickets outside a code project. Set up dependencies needed by the verification command inside that command. The test checkout starts clean and uses the host’s managed shell driver and network setting.
+
+The host runs the configured command at the proposed commit, records its output and checks the reviewed files from that commit. The original requester can approve or return the **current review ID** in the same conversation. Use the command prefix shown in the review message when the entry requires one. An operator can open **Needs your attention → Code projects** to inspect the diff, download a patch or Git bundle, approve the SHA, or return it with feedback. A return reopens the same integration task. Acceptance closes the project. To retrieve a candidate in a clone containing the base commit, run `git fetch /path/to/downloaded.bundle refs/heads/commits/<full-reviewed-sha>` and inspect `FETCH_HEAD`.
+
+A time or cost budget covers the project across restarts and excludes time waiting for final human review. To enable estimated cost limits, set `budget.cost` with `maxUsd`, `inputUsdPerMillion` and `outputUsdPerMillion` using your own model rates. The Router can set lower `budget.maxMinutes` and `budget.maxUsd` on the initial goal. The host counts reported Router, Worker, verifier and replanning usage against the project. A completed call without sufficient usage data holds a cost-limited goal. Parallel calls can accrue charges before a provider reports them. A monetary estimate is checked as usage arrives and before further model work. Without an explicit replan count, a budgeted project may adopt further independently reviewed plans within its budget.
+
+The first code project advances the host database to schema 13. A matching backup includes the retained base, accepted Git bundles and tested patches. An older host must open its matching pre-project backup to roll back. Active Worker directories follow the ordinary workspace backup policy.
+
 ## Software connections and prompts
 
 **Software connections → New connection** adds a named office/repository instance even if that platform is already connected. Feishu can reuse the host bot or connect another bot. Existing instances keep their scopes and allowed senders; each office instance has its own verification observation. A personal MCP client entry is the actual installed bridge profile, not an extra artificial software instance.

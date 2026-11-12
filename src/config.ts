@@ -12,6 +12,15 @@ import {browserConfigSchema} from './browser-contract.ts'
 import {watchdogConfigSchema} from './watchdog-contract.ts'
 import {viewPluginsSchema} from './workspace-view-package.ts'
 
+const projectPolicy=z.object({
+  testCommand:z.string().trim().min(1).max(16000),
+  budget:z.object({
+    maxMinutes:z.number().positive().max(43200).optional(),
+    cost:z.object({maxUsd:z.number().positive(),inputUsdPerMillion:z.number().nonnegative(),outputUsdPerMillion:z.number().nonnegative()}).strict().optional(),
+  }).strict().refine(b=>b.maxMinutes!==undefined||b.cost!==undefined,'Set a time or cost budget').optional(),
+}).strict()
+export type ProjectPolicy=z.infer<typeof projectPolicy>
+
 const sourceSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
   label:z.string().min(1).max(100).optional(),
@@ -40,12 +49,13 @@ const sourceSchema = z.object({
     downloadHosts:z.array(z.string().regex(/^[a-z0-9.-]+$/)).default(['weixin.qq.com','qpic.cn']),
   }).strict().optional(),
   cwd: z.string(),
-  workspace:z.object({mode:z.enum(['source','directory','git-worktree']).default('git-worktree'),prepare:z.object({command:z.string().min(1),args:z.array(z.string()).default([])}).strict().optional()}).strict().optional(),
+  workspace:z.object({mode:z.enum(['source','directory','git-worktree']).default('git-worktree'),project:projectPolicy.optional(),prepare:z.object({command:z.string().min(1),args:z.array(z.string()).default([])}).strict().optional()}).strict().optional(),
   sandbox: z.enum(['read-only', 'workspace-write']).default('read-only'),
   repository: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
   replyUrl: z.string().url().optional(),
   tokenEnv: z.string().optional(),
 }).strict().superRefine((s,ctx)=>{
+  if(s.workspace?.project&&(s.workspace.mode!=='directory'||s.sandbox!=='workspace-write'))ctx.addIssue({code:'custom',message:'Code projects require a writable directory workspace'})
   if(s.kind==='local'&&!s.allowedActors.length)ctx.addIssue({code:'custom',message:'Local source requires an operator identity'})
   if(s.kind==='github'&&!s.repository)ctx.addIssue({code:'custom',message:'GitHub source requires repository'})
   if(s.kind==='feishu'&&(!s.feishu||(!s.feishu.cli&&(!s.feishu.appIdEnv||!s.feishu.appSecretEnv))))ctx.addIssue({code:'custom',message:'Feishu source requires CLI or app credential environment names'})

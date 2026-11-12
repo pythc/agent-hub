@@ -8,7 +8,7 @@ import {Ajv2020} from 'ajv/dist/2020.js'
 import {decisionConfigSchema} from './decision-config.ts'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { createReadStream, statSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { Runtime } from './runtime.ts'
@@ -266,6 +266,20 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const {artifact,bytes}=runtime.artifacts.download(path.slice('/goal-artifacts/'.length))
       res.writeHead(200,{'content-type':artifact.mime,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(artifact.path.split('/').at(-1)!),'cache-control':'no-store','x-content-type-options':'nosniff'})
       res.end(bytes);return
+    }
+    const projectRoute=path.match(/^\/project-reviews\/([a-f0-9]{16})(?:\/(bundle|patch))?$/)
+    if(projectRoute){
+      const id=projectRoute[1]!,kind=projectRoute[2] as 'bundle'|'patch'|undefined
+      if(req.method==='GET'&&kind){
+        const goal=runtime.goals.operatorReview(id),file=runtime.projectCode.file(goal,kind)
+        const size=statSync(file).size
+        res.writeHead(200,{'content-type':'application/octet-stream','content-length':size,'content-disposition':'attachment; filename="'+goal.project!.review!.head+'.'+kind+'"','cache-control':'no-store','x-content-type-options':'nosniff'})
+        const stream=createReadStream(file);stream.on('error',e=>res.destroy(e));res.on('close',()=>stream.destroy());stream.pipe(res);return
+      }
+      if(req.method==='POST'&&!kind){
+        const input=z.object({decision:z.enum(['approve','return']),feedback:z.string().trim().min(1).max(4000).optional()}).strict().parse(await body(req))
+        send(res,200,runtime.goals.decideOperator(id,input.decision,account.status(req).user?.id??'local-operator',input.feedback));return
+      }
     }
     if(req.method==='POST'&&path==='/workflow-actions'){
       const operatorId=account.status(req).user?.id??'local-operator'
