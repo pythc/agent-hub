@@ -57,6 +57,11 @@ export function planHistory(store:Store,stateDir:string,scopeId:string,id:string
  const plan:HistoryPlan={id,scopeId,at,roots:[...roots],records:[],tickets:[...tickets],triggers:[...triggers],sessions:[],files:[]}
  return expandPlan(store,stateDir,plan)
 }
+/** A Chat reset starts only from this account's native conversations. */
+export function planChatHistory(store:Store,stateDir:string,scopeId:string,id:string,at:number,conversationIds:string[]):HistoryPlan {
+ const conversations=new Set(conversationIds),triggers=rows(store).filter(r=>r.kind==='chat-run'&&conversations.has(r.body.conversationId)).map(r=>r.body.triggerId as string)
+ return expandPlan(store,stateDir,{id,scopeId,at,roots:[...conversationIds,...triggers],tickets:[],triggers,records:[],sessions:[],files:[]})
+}
 function expandPlan(store:Store,stateDir:string,plan:HistoryPlan):HistoryPlan {
  const all=rows(store),ids=new Set(plan.roots),selected=new Map(plan.records.map(([k,id])=>[k+'\0'+id,[k,id] as [string,string]]))
  const nonDocumentIds=new Set(all.filter(r=>r.kind!=='knowledge-document').map(r=>r.id))

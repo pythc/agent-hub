@@ -277,22 +277,22 @@ Motion communicates selection, navigation or real execution. The operator reduce
 
 ## Shared conversation workspace — 2026-11-07
 
-Authenticated `/chat`, `/configure` and `/` now use the same application shell: one global feature rail, an independent conversation list, workspace picker, header, theme and language controls. Configuration is a content outlet; the existing form controllers and revisioned drafts are retained through a build-time module adapter with scoped CSS. Account onboarding and the public usage guide remain separate entry flows.
+Authenticated `/chat`, `/configure` and `/` now use the same application shell: one global feature rail, a persistent Chat space, workspace picker, header, theme and language controls. Configuration is a content outlet; the existing form controllers and revisioned drafts are retained through a build-time module adapter with scoped CSS. Account onboarding and the public usage guide remain separate entry flows.
 
 The conversation owns a collapsible panel with Files, Browser and Team activity tabs. Browser instances are scoped to the conversation, while authorized login profiles remain reusable. Files previews are read-only and restricted to that conversation's task directories. Team flow continues to reflect recorded execution. The black/white palette and existing controls remain; motion on the shared panel is a brief reveal, with immediate reduced-motion behavior.
 
 Rendered evidence: shared-workspace acceptance (local historical notes).
 
 
-## Conversation space and feature rail — 2026-11-07
+## Single Chat space and feature rail — 2026-11-14
 
-The Codex reference establishes three separate regions: global feature navigation, conversation list, and conversation content. Feature navigation defaults to a 64px icon rail and expands to 208px; its labels are restored on expansion. The conversation list is 220–252px and can be hidden independently. Both preferences persist locally. Management pages reuse the same global rail and omit the conversation list; returning to chat restores the list preference and drafts.
+One persistent Chat space replaces the conversation list. The existing feature rail remains 64px collapsed and 208px expanded. Group mode gives the remaining width to the shared transcript. Agent-list mode adds a 240px contact list containing the Router and Workers; selecting a Worker shows its actual Router/Worker exchange in the same content region, with a disabled input reading “请与 Router 对话” and a link back to Router. Older Router identities remain read-only. No new-chat, rename, search or archive controls appear.
 
-The new-conversation action, search and archive controls belong to the conversation list. The feature rail uses 40px rows, neutral active fills and accessible names/native titles for all collapsed icons. Its logo uses 22px type; secondary history captions retain 11px from the existing compact UI. The mobile navigation scrim retains the existing `#0005` treatment.
+Display mode and clearing live in the existing Settings → Chat tab. Two plain radio rows select the mode; a separate clear action names its scope and requires inline confirmation. It clears only the current account’s built-in Chat and associated memory/context. Independent external entry data belongs to its plugin. The memory tab retains only Edit and Delete per saved item.
 
-At 800px and below the two navigation regions form a drawer. Expanding feature labels temporarily hides its history column; closing restores focus to the menu button after the main region leaves inert. The session panel defaults closed for a new conversation and remembers existing choices. It uses an overlay on mobile or when splitting would leave less than 360px for conversation content. Reduced motion removes navigation transitions. No model execution is simulated by layout motion.
+At 800px and below the feature rail and contact list form a drawer. Expanding feature labels temporarily hides contacts; closing restores focus after the main region leaves inert. Resource tools retain their existing panel and become an overlay when the remaining content width would drop below 360px. The same Router draft survives contact, view, language, theme and settings navigation. Reduced motion removes navigation transitions.
 
-Rendered evidence: conversation-space acceptance (local historical notes).
+Rendered evidence in `docs/images/chat-space-*` uses an isolated HTTP/SQLite host and deterministic model replies; it verifies UI and execution projection, not a live model’s coding quality.
 
 ## Resource launcher and open views — 2026-11-07
 

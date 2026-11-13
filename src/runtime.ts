@@ -621,7 +621,7 @@ export class Runtime {
         await this.work.recovered
         for(const id of plan.tickets){this.controllers.get(id)?.abort(Error('History deletion'));this.toolConnections.cancel(id);this.approvals.cancel(id);const ticket=this.store.tickets.get(id);for(const a of ticket?.assignments??[])await this.work.endAssignment(id,a.id)}
         for(const [kind,id] of plan.records)if(kind==='router-goal')await this.projectCode.stop(id)
-        for(const id of plan.triggers){const route=this.store.get<any>('router-route',id);if(route)this.controllers.get('router:'+route.discussion)?.abort(Error('History deletion'))}
+        for(const id of plan.triggers){const route=this.store.get<any>('router-route',id),trigger=this.store.triggers.get(id),discussion=route?.discussion??(trigger?.threads[0]?trigger.source+':'+trigger.threads[0].id:undefined);if(discussion)this.controllers.get('router:'+discussion)?.abort(Error('History deletion'))}
         return !this.activity.list().some(c=>c.state==='running'&&(!!c.ticketId&&plan.tickets.includes(c.ticketId)||!!c.triggerId&&plan.triggers.includes(c.triggerId)))&&!this.work.list().some(w=>{if(!plan.tickets.includes(w.ticketId))return false;if(['starting','running'].includes(w.state))return true;if(w.kind==='shell'&&w.pid){try{process.kill(w.pid,0);return true}catch{}}return false})
       })
       await this.work.tick()
@@ -1235,7 +1235,7 @@ export class Runtime {
           const delegated=message.ticketId&&(this.store.get<any>('task-routing',message.ticketId)??this.store.get<any>('worker-assignment',message.ticketId))
           if(delegated?.mode==='host'&&delegated.parentTrigger&&!this.store.get('router-cancelled',delegated.parentTrigger)&&this.store.get<any>('router-report-read',delegated.discussion+':'+message.ticketId)?.at!==(ticket||undefined)?.assignments.at(-1)?.report?.at)this.store.enqueue('router:result:'+message.id,'router',{discussion:delegated.discussion,triggerId:delegated.parentTrigger,messageId:message.id})
         }else if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
-        this.store.atomic(()=>{this.chat.deliveredClarification(message);this.store.delivered(message.id)});blocked.delete(channel) }
+        this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
       catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
     }
   }

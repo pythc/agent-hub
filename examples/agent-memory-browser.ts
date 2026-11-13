@@ -24,7 +24,8 @@ const setup=await fetch(host.url+'/account/setup',{method:'POST',headers:{author
 const cookie=setup.headers.get('set-cookie')!.split(';')[0]!
 const identity=await (await fetch(host.url+'/api/chat/readiness',{headers:{cookie}})).json() as {user:{id:string}}
 h.pause(false)
-const chat=h.chat.create(identity.user.id),otherChat=h.chat.create(identity.user.id)
+const chat=h.chat.create(identity.user.id);h.chat.space(identity.user.id)
+const otherChat=h.chat.create(identity.user.id)
 for(const conversation of [chat,otherChat])h.scopes.command({action:'entry.bind',operationId:'chat-'+conversation.id,expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'chat:'+conversation.id,history:'group'})
 const chatTitle='以后技术报告先给结论，再给验证证据；日常更新简短一些。'
 const chatRun=h.chat.send(chat.id,identity.user.id,{clientMessageId:crypto.randomUUID(),text:chatTitle})

@@ -1,0 +1,26 @@
+.configuration-outlet .chat-settings{max-width:760px;color:var(--c-text)}
+.configuration-outlet .chat-settings section+section{margin-top:32px;padding-top:24px;border-top:1px solid var(--c-line)}
+.configuration-outlet .chat-settings h2{font-size:16px;margin:0 0 14px;font-weight:600}
+.configuration-outlet .chat-settings p{font-size:13px;line-height:1.7;color:var(--c-muted);max-width:65ch;margin:0 0 16px}
+.configuration-outlet .chat-settings fieldset{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
+.configuration-outlet .chat-settings label{display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:8px;cursor:pointer;background:var(--c-raised)}
+.configuration-outlet .chat-settings label:hover{background:var(--c-hover)}
+.configuration-outlet .chat-settings input[type="radio"]{margin:3px 0 0;accent-color:var(--c-action);width:16px;height:16px;min-height:16px;flex:0 0 16px;padding:0}
+.configuration-outlet .chat-settings strong{display:block;font-size:14px;font-weight:500}
+.configuration-outlet .chat-settings small{display:block;color:var(--c-muted);font-size:12px;line-height:1.6;margin-top:4px}
+.configuration-outlet .chat-settings button{min-height:36px;padding:7px 12px;border:1px solid var(--c-line);border-radius:7px;background:var(--c-raised);font-size:13px}
+.configuration-outlet .chat-settings button:hover{background:var(--c-hover)}
+.configuration-outlet .chat-settings .danger-action{color:var(--status-danger)}
+.configuration-outlet .chat-settings .reset-confirm{padding:16px;border:1px solid var(--c-line);border-radius:8px}
+.configuration-outlet .chat-settings .reset-confirm>div{display:flex;gap:8px;justify-content:flex-end}
+.agent-list{display:flex;flex-direction:column;gap:4px;padding:12px;overflow:auto}
+.agent-contact{display:flex;align-items:center;gap:10px;padding:12px;border-radius:8px;text-align:left;width:100%;font-size:13px;min-height:52px}
+.agent-contact:hover,.agent-contact[aria-pressed=true]{background:var(--c-hover)}
+.agent-contact>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.agent-contact small{display:block;color:var(--c-muted);font-size:12px;margin-top:3px}
+.agent-avatar{display:grid;place-items:center;width:28px;height:28px;flex-shrink:0;border-radius:8px;background:var(--c-soft);color:var(--c-muted)}
+.message-recipient{color:var(--c-muted);font-size:12px;font-weight:400}
+.worker-readonly{display:flex;align-items:center;gap:12px;padding:8px 0}
+.worker-readonly textarea{flex:1;resize:none;background:transparent;border:0;font-size:14px;padding:12px;min-width:0;color:var(--c-muted)}
+.worker-readonly button{font-size:13px;white-space:nowrap;color:var(--c-text);padding:10px}
+@media(max-width:800px){.worker-readonly textarea{font-size:16px}.configuration-outlet .chat-settings{padding-bottom:24px}}

@@ -214,5 +214,5 @@ export class RouterScopes {
   this.store.put('task-routing',ticketId,{ticketId,source:c.trigger.source,discussion:c.route.discussion,parentTrigger:c.trigger.id,entryId:c.route.entryId,mode:'host'})
  }
  addWorker(scopeId:string,workerId:string){const scope=this.scope(scopeId);if(!scope.workerIds.includes(workerId))this.store.put('management-scope',scope.id,{...scope,workerIds:[...scope.workerIds,workerId],revision:scope.revision+1})}
- taskRunnable(ticketId:string){const owner=this.ownership(ticketId);const migration=this.store.get<any>('scope-migration','current');return (!migration||migration.phase==='active')&&(!this.enabled()||!!owner&&owner.state==='active'&&owner.requiredSourceIds.every(s=>this.scope(owner.scopeId).sourceIds.includes(s))&&this.scope(owner.scopeId).backendIds.includes(owner.backendId))}
+ taskRunnable(ticketId:string){if(this.store.list<{tickets:string[]}>('history-plan').some(p=>p.tickets.includes(ticketId)))return false;const owner=this.ownership(ticketId);const migration=this.store.get<any>('scope-migration','current');return (!migration||migration.phase==='active')&&(!this.enabled()||!!owner&&owner.state==='active'&&owner.requiredSourceIds.every(s=>this.scope(owner.scopeId).sourceIds.includes(s))&&this.scope(owner.scopeId).backendIds.includes(owner.backendId))}
 }

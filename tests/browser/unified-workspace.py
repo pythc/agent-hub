@@ -54,15 +54,13 @@ async def main():
    else:raise AssertionError('hidden browser stream still active')
    await page.get_by_role('link',name='Conversations',exact=True).click();await expect(page.get_by_label('Browser session',exact=True)).to_have_value(sid)
    checks.append('browser tab and control state survive panel switching; hidden browser stops its stream')
-   await page.locator('.new-thread').click();await page.get_by_role('button',name='Session panel',exact=True).click();await open_resource_async(page,'Files');await expect(page.get_by_text('Files from this conversation',exact=True)).to_be_visible();await expect(page.get_by_text('result.md',exact=True)).to_have_count(0)
-   await open_resource_async(page,'Browser');await expect(page.get_by_role('button',name='Create browser',exact=True)).to_be_visible();new= parse_qs(urlparse(page.url).query)['conversation'][0];assert new!=original
-   await expect(page.get_by_alt_text('Live browser page')).to_have_count(0)
-   await page.get_by_role('button',name='Browser Lab',exact=True).click();await expect(page.locator('.browser-error')).to_contain_text('another conversation')
+   # Legacy conversation APIs remain isolated; the user-facing chat stays fixed.
+   new=(await(await page.request.post(base+'/api/chat/conversations',data={})).json())['id'];assert new!=original
    listed=await(await page.request.get(base+'/api/browser?conversation='+new)).json();assert listed['sessions']==[]
-   checks.append('new conversation has no old files or browser instances; writable profile cannot cross-bind')
-   # Return using the actual thread control; retain the conversation-specific panel selection.
-   title=next(c['title'] for c in conversations if c['id']==original)
-   await page.get_by_role('button',name=title,exact=True).click();await expect(page.get_by_label('Browser session',exact=True)).to_have_value(sid)
+   assert (await(await page.request.get(base+'/api/chat/space')).json())['conversation']['id']==original
+   await expect(page.get_by_role('button',name='New conversation',exact=True)).to_have_count(0)
+   await expect(page.get_by_label('Browser session',exact=True)).to_have_value(sid)
+   checks.append('fixed chat retains files and browser; legacy conversation APIs keep browser ownership isolated')
    await open_resource_async(page,'Team activity');await expect(page.locator('.team-panel .worker-node')).to_have_count(2);await page.screenshot(path=str(out/'conversation-team-dark.png'),animations='disabled')
    await page.get_by_role('tab',name='Files',exact=True).focus();await page.keyboard.press('End');await expect(page.locator('.resource-tabs [role=tab]').last).to_be_focused();await page.keyboard.press('Home');await expect(page.locator('.resource-tabs [role=tab]').first).to_have_attribute('aria-selected','true')
    await page.set_viewport_size({'width':390,'height':844});await page.emulate_media(reduced_motion='reduce');await open_resource_async(page,'Browser');await expect(page.get_by_alt_text('Live browser page')).to_be_visible(timeout=30000)

@@ -15,8 +15,6 @@ import {
   MessagePrimitive,
   ComposerPrimitive,
   ActionBarPrimitive,
-  ThreadListPrimitive,
-  ThreadListItemPrimitive,
   useAuiState,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
@@ -24,15 +22,11 @@ import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import {
   ArrowUp,
   ArrowDown,
-  Plus,
-  History,
   Users,
   SlidersHorizontal,
   Sun,
   Moon,
   PanelRight,
-  PanelLeftClose,
-  PanelLeftOpen,
   Menu,
   X,
   ChevronDown,
@@ -41,11 +35,7 @@ import {
   LoaderCircle,
   Square,
   Copy,
-  Archive,
-  ArchiveRestore,
-  Pencil,
   AlertCircle,
-  Search,
   RefreshCw,
   Network,
   Wrench,
@@ -56,6 +46,7 @@ import { initialResources, openResource, resourceKey, type ResourceKind } from "
 import { FeatureNavigation } from "./navigation.tsx";
 import {lazy,Suspense} from "react";
 const PluginMarketplace=lazy(()=>import("./plugin-marketplace.tsx").then(m=>({default:m.PluginMarketplace})));
+import {spaceRequest,clearChatDrafts,type ChatSpace} from './chat-settings.tsx';
 import { Configuration } from "./configuration.tsx";
 import {WorkspaceView,useWorkspaceViews} from './workspace-view.tsx';
 import { FilesPanel } from "./files.tsx";
@@ -132,7 +123,6 @@ async function api<T>(
 const Context = createContext({
   lang: "en" as Language,
   L: (en: string, zh: string) => en,
-  rename: (_id: string, _title: string) => {},
   calls: [] as Snapshot["calls"],
   workers: [] as Worker[],
 });
@@ -175,8 +165,8 @@ function ErrorNotice({ code, clear }: { code: string; clear: () => void }) {
         ? L("This conversation is unavailable.", "此会话暂不可用。")
         : code === "backend_changed"
           ? L(
-              "The backend configuration changed. Start a new conversation.",
-              "后端配置已变更，请新建会话使用新的配置。",
+              "The backend configuration changed. Clear context in Settings to continue.",
+              "后端配置已变更，请在设置中清空上下文后继续。",
             )
           : code === "message_conflict"
             ? L(
@@ -231,6 +221,8 @@ function Markdown() {
 }
 function AssistantMessage() {
   const { L } = useUI(),
+    speaker = useAuiState((s) => s.message.metadata.custom?.speaker) as Snapshot["participants"][number]|undefined,
+    recipient = useAuiState((s) => s.message.metadata.custom?.recipient) as Snapshot["participants"][number]|undefined,
     status = useAuiState((s) => s.message.status),
     hasText = useAuiState((s) =>
       s.message.content.some((c) => c.type === "text" && !!c.text),
@@ -243,8 +235,9 @@ function AssistantMessage() {
       data-streaming={streaming ? "true" : undefined}
     >
       <div className="assistant-identity">
-        <Logo small />
-        <strong>Router</strong>
+        {speaker?.kind === "worker" ? <span className="agent-avatar"><Wrench size={15}/></span> : <Logo small />}
+        <strong>{speaker?.label ?? "Router"}</strong>
+        {recipient ? <span className="message-recipient">→ {recipient.label}</span> : null}
         {streaming ? (
           <span className="output-state">
             <span className="live-dot" />
@@ -272,44 +265,6 @@ function AssistantMessage() {
         </ActionBarPrimitive.Root>
       </div>
     </MessagePrimitive.Root>
-  );
-}
-function ThreadItem() {
-  const { L, rename } = useUI(),
-    item = useAuiState((s) => s.threadListItem);
-  return (
-    <ThreadListItemPrimitive.Root className="thread-item">
-      <ThreadListItemPrimitive.Trigger className="thread-trigger">
-        <ThreadListItemPrimitive.Title
-          fallback={L("New conversation", "新会话")}
-        />
-      </ThreadListItemPrimitive.Trigger>
-      <div className="thread-actions">
-        <IconButton
-          label={L("Rename conversation", "重命名会话")}
-          onClick={() => rename(item.remoteId ?? item.id, item.title ?? "")}
-        >
-          <Pencil size={14} />
-        </IconButton>
-        {item.status === "archived" ? (
-          <ThreadListItemPrimitive.Unarchive
-            className="icon-button"
-            aria-label={L("Restore conversation", "恢复会话")}
-            title={L("Restore conversation", "恢复会话")}
-          >
-            <ArchiveRestore size={14} />
-          </ThreadListItemPrimitive.Unarchive>
-        ) : (
-          <ThreadListItemPrimitive.Archive
-            className="icon-button"
-            aria-label={L("Archive conversation", "归档会话")}
-            title={L("Archive conversation", "归档会话")}
-          >
-            <Archive size={14} />
-          </ThreadListItemPrimitive.Archive>
-        )}
-      </div>
-    </ThreadListItemPrimitive.Root>
   );
 }
 function StatusIcon({ state }: { state: string }) {
@@ -662,28 +617,15 @@ function Readiness({ ready }: { ready: Ready | null }) {
   );
 }
 function App() {
-  const initial = new URL(location.href).searchParams.get("conversation");
+
   const [route, setRoute] = useState(
     location.pathname + location.search + location.hash,
   );
-  const [id, setId] = useState<string | null>(initial),
-    [threads, setThreads] = useState<Conversation[]>([]),
-    [archived, setArchived] = useState<Conversation[]>([]),
+  const [id, setId] = useState<string | null>(null),
+    [display, setDisplay] = useState<ChatSpace["display"]>("group"),
     [ready, setReady] = useState<Ready | null>(null);
-  const [navExpanded, setNavExpanded] = useState(
-      read("roppo.navigation.expanded") === "true",
-    ),
-    [historyVisible, setHistoryVisible] = useState(
-      read("roppo.conversations.visible") !== "false",
-    );
-  useEffect(
-    () => write("roppo.navigation.expanded", String(navExpanded)),
-    [navExpanded],
-  );
-  useEffect(
-    () => write("roppo.conversations.visible", String(historyVisible)),
-    [historyVisible],
-  );
+  const [navExpanded, setNavExpanded] = useState(read("roppo.navigation.expanded") === "true");
+  useEffect(() => write("roppo.navigation.expanded", String(navExpanded)), [navExpanded]);
   const [lang, setLang] = useState<Language>(
       read("agenthub.configuration.language") === "zh-CN" ? "zh-CN" : "en",
     ),
@@ -692,26 +634,24 @@ function App() {
     (en: string, zh: string) => (lang === "zh-CN" ? zh : en),
     [lang],
   );
+  const spaceVersion=useRef(0);
   const refreshList = useCallback(async () => {
-    const [normal, archive] = await Promise.all([
-      api<{ conversations: Conversation[] }>("/conversations"),
-      api<{ conversations: Conversation[] }>("/conversations?archived=true"),
-    ]);
-    setThreads(normal.conversations);
-    setArchived(archive.conversations);
+    const version=++spaceVersion.current,space=await spaceRequest();if(version!==spaceVersion.current)return;
+    if(space.cleanup && read("roppo.chat.reset") !== space.cleanup.id){clearChatDrafts();write("roppo.chat.reset",space.cleanup.id)}
+    setId(space.conversation?.id??null);setDisplay(space.display);
   }, []);
+  useEffect(()=>{const change=()=>void refreshList();window.addEventListener('roppo:chat-space',change);return()=>window.removeEventListener('roppo:chat-space',change)},[refreshList]);
   const navigate = useCallback((next: string | null) => {
     setId(next);
     const url = new URL("/chat", location.origin);
-    if (next) url.searchParams.set("conversation", next);
+
     history.pushState(null, "", url);
     setRoute(url.pathname + url.search + url.hash);
   }, []);
   useEffect(() => {
     const sync = () => {
       if (location.hash === "#prompts/memory") history.replaceState(null, "", location.pathname + location.search + "#advanced/memory");
-      if (location.pathname === "/chat")
-        setId(new URL(location.href).searchParams.get("conversation"));
+      if (location.pathname === "/chat" && location.search) history.replaceState(null, "", "/chat" + location.hash);
       setRoute(location.pathname + location.search + location.hash);
     };
     const click = (event: MouseEvent) => {
@@ -741,8 +681,7 @@ function App() {
       )
         return;
       event.preventDefault();
-      if (url.pathname === "/chat" && !url.search && id)
-        url.searchParams.set("conversation", id);
+      if (url.pathname === "/chat") url.search = "";
       history.pushState(null, "", url);
       sync();
     };
@@ -810,8 +749,7 @@ function App() {
         key={id ?? "new"}
         {...{
           id,
-          threads,
-          archived,
+          display,
           ready,
           lang,
           L,
@@ -823,8 +761,6 @@ function App() {
           route,
           navExpanded,
           setNavExpanded,
-          historyVisible,
-          setHistoryVisible,
         }}
       />
     </>
@@ -833,12 +769,9 @@ function App() {
 type ChatProps = {
   navExpanded: boolean;
   setNavExpanded: (value: boolean) => void;
-  historyVisible: boolean;
-  setHistoryVisible: (value: boolean) => void;
+  display: ChatSpace["display"];
   route: string;
   id: string | null;
-  threads: Conversation[];
-  archived: Conversation[];
   ready: Ready | null;
   lang: Language;
   L: (en: string, zh: string) => string;
@@ -851,8 +784,7 @@ type ChatProps = {
 function Chat(p: ChatProps) {
   const {
     id,
-    threads,
-    archived,
+    display,
     ready: boot,
     lang,
     L,
@@ -864,8 +796,6 @@ function Chat(p: ChatProps) {
     route,
     navExpanded,
     setNavExpanded,
-    historyVisible,
-    setHistoryVisible,
   } = p;
   const configuring = !route.startsWith("/chat");
   const [resources, setResources] = useState(() =>
@@ -890,7 +820,7 @@ function Chat(p: ChatProps) {
       if (creating.current) return;
       creating.current = true;
       try {
-        const conversation = await api<Conversation>("/conversations", {});
+        const conversation = (await spaceRequest({}, "POST")).conversation!;
         write(resourceKey(conversation.id), JSON.stringify(openResource(resources, "browser")));
         if (url) try { sessionStorage.setItem("roppo.website." + conversation.id, url); } catch {}
         write(draftKey(conversation.id), runtime.thread.composer.getState().text);
@@ -941,11 +871,8 @@ function Chat(p: ChatProps) {
     [sending, setSending] = useState(false),
     [stopping, setStopping] = useState(false),
     [menu, setMenu] = useState(false),
-    [showArchive, setShowArchive] = useState(false),
-    [search, setSearch] = useState(""),
-    [searchOpen, setSearchOpen] = useState(false),
+    [selectedAgent, setSelectedAgent] = useState("router"),
     [panelOverlay, setPanelOverlay] = useState(false),
-    [rename, setRename] = useState<{ id: string; title: string } | null>(null),
     [narrow, setNarrow] = useState(
       () => matchMedia("(max-width:800px)").matches,
     );
@@ -958,11 +885,8 @@ function Chat(p: ChatProps) {
       conversationId: string;
     } | null>(savedPending(id)),
     bodyRef = useRef<HTMLDivElement>(null),
-    searchInput = useRef<HTMLInputElement>(null),
     teamButton = useRef<HTMLButtonElement>(null),
-    menuButton = useRef<HTMLButtonElement>(null),
-    renameInput = useRef<HTMLInputElement>(null),
-    renameDialog = useRef<HTMLDialogElement>(null);
+    menuButton = useRef<HTMLButtonElement>(null);
   const closeNavigation = useCallback(() => {
     setMenu(false);
     // The main region must leave inert before its menu button can receive focus.
@@ -983,16 +907,19 @@ function Chat(p: ChatProps) {
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => {
-    if (searchOpen) searchInput.current?.focus();
-  }, [searchOpen]);
+
+  const participants = snapshot?.participants ?? [{id:"router",label:"Router",kind:"router" as const},...(boot?.workers??[]).map(w=>({id:w.id,label:w.label,kind:"worker" as const}))];
+  const currentRouter = participants.find(a=>a.id===(snapshot?.routerId??"router"))!;
+  const selected = participants.find(a=>a.id===selectedAgent) ?? currentRouter;
+  const readonly = display === "agents" && selected?.id !== currentRouter?.id;
+  const participantFilter = readonly ? selected.id : undefined;
   const ready = snapshot?.readiness ?? boot,
     run = snapshot?.run,
     workers = snapshot?.workers ?? boot?.workers ?? [],
     running =
       !!run && ["queued", "running", "cancel_requested"].includes(run.state),
     disabled =
-      !ready?.ready ||
+      readonly || !ready?.ready ||
       !!snapshot?.conversation.archived ||
       loading ||
       sending ||
@@ -1004,7 +931,7 @@ function Chat(p: ChatProps) {
   const refresh = useCallback(async () => {
     if (!id) return;
     const version = ++fetchVersion.current;
-    const data = await api<Snapshot>("/conversations/" + id);
+    const data = await api<Snapshot>("/conversations/" + id + (participantFilter ? "?participant="+encodeURIComponent(participantFilter) : ""));
     if (!alive.current || version !== fetchVersion.current) return;
     const older = messagesRef.current.filter(
       (m) => m.sequence < (data.messages[0]?.sequence ?? Infinity),
@@ -1022,9 +949,10 @@ function Chat(p: ChatProps) {
       write(pendingKey(id), "null");
       if (read(draftKey(id)) === saved.text) write(draftKey(id), "");
     }
-  }, [id]);
+  }, [id, participantFilter]);
   useEffect(() => {
     alive.current = true;
+    messagesRef.current=[];setLoading(!!id);setSnapshot(s=>s?{...s,messages:[]}:s);
     if (!id)
       return () => {
         alive.current = false;
@@ -1067,6 +995,9 @@ function Chat(p: ChatProps) {
       connection.addEventListener("change", () => {
         if (source === connection) void load();
       });
+      connection.addEventListener("reset", () => {
+        connection.close();clearChatDrafts();pending.current=null;window.dispatchEvent(new Event("roppo:chat-space"));
+      });
       connection.onerror = () => {
         if (alive.current && source === connection) setConnected(false);
       };
@@ -1100,30 +1031,17 @@ function Chat(p: ChatProps) {
       window.removeEventListener("online", online);
     };
   }, [id, refresh, refreshList]);
-  const patch = async (
-    target: string,
-    changes: { title?: string; archived?: boolean },
-  ) => {
-    try {
-      await api("/conversations/" + target, changes, "PATCH");
-      await refreshList();
-      if (target === id) await refresh();
-      return true;
-    } catch (e) {
-      fail(e);
-      return false;
-    }
-  };
   const runtime = useExternalStoreRuntime({
-    isRunning: running || sending || stopping,
+    isRunning: !readonly && (running || sending || stopping),
     isLoading: loading,
     isSendDisabled: disabled,
     activeRunId: run?.id,
-    messages: snapshot?.messages ?? [],
+    messages: (snapshot?.messages ?? []).filter(m => display === "group" || (readonly ? m.speaker?.id===selected.id || m.recipient?.id===selected.id : !m.recipient && (m.role==="user" || !m.speaker || m.speaker.id===selected.id))),
     convertMessage: (m): ThreadMessageLike => ({
       id: m.id,
       role: m.role,
       createdAt: new Date(m.createdAt),
+      metadata:{custom:{speaker:m.speaker,recipient:m.recipient}},
       content: [{ type: "text", text: m.text }],
       ...(m.role === "assistant"
         ? {
@@ -1146,13 +1064,13 @@ function Chat(p: ChatProps) {
         .map((c) => c.text)
         .join("\n")
         .trim();
-      if (!text || sending) return;
+      if (!text || sending || readonly) return;
       setSending(true);
       setError("");
       let target = id;
       try {
         if (!target) {
-          target = (await api<Conversation>("/conversations", {})).id;
+          target = (await spaceRequest({}, "POST")).conversation!.id;
         }
         if (
           !pending.current ||
@@ -1168,7 +1086,7 @@ function Chat(p: ChatProps) {
         write(draftKey(target), text);
         if (!id && alive.current) {
           const url = new URL(location.href);
-          url.searchParams.set("conversation", target);
+          url.search = "";
           history.replaceState(null, "", url);
         }
         await api("/conversations/" + target + "/messages", {
@@ -1214,7 +1132,7 @@ function Chat(p: ChatProps) {
         "/conversations/" +
           id +
           "/messages?before=" +
-          snapshot.messages[0]!.sequence,
+          snapshot.messages[0]!.sequence + (participantFilter ? "&participant="+encodeURIComponent(participantFilter) : ""),
       );
       if (!alive.current) return;
       const ids = new Set(messagesRef.current.map((m) => m.id));
@@ -1225,46 +1143,6 @@ function Chat(p: ChatProps) {
       messagesRef.current = messages;
       setSnapshot((s) => (s ? { ...s, messages, hasMore: data.hasMore } : s));
     },
-    adapters: {
-      threadList: {
-        threadId: id ?? undefined,
-        threads: threads
-          .filter((t) =>
-            t.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-          )
-          .map((t) => ({
-            id: t.id,
-            title: t.title || L("New conversation", "新会话"),
-            status: "regular" as const,
-          })),
-        archivedThreads: archived
-          .filter((t) =>
-            t.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-          )
-          .map((t) => ({
-            id: t.id,
-            title: t.title,
-            status: "archived" as const,
-          })),
-        onSwitchToThread: (target) => {
-          setMenu(false);
-          navigate(target);
-        },
-        onSwitchToNewThread: () => {
-          setMenu(false);
-          navigate(null);
-        },
-        onRename: async (target, title) => {
-          await patch(target, { title });
-        },
-        onArchive: async (target) => {
-          await patch(target, { archived: true });
-        },
-        onUnarchive: async (target) => {
-          await patch(target, { archived: false });
-        },
-      },
-    },
   });
   useEffect(() => {
     runtime.thread.composer.setText(
@@ -1274,15 +1152,6 @@ function Chat(p: ChatProps) {
       write(draftKey(id), runtime.thread.composer.getState().text),
     );
   }, [runtime, id]);
-  useEffect(() => {
-    if (rename) {
-      const previous = document.activeElement as HTMLElement | null;
-      renameDialog.current?.showModal();
-      renameInput.current?.focus();
-      renameInput.current?.select();
-      return () => previous?.focus();
-    }
-  }, [!!rename]);
   useEffect(() => {
     const media = matchMedia("(max-width:800px)");
     const change = () => {
@@ -1306,8 +1175,7 @@ function Chat(p: ChatProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.defaultPrevented) {
-        if (rename) setRename(null);
-        else if (menu) {
+        if (menu) {
           closeNavigation();
         } else if (panel) {
           void choosePanel(null);
@@ -1317,7 +1185,7 @@ function Chat(p: ChatProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rename, menu, panel, closeNavigation]);
+  }, [menu, panel, closeNavigation]);
   useEffect(() => {
     if (narrow && menu)
       document
@@ -1342,7 +1210,6 @@ function Chat(p: ChatProps) {
       value={{
         lang,
         L,
-        rename: (target, title) => setRename({ id: target, title }),
         calls: snapshot?.calls ?? [],
         workers,
       }}
@@ -1355,7 +1222,7 @@ function Chat(p: ChatProps) {
             (panel ? " team-open" : "") +
             (navExpanded ? " functions-expanded" : "") +
             (configuring ? " management-mode" : "") +
-            (!historyVisible ? " conversation-list-hidden" : "")
+            (display === "group" ? " conversation-list-hidden" : "")
           }
         >
           <a className="skip-link" href="#conversation">
@@ -1376,100 +1243,12 @@ function Chat(p: ChatProps) {
             user={boot?.user}
             views={views.map(view=>({id:view.id,label:view.label[lang]}))}
           />
-          <aside
-            className="conversation-sidebar"
-            id="conversation-list"
-            hidden={configuring || (!historyVisible && !narrow)}
-            inert={(narrow && !menu) || (narrow && navExpanded)}
-            aria-label={L("Conversations", "对话")}
-          >
-            <header className="conversation-heading">
-              <h2>{L("Conversations", "对话")}</h2>
-              <IconButton
-                label={L("Hide conversation list", "收起会话列表")}
-                aria-controls="conversation-list"
-                aria-expanded={historyVisible}
-                onClick={() => {
-                  if (narrow) {
-                    closeNavigation();
-                  } else {
-                    setHistoryVisible(false);
-                    requestAnimationFrame(() =>
-                      document
-                        .querySelector<HTMLButtonElement>(
-                          ".desktop-history-toggle",
-                        )
-                        ?.focus(),
-                    );
-                  }
-                }}
-              >
-                <PanelLeftClose size={17} />
-              </IconButton>
-            </header>
-            <ThreadListPrimitive.Root className="history">
-              <div className="conversation-actions">
-                <ThreadListPrimitive.New className="new-thread">
-                  <Plus size={18} />
-                  {L("New conversation", "新建会话")}
-                </ThreadListPrimitive.New>
-                <IconButton
-                  label={L("Search conversations", "搜索会话")}
-                  aria-expanded={searchOpen}
-                  aria-controls="conversation-search"
-                  onClick={() => {
-                    setSearchOpen(!searchOpen);
-                    if (searchOpen) setSearch("");
-                  }}
-                >
-                  <Search size={17} />
-                </IconButton>
-              </div>
-              {searchOpen ? (
-                <label className="search">
-                  <Search size={15} />
-                  <input
-                    ref={searchInput}
-                    id="conversation-search"
-                    aria-label={L("Search conversations", "搜索会话")}
-                    placeholder={L("Search", "搜索")}
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </label>
-              ) : null}
-              <div className="history-heading">
-                <span>
-                  {showArchive
-                    ? L("Archived", "已归档")
-                    : L("Recent conversations", "最近会话")}
-                </span>
-                <IconButton
-                  label={
-                    showArchive
-                      ? L("Show recent conversations", "显示最近会话")
-                      : L("Show archived conversations", "显示已归档会话")
-                  }
-                  onClick={() => setShowArchive(!showArchive)}
-                >
-                  {showArchive ? <History size={15} /> : <Archive size={15} />}
-                </IconButton>
-              </div>
-              <div className="thread-list">
-                <ThreadListPrimitive.Items
-                  archived={showArchive}
-                  components={{ ThreadListItem: ThreadItem }}
-                />
-                {(showArchive ? archived : threads).length === 0 ? (
-                  <p className="history-empty">
-                    {showArchive
-                      ? L("No archived conversations", "暂无归档会话")
-                      : L("Your conversations appear here", "会话将显示在这里")}
-                  </p>
-                ) : null}
-              </div>
-            </ThreadListPrimitive.Root>
-          </aside>
+          {display === "agents" && !configuring ? <aside className="conversation-sidebar" id="agent-list" inert={(narrow && !menu) || (narrow && navExpanded)} aria-label={L("Agents", "好友列表")}>
+            <header className="conversation-heading"><h2>{L("Agents", "好友列表")}</h2></header>
+            <div className="agent-list">{participants.map(agent=><button key={agent.id} className="agent-contact" aria-pressed={selected?.id===agent.id} onClick={()=>{setSelectedAgent(agent.id);if(narrow)closeNavigation()}}>
+              <span className="agent-avatar">{agent.kind==='router'?<Network size={17}/>:<Wrench size={17}/>}</span><span>{agent.label}<small>{agent.id===currentRouter?.id?L('Talk to Router','与 Router 对话'):L('Read only','只读')}</small></span>
+            </button>)}</div>
+          </aside> : null}
           {menu ? (
             <button
               className="nav-scrim"
@@ -1490,30 +1269,10 @@ function Chat(p: ChatProps) {
                 onClick={() => setMenu(true)}
                 aria-label={L("Open navigation", "打开导航")}
                 aria-expanded={menu}
-                aria-controls="function-navigation conversation-list"
+                aria-controls={display === "agents" ? "function-navigation agent-list" : "function-navigation"}
               >
                 <Menu size={20} />
               </button>
-              {!configuring && !historyVisible ? (
-                <IconButton
-                  label={L("Show conversation list", "展开会话列表")}
-                  className="icon-button desktop-history-toggle"
-                  aria-controls="conversation-list"
-                  aria-expanded={historyVisible}
-                  onClick={() => {
-                    setHistoryVisible(true);
-                    requestAnimationFrame(() =>
-                      document
-                        .querySelector<HTMLButtonElement>(
-                          ".conversation-heading .icon-button",
-                        )
-                        ?.focus(),
-                    );
-                  }}
-                >
-                  <PanelLeftOpen size={19} />
-                </IconButton>
-              ) : null}
               <div className="chat-breadcrumb">
                 <span>
                   {configuring
@@ -1524,7 +1283,7 @@ function Chat(p: ChatProps) {
                 <strong>
                   {configuring
                     ? pageTitle
-                    : current?.title || L("New conversation", "新会话")}
+                    : display === "agents" ? selected?.label : L("Team chat", "团队群聊")}
                 </strong>
               </div>
               <div className="header-actions">
@@ -1594,14 +1353,14 @@ function Chat(p: ChatProps) {
                       <div className="empty-state">
                         <Logo />
                         <h1>
-                          {L("What shall we work on?", "今天想完成什么？")}
+                          {readonly ? L("No collaboration messages yet", "暂无协作消息") : L("What shall we work on?", "今天想完成什么？")}
                         </h1>
                       </div>
                     </ThreadPrimitive.Empty>
                     <ThreadPrimitive.Messages
                       components={{ UserMessage, AssistantMessage }}
                     />
-                    {run ? (
+                    {run && !readonly ? (
                       <div className="run-activity" aria-live="polite">
                         <div className={"run-status " + run.state}>
                           <StatusIcon state={run.state} />
@@ -1646,20 +1405,7 @@ function Chat(p: ChatProps) {
                     </div>
                   ) : null}
                   <Readiness ready={ready} />
-                  {current?.archived ? (
-                    <div className="notice">
-                      <Archive size={17} />
-                      <span>
-                        {L("This conversation is archived.", "此会话已归档。")}
-                      </span>
-                      <button
-                        onClick={() => patch(current.id, { archived: false })}
-                      >
-                        {L("Restore", "恢复")}
-                      </button>
-                    </div>
-                  ) : null}
-                  <ComposerPrimitive.Root className="composer">
+                  {readonly ? <div className="composer worker-readonly"><textarea disabled rows={1} aria-label={L("Please talk to Router", "请与 Router 对话")} placeholder={L("Please talk to Router", "请与 Router 对话")}/><button onClick={()=>setSelectedAgent(currentRouter.id)}>{L("Go to Router", "前往 Router")}</button></div> : <ComposerPrimitive.Root className="composer">
                     <ComposerPrimitive.Input
                       className="composer-input"
                       placeholder={L("Message Router…", "向 Router 发送消息…")}
@@ -1725,7 +1471,7 @@ function Chat(p: ChatProps) {
                         )}
                       </div>
                     </div>
-                  </ComposerPrimitive.Root>
+                  </ComposerPrimitive.Root>}
                 </div>
               </ThreadPrimitive.Root>
               {panel ? (
@@ -1753,51 +1499,6 @@ function Chat(p: ChatProps) {
               ) : null}
             </div>
           </main>
-          {rename ? (
-            <dialog
-              className="rename-dialog"
-              ref={renameDialog}
-              aria-labelledby="rename-title"
-              onCancel={() => setRename(null)}
-            >
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (rename.title.trim())
-                    void patch(rename.id, { title: rename.title.trim() }).then(
-                      (ok) => {
-                        if (ok) setRename(null);
-                      },
-                    );
-                }}
-              >
-                <h2 id="rename-title">
-                  {L("Rename conversation", "重命名会话")}
-                </h2>
-                <input
-                  ref={renameInput}
-                  aria-label={L("Conversation title", "会话标题")}
-                  value={rename.title}
-                  maxLength={100}
-                  onChange={(e) =>
-                    setRename({ ...rename, title: e.target.value })
-                  }
-                />
-                <div>
-                  <button type="button" onClick={() => setRename(null)}>
-                    {L("Cancel", "取消")}
-                  </button>
-                  <button
-                    className="primary-button"
-                    type="submit"
-                    disabled={!rename.title.trim()}
-                  >
-                    {L("Save", "保存")}
-                  </button>
-                </div>
-              </form>
-            </dialog>
-          ) : null}
         </div>
       </AssistantRuntimeProvider>
     </Context.Provider>

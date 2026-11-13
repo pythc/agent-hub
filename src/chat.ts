@@ -9,6 +9,7 @@ import {workerProfiles} from './worker-pool.ts'
 import type {Run} from './store.ts'
 import type {ModelOutput} from './model.ts'
 import type {ExecutionCall} from './execution-activity.ts'
+import {stableDigest} from './sources.ts'
 import {partialReply} from './partial-reply.ts'
 import type {MessageBatch} from './router-proactive.ts'
 import type {ContextManifest} from './router-memory.ts'
@@ -20,8 +21,10 @@ interface Conversation {
   id:string; owner:string; title:string; createdAt:number; updatedAt:number; archived:boolean
   sourceId:string; actor:string; discussion:string; sequence:number
   backendId?:string; backendFingerprint?:string; model?:string; options:AgentOptions
+  nativeId?:string
 }
-interface Message {id:string; conversationId:string; runId:string; sequence:number; role:'user'|'assistant'; text:string; createdAt:number;clientMessageId?:string;status?:'streaming'|'complete'|'interrupted'|'failed'}
+interface Speaker {id:string;label:string;kind:'router'|'worker'}
+interface Message {id:string; conversationId:string; runId:string; sequence:number; role:'user'|'assistant'; text:string; createdAt:number;clientMessageId?:string;status?:'streaming'|'complete'|'interrupted'|'failed';speaker?:Speaker;recipient?:Speaker;ticketId?:string}
 interface ChatRun {id:string; conversationId:string; triggerId:string; clientMessageId:string; createdAt:number; cancelRequested?:boolean; cancelled?:boolean}
 interface Delegation {ticketId:string; workerId:string; discussion:string; parentTrigger?:string}
 type ChatCall=ExecutionCall&{conversationId:string;runId:string}
@@ -106,6 +109,7 @@ export class ChatSessions {
   private get(id:string,owner:string){
     const c=this.host.store.get<Conversation>('chat-conversation',id)
     if(!c||c.owner!==owner)throw new ChatError('conversation_missing','Conversation not found.',404)
+    if(this.host.memory.cleanup.blocked('chat-conversation',id,c))throw new ChatError('conversation_reset','The chat context was cleared. Return to the current chat.')
     return c
   }
   private source(){
@@ -136,7 +140,27 @@ export class ChatSessions {
     const {label,...definition}=this.host.model.definition(id)
     return createHash('sha256').update(JSON.stringify(definition)).digest('hex')
   }
-  list(owner:string,archived=false){return this.rows<Conversation>('chat-conversation','owner',owner).filter(c=>c.archived===archived).sort((a,b)=>b.updatedAt-a.updatedAt).map(c=>this.publicConversation(c))}
+  list(owner:string,archived=false){return this.rows<Conversation>('chat-conversation','owner',owner).filter(c=>c.archived===archived&&!this.host.memory.cleanup.blocked('chat-conversation',c.id,c)).sort((a,b)=>b.updatedAt-a.updatedAt).map(c=>this.publicConversation(c))}
+  space(owner:string,create=false){
+    const key='chat-space:'+owner,saved=this.host.store.get<{conversationId?:string;display:'group'|'agents';nativeId?:string}>('settings',key)
+    const conversations=this.list(owner),current=conversations.find(c=>c.id===saved?.conversationId)??conversations[0]??(create?this.create(owner):null)
+    if(current&&saved?.conversationId!==current.id){
+      if(saved?.nativeId){const c=this.get(current.id,owner);this.host.store.put('chat-conversation',c.id,{...c,nativeId:saved.nativeId})}
+      this.host.store.put('settings',key,{...saved,conversationId:current.id,display:saved?.display??'group',nativeId:saved?.nativeId??'chat:'+current.id})
+    }
+    const cleanup=this.host.memory.cleanup.receipts().filter(r=>r.scopeId==='@chat:'+stableDigest(owner)).at(-1)??null
+    return {conversation:current,display:saved?.display??'group',cleanup}
+  }
+  display(owner:string,display:'group'|'agents'){
+    this.space(owner);const key='chat-space:'+owner
+    this.host.store.put('settings',key,{...this.host.store.get<object>('settings',key),display});return this.space(owner)
+  }
+  reset(owner:string,operationId:string){
+    this.space(owner)
+    const result=this.host.memory.resetChat(owner,operationId,this.rows<Conversation>('chat-conversation','owner',owner).map(c=>c.id))
+    for(const id of this.listeners.keys())this.changed(id)
+    return {...this.space(owner),...result}
+  }
   create(owner:string){
     const ready=this.readiness();if(!ready.ready)throw new ChatError(ready.code,'Configure an available host Router before starting a conversation.')
     const {source,actor}=this.source()!,id=randomUUID(),at=Date.now()
@@ -164,12 +188,38 @@ export class ChatSessions {
     return this.host.agentMemory.manage(context,input?.command??{action:'inspect'})
   }
   private message(c:Conversation, m:Omit<Message,'conversationId'|'sequence'|'createdAt'>){
+    if(this.host.memory.cleanup.blocked('chat-conversation',c.id,c))return
+    if(m.role==='assistant'&&!m.speaker)m={...m,speaker:this.router(m.runId)}
     const existing=this.host.store.get<Message>('chat-message',m.id)
     if(existing){if(existing.role==='assistant'&&existing.status!=='complete'&&(existing.text!==m.text||existing.status!==m.status))this.host.store.put('chat-message',m.id,{...existing,...m});return}
     const latest=this.host.store.get<Conversation>('chat-conversation',c.id)!
     const sequence=latest.sequence+1,at=Date.now()
     this.host.store.put('chat-message',m.id,{...m,conversationId:c.id,sequence,createdAt:at})
     this.host.store.put('chat-conversation',c.id,{...latest,sequence,updatedAt:at,...(!latest.title&&m.role==='user'?{title:m.text.replace(/\s+/g,' ').slice(0,70)}:{})})
+  }
+  private router(triggerId:string):Speaker {
+    const route=this.host.store.get<{routerId:string;scopeId:string}>('router-route',triggerId)
+    return {id:route?.routerId??'router',label:route?this.host.scopes.scope(route.scopeId).name+' · Router':'Router',kind:'router'}
+  }
+  private worker(id:string):Speaker {return {id,label:workerProfiles(this.host.config).find(w=>w.id===id)?.label??id,kind:'worker'}}
+  delegated(id:string,triggerId:string,ticketId:string,workerId:string,text:string){
+    const run=this.host.store.get<ChatRun>('chat-run',triggerId);if(!run||run.cancelRequested)return
+    const c=this.host.store.get<Conversation>('chat-conversation',run.conversationId)!
+    this.message(c,{id:'delegated:'+id,runId:run.id,role:'assistant',text,status:'complete',speaker:this.router(triggerId),recipient:this.worker(workerId),ticketId});this.changed(c.id)
+  }
+  deliveredWorker(message:{id:string;ticketId?:string;text:string}){
+    if(!message.ticketId||this.host.store.get('chat-message','worker:'+message.id))return
+    const assignment=this.host.store.get<Delegation>('worker-assignment',message.ticketId),authority=this.host.taskAuthority(message.ticketId)
+    const run=authority?.parentTrigger?this.host.store.get<ChatRun>('chat-run',authority.parentTrigger):undefined
+    if(!assignment||!run||run.cancelRequested||!message.text.trim())return
+    const c=this.host.store.get<Conversation>('chat-conversation',run.conversationId)!
+    try{
+      this.host.routerIngress.authority(run.triggerId,c.discussion)
+      const trigger=this.host.store.triggers.get(run.triggerId)!,context=this.host.scopes.context(trigger,c.discussion)
+      if(context){this.host.scopes.checkTask(message.ticketId,context);this.host.scopes.checkTaskEntry(this.host.scopes.ownership(message.ticketId)!,context.route.entryId,'result')}
+      const saved=this.host.store.get<{manifest:ContextManifest}>('task-context',message.ticketId);if(saved)this.host.memory.validate(saved.manifest)
+    }catch{return}
+    this.message(c,{id:'worker:'+message.id,runId:run.id,role:'assistant',text:message.text,status:'complete',speaker:this.worker(assignment.workerId),recipient:this.router(run.triggerId),ticketId:message.ticketId});this.changed(c.id)
   }
   binding(triggerId:string){
     const run=this.host.store.get<ChatRun>('chat-run',triggerId)
@@ -204,13 +254,13 @@ export class ChatSessions {
       }
       if(c.archived)throw new ChatError('conversation_archived','Restore this conversation before sending.')
       const ready=this.readiness();if(!ready.ready)throw new ChatError(ready.code,'The Router is not ready to receive a message.')
-      try{if(c.backendFingerprint&&this.fingerprint(c.backendId)!==c.backendFingerprint)throw Error()}catch{throw new ChatError('backend_changed','This backend changed. Start a new conversation to use its new configuration.')}
+      try{if(c.backendFingerprint&&this.fingerprint(c.backendId)!==c.backendFingerprint)throw Error()}catch{throw new ChatError('backend_changed','This backend changed. Clear the chat context in Settings to use its new configuration.')}
       const active=this.view(id,owner).run
       if(active&&['queued','running','cancel_requested'].includes(active.state))throw new ChatError('conversation_busy','Wait for the current run or stop it first.')
       const source=this.host.sources.get(c.sourceId)?.config
       if(!source?.enabled||source.kind!=='local'||!source.allowedActors.includes(c.actor))throw new ChatError('source_unavailable','This conversation source is no longer available.')
       const eventId='chat:'+id+':'+input.clientMessageId
-      const received=this.host.receive(c.sourceId,c.actor,{id:eventId,thread:'chat:'+id,text,addressed:true}) as {triggerId:string}
+      const received=this.host.receive(c.sourceId,c.actor,{id:eventId,thread:'chat:'+id,scope:c.nativeId??'chat:'+id,text,addressed:true}) as {triggerId:string}
       const admitted=this.host.routerIngress.get(received.triggerId)
       if(admitted?.state!=='accepted')throw new ChatError('request_not_admitted','This request was not admitted by the current Router policy.')
       const run:ChatRun={id:received.triggerId,triggerId:received.triggerId,conversationId:id,clientMessageId:input.clientMessageId,createdAt:Date.now()}
@@ -235,13 +285,13 @@ export class ChatSessions {
       return {tasks,result}
     }catch{throw new ChatError('file_unavailable','This file is unavailable or cannot be previewed.',404)}
   }
-  view(id:string,owner:string,before?:number){
+  view(id:string,owner:string,before?:number,participant?:string){
     const c=this.get(id,owner),runs=this.rows<ChatRun>('chat-run','conversationId',id),last=runs.at(-1)
     const tasks=this.tasks(c,last)
     const batch=last?this.rows<MessageBatch>('router-batch','discussion',c.discussion).reverse().find(b=>b.triggerIds.includes(last.triggerId)):undefined
     const jobs=last?this.host.store.db.prepare("SELECT state FROM jobs WHERE (kind='router' AND json_extract(payload,'$.triggerId')=?) OR (kind='router-batch' AND json_extract(payload,'$.batchId')=?)").all(last.triggerId,batch?.id??null):[]
     const clarification=batch?.decision?.action==='clarify'?this.host.store.deliveries().find(d=>d.id==='router-clarify:'+batch.id):undefined
-    const messages=this.host.store.db.prepare("SELECT body FROM records WHERE kind='chat-message' AND json_extract(body,'$.conversationId')=? AND json_extract(body,'$.sequence')<? ORDER BY json_extract(body,'$.sequence') DESC LIMIT 101").all(id,before??Number.MAX_SAFE_INTEGER).map(r=>JSON.parse(String(r.body)) as Message).reverse()
+    const messages=this.host.store.db.prepare("SELECT body FROM records WHERE kind='chat-message' AND json_extract(body,'$.conversationId')=? AND json_extract(body,'$.sequence')<? AND (? IS NULL OR json_extract(body,'$.speaker.id')=? OR json_extract(body,'$.recipient.id')=?) ORDER BY json_extract(body,'$.sequence') DESC LIMIT 101").all(id,before??Number.MAX_SAFE_INTEGER,participant??null,participant??null,participant??null).map(r=>JSON.parse(String(r.body)) as Message).reverse()
     let state:ChatRunState='queued'
     if(last){
       if(last.cancelled)state='cancelled'
@@ -257,7 +307,12 @@ export class ChatSessions {
     const workers=workerProfiles(this.host.config).map(w=>({id:w.id,label:w.label??w.id,model:w.model,state:w.state??'enabled',tasks:tasks.filter(t=>t.workerId===w.id)}))
     for(const workerId of new Set(tasks.map(t=>t.workerId)))if(!workers.some(w=>w.id===workerId))workers.push({id:workerId,label:workerId,model:undefined,state:'retiring',tasks:tasks.filter(t=>t.workerId===workerId)})
     const calls=this.host.store.db.prepare("SELECT body FROM records WHERE kind='chat-call' AND json_extract(body,'$.conversationId')=? ORDER BY json_extract(body,'$.startedAt') DESC,rowid DESC LIMIT 200").all(id).map(r=>JSON.parse(String(r.body)) as ChatCall).reverse()
-    const result={conversation:this.publicConversation(c),messages:messages.slice(-100),hasMore:messages.length>100,run:last?{id:last.id,state,createdAt:last.createdAt}:null,workers,calls,readiness:this.readiness()}
+    const participants=new Map<string,Speaker>()
+    const identities=this.host.store.db.prepare("SELECT json_extract(body,'$.speaker') AS speaker FROM records WHERE kind='chat-message' AND json_extract(body,'$.conversationId')=? UNION SELECT json_extract(body,'$.recipient') AS speaker FROM records WHERE kind='chat-message' AND json_extract(body,'$.conversationId')=?").all(id,id)
+    for(const row of identities)if(row.speaker){const speaker=JSON.parse(String(row.speaker)) as Speaker;participants.set(speaker.id,speaker)}
+    const router=this.router(last?.triggerId??'');participants.set(router.id,router)
+    for(const worker of workers)participants.set(worker.id,this.worker(worker.id))
+    const result={conversation:this.publicConversation(c),messages:messages.slice(-100),hasMore:messages.length>100,run:last?{id:last.id,state,createdAt:last.createdAt}:null,workers,calls,routerId:router.id,participants:[router,...[...participants.values()].filter(p=>p.id!==router.id).sort((a,b)=>Number(b.kind==='router')-Number(a.kind==='router'))],readiness:this.readiness()}
     return result
   }
   /** A durable revision plus a fresh full projection recovers SSE gaps without replaying execution. */

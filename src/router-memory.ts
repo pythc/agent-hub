@@ -8,7 +8,7 @@ import type {RouterScopes,ScopeContext} from './router-scope.ts'
 import {stableDigest,bodyDigest,sourceChangeSchema,type SourceChange} from './sources.ts'
 import type {ToolSpec} from './model.ts'
 import {assertNoMemorySecret,memoryLearningSchema,type MemoryLearning} from './memory-policy.ts'
-import {HistoryCleanup,planHistory,type HistoryPlan} from './history-cleanup.ts'
+import {HistoryCleanup,planHistory,planChatHistory,type HistoryPlan} from './history-cleanup.ts'
 import {detectExplicitMemory,renderMemory,type MemoryKind} from './vendor/weknora/primitives.ts'
 
 const id=z.string().min(1).max(300)
@@ -51,10 +51,33 @@ export class RouterMemory {
  validateUse?:(context:ScopeContext,refs:{id:string;revision:number}[])=>void
  validateKnowledge?:(context:ScopeContext,refs:{documentId:string;revision:number}[])=>void
  constructor(readonly store:Store,readonly scopes:RouterScopes,readonly stateDir:string){this.cleanup=new HistoryCleanup(store,stateDir);this.cleanup.onExpand=plan=>{
-  const previous=readRevocations(stateDir).at(-1),body={seq:(previous?.seq??0)+1,previous:previous?.hash??'',tenantId:scopes.scope(plan.scopeId).tenantId,scopeId:plan.scopeId,action:'history.extend' as const,generation:this.generation(plan.scopeId),at:Date.now(),cleanup:plan},r={...body,hash:stableDigest(body)}
+  const ledger=readRevocations(stateDir),previous=ledger.at(-1),body={seq:(previous?.seq??0)+1,previous:previous?.hash??'',tenantId:ledger.find(r=>r.cleanup?.id===plan.id)!.tenantId,scopeId:plan.scopeId,action:'history.extend' as const,generation:this.generation(plan.scopeId),at:Date.now(),cleanup:plan},r={...body,hash:stableDigest(body)}
   this.appendRevocation(r);this.store.put('memory-revocation-head','current',{seq:r.seq,hash:r.hash})
  };this.reconcile()}
  generation(scopeId:string){return this.store.get<number>('memory-generation',scopeId)??0}
+ /** Authenticated control-plane operation; never exposed as an agent tool. */
+ resetChat(owner:string,operationId:string,conversationIds:string[]){
+  this.reconcile()
+  const scopeId='@chat:'+stableDigest(owner),id='chat-reset:'+stableDigest([owner,operationId]),ledger=readRevocations(this.stateDir)
+  if(ledger.some(r=>r.cleanup?.id===id))return {cleanupId:id}
+  const at=Math.max(Date.now(),(this.store.get<number>('memory-clock','last')??0)+1)
+  const cleanup=planChatHistory(this.store,this.stateDir,scopeId,id,at,conversationIds)
+  if(cleanup.tickets.some(id=>this.store.get<{phase:string}>('run',id)?.phase==='merging'))throw Error('A Chat task merge is in progress. Reconcile its outcome before clearing history.')
+  const conversations=conversationIds.map(id=>this.store.get<{id:string;sourceId:string;nativeId?:string}>('chat-conversation',id)!)
+  const entries=new Set(this.scopes.bindings().filter(b=>conversations.some(c=>b.sourceId===c.sourceId&&b.nativeId===(c.nativeId??'chat:'+c.id))).map(b=>b.id))
+  const evidence=this.store.list<MemoryEvidence>('memory-evidence').filter(e=>entries.has(e.entryId)||cleanup.triggers.some(id=>e.locator==='trigger:'+id))
+  const facts=this.store.list<MemoryFact>('memory-fact').filter(f=>entries.has(f.entryId))
+  let previous=ledger.at(-1)
+  const rows:Revocation[]=[]
+  const add=(value:Pick<Revocation,'tenantId'|'scopeId'|'action'|'generation'>&Partial<Pick<Revocation,'id'|'cleanup'>>)=>{
+   const body={seq:(previous?.seq??0)+1,previous:previous?.hash??'',at,...value},row={...body,hash:stableDigest(body)};rows.push(row);previous=row
+  }
+  for(const e of evidence)add({tenantId:e.tenantId,scopeId:e.scopeId,action:'source.delete',generation:this.generation(e.scopeId),id:e.id})
+  for(const f of facts)add({tenantId:f.tenantId,scopeId:f.scopeId,action:'forget',generation:this.generation(f.scopeId),id:f.id})
+  add({tenantId:scopeId,scopeId,action:'history.extend',generation:0,cleanup})
+  this.appendRevocations(rows);this.store.atomic(()=>{for(const row of rows)this.applyRevocation(row)});this.onMutation?.()
+  return {cleanupId:id}
+ }
  /** Deterministic explicit-write path; retain the original request as evidence. */
  captureExplicit(c:ScopeContext){
   if(!c.trigger.human||!this.scopes.scope(c.route.scopeId).memoryEnabled)return
@@ -320,7 +343,8 @@ export class RouterMemory {
   this.applyRevocation(r)
   return r
  }
- private appendRevocation(r:Revocation){const path=join(this.stateDir,'memory-revocations.jsonl');appendFileSync(path,JSON.stringify(r)+'\n',{mode:0o600});const fd=openSync(path,'r');try{fsyncSync(fd)}finally{closeSync(fd)}}
+ private appendRevocation(r:Revocation){this.appendRevocations([r])}
+ private appendRevocations(rows:Revocation[]){const path=join(this.stateDir,'memory-revocations.jsonl');appendFileSync(path,rows.map(r=>JSON.stringify(r)+'\n').join(''),{mode:0o600});const fd=openSync(path,'r');try{fsyncSync(fd)}finally{closeSync(fd)}}
  reconcile(){
   const rows=readRevocations(this.stateDir),head=this.store.get<{seq:number;hash:string}>('memory-revocation-head','current')
   if(head&&!rows.some(r=>r.seq===head.seq&&r.hash===head.hash))throw Error('Latest memory revocation ledger is required before restoring service')

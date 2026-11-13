@@ -216,6 +216,7 @@ function renderWorkspaceSettings() {
   const page = entryState.advancedPage
   const tabs = [
     ['host', L('Host status', '宿主状态')],
+    ['chat', L('Chat', '聊天')],
     ['memory', L('Memory', '记忆')],
     ['intake', L('Intake rules', '接收规则')],
     ['runtime', L('Runtime and isolation', '运行与隔离')],
@@ -224,7 +225,7 @@ function renderWorkspaceSettings() {
   ]
   const maintenance = page === 'json' || page === 'revisions'
   const select = view => opNavigate('advanced', '', { view })
-  const views = { host: renderHostStatus, intake: renderPolicy, runtime: renderWork,
+  const views = { chat: () => typeof configurationHost !== 'undefined' && configurationHost ? [configurationHost.chat()] : [], host: renderHostStatus, intake: renderPolicy, runtime: renderWork,
     delivery: renderDelivery, json: renderSettingsJson, revisions: renderRevisions, memory: () => {
       if(typeof configurationHost !== 'undefined' && configurationHost)return [configurationHost.memory()]
       const link=el('a','text-button',L('Manage memory','管理记忆'));link.href='/configure#advanced/memory';return [link]

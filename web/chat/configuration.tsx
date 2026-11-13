@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {createPortal} from "react-dom";
+import {ChatSettings} from './chat-settings.tsx';
 import {MemorySettings} from "./memory.tsx";
 import type { mount } from "virtual:configuration-content";
 let controller: ReturnType<typeof mount> | undefined;
 let element: HTMLDivElement | undefined;
 let pending: Promise<void> | undefined;
 let memoryElement: HTMLDivElement | undefined;
+let chatElement: HTMLDivElement | undefined;
 const active = () =>
   location.hash !== '#prompts/memory' && !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
   location.pathname === "/configure/" ||
@@ -17,7 +19,8 @@ async function prepare() {
         element = document.createElement("div");
         element.className = "management-content";
         memoryElement = document.createElement("div");
-        controller = module.mount({ element, active, memory: () => memoryElement! });
+        chatElement = document.createElement("div");
+        controller = module.mount({ element, active, memory: () => memoryElement!, chat: () => chatElement! });
       })
       .catch((error) => {
         pending = undefined;
@@ -38,6 +41,7 @@ export function Configuration({
 }) {
   const outlet = useRef<HTMLDivElement>(null),
     [error, setError] = useState(false),
+    [chatTarget, setChatTarget] = useState<HTMLDivElement|null>(null),
     [memoryTarget, setMemoryTarget] = useState<HTMLDivElement|null>(null);
   const pickerHandled = useRef(0);
   const latest = useRef({ visible, language });
@@ -56,6 +60,7 @@ export function Configuration({
         setError(false);
         outlet.current?.append(element!);
         setMemoryTarget(memoryElement!);
+        setChatTarget(chatElement!);
         if (latest.current.visible) {
           controller!.activate(latest.current.language);
           if (pickerRequest > pickerHandled.current) {
@@ -82,6 +87,7 @@ export function Configuration({
     >
       <div ref={outlet} />
       {visible && route.split("#")[1] === "advanced/memory" && memoryTarget ? createPortal(<MemorySettings L={(en, zh) => language === "en" ? en : zh}/>, memoryTarget) : null}
+      {visible && route.split("#")[1] === "advanced/chat" && chatTarget ? createPortal(<ChatSettings L={(en, zh) => language === "en" ? en : zh}/>, chatTarget) : null}
       {error ? (
         <button
           className="configuration-retry"

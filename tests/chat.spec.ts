@@ -247,7 +247,7 @@ it('keeps conversations and owners isolated and binds new sessions to their orig
   expect(()=>h.chat.view(a.id,'other')).toThrow('not found')
   expect(()=>h.chat.update(a.id,'other',{title:'Hijacked'})).toThrow('not found')
 })
-it('delegates through the real Worker manager and exposes Worker status without Worker chat messages',async()=>{
+it('projects real Router-to-Worker dialogue with distinct speakers and no extra external deliveries',async()=>{
   const {h,calls}=fixture(async r=>{
     if(r.role==='worker')return report
     if(JSON.parse(r.input).kind==='user_message'){
@@ -261,7 +261,9 @@ it('delegates through the real Worker manager and exposes Worker status without 
   const view=h.chat.view(c.id,'owner')
   expect(calls.map(r=>r.role)).toEqual(['router','worker','router'])
   expect(view.workers[0]?.tasks[0]).toMatchObject({state:'completed',title:'Check evidence'})
-  expect(view.messages.map(m=>m.text)).not.toContain('Worker result')
+  expect(view.messages.find(m=>m.text==='Worker result')).toMatchObject({speaker:{id:'research',label:'Research',kind:'worker'},recipient:{kind:'router'}})
+  expect(view.messages.find(m=>m.text==='Check evidence')).toMatchObject({speaker:{kind:'router'},recipient:{id:'research'}})
+  expect(view.messages.map(m=>m.id).length).toBe(new Set(view.messages.map(m=>m.id)).size)
   expect(h.store.deliveries().filter(d=>!d.channel.address.routerInbox).map(d=>d.text)).not.toContain('Worker result')
 })
 it('cancels queued work without ever calling a model and permits a subsequent message',async()=>{
@@ -427,4 +429,126 @@ it('rechecks scoped memory before publishing buffered chat output',async()=>{
  send(f.h,chat.id,'budget')
  await settle(f.h,()=>f.h.chat.view(chat.id,'owner').run?.state==='failed')
  expect(f.h.chat.view(chat.id,'owner').messages.every(m=>m.role!=='assistant'||!m.text.includes('Budget 73'))).toBe(true)
+})
+
+it('keeps a single owner-specific chat across display changes and adopts the most recent legacy conversation without deleting others',()=>{
+ const {h}=fixture(),first=h.chat.create('owner'),second=h.chat.create('owner');h.chat.update(first.id,'owner',{title:'Latest legacy chat'})
+ const space=h.chat.space('owner',true);expect(space.conversation?.id).toBe(first.id)
+ expect(h.chat.display('owner','agents')).toMatchObject({display:'agents',conversation:{id:first.id}})
+ expect(h.chat.space('owner',true).conversation?.id).toBe(first.id)
+ expect(h.chat.space('someone-else',true).conversation?.id).not.toBe(first.id)
+ expect(h.chat.view(second.id,'owner').messages).toEqual([])
+})
+
+it('clears native Chat context, fences late output, preserves configuration and starts a fresh bound chat',async()=>{
+ const f=fixture(),c=f.h.chat.space('owner',true).conversation!;enableChatBatch(f.h,c.id)
+ const run=send(f.h,c.id,'记住：本次测试的唯一记忆'),trigger=f.h.store.triggers.get(run.runId)!,context=f.h.scopes.context(trigger,'local:chat:'+c.id)!,e=f.h.memory.ingest(context)
+ const fact=f.h.memory.command(context,{action:'remember',operationId:'save',expectedRevision:0,subject:'Unique',content:'Only before reset',sourceIds:[e.id],candidate:false},true) as any
+ f.h.chat.reply('reply-before-reset',run.runId,'Old answer')
+ f.h.chat.display('owner','agents')
+ const settings=f.h.settings.current(),op=randomUUID(),reset=f.h.chat.reset('owner',op)
+ expect(reset.conversation).toBeNull();expect(reset.display).toBe('agents');expect(reset.cleanup).toMatchObject({status:'processing'})
+ expect(f.h.memory.fact(fact.id)?.content).toBe('');expect(f.h.store.triggers.get(run.runId)?.text).toBe('')
+ expect(()=>f.h.chat.view(c.id,'owner')).toThrow('cleared');expect(()=>send(f.h,c.id)).toThrow('cleared')
+ f.h.chat.reply('late',run.runId,'Must never return');expect(f.h.store.get('chat-message','reply:late')).toBeUndefined()
+ const fresh=f.h.chat.space('owner',true).conversation!;expect(fresh.id).not.toBe(c.id)
+ const next=send(f.h,fresh.id,'A fresh authorized request');expect(f.h.routerIngress.get(next.runId)?.state).toBe('accepted')
+ expect(f.h.chat.view(fresh.id,'owner').messages.map(m=>m.text)).toEqual(['A fresh authorized request'])
+ expect(f.h.chat.reset('owner',op).conversation?.id).toBe(fresh.id)
+ await f.h.memory.cleanup.process({run:async()=>{throw Error('No model')},purge:async()=>({local:'verified',provider:'not_managed'})},async()=>true)
+ expect(f.h.chat.space('owner').cleanup?.status).toBe('completed');expect(f.h.settings.current()).toEqual(settings)
+ expect(f.h.scopes.binding(context.route.entryId).active).toBe(true)
+})
+
+it('quiesces a running unscoped Router before completing reset, survives restart and never resumes its native context',async()=>{
+ let aborted=false;const f=fixture(async r=>{await waitForAbort(r);aborted=true;throw Error('Stopped')}),c=f.h.chat.space('owner',true).conversation!
+ send(f.h,c.id);await settle(f.h,()=>f.calls.length===1)
+ const reset=f.h.chat.reset('owner',randomUUID())
+ await settle(f.h,()=>aborted)
+ expect(f.h.chat.space('owner').cleanup).toMatchObject({status:'processing'})
+ const purged:string[]=[]
+ const receipt=f.h.memory.cleanup.receipts().find(r=>r.id===reset.cleanupId)!;f.h.store.put('history-cleanup',receipt.id,{...receipt,nextAt:0})
+ await f.h.memory.cleanup.process({run:async()=>{throw Error('unused')},purge:async thread=>{purged.push(thread);return {local:'verified',provider:'not_managed'}}},async()=>true)
+ expect(purged.length).toBeGreaterThan(0)
+ await f.h.close();hosts.splice(hosts.indexOf(f.h),1)
+ const reopened=new Runtime(f.config,{model:f.model});hosts.push(reopened)
+ expect(()=>reopened.chat.view(c.id,'owner')).toThrow('cleared')
+ const fresh=reopened.chat.space('owner',true).conversation!;expect(fresh.id).not.toBe(c.id)
+ expect(reopened.chat.view(fresh.id,'owner').messages).toEqual([])
+})
+
+it('rejects a Chat reset before changing memory when one of its task merges has been submitted',async()=>{
+ const {h,root}=fixture(),c=h.chat.space('owner',true).conversation!,sent=send(h,c.id),trigger=h.store.triggers.get(sent.runId)!
+ const task=await h.manager.call({action:'assign',revision:0,requestId:'merge-test',id:'research',text:'Check the repository'},{trigger,discussion:'local:chat:'+c.id})
+ h.store.put('run',task.ticketId,{ticketId:task.ticketId,phase:'merging',cwd:root})
+ expect(()=>h.chat.reset('owner',randomUUID())).toThrow('merge is in progress')
+ expect(h.memory.cleanup.plans()).toEqual([]);expect(h.chat.view(c.id,'owner').messages.some(m=>m.role==='user')).toBe(true)
+})
+
+it('replays the reset ledger over an older database snapshot without reviving memory or the old chat',async()=>{
+ const f=fixture(),c=f.h.chat.space('owner',true).conversation!;enableChatBatch(f.h,c.id)
+ const run=send(f.h,c.id,'记住：只能出现在旧快照中'),t=f.h.store.triggers.get(run.runId)!,context=f.h.scopes.context(t,'local:chat:'+c.id)!,source=f.h.memory.ingest(context)
+ const fact=f.h.memory.command(context,{action:'remember',operationId:'old-snapshot',expectedRevision:0,subject:'Old',content:'Snapshot-only memory',sourceIds:[source.id],candidate:false},true) as any
+ const backup=join(f.root,'before-reset.sqlite');f.h.store.db.prepare('VACUUM INTO ?').run(backup)
+ f.h.chat.reset('owner',randomUUID());await f.h.close();hosts.splice(hosts.indexOf(f.h),1)
+ writeFileSync(join(f.config.stateDir,'state.sqlite'),readFileSync(backup))
+ const restored=new Runtime(f.config,{model:f.model});hosts.push(restored)
+ expect(restored.memory.fact(fact.id)?.content).toBe('');expect(restored.store.triggers.get(run.runId)?.text).toBe('')
+ expect(()=>restored.chat.view(c.id,'owner')).toThrow('cleared');expect(restored.chat.space('owner',true).conversation?.id).not.toBe(c.id)
+})
+
+it('protects settings/reset HTTP mutations with authentication and origin checks and rejects a Worker recipient',async()=>{
+ const {h,root}=fixture(),host=await serve(h);servers.push(host.server)
+ const headers={authorization:'Bearer '+readFileSync(join(root,'state/access-token'),'utf8').trim(),'content-type':'application/json'}
+ expect((await fetch(host.url+'/api/chat/reset',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operationId:randomUUID()})})).status).toBe(401)
+ expect((await fetch(host.url+'/api/chat/reset',{method:'POST',headers:{...headers,origin:'https://wrong.example'},body:JSON.stringify({operationId:randomUUID()})})).status).toBe(403)
+ const created=await (await fetch(host.url+'/api/chat/space',{method:'POST',headers,body:'{}'})).json() as any
+ const same=await (await fetch(host.url+'/api/chat/space',{method:'POST',headers,body:'{}'})).json() as any
+ expect(same.conversation.id).toBe(created.conversation.id)
+ expect((await fetch(host.url+'/api/chat/conversations/'+same.conversation.id+'/messages',{method:'POST',headers,body:JSON.stringify({clientMessageId:randomUUID(),text:'Bypass Router',recipient:'research'})})).status).toBe(400)
+ expect(h.chat.view(same.conversation.id,'local-operator').messages).toEqual([])
+})
+
+it('preserves external entry memory/history in the same scope, other accounts and unrelated running work',async()=>{
+ const {h,root}=fixture(),chat=h.chat.space('owner',true).conversation!,other=h.chat.space('another-account',true).conversation!;enableChatBatch(h,chat.id)
+ for(const nativeId of ['external-group','chat:'+other.id])h.scopes.command({action:'entry.bind',operationId:nativeId,expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId,history:'group'})
+ const before=h.receive('local','operator',{id:'external-first',thread:'external-thread',scope:'external-group',addressed:true,text:'External context to keep'}) as {triggerId:string}
+ const external=h.scopes.context(h.store.triggers.get(before.triggerId)!,'local:external-thread')!,e=h.memory.ingest(external)
+ const fact=h.memory.command(external,{action:'remember',operationId:'external-memory',expectedRevision:0,subject:'External preference',content:'Keep external memory',sourceIds:[e.id],candidate:false},true) as any
+ h.chat.send(other.id,'another-account',{clientMessageId:randomUUID(),text:'Another account stays intact'})
+ send(h,chat.id,'Clear only this Chat')
+ h.store.put('model-session','external-native',{threadId:'external-native',triggerId:before.triggerId,cwd:root})
+ h.store.put('run','unrelated-merge',{ticketId:'unrelated-merge',phase:'merging',cwd:root})
+ const reset=h.chat.reset('owner',randomUUID()),plan=h.memory.cleanup.plans().find(p=>p.id===reset.cleanupId)!
+ expect(plan.triggers).not.toContain(before.triggerId);expect(plan.tickets).not.toContain('unrelated-merge');expect(plan.sessions.map(s=>s.threadId)).not.toContain('external-native')
+ expect(h.memory.fact(fact.id)).toEqual(fact);expect(h.store.triggers.get(before.triggerId)?.text).toBe('External context to keep')
+ expect(h.chat.view(other.id,'another-account').messages[0]?.text).toBe('Another account stays intact')
+ const after=h.receive('local','operator',{id:'external-next',thread:'external-thread',scope:'external-group',addressed:true,text:'External entry continues'}) as {triggerId:string}
+ expect(h.routerIngress.get(after.triggerId)?.state).toBe('accepted');expect(h.store.triggers.get(after.triggerId)?.text).toBe('External entry continues')
+ const refreshed=h.scopes.context(h.store.triggers.get(after.triggerId)!,'local:external-thread')!
+ expect(h.memory.query(refreshed,{}).items.map(f=>f.id)).toContain(fact.id)
+ await h.memory.cleanup.process({run:async()=>{throw Error('unused')},purge:async id=>{expect(id).not.toBe('external-native');return {local:'verified',provider:'not_managed'}}},async()=>true)
+ expect(h.store.get<any>('model-session','external-native')?.threadId).toBe('external-native')
+})
+
+it('pages a selected Worker dialogue independently of newer group traffic',()=>{
+ const {h}=fixture(),c=h.chat.create('owner'),run=send(h,c.id)
+ h.chat.delegated('older-assignment',run.runId,'task-old','research','Older Worker instruction')
+ for(let i=0;i<110;i++)h.chat.reply('later-'+i,run.runId,'Newer group reply '+i)
+ expect(h.chat.view(c.id,'owner').messages.some(m=>m.text==='Older Worker instruction')).toBe(false)
+ expect(h.chat.view(c.id,'owner',undefined,'research').messages.map(m=>m.text)).toEqual(['Older Worker instruction'])
+ expect(h.chat.view(c.id,'owner',2,'research').messages).toEqual([])
+ expect(()=>h.chat.view(c.id,'another',undefined,'research')).toThrow('Conversation not found')
+})
+
+it('does not attribute a legacy sent Worker reply through a task owner changed after delivery',async()=>{
+ const f=fixture(),old=f.h.chat.create('owner'),sent=send(f.h,old.id),trigger=f.h.store.triggers.get(sent.runId)!
+ const task=await f.h.manager.call({action:'assign',revision:0,requestId:'legacy-attribution',id:'research',text:'Old work'},{trigger,discussion:'local:chat:'+old.id})
+ f.h.store.outbox.send({id:'legacy-worker-reply',ticketId:task.ticketId,kind:'reply',channel:{source:'local',thread:'old',address:{routerInbox:'local:chat:'+old.id}},text:'Old private Worker output'})
+ f.h.store.delivered('legacy-worker-reply')
+ const current=f.h.chat.create('owner'),next=send(f.h,current.id,'Current chat')
+ f.h.store.put('worker-assignment',task.ticketId,{...task,discussion:'local:chat:'+current.id,parentTrigger:next.runId})
+ await f.h.close();hosts.splice(hosts.indexOf(f.h),1)
+ const reopened=new Runtime(f.config,{model:f.model});hosts.push(reopened)
+ expect(reopened.chat.view(current.id,'owner').messages.map(m=>m.text)).toEqual(['Current chat'])
 })

@@ -28,7 +28,7 @@ with sync_playwright() as p:
         composer.fill('Help me plan the Roppo launch. Research the market and draft a practical release plan.')
         page.get_by_role('button',name='Send message',exact=True).click()
         expect(page.locator('.user-message')).to_have_count(1,timeout=15000)
-        first=parse_qs(urlparse(page.url).query)['conversation'][0]
+        first=page.request.get(base+'/api/chat/space').json()['conversation']['id']
         expect(page.locator('.inline-team>summary')).to_be_visible(timeout=15000)
         page.locator('.inline-team>summary').click()
         page.screenshot(path=str(evidence/'conversation-light-running.png'))
@@ -58,51 +58,37 @@ with sync_playwright() as p:
         page.keyboard.press('Escape');expect(page.get_by_role('complementary',name='Team activity',exact=True)).not_to_be_visible()
         expect(page.get_by_role('button',name='Team activity',exact=True)).to_be_focused()
         expect(page.locator('.run-status')).to_have_text('Complete',timeout=45000)
-        assert page.locator('.assistant-identity strong').all_text_contents()==['Router']*page.locator('.assistant-message').count()
-        checks.extend(['real Router/Worker runtime projection with fixture provider','collapsible team pane','theme toggle','Escape restores focus','Router only transcript'])
+        assert 'Router' in page.locator('.assistant-identity strong').all_text_contents()
+        assert any(name!='Router' for name in page.locator('.assistant-identity strong').all_text_contents())
+        checks.extend(['real Router/Worker runtime projection with fixture provider','collapsible team pane','theme toggle','Escape restores focus','Router and Worker transcript'])
         page.reload();expect(page.locator('.user-message')).to_have_count(1);expect(page.locator('.run-status')).to_have_text('Complete')
         assert page.locator('html').get_attribute('data-theme')=='dark'
         expect(page.locator('.message-tool-activity .tool-call').first).to_be_visible()
         assert page.locator('.team-branch.flowing').count()==0
         checks.append('history, tool calls and theme survive refresh')
-        composer.fill('Keep this draft for the first conversation')
-        page.get_by_role('button',name='New conversation',exact=True).click()
-        expect(page.get_by_role('heading',name='What shall we work on?')).to_be_visible()
+        before=page.locator('.assistant-message').count()
+        expect(page.get_by_role('button',name='New conversation',exact=True)).to_have_count(0)
         composer.fill('A separate conversation to stop')
         page.get_by_role('button',name='Send message',exact=True).click()
         expect(page.get_by_role('button',name='Stop this run',exact=True)).to_be_visible(timeout=15000)
-        second=parse_qs(urlparse(page.url).query)['conversation'][0];assert first!=second
+        second=page.request.get(base+'/api/chat/space').json()['conversation']['id'];assert first==second
         page.get_by_role('button',name='Stop this run',exact=True).click()
         expect(page.locator('.run-status')).to_have_text('Run stopped',timeout=15000)
-        page.wait_for_timeout(3500);assert page.locator('.assistant-message').count()==0
+        page.wait_for_timeout(3500);assert page.locator('.assistant-message').count()==before
         checks.append('cancellation suppresses late replies')
-        page.locator('.thread-item[data-active]').hover()
-        page.locator('.thread-item[data-active]').get_by_role('button',name='Rename conversation',exact=True).click()
-        expect(page.get_by_role('dialog')).to_be_visible()
-        page.get_by_role('textbox',name='Conversation title').fill('Stopped review')
-        page.get_by_role('button',name='Save',exact=True).click();expect(page.get_by_role('dialog')).not_to_be_visible()
-        expect(page.locator('.chat-breadcrumb strong')).to_have_text('Stopped review')
-        page.locator('.thread-item[data-active]').hover()
-        page.locator('.thread-item[data-active]').get_by_role('button',name='Archive conversation',exact=True).click()
-        expect(page.get_by_text('This conversation is archived.',exact=True)).to_be_visible()
-        expect(page.get_by_role('button',name='Send message',exact=True)).to_be_disabled()
-        page.get_by_role('button',name='Restore',exact=True).click();expect(page.get_by_text('This conversation is archived.',exact=True)).not_to_be_visible()
-        checks.extend(['rename with native dialog','archive and restore'])
-        page.get_by_role('button',name='New conversation',exact=True).click()
         composer.fill('A conversation to stop during a partial response')
         page.get_by_role('button',name='Send message',exact=True).click()
         expect(page.locator('.assistant-message[data-streaming="true"]')).to_be_visible(timeout=20000)
         page.get_by_role('button',name='Stop this run',exact=True).click()
         expect(page.locator('.run-status')).to_have_text('Run stopped',timeout=15000)
         expect(page.locator('.partial-status')).to_have_text('Output stopped')
-        stopped_text=page.locator('.assistant-body').inner_text()
-        page.wait_for_timeout(500);assert page.locator('.assistant-body').inner_text()==stopped_text
+        stopped_text=page.locator('.assistant-body').last.inner_text()
+        page.wait_for_timeout(500);assert page.locator('.assistant-body').last.inner_text()==stopped_text
         page.reload();expect(page.locator('.partial-status')).to_have_text('Output stopped')
         checks.append('mid-stream stop retains incomplete output without a late completion')
-        page.goto(base+'/chat?conversation='+first)
-        expect(composer).to_have_value('Keep this draft for the first conversation')
-        expect(page.locator('.user-message')).to_have_count(1)
-        checks.append('conversation isolation and per-thread drafts')
+        composer.fill('Keep the single chat draft');page.reload();expect(composer).to_have_value('Keep the single chat draft')
+        expect(page.locator('.user-message')).to_have_count(3)
+        checks.append('one persistent chat and draft across follow-ups')
         page.get_by_role('button',name='Switch to Chinese',exact=True).click()
         expect(page.get_by_role('textbox',name='向 Router 发送消息',exact=True)).to_be_visible()
         composer=page.get_by_role('textbox',name='向 Router 发送消息',exact=True)
@@ -110,7 +96,7 @@ with sync_playwright() as p:
         composer.dispatch_event('compositionstart')
         composer.dispatch_event('keydown',{'key':'Enter','code':'Enter','keyCode':229,'isComposing':True,'bubbles':True})
         composer.dispatch_event('compositionend')
-        page.wait_for_timeout(200);assert page.locator('.user-message').count()==1
+        page.wait_for_timeout(200);assert page.locator('.user-message').count()==3
         checks.append('IME Enter does not send')
         for width,height in [(1440,960),(1024,768),(390,844),(320,680)]:
             page.set_viewport_size({'width':width,'height':height})
@@ -124,7 +110,7 @@ with sync_playwright() as p:
                 page.screenshot(path=str(evidence/f'{width}-{theme}-zh.png'))
             if width<700:
                 page.get_by_role('button',name='打开导航',exact=True).click()
-                expect(page.get_by_role('button',name='新建会话',exact=True)).to_be_visible()
+                expect(page.get_by_role('link',name='对话',exact=True)).to_be_visible()
                 page.keyboard.press('Escape');expect(page.get_by_role('button',name='打开导航',exact=True)).to_be_focused()
                 page.get_by_role('button',name='团队动态',exact=True).click()
                 panel=page.get_by_role('complementary',name='团队动态')

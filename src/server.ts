@@ -334,6 +334,15 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const owner=account.status(req).user?.id??'local-operator'
       const query=new URL(req.url!,'http://localhost').searchParams
       if(path==='/api/chat/readiness'&&req.method==='GET'){send(res,200,{...runtime.chat.readiness(),...(options.configurationPreview?{ready:false,code:'preview_restricted'}:{}),user:account.status(req).user??null});return}
+      if(path==='/api/chat/space'){
+        if(req.method==='GET'){send(res,200,runtime.chat.space(owner));return}
+        if(req.method==='POST'){send(res,200,runtime.chat.space(owner,true));return}
+        if(req.method==='PATCH'){const input=z.object({display:z.enum(['group','agents'])}).strict().parse(await body(req));send(res,200,runtime.chat.display(owner,input.display));return}
+      }
+      if(path==='/api/chat/reset'&&req.method==='POST'){
+        const input=z.object({operationId:z.string().uuid()}).strict().parse(await body(req))
+        send(res,202,runtime.chat.reset(owner,input.operationId));return
+      }
       if(path==='/api/chat/conversations'){
         if(req.method==='GET'){send(res,200,{conversations:runtime.chat.list(owner,query.get('archived')==='true')});return}
         if(req.method==='POST'){send(res,201,runtime.chat.create(owner));return}
@@ -352,7 +361,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
         }
         if((!action||action==='messages')&&req.method==='GET'){
           const before=query.has('before')?z.coerce.number().int().positive().parse(query.get('before')):undefined
-          send(res,200,runtime.chat.view(id,owner,before));return
+          const participant=query.has('participant')?z.string().min(1).max(300).parse(query.get('participant')):undefined
+          send(res,200,runtime.chat.view(id,owner,before,participant));return
         }
         if(action==='files'&&req.method==='GET'){
           const input=z.object({ticket:z.string().min(1).optional(),path:z.string().max(1800).optional(),kind:z.enum(['directory','files']).optional(),offset:z.coerce.number().int().nonnegative().optional(),cursor:z.string().uuid().optional()}).strict().parse(Object.fromEntries(query))
@@ -378,7 +388,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
               const revision=String(runtime.chat.revision(id,owner))
               if(revision!==last){last=revision;res.write('id: '+revision+'\nevent: change\ndata: '+JSON.stringify({revision})+'\n\n')}
               else if(++heartbeat%20===0)res.write(': keepalive\n\n')
-            }catch{res.end()}
+            }catch(error){if(error instanceof ChatError&&error.code==='conversation_reset')res.write('event: reset\ndata: {}\n\n');res.end()}
           }
           const unsubscribe=runtime.chat.subscribe(id,owner,update)
           const timer=setInterval(update,750);timer.unref();res.on('close',()=>{clearInterval(timer);unsubscribe()});update();return
