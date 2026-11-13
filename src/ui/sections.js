@@ -216,6 +216,7 @@ function renderWorkspaceSettings() {
   const page = entryState.advancedPage
   const tabs = [
     ['host', L('Host status', '宿主状态')],
+    ['memory', L('Memory', '记忆')],
     ['intake', L('Intake rules', '接收规则')],
     ['runtime', L('Runtime and isolation', '运行与隔离')],
     ['delivery', L('Publishing and merging', '发布与合并')],
@@ -224,9 +225,12 @@ function renderWorkspaceSettings() {
   const maintenance = page === 'json' || page === 'revisions'
   const select = view => opNavigate('advanced', '', { view })
   const views = { host: renderHostStatus, intake: renderPolicy, runtime: renderWork,
-    delivery: renderDelivery, json: renderSettingsJson, revisions: renderRevisions }
-  return [opHeading(L('Advanced settings', '高级设置'), null),
-    workspaceTabs(L('Settings sections', '高级设置分区'), tabs.map(([key, title]) => [
+    delivery: renderDelivery, json: renderSettingsJson, revisions: renderRevisions, memory: () => {
+      if(typeof configurationHost !== 'undefined' && configurationHost)return [configurationHost.memory()]
+      const link=el('a','text-button',L('Manage memory','管理记忆'));link.href='/configure#advanced/memory';return [link]
+    } }
+  return [opHeading(L('Settings', '设置'), null),
+    workspaceTabs(L('Settings sections', '设置分区'), tabs.map(([key, title]) => [
       title, key === page || key === 'json' && maintenance, () => select(key)
     ])),
     maintenance ? workspaceTabs(L('Configuration maintenance', '配置维护'), [

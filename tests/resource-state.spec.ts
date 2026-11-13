@@ -8,10 +8,17 @@ describe('conversation resource tabs',()=>{
   });
   it('restores opened tabs and recent tools without duplicating the same tool',()=>{
     let s=initialResources('');s=openResource(s,'files',10);const file=s.active;
-    s=openResource(s,'browser',20);s=openResource(s,'memory',25);s=openResource(s,'files',30);
+    s=openResource(s,'browser',20);s=openResource(s,'files',30);
     const restored=initialResources(JSON.stringify(s));
-    expect(restored.active).toBe(file);expect(restored.tabs.map(t=>t.kind)).toEqual(['new','files','browser','memory']);
-    expect(restored.recent).toEqual([{kind:'files',at:30},{kind:'memory',at:25},{kind:'browser',at:20}]);
+    expect(restored.active).toBe(file);expect(restored.tabs.map(t=>t.kind)).toEqual(['new','files','browser']);
+    expect(restored.recent).toEqual([{kind:'files',at:30},{kind:'browser',at:20}]);
+  });
+  it('retires saved memory tabs while preserving other tools and their history',()=>{
+    const saved={tabs:[{id:'browser',kind:'browser'},{id:'memory',kind:'memory'}],active:'memory',visible:true,recent:[{kind:'memory',at:20},{kind:'browser',at:10}]};
+    const migrated=initialResources(JSON.stringify(saved));
+    expect(migrated).toEqual({tabs:[{id:'browser',kind:'browser'}],active:'browser',visible:false,recent:[{kind:'browser',at:10}]});
+    expect(initialResources(JSON.stringify({...saved,active:'browser'})).visible).toBe(true);
+    expect(initialResources(JSON.stringify({...saved,tabs:[saved.tabs[1]]})).tabs[0]?.kind).toBe('new');
   });
   it('closing a view preserves its recent record and chooses an adjacent tab',()=>{
     let s=openResource(initialResources(''),'files',1);const file=s.active;s=openResource(s,'activity',2);

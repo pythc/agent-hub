@@ -1,4 +1,4 @@
-export type ResourceKind = 'new' | 'files' | 'browser' | 'activity' | 'memory';
+export type ResourceKind = 'new' | 'files' | 'browser' | 'activity';
 export type ToolKind = Exclude<ResourceKind, 'new'>;
 export type ResourceTab = { id: string; kind: ResourceKind };
 export type ResourceState = {
@@ -7,7 +7,7 @@ export type ResourceState = {
   visible: boolean;
   recent: { kind: ToolKind; at: number }[];
 };
-const kinds: ResourceKind[] = ['new', 'files', 'browser', 'activity', 'memory'];
+const kinds: ResourceKind[] = ['new', 'files', 'browser', 'activity'];
 const tab = (kind: ResourceKind): ResourceTab => ({ id: crypto.randomUUID(), kind });
 export const resourceKey = (conversationId: string | null) => 'roppo.resources.' + (conversationId ?? 'new');
 export function initialResources(raw: string, legacy = ''): ResourceState {
@@ -15,13 +15,16 @@ export function initialResources(raw: string, legacy = ''): ResourceState {
     const value = JSON.parse(raw);
     if (!value || !Array.isArray(value.tabs) || value.tabs.length < 1 || value.tabs.length > 12) throw Error();
     const ids = new Set<string>(), tools = new Set<string>();
-    const tabs = value.tabs.map((t: ResourceTab) => {
-      if (!t || typeof t.id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(t.id) || ids.has(t.id) || !kinds.includes(t.kind) || (t.kind !== 'new' && tools.has(t.kind))) throw Error();
+    const savedTabs = value.tabs.map((t: {id:string;kind:ResourceKind|'memory'}) => {
+      if (!t || typeof t.id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(t.id) || ids.has(t.id) || !(t.kind === 'memory' || kinds.includes(t.kind)) || (t.kind !== 'new' && tools.has(t.kind))) throw Error();
       ids.add(t.id); tools.add(t.kind);
       return { id: t.id, kind: t.kind };
     });
-    return { tabs, active: ids.has(value.active) ? value.active : tabs[0]!.id, visible: value.visible === true,
-      recent: Array.isArray(value.recent) ? value.recent.filter((r: {kind:ToolKind;at:number}) => r && ['files','browser','activity','memory'].includes(r.kind) && Number.isFinite(r.at) && r.at >= 0 && r.at <= 8.64e15).slice(0,3) : [] };
+    // Retire the memory view without losing other open tools.
+    const tabs:ResourceTab[] = savedTabs.filter((t: {id:string;kind:ResourceKind|'memory'}) => t.kind !== 'memory');
+    if (!tabs.length) tabs.push(tab('new'));
+    return { tabs, active: tabs.some(t => t.id === value.active) ? value.active : tabs[0]!.id, visible: value.visible === true && !savedTabs.some((t: {id:string;kind:string}) => t.id === value.active && t.kind === 'memory'),
+      recent: Array.isArray(value.recent) ? value.recent.filter((r: {kind:ToolKind;at:number}) => r && ['files','browser','activity'].includes(r.kind) && Number.isFinite(r.at) && r.at >= 0 && r.at <= 8.64e15).slice(0,3) : [] };
   } catch {
     const first = tab(kinds.includes(legacy as ResourceKind) ? legacy as ResourceKind : 'new');
     return { tabs: [first], active: first.id, visible: first.kind !== 'new', recent: [] };

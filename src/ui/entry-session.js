@@ -92,7 +92,7 @@ const workspacePages = {
   'connections/new': 'catalogue', models: 'models', 'models/new': 'model-new',
   deployments: 'deployments', integrations: 'integrations', execution: 'execution', prompts: 'prompts', usage: 'usage'
 }
-const advancedPages = ['host', 'intake', 'runtime', 'delivery', 'json', 'revisions']
+const advancedPages = ['host', 'memory', 'intake', 'runtime', 'delivery', 'json', 'revisions']
 function workspaceHash() {
   const { page, selected, source, creating, advancedPage, promptView } = entryState
   if (page === 'advanced') return 'advanced/' + advancedPage

@@ -61,6 +61,16 @@ it('reads and corrects only memory authorized for the owned conversation and pre
  expect(()=>h.chat.memory(c.id,'owner')).toThrow()
 })
 
+it('omits inactive entries from the memory settings catalog',async()=>{
+ const {h,root}=fixture(),c=h.chat.create('owner');enableChatBatch(h,c.id)
+ const sent=send(h,c.id,'Remember this entry'),host=await serve(h);servers.push(host.server)
+ const headers={authorization:'Bearer '+readFileSync(join(root,'state/access-token'),'utf8').trim()}
+ const catalog=async()=>await (await fetch(host.url+'/router-management/catalog',{headers})).json() as any
+ expect((await catalog()).contexts.map((c:any)=>c.id)).toContain(sent.runId)
+ h.scopes.command({action:'entry.bind',operationId:'disable-entry',expectedRevision:1,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'chat:'+c.id,history:'group',active:false})
+ expect((await catalog()).contexts).toEqual([])
+})
+
 it('serves the conversation memory API with ownership checks and redirects the retired workbench into the app',async()=>{
  const {h,root}=fixture(),host=await serve(h);servers.push(host.server)
  const token=readFileSync(join(root,'state/access-token'),'utf8').trim(),headers={authorization:'Bearer '+token,'content-type':'application/json'}
@@ -70,7 +80,7 @@ it('serves the conversation memory API with ownership checks and redirects the r
  expect((await fetch(host.url+'/api/chat/conversations/'+wrong.id+'/memory',{headers})).status).toBe(404)
  expect((await fetch(host.url+'/api/chat/conversations/'+c.id+'/memory',{method:'POST',headers:{...headers,origin:'https://wrong.example'},body:JSON.stringify({kind:'manage',command:{action:'inspect'}})})).status).toBe(403)
  const redirect=await fetch(host.url+'/memory-workbench',{headers,redirect:'manual'})
- expect(redirect.status).toBe(302);expect(redirect.headers.get('location')).toBe('/configure#prompts/memory')
+ expect(redirect.status).toBe(302);expect(redirect.headers.get('location')).toBe('/configure#advanced/memory')
 })
 
 it('delivers batch clarification once into chat, waits for input and recovers legacy sent replies after restart',async()=>{

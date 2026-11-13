@@ -316,8 +316,10 @@ Connection selection comes before behavior. Native radio inputs provide three ke
 Visual evidence and browser checks use the isolated decision acceptance host with a synthetic provider. They exercise the real settings and probe HTTP routes, not a paid provider or production message flow.
 
 
-## Memory within the conversation (2026-11-13)
+## Memory in Settings (2026-11-13)
 
-Memory uses the existing conversation resource tabs, beside files, browser and team activity. It follows the selected conversation, keeps the composer draft, and inherits the shell's theme, language, typography and keyboard navigation. Preferences are plain text rows with inline correction and forgetting; sources and revision history remain collapsed. Candidate replacement and removal show what will change. No technical model, retrieval or budget fields belong in this daily flow.
+Memory is a section of the existing Settings navigation, not a conversation resource or an entry under Shared instructions. It shares the settings shell, neutral palette, typography, language and responsive layout. Saved memories appear as plain separated rows. Each row offers only Edit and Delete; editing uses one text field. Cancel and save controls belong to the active operation. Conditions and temporary scope remain readable metadata, with source and scope retained during editing.
 
-An optional collaboration-preferences view lives under Shared instructions in the same shell and reuses the conversation component. The sole learning switch names its team scope, preserves technical policy fields, and stops automatic learning without deleting existing notes. An unbound conversation shows an empty state rather than a setup questionnaire or invented memory. Desktop light/dark and 390px screenshots are isolated fixture evidence, not live-provider behavior or user visual approval.
+Do not reintroduce learning switches, entry selectors, candidate approval, source/history drawers, usage ledgers or technical configuration into this surface. Pending suggestions stay separate from saved memories; removing their UI does not approve them. Existing policy, background learning and authorization remain unchanged. Retired URLs lead to Settings, and retired memory tabs are removed without discarding other conversation tools or drafts.
+
+Desktop light/dark and 390px screenshots in docs/images/memory-settings-* use isolated HTTP/SQLite fixtures. They verify the interface, not live-provider behavior or user visual approval.

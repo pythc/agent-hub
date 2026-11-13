@@ -38,9 +38,9 @@ flowchart LR
 | 知识检索 | Router 生成知识查询时已获得受控记忆。另记录实际回复明确引用的文档 ID 与版本；同一入口／actor 的重复使用最多提供 15% 排序加成，不扩大文档权限。 |
 | 证据 | 上下文和 Worker 查询绑定事实及来源 revision；使用前后检查当前权限。禁用、撤销或变更后，旧 manifest 不能继续作为有效记忆使用。发布单条事实不会额外发布其原始消息全文或未发布的历史版本。 |
 
-日常入口是“对话 → 会话面板 → 记忆”，沿用现有主题、语言和标签布局；也可在“共享指令 → 协作偏好”查看已有公共入口。旧 `/memory-workbench` 地址跳转到应用内的 `/configure#prompts/memory`。界面只保留自动学习开关、查找、纠正、候选确认／不采用、忘记及按需展开的来源历史。模型、预算、语义检索等技术配置保留 API，不再放进日常界面。详见 [个性化与界面说明](PERSONAL_MEMORY_ADAPTATION.md)。
+唯一界面入口是“设置 → 记忆”（`/configure#advanced/memory`），沿用现有设置导航、主题和语言。界面汇总当前获准管理的已生效记忆，每条只提供修改与删除；修改只编辑正文，保留来源和适用范围。旧 `/memory-workbench` 与 `/configure#prompts/memory` 地址转到设置。会话侧栏、共享指令和旧 Router 页面不再重复展示记忆控件。详见 [个性化与界面说明](PERSONAL_MEMORY_ADAPTATION.md)。
 
-自动学习开关影响界面标示的团队范围；关闭自动学习回到明确指令模式，已有记忆继续可用。原生会话面板以会话所有权及当前 Router 授权读取对应入口；公共入口管理不能冒充私有入口成员。未绑定范围的新会话显示空状态，不自动创建全局范围。
+候选确认、来源历史、学习策略及技术维护仍保留 API，日常界面不展示这些配置；隐藏候选不会将其自动确认。改版保持既有学习模式，不能冒充私有入口成员，也不会自动为未绑定范围的新会话启用记忆。
 
 实现入口为 `src/agent-memory.ts`、`src/memory-learning.ts`、`src/memory-policy.ts` 与 `src/memory-vectors.ts`；既有 `router-memory.ts` 继续负责来源、版本、发布及内容无关的撤销日志。Router 和 Worker 都通过受控查询路径使用记忆。暂停使用会保留存储；清空与遗忘不等于删除会话历史或供应商副本。
 
@@ -69,7 +69,7 @@ AGENTHUB_CODEX=/path/to/codex \
 MEMORY_ACCEPTANCE_DIR=/tmp/agenthub-memory-native \
 node --import tsx examples/agent-memory-smoke.ts
 
-# 启动隔离的真实 HTTP/SQLite 应用壳与会话面板，再在另一终端跑浏览器脚本。
+# 启动隔离的真实 HTTP/SQLite 应用壳与记忆设置，再在另一终端跑浏览器脚本。
 MEMORY_BROWSER_DIR=/tmp/agenthub-memory-browser \
 node --import tsx examples/agent-memory-browser.ts
 MEMORY_BROWSER_DIR=/tmp/agenthub-memory-browser \

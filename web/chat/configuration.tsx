@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import {createPortal} from "react-dom";
+import {MemorySettings} from "./memory.tsx";
 import type { mount } from "virtual:configuration-content";
 let controller: ReturnType<typeof mount> | undefined;
 let element: HTMLDivElement | undefined;
 let pending: Promise<void> | undefined;
+let memoryElement: HTMLDivElement | undefined;
 const active = () =>
   location.hash !== '#prompts/memory' && !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
   location.pathname === "/configure/" ||
@@ -13,7 +16,8 @@ async function prepare() {
       .then((module) => {
         element = document.createElement("div");
         element.className = "management-content";
-        controller = module.mount({ element, active });
+        memoryElement = document.createElement("div");
+        controller = module.mount({ element, active, memory: () => memoryElement! });
       })
       .catch((error) => {
         pending = undefined;
@@ -33,7 +37,8 @@ export function Configuration({
   pickerRequest: number;
 }) {
   const outlet = useRef<HTMLDivElement>(null),
-    [error, setError] = useState(false);
+    [error, setError] = useState(false),
+    [memoryTarget, setMemoryTarget] = useState<HTMLDivElement|null>(null);
   const pickerHandled = useRef(0);
   const latest = useRef({ visible, language });
   latest.current = { visible, language };
@@ -50,6 +55,7 @@ export function Configuration({
         if (!alive) return;
         setError(false);
         outlet.current?.append(element!);
+        setMemoryTarget(memoryElement!);
         if (latest.current.visible) {
           controller!.activate(latest.current.language);
           if (pickerRequest > pickerHandled.current) {
@@ -75,6 +81,7 @@ export function Configuration({
       aria-label={language === "en" ? "Workspace content" : "工作区内容"}
     >
       <div ref={outlet} />
+      {visible && route.split("#")[1] === "advanced/memory" && memoryTarget ? createPortal(<MemorySettings L={(en, zh) => language === "en" ? en : zh}/>, memoryTarget) : null}
       {error ? (
         <button
           className="configuration-retry"

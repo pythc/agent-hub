@@ -16,7 +16,7 @@ const opPages = () => ({
   catalogue: L('New connection', '新建接入'), detail: entryName(entryState.selected),
   models: L('Model connections', '模型连接'), 'model-new': L('New model connection', '新建模型连接'),
   deployments: L('Deployments', '部署'), integrations: L('Tools and apps', '工具与应用'), execution: L('Agent team', 'Agent 团队'), prompts: L('Shared instructions', '共享指令'),
-  usage: L('Usage guide', '使用指引'), advanced: L('Advanced settings', '高级设置')
+  usage: L('Usage guide', '使用指引'), advanced: L('Settings', '设置')
 })
 function opButton(text,callback,kind='button',glyph){const button=action(text,callback,kind,glyph);if(kind.includes('icon-button')&&glyph){button.setAttribute('aria-label',text);button.title=text;button.replaceChildren(icon(glyph))}return button}
 function opNavigate(page, id, options) {
@@ -393,8 +393,8 @@ function renderOperatorWorkspace(){
   const host=add(el('div','host-mini'),el('span','status-dot'),add(el('div'),el('strong','',L('Management host','管理宿主')),el('span','',location.host)),icon('monitor'))
   const guideLink = opButton(L('Usage guide','使用指引'),()=>opNavigate('usage'),'utility-link','book')
   const webhookLink=el('a','operator-nav-link',L('Webhooks','事件自动化'));webhookLink.href='/webhook-workbench';nav.append(webhookLink)
-  const routerScopeLink=el('a','operator-nav-link',L('Router and memory','Router 与记忆'));routerScopeLink.href='/router-management';nav.append(routerScopeLink)
-  const settingsLink = opButton(L('Advanced settings','高级设置'),()=>opNavigate('advanced'),'utility-link','advanced')
+  const routerScopeLink=el('a','operator-nav-link',L('Router management','Router 管理'));routerScopeLink.href='/router-management';nav.append(routerScopeLink)
+  const settingsLink = opButton(L('Settings','设置'),()=>opNavigate('advanced'),'utility-link','advanced')
   if (entryState.page === 'advanced') settingsLink.setAttribute('aria-current','page')
   if (entryState.page === 'usage') guideLink.setAttribute('aria-current','page')
   const owner = entryState.account?.user

@@ -52,7 +52,6 @@ import {
 } from "lucide-react";
 import type { ChatSessions } from "../../src/chat.ts";
 import { ResourceWorkspace } from "./resource-workspace.tsx";
-import { ConversationMemory, MemoryPreferences } from "./memory.tsx";
 import { initialResources, openResource, resourceKey, type ResourceKind } from "./resource-state.ts";
 import { FeatureNavigation } from "./navigation.tsx";
 import {lazy,Suspense} from "react";
@@ -710,6 +709,7 @@ function App() {
   }, []);
   useEffect(() => {
     const sync = () => {
+      if (location.hash === "#prompts/memory") history.replaceState(null, "", location.pathname + location.search + "#advanced/memory");
       if (location.pathname === "/chat")
         setId(new URL(location.href).searchParams.get("conversation"));
       setRoute(location.pathname + location.search + location.hash);
@@ -746,6 +746,7 @@ function App() {
       history.pushState(null, "", url);
       sync();
     };
+    sync();
     document.addEventListener("click", click);
     window.addEventListener("popstate", sync);
     window.addEventListener("hashchange", sync);
@@ -905,7 +906,6 @@ function Chat(p: ChatProps) {
     if (!next) setPanelExpanded(false);
   };
   const hash = route.split("#")[1] ?? "tasks";
-  const memoryRoute=configuring&&hash==='prompts/memory';
   const marketRoute=configuring&&(hash==='integrations'||hash.startsWith('integrations/'));
   const marketTools=hash==='integrations'||hash==='integrations/tools';
   const views=useWorkspaceViews();
@@ -922,7 +922,6 @@ function Chat(p: ChatProps) {
     integrations: L("Plugins & tools", "插件与工具"),
     prompts: L("Shared instructions", "共享指令"),
     advanced: L("Settings", "设置"),
-    "prompts/memory": L("Collaboration preferences", "协作偏好"),
     usage: L("Usage guide", "使用指引"),
   };
   const pageTitle =
@@ -1563,12 +1562,11 @@ function Chat(p: ChatProps) {
             </header>
             {marketRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading plugins…","正在加载插件…")}</div>}><PluginMarketplace route={hash} language={lang}/></Suspense>:null}
             <Configuration
-              visible={configuring&&!pluginId&&!memoryRoute&&(!marketRoute||marketTools)}
+              visible={configuring&&!pluginId&&(!marketRoute||marketTools)}
               route={route}
               language={lang}
               pickerRequest={pickerRequest}
             />
-            {memoryRoute?<MemoryPreferences L={L} conversationId={id}/>:null}
             {pluginId?<WorkspaceView key={pluginId} id={pluginId} view={currentView} dark={dark} language={lang}/>:null}
             <div
               ref={bodyRef}
@@ -1744,8 +1742,6 @@ function Chat(p: ChatProps) {
                     <FilesPanel conversationId={id} L={L} />
                   ) : panel === "browser" && id && !configuring ? (
                     <BrowserPanel L={L} conversationId={id} requestedUrl={pendingWebsite} onUrlConsumed={consumeWebsite} />
-                  ) : panel === "memory" && !configuring ? (
-                    <ConversationMemory conversationId={id} L={L} refreshKey={run?.id+":"+run?.state}/>
                   ) : panel === "activity" ? (
                     <TeamPanel workers={workers}
                       calls={snapshot?.calls?.filter((c) => c.runId === run?.id) ?? []}
