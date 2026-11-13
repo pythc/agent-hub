@@ -156,14 +156,26 @@ with sync_playwright() as p:
 
     page.goto(f['url'] + '/configure#advanced/memory')
     expect(memory.locator('.memory-note')).to_have_count(3)
-    for memory_id in [f['chatPreference'], f['forgetTarget'], f['old']]:
+    page.goto(f['url'] + '/configure#advanced/chat')
+    page.get_by_role('button', name='清空所有记忆和上下文', exact=True).click()
+    page.get_by_role('button', name='确认清空', exact=True).click()
+    expect(page.get_by_text('上次清空已完成。', exact=True)).to_be_visible(timeout=15000)
+    page.goto(f['url'] + '/configure#advanced/memory')
+    expect(memory.locator('.memory-note')).to_have_count(2)
+    expect(memory.locator('[data-memory-id="' + f['chatPreference'] + '"]')).to_have_count(0)
+    expect(memory.get_by_role('alert')).to_have_count(0)
+    assert context.request.get(api).status == 409
+    external = context.request.post(f['url'] + '/agent-memory', headers={'origin': f['url']}, data={'triggerId': f['triggerId'], 'command': {'action': 'inspect'}}).json()
+    assert external['policy'] == original_policy
+    check('clearing native Chat leaves external memories editable and omits deleted chat contexts from the settings catalog')
+    for memory_id in [f['forgetTarget'], f['old']]:
         row = memory.locator('[data-memory-id="' + memory_id + '"]')
         row.get_by_role('button', name='删除', exact=True).click()
         row.get_by_role('button', name='删除', exact=True).click()
         expect(row).to_have_count(0)
     expect(memory.get_by_text('暂无已保存的记忆。', exact=True)).to_be_visible()
     expect(memory.get_by_role('button')).to_have_count(0)
-    assert context.request.get(api).json()['policy'] == original_policy
+    assert context.request.post(f['url'] + '/agent-memory', headers={'origin': f['url']}, data={'triggerId': f['triggerId'], 'command': {'action': 'inspect'}}).json()['policy'] == original_policy
     check('an empty list has no setup prompts or extra management actions')
     assert not errors, errors
     check('no unexpected page or console errors; optional bare-host discovery probes recorded separately')

@@ -552,3 +552,16 @@ it('does not attribute a legacy sent Worker reply through a task owner changed a
  const reopened=new Runtime(f.config,{model:f.model});hosts.push(reopened)
  expect(reopened.chat.view(current.id,'owner').messages.map(m=>m.text)).toEqual(['Current chat'])
 })
+
+it('omits cleared Chat from the memory settings catalog while keeping an independent entry readable',async()=>{
+ const {h,root}=fixture(),chat=h.chat.space('local-operator',true).conversation!;enableChatBatch(h,chat.id)
+ h.scopes.command({action:'entry.bind',operationId:'keep-external',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'external',history:'group'})
+ const external=h.receive('local','operator',{id:'external-readable',thread:'external',scope:'external',text:'Keep external context',addressed:true}) as {triggerId:string}
+ const local=h.chat.send(chat.id,'local-operator',{clientMessageId:randomUUID(),text:'Clear this native context'})
+ h.chat.reset('local-operator',randomUUID())
+ const host=await serve(h);servers.push(host.server)
+ const headers={authorization:'Bearer '+readFileSync(join(root,'state/access-token'),'utf8').trim(),'content-type':'application/json'}
+ const catalog=await(await fetch(host.url+'/router-management/catalog',{headers})).json() as any
+ expect(catalog.contexts.map((c:any)=>c.id)).toContain(external.triggerId);expect(catalog.contexts.map((c:any)=>c.id)).not.toContain(local.runId)
+ for(const item of catalog.contexts)expect((await fetch(host.url+'/agent-memory',{method:'POST',headers,body:JSON.stringify({triggerId:item.id,command:{action:'inspect'}})})).status).toBe(200)
+})
