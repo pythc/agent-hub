@@ -10,6 +10,7 @@ const decisionSchema=z.object({
  kind:z.enum(memoryKinds),topic:z.string().min(1).max(100),content:z.string().min(1).max(1200),
  importance:z.number().int().min(1).max(5),source:z.number().int().min(0),quote:z.string().min(1).max(1000),
  expiresAt:z.string().nullable(),inferred:z.boolean(),
+ scope:z.enum(['entry','discussion']).default('entry'),condition:z.string().max(300).default(''),
 }).strict()
 const extractionSchema=z.object({memories:z.array(decisionSchema).max(16),topics:z.array(z.object({label:z.string().min(1).max(100),existing:z.number().int().min(0).nullable()}).strict()).max(8)}).strict()
 const instructions=`Maintain sourced long-term notes about the human speaking in the supplied messages.
@@ -18,7 +19,13 @@ Extract stable profile, working preferences, project facts, temporary task backg
 Do not extract general knowledge, quoted documents, assistant claims, credentials, or imagined accomplishments.
 Use add for new information; update/delete must identify an existing note by its supplied index.
 Each memory needs a source message index and an EXACT quote from that message supporting the observation.
-An inference must be marked inferred. Every automatic output is only a proposal for human confirmation.
+Mark inferred=false only for preferences the speaker actually states; mark generalizations inferred=true.
+Describe when each preference applies in condition; use an empty condition only for a general preference.
+Use scope=discussion for temporary instructions such as "this time", "today's task", or a one-off exception.
+Use scope=entry for enduring preferences in this project or entry. Do not turn one task choice into a permanent trait.
+Update only the same preference under the same conditions. A narrower exception coexists with the general preference.
+A direct correction supersedes the old preference; a guess must not replace something the user stated.
+The host applies the selected learning policy. Do not ask the user to approve ordinary adaptive preferences.
 Use an absolute ISO date for expiry when appropriate, otherwise null. Never alter a task's actual goal,
 authorization, acceptance criteria or completion state. A task note is background, not an executable task.
 Topic labels should name reusable subject areas, not one question. Reuse an existing topic index for aliases.
@@ -49,12 +56,12 @@ export async function extractMemories(engine:AgentMemory,c:ScopeContext,batch:Me
  if(JSON.stringify(messages).length>100000)throw Error('extraction_input_requires_smaller_batch')
  const query=messages.map(m=>m.text).join(' ').slice(0,200)
  await engine.prepare(c,query)
- const all=engine.authorized(c).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
+ const all=engine.applicable(c).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
  const ranked=engine.rank(c,query,all).items
  const existing=[...ranked,...all.filter(f=>!ranked.includes(f))].slice(0,15)
  const topics=host.store.list<any>('memory-topic').filter(t=>t.space===engine.space(c)&&t.generation===host.memory.generation(c.route.scopeId)).slice(-40)
  const rejected=host.memory.suppressions(c).map(r=>({factId:r.factId}))
- const result=await modelJSON(engine,c,'extract',{referenceTime:new Date(engine.now()).toISOString(),messages:messages.map((m,index)=>({...m,index})),existing:existing.map((f,index)=>({index,kind:f.kind,topic:f.subject,content:f.content,protected:f.protected})),topics:topics.map((t,index)=>({index,label:t.label,aliases:t.aliases})),rejected},extractionSchema,signal,batch.map(r=>r.triggerId),existing) as z.infer<typeof extractionSchema>
+ const result=await modelJSON(engine,c,'extract',{referenceTime:new Date(engine.now()).toISOString(),messages:messages.map((m,index)=>({...m,index})),existing:existing.map((f,index)=>({index,kind:f.kind,topic:f.subject,content:f.content,protected:f.protected,learning:f.learning})),topics:topics.map((t,index)=>({index,label:t.label,aliases:t.aliases})),rejected},extractionSchema,signal,batch.map(r=>r.triggerId),existing) as z.infer<typeof extractionSchema>
  // Validate the complete result before committing anything or advancing progress.
  const decisions=result.memories.map(d=>{
   const source=messages[d.source];if(!source||!source.text.includes(d.quote))throw Error('unverifiable_memory_source')
@@ -73,12 +80,16 @@ export async function extractMemories(engine:AgentMemory,c:ScopeContext,batch:Me
  return {apply(capture:MemoryCapture){
   for(const d of decisions){
    const current=engine.authorized(c,true).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
-   if(current.some(f=>f.kind===d.kind&&normalizeMemory(f.content)===normalizeMemory(d.content)&&f.proposalAction!=='forget'&&d.action!=='delete'))continue
-   const refs=[d.source.sourceId,...(d.target?.sources.map(s=>s.id)??[])]
+   const learning={inferred:d.inferred,condition:d.condition,quote:d.quote,...(d.scope==='discussion'?{discussion:c.route.discussion}:{})}
+   if(current.some(f=>f.kind===d.kind&&normalizeMemory(f.content)===normalizeMemory(d.content)&&f.learning?.discussion===learning.discussion&&(f.learning?.condition??'')===learning.condition&&(f.learning?.inferred??false)===learning.inferred&&f.proposalAction!=='forget'&&d.action!=='delete'))continue
+   // A temporary exception never supersedes a standing preference.
+   const target=d.action==='delete'||d.target?.learning?.discussion===learning.discussion?d.target:undefined
+   const refs=[d.source.sourceId,...(target?.sources.map(s=>s.id)??[])]
    const ids=[...new Set(refs)],fullCapture=host.memory.capture(c,ids)
    if(fullCapture.epoch!==capture.epoch||fullCapture.generation!==capture.generation)throw Error('stale_extraction')
    try{
-    host.memory.command(c,{action:'remember',operationId:'extract:'+stableDigest([d.source.id,d.action,d.kind,d.topic,d.content,d.target?.id]),expectedRevision:0,subject:d.topic,content:d.content,sourceIds:ids,kind:d.kind,importance:d.importance,expiresAt:d.expiresAt,candidate:true,origin:'extracted',replaces:d.target?[{id:d.target.id,revision:d.target.revision}]:undefined,proposalAction:d.action==='delete'?'forget':'replace',capture:fullCapture,visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'})
+    const fact=host.memory.command(c,{action:'remember',operationId:'extract:'+stableDigest([d.source.id,d.action,d.kind,d.topic,d.content,target?.id,learning]),expectedRevision:0,subject:d.topic,content:d.content,sourceIds:ids,kind:d.kind,importance:d.importance,expiresAt:d.expiresAt,candidate:true,origin:'extracted',learning,replaces:target?[{id:target.id,revision:target.revision}]:undefined,proposalAction:d.action==='delete'?'forget':'replace',capture:fullCapture,visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'}) as MemoryFact
+    if(engine.policy(c).writeMode==='adaptive'&&d.kind==='preference'&&d.action!=='delete'&&(!d.inferred||!target||target.learning?.inferred===true&&!target.protected))host.memory.acceptLearning(c,fact)
    }catch(error){if(!String(error).includes('Fact was forgotten'))throw error}
   }
   for(const t of resolvedTopics)if(t.id&&t.alias&&!host.memory.topicSuppressed(c.route.scopeId,t.alias)){const old=host.store.get<any>('memory-topic',t.id);if(old)host.store.put('memory-topic',t.id,{...old,aliases:[...new Set([...old.aliases,t.alias])].slice(-12)})}
@@ -92,23 +103,24 @@ export async function consolidateMemories(engine:AgentMemory,c:ScopeContext,sign
  const space=engine.space(c),previous=host.store.get<any>('memory-consolidation',space)
  if(previous?.status==='running')return {status:'busy'}
  if(previous&&previous.status!=='interrupted'&&engine.now()-previous.at<60000)return {status:'rate_limited'}
- const candidates=engine.authorized(c).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
- const related=candidates.filter((f,i)=>candidates.some((other,j)=>i!==j&&f.kind===other.kind&&(lexicalScore(f.subject+' '+f.content,other.subject+' '+other.content)>.3||engine.similar(c,f,other)>=.88))).slice(0,20)
+ const candidates=engine.applicable(c).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
+ const sameContext=(a:MemoryFact,b:MemoryFact)=>a.kind===b.kind&&a.learning?.discussion===b.learning?.discussion&&(a.learning?.condition??'')===(b.learning?.condition??'')&&a.learning?.inferred===b.learning?.inferred
+ const related=candidates.filter((f,i)=>candidates.some((other,j)=>i!==j&&sameContext(f,other)&&(lexicalScore(f.subject+' '+f.content,other.subject+' '+other.content)>.3||engine.similar(c,f,other)>=.88))).slice(0,20)
  const revision=engine.policyRevision(c),generation=host.memory.generation(c.route.scopeId)
  host.store.put('memory-consolidation',space,{at:engine.now(),status:'running',reviewed:candidates.length})
  try{
   if(related.length<2){const result={at:engine.now(),status:'no_candidates',reviewed:candidates.length,proposed:0};host.store.put('memory-consolidation',space,result);return result}
-  const result=await modelJSON(engine,c,'consolidate',{memories:related.map((f,index)=>({index,kind:f.kind,content:f.content,topic:f.subject,recordedAt:f.createdAt,protected:f.protected}))},consolidationSchema,signal,[c.trigger.id],related) as z.infer<typeof consolidationSchema>
+  const result=await modelJSON(engine,c,'consolidate',{memories:related.map((f,index)=>({index,kind:f.kind,content:f.content,topic:f.subject,recordedAt:f.createdAt,protected:f.protected,learning:f.learning}))},consolidationSchema,signal,[c.trigger.id],related) as z.infer<typeof consolidationSchema>
   signal.throwIfAborted();if(!engine.enabled(c)||revision!==engine.policyRevision(c)||generation!==host.memory.generation(c.route.scopeId))throw Error('memory_policy_changed')
   const seen=new Set<number>()
   const merges=result.merges.map(m=>{
    const members=m.indices.map(i=>{const f=related[i];if(!f||seen.has(i))throw Error('invalid_merge_target');seen.add(i);return f})
-   if(members.some(f=>f.kind!==members[0]!.kind))throw Error('incompatible_merge_kinds')
+   if(members.some(f=>!sameContext(f,members[0]!)))throw Error('incompatible_merge_kinds')
    return {members,content:safeMemoryText(m.content)}
   })
   return host.store.atomic(()=>{const proposed=merges.map(m=>{
    const sources=[...new Set(m.members.flatMap(f=>f.sources.map(s=>s.id)))];if(sources.length>30)throw Error('merge_evidence_limit')
-   return host.memory.command(c,{action:'remember',operationId:'merge:'+stableDigest([m.members.map(f=>[f.id,f.revision]),m.content]),expectedRevision:0,subject:m.members[0]!.subject,content:m.content,sourceIds:sources,kind:m.members[0]!.kind??'fact',candidate:true,origin:'consolidated',replaces:m.members.map(f=>({id:f.id,revision:f.revision})),visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'})
+   return host.memory.command(c,{action:'remember',operationId:'merge:'+stableDigest([m.members.map(f=>[f.id,f.revision]),m.content]),expectedRevision:0,subject:m.members[0]!.subject,content:m.content,sourceIds:sources,kind:m.members[0]!.kind??'fact',candidate:true,origin:'consolidated',learning:m.members[0]!.learning,replaces:m.members.map(f=>({id:f.id,revision:f.revision})),visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'})
   })
   const report={at:engine.now(),status:'completed',reviewed:candidates.length,proposed:proposed.length};host.store.put('memory-consolidation',space,report);return report
   })

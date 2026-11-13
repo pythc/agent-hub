@@ -9,7 +9,7 @@ const config=()=>configSchema.parse({execution:{router:{mode:'host',prompt:'Rout
 it('previews project runtime sections and selected Worker without restricting collaboration',()=>{
  const c=config(),p=previewInstructions(c,{role:'worker',workerId:'two'})
  expect(p.mode).toBe('project')
- expect(p.sections.map(s=>s.id)).toEqual(['role','runtime/worker/delegated','runtime/worker/project','project-context','runtime/worker/tools','runtime/worker/goal','agent-profile'])
+ expect(p.sections.map(s=>s.id)).toEqual(['role','runtime/worker/delegated','runtime/worker/project','project-context','runtime/worker/tools','runtime/personalization','runtime/worker/goal','agent-profile'])
  expect(p.text).toContain('Worker two profile')
  expect(p.text).not.toContain('Worker one profile')
  expect(p.text).toContain('npm test')
@@ -19,7 +19,7 @@ it('previews project runtime sections and selected Worker without restricting co
  expect(p.baseInstructions).toBe(managedBase)
  expect(c.execution.workers).toHaveLength(2)
  const r=previewInstructions(c,{role:'router'})
- expect(r.sections.map(s=>s.id)).toEqual(['role','runtime/coordinator/project','runtime/coordinator/context','agent-profile'])
+ expect(r.sections.map(s=>s.id)).toEqual(['role','runtime/coordinator/project','runtime/coordinator/context','runtime/personalization','agent-profile'])
  expect(r.text).toContain('one Worker')
  expect(r.text).toContain('Router profile')
 })

@@ -445,6 +445,7 @@ export class RouterGoals {
        g.state='completed';g.nextAt=undefined;g.reason=undefined;g.recovery=undefined
        g.checks=g.criteria.map(cr=>{const n=g.nodes!.find(n=>n.criterionIds.includes(cr.id))!;return {criterionId:cr.id,...(n.teamTargetId?{delegationId:n.delegationId!,reportAt:String(round.finishedAt)}:{ticketId:n.ticketId!,reportAt:this.host.store.tickets.get(n.ticketId!)!.assignments.at(-1)!.report!.at}),explanation:'Independent acceptance '+round.id}})
        this.save(g)
+       try{this.host.agentMemory.observeExperience(g,round)}catch(error){this.host.store.audit({type:'memory.experience_failed',goalId:g.id,error:String(error)})}
        if(g.project)this.notice(g,'已完成「'+g.title+'」。人工验收提交 '+g.project.review!.head+'。',true)
        if(g.nodes!.every(n=>n.teamTargetId)){
         const {trigger}=this.anchor(g),id='goal-complete:'+g.id

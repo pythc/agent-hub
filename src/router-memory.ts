@@ -7,20 +7,20 @@ import type {Trigger} from './vendor/dsh-core/index.ts'
 import type {RouterScopes,ScopeContext} from './router-scope.ts'
 import {stableDigest,bodyDigest,sourceChangeSchema,type SourceChange} from './sources.ts'
 import type {ToolSpec} from './model.ts'
-import {assertNoMemorySecret} from './memory-policy.ts'
+import {assertNoMemorySecret,memoryLearningSchema,type MemoryLearning} from './memory-policy.ts'
 import {HistoryCleanup,planHistory,type HistoryPlan} from './history-cleanup.ts'
 import {detectExplicitMemory,renderMemory,type MemoryKind} from './vendor/weknora/primitives.ts'
 
 const id=z.string().min(1).max(300)
-export interface MemoryEvidence {id:string;tenantId:string;scopeId:string;entryId:string;sourceId:string;actor:string;version:number;hash:string;text:string;locator:string;occurredAt?:string;capturedAt:number;revoked:boolean}
-export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;origin?:'explicit'|'manual'|'extracted'|'consolidated';importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;topicAliases?:string[]}
+export interface MemoryEvidence {id:string;parentId?:string;tenantId:string;scopeId:string;entryId:string;sourceId:string;actor:string;version:number;hash:string;text:string;locator:string;occurredAt?:string;capturedAt:number;revoked:boolean}
+export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;origin?:'explicit'|'manual'|'extracted'|'consolidated'|'experience';learning?:MemoryLearning;importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;topicAliases?:string[]}
 export interface MemoryProjection extends MemoryFact {freshness:{status:'verified'|'unverified'|'unavailable'|'stale';capturedAt:number;checkedAt?:number;sourceVersions:{id:string;version:number}[]};access:{audienceEntry:string;sourceEntry:string;mode:'origin'|'published_revision';revision:number;shareId?:string}}
 export interface MemoryShare {id:string;factId:string;revision:number;targetEntry:string;active:boolean;expiresAt?:number;publishedAt?:number}
 export interface MemoryCapture {tenantId:string;scopeId:string;generation:number;epoch:number;sourceVersions:{id:string;version:number}[]}
 export interface ContextManifest {id:string;triggerId:string;actor:string;tenantId:string;scopeId:string;entryId:string;routerId:string;epoch:number;generation:number;facts:{id:string;revision:number}[];evidence:{id:string;version:number}[];inputEvidence?:{id:string;version:number}[];knowledge?:{documentId:string;revision:number}[];taskOwners:{id:string;epoch:number;dataRevision?:number}[];bytes:number;truncated:boolean;retrieval?:{status:string;reason?:string};at:number;backend:string;sessionKey:string}
 const base={operationId:id,expectedRevision:z.number().int().min(0)}
 export const memoryCommandSchema=z.discriminatedUnion('action',[
- z.object({action:z.literal('remember'),...base,id:id.optional(),subject:id,content:z.string().min(1).max(16000),sourceIds:z.array(id).max(30),derivedFrom:z.array(id).max(20).default([]),relation:z.enum(['independent','joint']).default('joint'),visibility:z.enum(['group','private','task']).default('group'),ticketId:id.optional(),expiresAt:z.number().int().positive().optional(),candidate:z.boolean().default(true),kind:z.enum(['profile','preference','fact','task','interest']).default('fact'),importance:z.number().int().min(1).max(5).default(3),origin:z.enum(['explicit','manual','extracted','consolidated']).optional(),replaces:z.array(z.object({id,revision:z.number().int().positive()}).strict()).max(20).optional(),proposalAction:z.enum(['replace','forget']).default('replace'),topicAliases:z.array(z.string().min(1).max(100)).max(12).optional(),capture:z.object({tenantId:id,scopeId:id,generation:z.number(),epoch:z.number(),sourceVersions:z.array(z.object({id,version:z.number()}).strict())}).strict().optional()}).strict(),
+ z.object({action:z.literal('remember'),...base,id:id.optional(),subject:id,content:z.string().min(1).max(16000),sourceIds:z.array(id).max(30),derivedFrom:z.array(id).max(20).default([]),relation:z.enum(['independent','joint']).default('joint'),visibility:z.enum(['group','private','task']).default('group'),ticketId:id.optional(),expiresAt:z.number().int().positive().optional(),candidate:z.boolean().default(true),kind:z.enum(['profile','preference','fact','task','interest']).default('fact'),importance:z.number().int().min(1).max(5).default(3),origin:z.enum(['explicit','manual','extracted','consolidated','experience']).optional(),learning:memoryLearningSchema.optional(),replaces:z.array(z.object({id,revision:z.number().int().positive()}).strict()).max(20).optional(),proposalAction:z.enum(['replace','forget']).default('replace'),topicAliases:z.array(z.string().min(1).max(100)).max(12).optional(),capture:z.object({tenantId:id,scopeId:id,generation:z.number(),epoch:z.number(),sourceVersions:z.array(z.object({id,version:z.number()}).strict())}).strict().optional()}).strict(),
  z.object({action:z.literal('suppression.remove'),...base,id}).strict(),
  z.object({action:z.literal('confirm'),...base,id}).strict(),
  z.object({action:z.literal('share'),...base,id,targetEntry:id,expiresAt:z.number().int().positive().optional()}).strict(),
@@ -47,6 +47,7 @@ export class RouterMemory {
  readonly cleanup:HistoryCleanup
  recall?:(context:ScopeContext,query:string)=>{items:MemoryProjection[];status:string;reason?:string}
  onMutation?:()=>void
+ learning?:(context:ScopeContext)=>{mode:string;enabled:boolean;coldStart:boolean}
  validateUse?:(context:ScopeContext,refs:{id:string;revision:number}[])=>void
  validateKnowledge?:(context:ScopeContext,refs:{documentId:string;revision:number}[])=>void
  constructor(readonly store:Store,readonly scopes:RouterScopes,readonly stateDir:string){this.cleanup=new HistoryCleanup(store,stateDir);this.cleanup.onExpand=plan=>{
@@ -54,8 +55,7 @@ export class RouterMemory {
   this.appendRevocation(r);this.store.put('memory-revocation-head','current',{seq:r.seq,hash:r.hash})
  };this.reconcile()}
  generation(scopeId:string){return this.store.get<number>('memory-generation',scopeId)??0}
- /** Deterministic explicit-write path, adapted from WeKnora. Inferred memories
-  * continue to require confirmation. The original request is retained as evidence. */
+ /** Deterministic explicit-write path; retain the original request as evidence. */
  captureExplicit(c:ScopeContext){
   if(!c.trigger.human||!this.scopes.scope(c.route.scopeId).memoryEnabled)return
   // A connector command is addressing syntax, not part of the memory directive.
@@ -106,6 +106,7 @@ export class RouterMemory {
   // Leaving a group revokes the actor's future authority, not the truth of their
   // previously sourced statements. Content edits/recalls do invalidate evidence.
   for(const evidence of this.store.list<MemoryEvidence>('memory-evidence'))if(!e.kind.startsWith('member.')&&evidence.tenantId===r.tenantId&&evidence.locator.startsWith('trigger:')&&invalid.has(evidence.locator.slice(8))&&!evidence.revoked){invalidEvidence.add(evidence.id);this.store.put('memory-evidence',evidence.id,{...evidence,revoked:true,version:evidence.version+1})}
+  for(const evidence of this.store.list<MemoryEvidence>('memory-evidence'))if(evidence.parentId&&invalidEvidence.has(evidence.parentId)&&!evidence.revoked){invalidEvidence.add(evidence.id);this.store.put('memory-evidence',evidence.id,{...evidence,revoked:true,version:evidence.version+1})}
   for(const fact of this.store.list<MemoryFact>('memory-fact'))if(fact.tenantId===r.tenantId&&fact.sources.some(s=>invalidEvidence.has(s.id))&&!this.supported(fact)&&['active','candidate','disputed'].includes(fact.state)){this.store.put('memory-version',fact.id+':'+fact.revision,fact);this.save({...fact,state:'revoked',revision:fact.revision+1})}
   this.invalidateDerived()
   if(changed){this.scopes.bump(entry.tenantId);this.queryChanged(entry.tenantId)}
@@ -240,6 +241,7 @@ export class RouterMemory {
   }
   if(x.action==='remember'){
    assertNoMemorySecret(x.content);assertNoMemorySecret(x.subject)
+   if(x.learning){assertNoMemorySecret(x.learning.condition);if(x.learning.quote)assertNoMemorySecret(x.learning.quote)}
    const capture=x.capture??this.capture(c,x.sourceIds);this.validCapture(c,capture)
    if(x.sourceIds.some(id=>!capture.sourceVersions.some(s=>s.id===id)))throw Error('Uncaptured extraction input')
    const parents=x.derivedFrom.map(id=>{const p=this.fact(id);if(!p||!this.visible(p,c))throw Error('Derived memory dependency unavailable');return p})
@@ -262,7 +264,7 @@ export class RouterMemory {
    for(const ref of replaces??[]){const target=this.fact(ref.id);if(!target||!this.visible(target,c)||target.scopeId!==c.route.scopeId||target.entryId!==c.route.entryId||target.owner!==c.actor&&!manager||target.revision!==ref.revision)throw Error('Replacement target changed or is outside authority')}
    if(!operator&&x.origin&&x.origin!=='extracted'&&x.origin!=='consolidated')throw Error('Automatic memory cannot claim human origin')
    const proposed=!!old&&x.candidate
-   const fact:MemoryFact={id:proposed?'memory-'+randomUUID():old?.id??'memory-'+randomUUID(),revision:proposed?1:(old?.revision??0)+1,tenantId:c.route.tenantId,scopeId:c.route.scopeId,subject:x.subject,content:x.content,state:x.candidate?'candidate':'active',sources,dependencies:parents.map(p=>({id:p.id,revision:p.revision})),relation:x.relation,visibility:x.visibility,owner:old?.owner??c.actor,entryId:c.route.entryId,ticketId:x.ticketId,expiresAt:x.expiresAt,generation:capture.generation,createdAt:Date.now(),kind:x.kind,importance:x.importance,origin:x.origin??(operator?'manual':'extracted'),protected:operator&&!x.candidate,replaces,proposalAction:x.proposalAction,topicAliases:x.topicAliases}
+   const fact:MemoryFact={id:proposed?'memory-'+randomUUID():old?.id??'memory-'+randomUUID(),revision:proposed?1:(old?.revision??0)+1,tenantId:c.route.tenantId,scopeId:c.route.scopeId,subject:x.subject,content:x.content,state:x.candidate?'candidate':'active',sources,dependencies:parents.map(p=>({id:p.id,revision:p.revision})),relation:x.relation,visibility:x.visibility,owner:old?.owner??c.actor,entryId:c.route.entryId,ticketId:x.ticketId,expiresAt:x.expiresAt,generation:capture.generation,createdAt:Date.now(),kind:x.kind,importance:x.importance,origin:x.origin??(operator?'manual':'extracted'),protected:operator&&!x.candidate,replaces,proposalAction:x.proposalAction,topicAliases:x.topicAliases,learning:x.learning}
    if(old&&!proposed)this.store.put('memory-version',old.id+':'+old.revision,{...old,state:'superseded'})
    this.save(fact);return fact
   }
@@ -295,10 +297,15 @@ export class RouterMemory {
   const share:MemoryShare={id:stableDigest([fact.id,target.id]),factId:fact.id,revision:fact.revision,targetEntry:target.id,active:true,expiresAt:x.expiresAt,publishedAt:Date.now()}
   this.store.put('memory-share',share.id,share);this.queryChanged(fact.tenantId);return share
  }
+ /** Host learning uses the same versioned replacement transaction as confirmation. */
+ acceptLearning(c:ScopeContext,fact:MemoryFact){
+  const accepted=this.command(c,{action:'confirm',operationId:'learn:'+fact.id,id:fact.id,expectedRevision:fact.revision},true) as MemoryFact
+  const next={...accepted,protected:false};this.save(next);return next
+ }
  private dependsOn(fact:MemoryFact,targets:Set<string>,seen=new Set<string>()):boolean{if(targets.has(fact.id))return true;if(seen.has(fact.id))return false;seen.add(fact.id);return !!fact.dependencies?.some(ref=>{const parent=this.fact(ref.id);return !!parent&&this.dependsOn(parent,targets,seen)})}
  private invalidateDerived(wipe=false){
   let changed=true
-  while(changed){changed=false;for(const f of this.store.list<MemoryFact>('memory-fact'))if(f.dependencies?.length&&['active','candidate','disputed'].includes(f.state)&&!this.supported(f)){this.store.put('memory-version',f.id+':'+f.revision,wipe?{...f,subject:'',content:'',state:'tombstoned'}:f);this.save({...f,...(wipe?{subject:'',content:''}:{}),state:'revoked',revision:f.revision+1});changed=true}}
+  while(changed){changed=false;for(const f of this.store.list<MemoryFact>('memory-fact'))if(f.dependencies?.length&&['active','candidate','disputed'].includes(f.state)&&!this.supported(f)){this.store.put('memory-version',f.id+':'+f.revision,wipe?{...f,subject:'',content:'',learning:undefined,state:'tombstoned'}:f);this.save({...f,...(wipe?{subject:'',content:'',learning:undefined}:{}),state:'revoked',revision:f.revision+1});changed=true}}
  }
  private queryChanged(tenantId:string){this.store.put('memory-query-version',tenantId,(this.store.get<number>('memory-query-version',tenantId)??0)+1)}
  private save(f:MemoryFact){this.queryChanged(f.tenantId);this.store.put('memory-fact',f.id,f);this.store.db.prepare('DELETE FROM memory_search WHERE id=?').run(f.id);if(f.state==='active')this.store.db.prepare('INSERT INTO memory_search(id,body) VALUES(?,?)').run(f.id,f.subject+' '+f.content)}
@@ -333,15 +340,15 @@ export class RouterMemory {
    if(share)this.store.put('memory-share',key,{...share,active:false})
   }
   if(r.action==='source.delete'){
-   const e=this.evidence(r.id!);if(e)this.store.put('memory-evidence',e.id,{...e,revoked:true,text:'',version:e.version+1})
+   for(const e of this.store.list<MemoryEvidence>('memory-evidence'))if(e.id===r.id||e.parentId===r.id)this.store.put('memory-evidence',e.id,{...e,revoked:true,text:'',version:e.version+1})
   }
   for(const fact of this.store.list<MemoryFact>('memory-fact')){
    if(fact.tenantId!==r.tenantId)continue
    const wipe=r.action==='forget'&&fact.id===r.id||['clear','history.delete'].includes(r.action)&&fact.scopeId===r.scopeId&&fact.generation<r.generation
    const lost=r.action==='source.delete'&&fact.sources.some(s=>s.id===r.id)&&!this.supported(fact)
    if(wipe||lost){
-    this.save({...fact,subject:'',content:'',topicAliases:[],state:wipe?'tombstoned':'revoked',revision:fact.revision+1})
-    for(const v of this.store.list<MemoryFact>('memory-version'))if(v.id===fact.id)this.store.put('memory-version',v.id+':'+v.revision,{...v,subject:'',content:'',topicAliases:[],state:'tombstoned'})
+    this.save({...fact,subject:'',content:'',learning:undefined,topicAliases:[],state:wipe?'tombstoned':'revoked',revision:fact.revision+1})
+    for(const v of this.store.list<MemoryFact>('memory-version'))if(v.id===fact.id)this.store.put('memory-version',v.id+':'+v.revision,{...v,subject:'',content:'',learning:undefined,topicAliases:[],state:'tombstoned'})
     if(r.action==='forget'&&!r.suppression)this.store.put('memory-suppression',stableDigest([fact.scopeId,fact.owner,fact.subject]),{id:fact.id,at:r.at})
    }
   }
@@ -356,10 +363,11 @@ export class RouterMemory {
   const retrieval=this.recall?.(c,c.trigger.text.slice(0,200))??this.query(c,{query:c.trigger.text.slice(0,200),limit:20}),items=retrieval.items
   // Explicitly referenced or recent facts remain discoverable when the whole request is not a useful search phrase.
   const candidates=this.recall?items:items.length?items:this.query(c,{limit:20}).items
-  const facts:typeof candidates=[];let rendered=JSON.stringify({...input as object,memory:{facts,status:'complete'}}),truncated=false
-  for(const fact of candidates){const next=JSON.stringify({...input as object,memory:{facts:[...facts,fact],status:'complete'}});if(Buffer.byteLength(next)>s.contextBytes-1024){truncated=true;continue}facts.push(fact);rendered=next}
-  const outline=renderMemory(facts.map(f=>({id:f.id,kind:f.kind??'fact',content:f.content})))
-  rendered=JSON.stringify({...input as object,memory:{facts,status:retrieval.status==='partial'?'partial':truncated?'truncated':'complete',...(retrieval.reason?{reason:retrieval.reason}:{})}})
+  const learning=this.learning?.(c)
+  const facts:typeof candidates=[];let rendered=JSON.stringify({...input as object,memory:{facts,learning,status:'complete'}}),truncated=false
+  for(const fact of candidates){const next=JSON.stringify({...input as object,memory:{facts:[...facts,fact],learning,status:'complete'}});if(Buffer.byteLength(next)>s.contextBytes-1024){truncated=true;continue}facts.push(fact);rendered=next}
+  const outline=renderMemory(facts.map(f=>({id:f.id,kind:f.kind??'fact',content:(f.learning?('['+(f.learning.inferred&&!f.protected?'Tentative; ':'')+(f.learning.discussion?'This discussion; ':'')+(f.learning.condition||'This entry')+'] '):'')+f.content})))
+  rendered=JSON.stringify({...input as object,memory:{facts,learning,status:retrieval.status==='partial'?'partial':truncated?'truncated':'complete',...(retrieval.reason?{reason:retrieval.reason}:{})}})
   const withOutline=JSON.stringify({...JSON.parse(rendered),memory:{...JSON.parse(rendered).memory,outline}})
   if(Buffer.byteLength(withOutline)<=s.contextBytes)rendered=withOutline
   if(Buffer.byteLength(rendered)>s.contextBytes)throw Error('Context budget is insufficient for the request envelope')

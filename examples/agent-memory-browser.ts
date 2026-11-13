@@ -12,9 +12,10 @@ let n=0
 const send=(text:string,group='a')=>{const out=h.receive('local','alice',{id:'msg-'+(++n),scope:group,thread:group,addressed:true,text}) as any;const t=h.store.triggers.get(out.triggerId)!;return h.scopes.context(t,'local:'+group)!}
 const c=send('技术报告先给结论；原始来源验证标记；<script>window.memoryPwned=1</script>'),e=h.memory.ingest(c)
 const remember=(subject:string,content:string,extra:any={})=>h.memory.command(c,{action:'remember',operationId:'write-'+(++n),expectedRevision:0,subject,content,kind:'preference',sourceIds:[e.id],candidate:false,...extra},true) as any
-const old=remember('报告顺序','技术报告先给结论')
-const pending=remember('报告顺序','技术报告先列未验证项',{candidate:true,replaces:[{id:old.id,revision:old.revision}],origin:'extracted'})
-const rejected=remember('不保留项目','用于浏览器拒绝建议验证',{candidate:true,kind:'fact'})
+const old=remember('报告顺序','技术报告先给结论',{learning:{inferred:false,condition:'技术报告',quote:'技术报告先给结论'}})
+const pending=remember('报告顺序','技术报告先列未验证项',{candidate:true,replaces:[{id:old.id,revision:old.revision}],origin:'extracted',learning:{inferred:false,condition:'技术报告',quote:'技术报告先给结论'}})
+const rejectedSource=h.memory.ingest(send('用于浏览器拒绝建议验证'))
+const rejected=remember('不保留项目','用于浏览器拒绝建议验证',{candidate:true,kind:'fact',sourceIds:[rejectedSource.id]})
 const other=send('另一入口的独立内容','b')
 const host=await serve(h),authorization='Bearer '+readFileSync(host.tokenPath,'utf8').trim()
 const setup=await fetch(host.url+'/account/setup',{method:'POST',headers:{authorization,'content-type':'application/json',origin:host.url},body:JSON.stringify({username:'memory-review',displayName:'记忆验证',password:'isolated memory browser password',remember:false})});if(setup.status!==201)throw Error('setup failed '+setup.status)

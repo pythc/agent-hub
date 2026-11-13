@@ -1,9 +1,9 @@
 import {z} from 'zod'
 
-/** AgentHub policies deliberately retain candidate-first automatic learning. */
+/** Existing installations keep their write policy; adaptive learning is explicit. */
 export const memoryPolicySchema=z.object({
  enabled:z.boolean().default(true),
- writeMode:z.enum(['explicit_only','auto']).default('explicit_only'),
+ writeMode:z.enum(['explicit_only','auto','adaptive']).default('explicit_only'),
  extractBackend:z.string().min(1).optional(),extractModel:z.string().min(1).optional(),
  delayMs:z.number().int().min(0).max(3600000).default(90000),
  minIntervalMs:z.number().int().min(0).max(86400000).default(300000),
@@ -16,6 +16,13 @@ export const memoryPolicySchema=z.object({
  reranker:z.object({url:z.url().refine(s=>['http:','https:'].includes(new URL(s).protocol),'HTTP endpoint required'),model:z.string().min(1),apiKeyEnv:z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),minScore:z.number().min(0).max(1).default(.5),candidateLimit:z.number().int().min(2).max(40).default(20)}).strict().optional(),
 }).strict()
 export type MemoryPolicy=z.infer<typeof memoryPolicySchema>
+export const memoryLearningSchema=z.object({
+ inferred:z.boolean(),
+ condition:z.string().max(300),
+ discussion:z.string().min(1).optional(),
+ quote:z.string().min(1).max(1000).optional(),
+}).strict()
+export type MemoryLearning=z.infer<typeof memoryLearningSchema>
 export const memoryKinds=['profile','preference','fact','task','interest'] as const
 export const normalizeMemory=(s:string)=>s.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu,'')
 export function memoryTokens(s:string){

@@ -2,15 +2,18 @@ import {randomUUID} from 'node:crypto'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {ScopeContext} from './router-scope.ts'
-import type {MemoryFact,MemoryProjection,MemoryCapture,ContextManifest} from './router-memory.ts'
+import type {MemoryFact,MemoryProjection,MemoryCapture,ContextManifest,MemoryEvidence} from './router-memory.ts'
 import {stableDigest} from './sources.ts'
 import {memoryPolicySchema,normalizeMemory,lexicalScore,cosine,assertNoMemorySecret,type MemoryPolicy} from './memory-policy.ts'
 import {embedMemory,validateMemoryVector,type EmbedMemory} from './memory-vectors.ts'
 import {rerankMemory,memoryCandidates,memoryRetrievalComplete,type RerankMemory} from './memory-rerank.ts'
 import {extractMemories,consolidateMemories} from './memory-learning.ts'
+import {observeExperience,extractExperience} from './memory-experience.ts'
+import type {RouterGoal} from './router-goals.ts'
+import type {VerificationRound} from './goal-verification.ts'
 import {verifyMemoryRelevance} from './memory-relevance.ts'
 
-export interface MemoryObservation {id:string;space:string;triggerId:string;discussion:string;scopeId:string;entryId:string;actor:string;session:string;sourceId:string;start?:number;end?:number;generation:number;epoch:number;policyRevision:number;sequence:number;state:'pending'|'running'|'done'|'held'|'stale';attempts:number;nextAt:number;lease?:string;error?:string}
+export interface MemoryObservation {id:string;kind?:'experience';parentSourceId?:string;space:string;triggerId:string;discussion:string;scopeId:string;entryId:string;actor:string;session:string;sourceId:string;start?:number;end?:number;generation:number;epoch:number;policyRevision:number;sequence:number;state:'pending'|'running'|'done'|'held'|'stale';attempts:number;nextAt:number;lease?:string;error?:string}
 interface Vector {id:string;factId:string;revision:number;generation:number;scopeId:string;model:string;vector:number[]}
 interface Topic {id:string;space:string;scopeId:string;generation:number;label:string;aliases:string[];sources:{id:string;version:number}[];sessions:string[];proposalId?:string}
 interface QueryVector {vector?:number[];mode:string;at:number;epoch:number;generation:number;policyRevision:number;signature?:string;verified?:boolean;reranked?:{id:string;revision:number;score:number}[]}
@@ -23,11 +26,12 @@ export class AgentMemory {
  private closed=false
  constructor(readonly host:Runtime,readonly embed:EmbedMemory=embedMemory,readonly now=Date.now,readonly rerank:RerankMemory=rerankMemory){
   const schema=host.store.get<number>('memory-schema','current')??1
-  if(schema>2)throw Error('Memory schema is newer than this host; use a compatible release')
+  if(schema>3)throw Error('Memory schema is newer than this host; use a compatible release')
   // Additive upgrade: legacy facts retain their IDs, state, audience and sources.
-  host.store.atomic(()=>{for(const f of host.store.list<MemoryFact>('memory-fact'))if(!f.kind)host.store.put('memory-fact',f.id,{...f,kind:'fact',importance:3,protected:f.state==='active'});host.store.put('memory-schema','current',2);host.store.db.exec('PRAGMA user_version='+Math.max(7,Number(host.store.db.prepare('PRAGMA user_version').get()!.user_version)))})
+  host.store.atomic(()=>{for(const f of host.store.list<MemoryFact>('memory-fact'))if(!f.kind)host.store.put('memory-fact',f.id,{...f,kind:'fact',importance:3,protected:f.state==='active'});host.store.put('memory-schema','current',3);host.store.db.exec('PRAGMA user_version='+Math.max(7,Number(host.store.db.prepare('PRAGMA user_version').get()!.user_version)))})
   host.memory.recall=(c,q)=>this.recall(c,q)
-  host.memory.validateUse=(c,refs)=>{if(!refs.length)return;if(!this.enabled(c))throw Error('Memory use disabled');const allowed=this.authorized(c);if(refs.some(ref=>!allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))throw Error('Memory audience changed')}
+  host.memory.learning=c=>this.learning(c)
+  host.memory.validateUse=(c,refs)=>{if(!refs.length)return;if(!this.enabled(c))throw Error('Memory use disabled');const allowed=this.applicable(c);if(refs.some(ref=>!allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))throw Error('Memory audience changed')}
   host.memory.onMutation=()=>{this.queries.clear();this.reconcile()}
   for(const row of this.observations())if(row.state==='running')this.saveObservation({...row,state:'pending',lease:undefined,nextAt:this.now()})
   host.store.atomic(()=>{for(const row of host.store.db.prepare("SELECT id,body FROM records WHERE kind='memory-consolidation'").all()){
@@ -46,25 +50,30 @@ export class AgentMemory {
   const c=this.host.scopes.context(t,row.discussion)
   if(!c||this.space(c)!==row.space||(!refreshEpoch&&c.route.epoch!==row.epoch)||this.host.memory.generation(row.scopeId)!==row.generation)throw Error('scope_changed')
   this.host.routerIngress.authority(t.id)
-  this.host.memory.capture(c,[row.sourceId])
+  this.host.memory.capture(c,[row.sourceId,...(row.parentSourceId?[row.parentSourceId]:[])])
   return c
  }
  observations(){return this.host.store.list<MemoryObservation>('memory-observation')}
  saveObservation(row:MemoryObservation){this.host.store.put('memory-observation',row.id,row)}
  observe(c:ScopeContext){
   if(!c.trigger.human||!this.enabled(c))return
-  const p=this.policy(c);if(p.writeMode!=='auto')return
+  const p=this.policy(c);if(p.writeMode==='explicit_only')return
   const e=this.host.memory.ingest(c);if(e.revoked)return
+  this.observeEvidence(c,e)
+ }
+ observeExperience(goal:RouterGoal,round:VerificationRound){observeExperience(this,goal,round)}
+ observeEvidence(c:ScopeContext,e:MemoryEvidence,kind?:'experience',parentSourceId?:string){
+  const p=this.policy(c)
   const space=this.space(c),length=[...e.text].length
   let sensitive=false;try{assertNoMemorySecret(e.text)}catch{sensitive=true}
   this.host.store.atomic(()=>{
    for(let start=0;start<length;start+=12000){
-   const end=Math.min(length,start+12000),id=stableDigest([space,c.trigger.id,e.version,this.host.memory.generation(c.route.scopeId),start])
+   const end=Math.min(length,start+12000),id=stableDigest([space,kind?e.id:c.trigger.id,e.version,this.host.memory.generation(c.route.scopeId),start])
    if(this.host.store.get('memory-observation',id))continue
    const sequence=(this.host.store.get<number>('memory-sequence',space)??0)+1
    this.host.store.put('memory-sequence',space,sequence)
    const last=this.host.store.get<number>('memory-last-extract',space)??0
-   this.saveObservation({id,space,triggerId:c.trigger.id,discussion:c.route.discussion,scopeId:c.route.scopeId,entryId:c.route.entryId,actor:c.actor,session:c.route.discussion,sourceId:e.id,start,end,generation:this.host.memory.generation(c.route.scopeId),epoch:c.route.epoch,policyRevision:this.policyRevision(c),sequence,state:sensitive?'held':'pending',...(sensitive?{error:'sensitive_content'}:{}),attempts:0,nextAt:Math.max(this.now()+p.delayMs,last+p.minIntervalMs)})
+   this.saveObservation({id,kind,parentSourceId,space,triggerId:c.trigger.id,discussion:c.route.discussion,scopeId:c.route.scopeId,entryId:c.route.entryId,actor:c.actor,session:c.route.discussion,sourceId:e.id,start,end,generation:this.host.memory.generation(c.route.scopeId),epoch:c.route.epoch,policyRevision:this.policyRevision(c),sequence,state:sensitive?'held':'pending',...(sensitive?{error:'sensitive_content'}:{}),attempts:0,nextAt:Math.max(this.now()+p.delayMs,last+p.minIntervalMs)})
    }
   })
  }
@@ -74,10 +83,12 @@ export class AgentMemory {
   do{const page=this.host.memory.query(c,{limit:50,candidates,cursor});items.push(...page.items);cursor=page.cursor}while(cursor)
   return items.filter(f=>!['profile','preference','interest'].includes(f.kind??'fact')||f.owner===c.actor)
  }
+ applicable(c:ScopeContext){return this.authorized(c).filter(f=>!f.learning?.discussion||f.learning.discussion===c.route.discussion)}
+ learning(c:ScopeContext){return {mode:this.policy(c).writeMode,enabled:this.enabled(c),coldStart:!this.applicable(c).some(f=>f.kind==='preference'||f.kind==='profile')}}
  private queryKey(c:ScopeContext,q:string){return stableDigest([this.space(c),q.slice(0,200),this.policyRevision(c)])}
  modelSelection(c:ScopeContext){const p=this.policy(c),scope=this.host.scopes.scope(c.route.scopeId),backend=p.extractBackend??scope.router?.backend??this.host.config.execution.router?.backend??this.host.config.execution.roles.router??this.host.config.execution.backend;if(!scope.backendIds.includes(backend))throw Error('Memory backend is outside scope');return {backendId:backend,model:p.extractModel??scope.router?.model??this.host.config.execution.router?.model}}
  private vectorModel(c:ScopeContext){const e=this.policy(c).embedding;return e?stableDigest([e.url,e.model]):''}
- private rankingSignature(c:ScopeContext,items=this.authorized(c)){
+ private rankingSignature(c:ScopeContext,items=this.applicable(c)){
   const model=this.vectorModel(c)
   return stableDigest(items.map(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return [f.id,f.revision,v?.revision,v?.generation,v?.vector.length]}).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))
  }
@@ -104,7 +115,7 @@ export class AgentMemory {
   this.queryLifetime.signal.throwIfAborted()
   this.host.scopes.assertCurrent(c)
   if(capture.generation!==this.host.memory.generation(c.route.scopeId)||revision!==this.policyRevision(c)||!this.enabled(c))return
-  const items=this.authorized(c),signature=this.rankingSignature(c,items)
+  const items=this.applicable(c),signature=this.rankingSignature(c,items)
   let reranked:QueryVector['reranked'],verified=false
   if((p.reranker||p.verifyRelevance)&&!sensitive){
    const ranking=this.rankings(c,query,items,vector)
@@ -133,7 +144,7 @@ export class AgentMemory {
   this.queries.set(key,{vector,mode,at:this.now(),epoch:c.route.epoch,generation,policyRevision:revision,signature,reranked,verified})
  }
  similar(c:ScopeContext,a:MemoryFact,b:MemoryFact){const model=this.vectorModel(c),av=this.host.store.get<Vector>('memory-vector',stableDigest([a.id,model])),bv=this.host.store.get<Vector>('memory-vector',stableDigest([b.id,model]));return av?.revision===a.revision&&bv?.revision===b.revision&&av.generation===a.generation&&bv.generation===b.generation?cosine(av.vector,bv.vector):0}
- rank(c:ScopeContext,query:string,items=this.authorized(c)){
+ rank(c:ScopeContext,query:string,items=this.applicable(c)){
   const cached=this.queries.get(this.queryKey(c,query)),model=this.vectorModel(c)
   const q=cached&&cached.epoch===c.route.epoch&&cached.generation===this.host.memory.generation(c.route.scopeId)&&this.now()-cached.at<60000?cached:undefined
   const incomplete=q?.vector&&items.some(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return !v||v.revision!==f.revision||v.generation!==f.generation||v.vector.length!==q.vector!.length})
@@ -147,7 +158,7 @@ export class AgentMemory {
  }
  recall(c:ScopeContext,query:string){
   if(!this.enabled(c))return {items:[],status:'unavailable',reason:'Memory disabled'}
-  const all=this.authorized(c),resident=all.filter(f=>['profile','preference'].includes(f.kind??'fact')||f.origin==='explicit').sort((a,b)=>(b.importance??3)-(a.importance??3)||b.createdAt-a.createdAt)
+  const all=this.applicable(c),resident=all.filter(f=>['profile','preference'].includes(f.kind??'fact')||f.origin==='explicit').sort((a,b)=>(b.importance??3)-(a.importance??3)||b.createdAt-a.createdAt)
   const ranked=this.rank(c,query,all),selected:MemoryProjection[]=[]
   let standingBytes=0,relatedBytes=0
   for(const f of resident){const bytes=Buffer.byteLength(f.content);if(standingBytes+bytes<=3600){standingBytes+=bytes;selected.push(f)}}
@@ -159,7 +170,7 @@ export class AgentMemory {
   const x=z.object({action:z.enum(['query','inspect','propose']),query:z.string().max(200).optional(),id:z.string().max(300).optional(),subject:z.string().max(300).optional(),content:z.string().max(16000).optional(),operationId:z.string().max(300).optional()}).strict().parse(value)
   if(!this.enabled(c))return {items:[],status:'unavailable',reason:'Memory disabled'}
   if(x.action==='query')return this.search(c,x.query??'')
-  if(x.action==='inspect'){const items=this.authorized(c).filter(f=>!x.id||f.id===x.id).slice(0,20);this.recordUse(c,items,'inspect','authorized');return {items,status:'complete'}}
+  if(x.action==='inspect'){const items=this.applicable(c).filter(f=>!x.id||f.id===x.id).slice(0,20);this.recordUse(c,items,'inspect','authorized');return {items,status:'complete'}}
   return this.host.memory.tool(c,x)
  }
  recordUse(c:ScopeContext,items:{id:string;revision:number}[],kind:string,mode:string){
@@ -210,10 +221,10 @@ export class AgentMemory {
  tick(){
   if(this.closed||this.active)return
   this.reconcile()
-  const row=this.observations().filter(r=>r.state==='pending'&&r.nextAt<=this.now()).sort((a,b)=>a.nextAt-b.nextAt||a.sequence-b.sequence).find(r=>{try{const c=this.context(r);return this.enabled(c)&&this.policy(c).writeMode==='auto'&&this.now()>=(this.host.store.get<number>('memory-last-extract',r.space)??0)+this.policy(c).minIntervalMs}catch{return false}})
+  const row=this.observations().filter(r=>r.state==='pending'&&r.nextAt<=this.now()).sort((a,b)=>a.nextAt-b.nextAt||a.sequence-b.sequence).find(r=>{try{const c=this.context(r);return this.enabled(c)&&this.policy(c).writeMode!=='explicit_only'&&(!r.kind||this.policy(c).writeMode==='adaptive')&&this.now()>=(this.host.store.get<number>('memory-last-extract',r.space)??0)+this.policy(c).minIntervalMs}catch{return false}})
   if(!row){this.maintain();return}
   let c:ScopeContext;try{c=this.context(row)}catch{return}
-  if(!this.enabled(c)||this.policy(c).writeMode!=='auto')return
+  if(!this.enabled(c)||this.policy(c).writeMode==='explicit_only')return
   this.controller=new AbortController()
   this.active=this.process(c,row,this.controller.signal).catch(()=>{}).finally(()=>{this.active=undefined;this.controller=undefined})
  }
@@ -228,7 +239,7 @@ export class AgentMemory {
     const c=this.host.scopes.context(trigger,trigger.source+':'+trigger.threads[0]!.id);if(!c||c.actor!==fact.owner||!this.enabled(c))continue
     this.host.routerIngress.authority(trigger.id)
     const p=this.policy(c),space=this.space(c),last=this.host.store.get<number>('memory-maintenance',space)??0
-    if(this.now()-last<60000||!p.embedding&&p.writeMode!=='auto')continue
+    if(this.now()-last<60000||!p.embedding&&p.writeMode==='explicit_only')continue
     this.host.store.put('memory-maintenance',space,this.now());this.controller=new AbortController()
     const signal=this.controller.signal
     this.active=(async()=>{
@@ -236,7 +247,7 @@ export class AgentMemory {
      if(!this.enabled(c))return
      for(const f of this.authorized(c))if(f.owner===c.actor&&f.kind==='task'&&!f.protected&&(f.lastUsedAt??f.createdAt)<this.now()-45*86400000&&(f.importance??3)>1)this.host.store.put('memory-fact',f.id,{...f,importance:1})
      const review=this.host.store.get<any>('memory-consolidation',space)
-     if(this.policy(c).writeMode==='auto'&&(review?.status==='interrupted'||this.now()-(review?.at??0)>=86400000)&&this.authorized(c).filter(f=>f.owner===c.actor).length>=6)await consolidateMemories(this,c,signal)
+     if(this.policy(c).writeMode!=='explicit_only'&&(review?.status==='interrupted'||this.now()-(review?.at??0)>=86400000)&&this.authorized(c).filter(f=>f.owner===c.actor).length>=6)await consolidateMemories(this,c,signal)
     })().catch(()=>{}).finally(()=>{this.active=undefined;this.controller=undefined})
     return
    }catch{}
@@ -245,11 +256,11 @@ export class AgentMemory {
  private async process(c:ScopeContext,first:MemoryObservation,signal:AbortSignal){
   const policy=this.policy(c)
   let size=0
-  const batch=this.observations().filter(r=>r.space===first.space&&r.session===first.session&&r.state==='pending'&&r.nextAt<=this.now()&&r.generation===first.generation&&r.epoch===first.epoch).sort((a,b)=>a.sequence-b.sequence).slice(0,20).filter(r=>{const length=(r.end??this.host.memory.evidence(r.sourceId)!.text.length)-(r.start??0);if(size+length>24000)return false;size+=length;return true})
-  const lease=randomUUID(),capture=this.host.memory.capture(c,batch.map(r=>r.sourceId)),revision=this.policyRevision(c)
+  const batch=this.observations().filter(r=>r.space===first.space&&r.session===first.session&&r.kind===first.kind&&r.state==='pending'&&r.nextAt<=this.now()&&r.generation===first.generation&&r.epoch===first.epoch).sort((a,b)=>a.sequence-b.sequence).slice(0,20).filter(r=>{const length=(r.end??this.host.memory.evidence(r.sourceId)!.text.length)-(r.start??0);if(size+length>24000)return false;size+=length;return true})
+  const lease=randomUUID(),capture=this.host.memory.capture(c,[...new Set(batch.flatMap(r=>[r.sourceId,...(r.parentSourceId?[r.parentSourceId]:[])]))]),revision=this.policyRevision(c)
   this.host.store.atomic(()=>{for(const r of batch)this.saveObservation({...r,state:'running',lease,attempts:r.attempts+1})})
   try{
-   const result=await extractMemories(this,c,batch,signal)
+   const result=await (first.kind==='experience'?extractExperience(this,c,batch,signal):extractMemories(this,c,batch,signal))
    signal.throwIfAborted();this.assertBatch(c,batch,lease,capture,revision)
    this.host.store.atomic(()=>{
     this.assertBatch(c,batch,lease,capture,revision)
@@ -269,7 +280,7 @@ export class AgentMemory {
  }
  assertBatch(c:ScopeContext,batch:MemoryObservation[],lease:string,capture:MemoryCapture,revision:number){
   this.host.scopes.assertCurrent(c)
-  if(!this.enabled(c)||this.policy(c).writeMode!=='auto'||this.policyRevision(c)!==revision||capture.generation!==this.host.memory.generation(c.route.scopeId))throw Error('memory_policy_changed')
+  if(!this.enabled(c)||this.policy(c).writeMode==='explicit_only'||batch.some(r=>r.kind==='experience')&&this.policy(c).writeMode!=='adaptive'||this.policyRevision(c)!==revision||capture.generation!==this.host.memory.generation(c.route.scopeId))throw Error('memory_policy_changed')
   for(const r of batch){this.context(r);const current=this.host.store.get<MemoryObservation>('memory-observation',r.id);if(current?.state!=='running'||current.lease!==lease)throw Error('memory_lease_lost')}
  }
  observeTopics(c:ScopeContext,labels:string[],batch:MemoryObservation[]){
@@ -318,7 +329,7 @@ export class AgentMemory {
    const origin=fact?.entryId===c.route.entryId
    const evidence=origin?fact!.sources.flatMap(s=>{try{this.host.memory.capture(c,[s.id]);return [this.host.memory.evidence(s.id)!]}catch{return []}}):[]
    const versions=fact&&origin?this.host.store.list<MemoryFact>('memory-version').filter(v=>v.id===fact.id&&v.entryId===c.route.entryId&&v.sources.every(s=>{const e=this.host.memory.evidence(s.id);return e&&!e.revoked&&e.version===s.version})):[]
-   return {policy:this.policy(c),revision:this.policyRevision(c),enabled:this.enabled(c),items,detail:fact?{fact,evidence,versions}:undefined,consolidation:this.host.store.get('memory-consolidation',this.space(c)),observations:this.observations().filter(r=>r.space===this.space(c)),topics:this.host.store.list<Topic>('memory-topic').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),uses:this.host.store.list<any>('memory-use').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),archived:this.host.store.list<MemoryFact>('memory-fact').filter(f=>f.archived&&f.entryId===c.route.entryId&&f.owner===c.actor&&f.generation===this.host.memory.generation(c.route.scopeId)).map(f=>({id:f.id,revision:f.revision,kind:f.kind,createdAt:f.createdAt}))}
+   return {policy:this.policy(c),revision:this.policyRevision(c),enabled:this.enabled(c),items,adaptation:{coldStart:this.learning(c).coldStart,preferences:this.applicable(c).filter(f=>f.kind==='preference'),recent:items.filter(f=>f.origin==='extracted'||f.origin==='experience').sort((a,b)=>b.createdAt-a.createdAt).slice(0,10)},detail:fact?{fact,evidence,versions}:undefined,consolidation:this.host.store.get('memory-consolidation',this.space(c)),observations:this.observations().filter(r=>r.space===this.space(c)),topics:this.host.store.list<Topic>('memory-topic').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),uses:this.host.store.list<any>('memory-use').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),archived:this.host.store.list<MemoryFact>('memory-fact').filter(f=>f.archived&&f.entryId===c.route.entryId&&f.owner===c.actor&&f.generation===this.host.memory.generation(c.route.scopeId)).map(f=>({id:f.id,revision:f.revision,kind:f.kind,createdAt:f.createdAt}))}
   }
   if(!this.host.scopes.canManage(c))throw Error('Memory management requires scope manager')
   if(x.action==='configure'){

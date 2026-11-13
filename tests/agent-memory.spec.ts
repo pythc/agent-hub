@@ -29,6 +29,125 @@ function fixture(output?:(input:any,request:ModelRequest)=>unknown|Promise<unkno
 }
 function decision(input:any,extra:any={}){return {action:'add',target:null,kind:'preference',topic:'回答风格',content:'回答先给结论',importance:4,source:0,quote:input.messages[0].text,expiresAt:null,inferred:false,...extra}}
 
+it('applies stated adaptive preferences, revises them across sessions and preserves provenance after restart',async()=>{
+ const f=fixture(input=>({memories:[decision(input,input.existing.length?{action:'update',target:0,content:'报告先列未验证项',condition:'技术报告'}:{condition:'技术报告'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const first=f.send('以后技术报告先给结论','first');await f.learn()
+ const old=f.h.agentMemory.applicable(first)[0]!
+ expect(old).toMatchObject({state:'active',protected:false,learning:{inferred:false,condition:'技术报告',quote:'以后技术报告先给结论'}})
+ const next=f.send('改一下，以后技术报告先列未验证项','second');await f.learn()
+ expect(f.h.memory.fact(old.id)?.state).toBe('superseded')
+ expect(f.h.agentMemory.applicable(next).map(f=>f.content)).toEqual(['报告先列未验证项'])
+ await f.restart();const current=f.context(next.trigger.id),packet=f.h.memory.build(current,{},'test')
+ expect(JSON.parse(packet.input).memory).toMatchObject({learning:{mode:'adaptive',coldStart:false},facts:[{learning:{inferred:false,condition:'技术报告'}}]})
+ f.h.memory.validate(packet.manifest)
+})
+
+it('keeps a temporary exception alongside the standing preference and out of later sessions',async()=>{
+ const f=fixture(input=>({memories:[decision(input,input.existing.length?{action:'update',target:0,content:'这次详细解释',scope:'discussion',condition:'本次修复说明'}:{content:'日常报告简短'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const first=f.send('日常报告简短','first');await f.learn();const standing=f.h.agentMemory.applicable(first)[0]!
+ const second=f.send('这次详细解释','second');await f.learn()
+ expect(f.h.agentMemory.applicable(second).map(f=>f.content)).toEqual(expect.arrayContaining(['日常报告简短','这次详细解释']))
+ expect(f.h.memory.fact(standing.id)?.state).toBe('active')
+ const third=f.send('继续下一项任务','third')
+ expect(f.h.agentMemory.recall(third,'解释').items.map(f=>f.content)).toEqual(['日常报告简短'])
+ expect((await f.h.agentMemory.search(third,'这次详细解释')).items.some(f=>f.learning?.discussion)).toBe(false)
+ await f.restart();expect(f.h.agentMemory.applicable(f.context(third.trigger.id)).map(f=>f.id)).toEqual([standing.id])
+})
+
+it('shows the same cold-start state in the workbench and runtime after a temporary-only preference',async()=>{
+ const f=fixture(input=>({memories:[decision(input,{scope:'discussion'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const first=f.send('仅本次回答先给结论','first');await f.learn()
+ expect(f.h.agentMemory.learning(first).coldStart).toBe(false)
+ const next=f.send('开始下一项任务','next'),view=f.h.agentMemory.manage(next,{action:'inspect'}) as any
+ expect(view.adaptation).toMatchObject({coldStart:true,preferences:[]})
+ expect(JSON.parse(f.h.memory.build(next,{},'test').input).memory.learning.coldStart).toBe(true)
+})
+
+it('does not duplicate an unchanged legacy preference without learning metadata',async()=>{
+ const f=fixture(input=>({memories:[decision(input)],topics:[]}));f.configure({writeMode:'adaptive'})
+ const c=f.send('回答先给结论'),original=f.remember(c,'回答先给结论',{kind:'preference'})
+ await f.learn()
+ expect(f.h.agentMemory.authorized(c,true).map(f=>f.id)).toEqual([original.id])
+})
+
+it('uses an inferred preference as tentative context without replacing a stated preference',async()=>{
+ const f=fixture(input=>({memories:[decision(input,{inferred:true,...(input.existing.length?{action:'update',target:0,content:'报告可以省略证据'}:{condition:'代码交付'})})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const c=f.send('用户的选择可能偏向先给结论');await f.learn()
+ const tentative=f.h.agentMemory.applicable(c)[0]!
+ expect(tentative).toMatchObject({state:'active',protected:false,learning:{inferred:true}})
+ f.h.memory.command(c,{action:'remember',operationId:'stated-edit',id:tentative.id,expectedRevision:tentative.revision,subject:tentative.subject,content:'报告必须提供证据',sourceIds:tentative.sources.map(s=>s.id),kind:'preference',candidate:false,learning:{...tentative.learning!,inferred:false}},true)
+ const next=f.send('本次没有继续追问证据','next');await f.learn()
+ expect(f.h.agentMemory.applicable(next).map(f=>f.content)).toEqual(['报告必须提供证据'])
+ expect(f.h.agentMemory.authorized(next,true).some(f=>f.state==='candidate'&&f.learning?.inferred)).toBe(true)
+})
+
+it('keeps unrelated facts in review under adaptive learning',async()=>{
+ const f=fixture(input=>({memories:[decision(input,{kind:'fact',content:'项目使用 TypeScript'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const c=f.send('项目使用 TypeScript');await f.learn()
+ expect(f.h.agentMemory.applicable(c)).toHaveLength(0)
+ expect(f.h.agentMemory.authorized(c,true)[0]?.state).toBe('candidate')
+})
+
+it('does not replace a human-confirmed inference with a new inferred preference',async()=>{
+ const f=fixture(input=>({memories:[decision(input,{action:'update',target:0,inferred:true,content:'推断用户改为喜欢长报告'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const c=f.send('确认短报告偏好'),original=f.remember(c,'喜欢短报告',{kind:'preference',learning:{inferred:true,condition:'工作报告',quote:c.trigger.text}})
+ await f.learn()
+ expect(f.h.memory.fact(original.id)).toMatchObject({state:'active',protected:true})
+ expect(f.h.agentMemory.applicable(c).map(f=>f.content)).toEqual(['喜欢短报告'])
+ expect(f.h.agentMemory.authorized(c,true).some(f=>f.state==='candidate'&&f.replaces?.[0]?.id===original.id)).toBe(true)
+})
+
+it('keeps automatic deletion proposals pending even in adaptive mode',async()=>{
+ const f=fixture(input=>({memories:[decision(input,{action:'delete',target:0,scope:'discussion',content:'不再保留旧偏好'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const c=f.send('考虑忘掉旧偏好'),original=f.remember(c,'旧偏好',{kind:'preference'})
+ await f.learn()
+ expect(f.h.memory.fact(original.id)?.state).toBe('active')
+ expect(f.h.agentMemory.authorized(c,true).find(f=>f.proposalAction==='forget')).toMatchObject({state:'candidate',replaces:[{id:original.id,revision:original.revision}]})
+})
+
+it('learns working methods from accepted execution evidence and removes them with the original source',async()=>{
+ const f=fixture(input=>input.sources?{lessons:[{topic:'Unicode 回归',content:'修改摘要截断时运行 Unicode 回归测试',condition:'本项目的摘要截断修改',source:0,quote:'node --test tests/reader-brief.test.mjs'}]}:{memories:[],topics:[]})
+ f.configure({writeMode:'adaptive'});const c=f.send('修复摘要的 emoji 截断问题')
+ const goal=f.h.goals.command({action:'start',operationId:'experience-goal',expectedRevision:0,objective:c.trigger.text,authorizationQuote:c.trigger.text,criteria:[{id:'unicode',description:'Unicode 回归通过'}]},c)
+ const round:any={id:'acceptance-experience',goalId:goal.id,triggerId:c.trigger.id,scopeId:c.route.scopeId,entryId:c.route.entryId,ticketIds:[],state:'passed',attempts:1,at:Date.now(),finishedAt:Date.now(),snapshot:{contract:'contract',tasks:[],evidence:[{id:'execution',kind:'execution',key:'host-execution',content:'node --test tests/reader-brief.test.mjs exited with code 0',hash:'evidence'}]},checks:[{criterionId:'unicode',verdict:'passed',explanation:'Unicode 回归通过',evidenceIds:['execution'],method:'agent'}]}
+ f.h.store.put('goal-verification',round.id,round)
+ const completed={...f.h.goals.get(goal.id)!,state:'completed' as const,finalRoundId:round.id};f.h.store.put('router-goal',goal.id,completed)
+ f.h.agentMemory.observeExperience(completed,round);f.h.agentMemory.observeExperience(completed,round)
+ expect(f.h.agentMemory.observations().filter(r=>r.kind==='experience')).toHaveLength(1)
+ await f.learn();await f.learn()
+ const learned=f.h.agentMemory.applicable(c).find(f=>f.origin==='experience')!
+ expect(learned).toMatchObject({state:'active',protected:false,learning:{inferred:true,condition:'本项目的摘要截断修改'}})
+ expect(learned.sources).toHaveLength(2)
+ const execution=f.h.memory.evidence(learned.sources.find(ref=>f.h.memory.evidence(ref.id)?.parentId)!.id)!
+ expect(execution.locator).toBe('goal-verification:'+round.id)
+ await f.restart();const current=f.context(c.trigger.id)
+ expect((await f.h.agentMemory.search(current,'Unicode 回归')).items.some(f=>f.id===learned.id)).toBe(true)
+ const parent=f.h.memory.ingest(current)
+ f.h.memory.command(current,{action:'source.delete',id:parent.id,expectedRevision:parent.version,operationId:'delete-experience-input'},true)
+ expect(f.h.memory.evidence(execution.id)).toMatchObject({revoked:true,text:''})
+ expect(f.h.memory.fact(learned.id)).toMatchObject({state:'revoked',content:''})
+ expect(f.h.memory.fact(learned.id)?.learning).toBeUndefined()
+})
+
+it('clears learning conditions and quotes from facts and history when forgotten',async()=>{
+ const f=fixture(input=>({memories:[decision(input,{condition:'私人报告'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const c=f.send('以后私人报告先给结论');await f.learn();const fact=f.h.agentMemory.applicable(c)[0]!
+ f.h.memory.command(c,{action:'forget',operationId:'forget-adaptive',id:fact.id,expectedRevision:fact.revision},true)
+ expect(f.h.memory.fact(fact.id)).toMatchObject({state:'tombstoned',content:''})
+ expect(f.h.memory.fact(fact.id)?.learning).toBeUndefined()
+ expect(f.h.store.list<MemoryFact>('memory-version').filter(f=>f.id===fact.id).every(f=>!f.learning)).toBe(true)
+ await f.restart();expect(f.h.agentMemory.applicable(f.context(c.trigger.id))).toHaveLength(0)
+})
+
+it('upgrades existing memory without changing its policy or activating pending proposals',async()=>{
+ const f=fixture(input=>({memories:[decision(input)],topics:[]}));f.configure({writeMode:'auto'})
+ const c=f.send('偏好应保持等待确认');await f.learn();const before=f.h.memory.query(c,{candidates:true}).items
+ f.h.store.put('memory-schema','current',2);await f.restart()
+ expect(f.h.store.get('memory-schema','current')).toBe(3)
+ expect(f.h.agentMemory.policy(f.context(c.trigger.id)).writeMode).toBe('auto')
+ expect(f.h.memory.query(f.context(c.trigger.id),{candidates:true}).items).toEqual(before)
+})
+
 it('learns through the real ingress hook, keeps proposals out of context and persists restart recovery',async()=>{
  const f=fixture(input=>({memories:[decision(input)],topics:[{label:'后端开发',existing:null}]}));f.configure({writeMode:'auto'})
  const c=f.send('我希望回答先给结论')

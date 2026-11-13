@@ -29,7 +29,7 @@ export function composeExecutionPrompt(config:Config,input:ExecutionPrompt){
   add('role',input.hostRouter?composeCoordinator(config,input.environment):compose(config,'router',input.environment,input.policyVersion??'preview'),input.hostRouter?'src/prompts.ts#composeCoordinator':'src/prompts.ts#compose')
   if(input.hostRouter){
    if(input.project)part('runtime/coordinator/project')
-   if(input.scoped)part('runtime/coordinator/context')
+   if(input.scoped){part('runtime/coordinator/context');part('runtime/personalization')}
   }
  }else{
   add('role',compose(config,'worker',input.environment,input.policyVersion??'preview'),'src/prompts.ts#compose')
@@ -41,6 +41,7 @@ export function composeExecutionPrompt(config:Config,input:ExecutionPrompt){
     if(typeof input.project==='object')add('project-context',JSON.stringify(input.project),'task:project')
    }
    part('runtime/worker/tools')
+   part('runtime/personalization')
    part(input.managedGoal?'runtime/worker/goal':input.delegated?'runtime/worker/continuation':'runtime/worker/standalone')
   }
  }
