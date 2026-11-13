@@ -1,4 +1,4 @@
-export type ResourceKind = 'new' | 'files' | 'browser' | 'activity';
+export type ResourceKind = 'new' | 'files' | 'browser' | 'activity' | 'memory';
 export type ToolKind = Exclude<ResourceKind, 'new'>;
 export type ResourceTab = { id: string; kind: ResourceKind };
 export type ResourceState = {
@@ -7,7 +7,7 @@ export type ResourceState = {
   visible: boolean;
   recent: { kind: ToolKind; at: number }[];
 };
-const kinds: ResourceKind[] = ['new', 'files', 'browser', 'activity'];
+const kinds: ResourceKind[] = ['new', 'files', 'browser', 'activity', 'memory'];
 const tab = (kind: ResourceKind): ResourceTab => ({ id: crypto.randomUUID(), kind });
 export const resourceKey = (conversationId: string | null) => 'roppo.resources.' + (conversationId ?? 'new');
 export function initialResources(raw: string, legacy = ''): ResourceState {
@@ -21,7 +21,7 @@ export function initialResources(raw: string, legacy = ''): ResourceState {
       return { id: t.id, kind: t.kind };
     });
     return { tabs, active: ids.has(value.active) ? value.active : tabs[0]!.id, visible: value.visible === true,
-      recent: Array.isArray(value.recent) ? value.recent.filter((r: {kind:ToolKind;at:number}) => r && ['files','browser','activity'].includes(r.kind) && Number.isFinite(r.at) && r.at >= 0 && r.at <= 8.64e15).slice(0,3) : [] };
+      recent: Array.isArray(value.recent) ? value.recent.filter((r: {kind:ToolKind;at:number}) => r && ['files','browser','activity','memory'].includes(r.kind) && Number.isFinite(r.at) && r.at >= 0 && r.at <= 8.64e15).slice(0,3) : [] };
   } catch {
     const first = tab(kinds.includes(legacy as ResourceKind) ? legacy as ResourceKind : 'new');
     return { tabs: [first], active: first.id, visible: first.kind !== 'new', recent: [] };

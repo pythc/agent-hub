@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Folder, Globe, Users, Plus, X, Maximize2, Minimize2, Search, ArrowUpRight } from 'lucide-react';
+import { Folder, Globe, Users, BookOpen, Plus, X, Maximize2, Minimize2, Search, ArrowUpRight } from 'lucide-react';
 import { closeResource, openResource, resourceUrl, type ResourceState, type ResourceKind } from './resource-state.ts';
 import './resource-workspace.css';
 type Props = {
@@ -16,6 +16,7 @@ export function ResourceWorkspace({state,onChange,onOpen,onClose,expanded,onExpa
     {kind:'browser' as const,Icon:Globe,label:L('Browser','浏览器')},
     {kind:'files' as const,Icon:Folder,label:L('Files','文件')},
     {kind:'activity' as const,Icon:Users,label:L('Team activity','团队动态')},
+    {kind:'memory' as const,Icon:BookOpen,label:L('Memory','记忆')},
   ];
   const meta=(kind:ResourceKind)=>entries.find(e=>e.kind===kind)??{kind:'new',Icon:Plus,label:L('New tab','新标签页')};
   useEffect(()=>{document.getElementById('resource-tab-'+state.active)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});},[state.active]);

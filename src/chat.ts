@@ -152,6 +152,17 @@ export class ChatSessions {
     const c=this.get(id,owner),next={...c,...patch,updatedAt:Date.now()}
     this.host.store.put('chat-conversation',id,next);return this.publicConversation(next)
   }
+  memory(id:string,owner:string,input?:{kind:'manage'|'memory';command:unknown}){
+    const conversation=this.get(id,owner)
+    const run=this.rows<ChatRun>('chat-run','conversationId',id).at(-1)
+    const trigger=run?this.host.store.triggers.get(run.triggerId):undefined
+    if(!trigger){if(input)throw new ChatError('memory_unavailable','This conversation has no memory context.');return {unavailable:true}}
+    this.host.routerIngress.authority(trigger.id,conversation.discussion)
+    const context=this.host.scopes.context(trigger,conversation.discussion)
+    if(!context){if(input)throw new ChatError('memory_unavailable','This conversation has no memory context.');return {unavailable:true}}
+    if(input?.kind==='memory')return this.host.memory.command(context,input.command,true)
+    return this.host.agentMemory.manage(context,input?.command??{action:'inspect'})
+  }
   private message(c:Conversation, m:Omit<Message,'conversationId'|'sequence'|'createdAt'>){
     const existing=this.host.store.get<Message>('chat-message',m.id)
     if(existing){if(existing.role==='assistant'&&existing.status!=='complete'&&(existing.text!==m.text||existing.status!==m.status))this.host.store.put('chat-message',m.id,{...existing,...m});return}

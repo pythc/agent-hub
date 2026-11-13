@@ -314,3 +314,10 @@ The model page uses a single 1120px content measure. Saved connections appear as
 Connection selection comes before behavior. Native radio inputs provide three keyboard-accessible choices, and advanced limits, instructions and JSON stay collapsed until requested. A saved-mode label refers to the persisted configuration, while the existing save bar owns draft changes. Probe samples are editable examples, not accuracy claims. Results display only returned labels, latency and token usage; missing usage displays an em dash. Editing the request invalidates prior results. Pending motion occurs only during an actual request and stops under reduced motion.
 
 Visual evidence and browser checks use the isolated decision acceptance host with a synthetic provider. They exercise the real settings and probe HTTP routes, not a paid provider or production message flow.
+
+
+## Memory within the conversation (2026-11-13)
+
+Memory uses the existing conversation resource tabs, beside files, browser and team activity. It follows the selected conversation, keeps the composer draft, and inherits the shell's theme, language, typography and keyboard navigation. Preferences are plain text rows with inline correction and forgetting; sources and revision history remain collapsed. Candidate replacement and removal show what will change. No technical model, retrieval or budget fields belong in this daily flow.
+
+An optional collaboration-preferences view lives under Shared instructions in the same shell and reuses the conversation component. The sole learning switch names its team scope, preserves technical policy fields, and stops automatic learning without deleting existing notes. An unbound conversation shows an empty state rather than a setup questionnaire or invented memory. Desktop light/dark and 390px screenshots are isolated fixture evidence, not live-provider behavior or user visual approval.

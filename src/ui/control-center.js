@@ -95,7 +95,9 @@ function controlPrompts() {
     [L('Role instructions', '角色指令'), !templates, () => opNavigate('prompts', '', { view: 'roles' })],
     [L('Team and templates', '团队与模板'), templates, () => opNavigate('prompts', '', { view: 'templates' })]
   ])
-  const result = [opHeading(L('Prompts', '提示词'), null), nav]
+  const memoryLink = el('a', 'text-button', L('Collaboration preferences', '协作偏好'))
+  memoryLink.href = '/configure#prompts/memory'
+  const result = [opHeading(L('Prompts', '提示词'), null, memoryLink), nav]
   const preview = add(el('div', 'settings-stack'),
     selector('preview-role', L('Instruction role', '合成指令角色'), [['router', 'Router'], ['worker', 'Worker']], S.previewRole, role => {
       S.previewRole = role

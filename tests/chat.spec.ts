@@ -29,6 +29,50 @@ function enableChatBatch(h:Runtime,id:string,settings:Record<string,number>={}){
 }
 const batchDecision=(action:string)=>({action,title:'Task',scope:'Requested work',question:'Which task should continue?',reason:'Explicit input',rules:[],targetTicketId:null,ruleAssessments:[]})
 
+it('opens memory in the conversation without creating configuration or fabricating remembered content',()=>{
+ const {h,calls}=fixture(),c=h.chat.create('owner')
+ expect(h.chat.memory(c.id,'owner')).toEqual({unavailable:true})
+ send(h,c.id)
+ expect(h.chat.memory(c.id,'owner')).toEqual({unavailable:true})
+ expect(h.scopes.enabled()).toBe(false);expect(calls).toHaveLength(0)
+ expect(()=>h.chat.memory(c.id,'another')).toThrow('Conversation not found')
+ expect(()=>h.chat.memory(c.id,'owner',{kind:'manage',command:{action:'configure',policy:{writeMode:'adaptive'},expectedRevision:0}})).toThrow('no memory context')
+})
+
+it('reads and corrects only memory authorized for the owned conversation and preserves saved technical settings',()=>{
+ const {h}=fixture(),c=h.chat.create('owner'),other=h.chat.create('owner');enableChatBatch(h,c.id)
+ h.scopes.command({action:'entry.bind',operationId:'other-chat-entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'chat:'+other.id,history:'group'})
+ const sent=send(h,c.id,'技术报告先给结论'),trigger=h.store.triggers.get(sent.runId)!,context=h.scopes.context(trigger,'local:chat:'+c.id)!,source=h.memory.ingest(context)
+ const fact=h.memory.command(context,{action:'remember',operationId:'memory',expectedRevision:0,subject:'报告顺序',content:'技术报告先给结论',sourceIds:[source.id],kind:'preference',candidate:false},true) as any
+ const before=h.chat.memory(c.id,'owner') as any
+ expect(before.items.map((f:any)=>f.id)).toEqual([fact.id]);expect(before).toMatchObject({canConfigure:true,learningAvailable:true,scopeName:'Chat team'})
+ const policy={...before.policy,extractModel:'current-memory-model',maxCallsPerDay:27,writeMode:'adaptive'}
+ h.chat.memory(c.id,'owner',{kind:'manage',command:{action:'configure',expectedRevision:before.revision,policy}})
+ const learned=h.chat.memory(c.id,'owner') as any
+ expect(learned.policy).toMatchObject({extractModel:'current-memory-model',maxCallsPerDay:27,writeMode:'adaptive'})
+ h.chat.memory(c.id,'owner',{kind:'memory',command:{action:'remember',id:fact.id,operationId:'correct',expectedRevision:fact.revision,subject:fact.subject,content:'技术报告先列未验证项',sourceIds:[source.id],kind:'preference',candidate:false,learning:{inferred:false,condition:'修复报告'}}})
+ expect((h.chat.memory(c.id,'owner') as any).adaptation.preferences[0]).toMatchObject({content:'技术报告先列未验证项',learning:{condition:'修复报告'}})
+ h.chat.memory(c.id,'owner',{kind:'manage',command:{action:'personal',enabled:false}})
+ expect(h.chat.memory(c.id,'owner')).toMatchObject({enabled:false,learningAvailable:false})
+ send(h,other.id,'另一个独立任务')
+ expect((h.chat.memory(other.id,'owner') as any).items).toEqual([])
+ expect(()=>h.chat.memory(other.id,'owner',{kind:'memory',command:{action:'forget',operationId:'wrong-entry',id:fact.id,expectedRevision:2}})).toThrow('Fact unavailable')
+ h.updateSettings(h.settings.current().revision,{sources:h.config.sources.map(s=>({...s,allowedActors:['another-operator']}))})
+ expect(()=>h.chat.memory(c.id,'owner')).toThrow()
+})
+
+it('serves the conversation memory API with ownership checks and redirects the retired workbench into the app',async()=>{
+ const {h,root}=fixture(),host=await serve(h);servers.push(host.server)
+ const token=readFileSync(join(root,'state/access-token'),'utf8').trim(),headers={authorization:'Bearer '+token,'content-type':'application/json'}
+ const c=h.chat.create('local-operator'),wrong=h.chat.create('another')
+ expect((await fetch(host.url+'/api/chat/conversations/'+c.id+'/memory')).status).toBe(401)
+ expect(await (await fetch(host.url+'/api/chat/conversations/'+c.id+'/memory',{headers})).json()).toEqual({unavailable:true})
+ expect((await fetch(host.url+'/api/chat/conversations/'+wrong.id+'/memory',{headers})).status).toBe(404)
+ expect((await fetch(host.url+'/api/chat/conversations/'+c.id+'/memory',{method:'POST',headers:{...headers,origin:'https://wrong.example'},body:JSON.stringify({kind:'manage',command:{action:'inspect'}})})).status).toBe(403)
+ const redirect=await fetch(host.url+'/memory-workbench',{headers,redirect:'manual'})
+ expect(redirect.status).toBe(302);expect(redirect.headers.get('location')).toBe('/configure#prompts/memory')
+})
+
 it('delivers batch clarification once into chat, waits for input and recovers legacy sent replies after restart',async()=>{
  const f=fixture(async()=>batchDecision('clarify')),c=f.h.chat.create('owner');enableChatBatch(f.h,c.id)
  const run=send(f.h,c.id,'Continue it')

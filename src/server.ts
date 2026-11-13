@@ -23,7 +23,6 @@ import {configurationSnapshot} from './configuration.ts'
 import {SettingsError,patchSchema} from './settings.ts'
 import {routerManagementPage} from './ui/router-management.ts'
 import {webhookWorkbenchPage} from './ui/webhook-workbench.ts'
-import {memoryWorkbenchPage} from './ui/memory-workbench.ts'
 import {routerProactivePage} from './ui/router-proactive.ts'
 import {configurationPage} from './ui/configuration.ts'
 import {Onboarding,OnboardingError} from './onboarding.ts'
@@ -125,8 +124,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       res.end(req.method==='HEAD'?undefined:page);return
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && ['/', '/configure', '/configure/', '/auth', '/account', '/usage', '/router-management', '/memory-workbench', '/webhook-workbench', '/router-proactive'].includes(path)) {
+      if(path==='/memory-workbench'){res.writeHead(302,{location:'/configure#prompts/memory','cache-control':'no-store'});res.end();return}
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" })
-      const page=path==='/usage'?configurationPage:path==='/auth'||path==='/account'||!account.authorized(req)?accountPage:path==='/webhook-workbench'?webhookWorkbenchPage:path==='/memory-workbench'?memoryWorkbenchPage:path==='/router-management'?routerManagementPage:path==='/router-proactive'?routerProactivePage:chatPage()
+      const page=path==='/usage'?configurationPage:path==='/auth'||path==='/account'||!account.authorized(req)?accountPage:path==='/webhook-workbench'?webhookWorkbenchPage:path==='/router-management'?routerManagementPage:path==='/router-proactive'?routerProactivePage:chatPage()
       res.end(req.method==='HEAD'?undefined:page)
       return
     }
@@ -268,7 +268,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,200,workspaceViewData(runtime,query,account.status(req).user?.id??'local-operator'));return
     }
     if(req.method==='GET'&&path==='/router-management/catalog'){
-      send(res,200,{sources:runtime.config.sources.filter(s=>s.enabled).map(s=>({id:s.id,name:s.label??s.id,kind:s.kind})),workers:runtime.manager.list().workers.map(w=>({id:w.id,label:w.label})),backends:[...new Set(runtime.manager.list().workers.map(w=>w.backend))],tasks:runtime.store.tickets.list().map(t=>({id:t.id,title:t.title})),contexts:runtime.store.list<any>('router-admission').filter(a=>a.state==='accepted'&&runtime.store.get<any>('router-route',a.triggerId)&&!runtime.scopes.binding(runtime.store.get<any>('router-route',a.triggerId).entryId).privateActor).map(a=>{const route=runtime.store.get<any>('router-route',a.triggerId),entry=runtime.scopes.binding(route.entryId);return {id:a.triggerId,scopeId:route.scopeId,entryId:entry.id,label:entry.nativeId+' · '+a.at}})});return
+      send(res,200,{sources:runtime.config.sources.filter(s=>s.enabled).map(s=>({id:s.id,name:s.label??s.id,kind:s.kind})),workers:runtime.manager.list().workers.map(w=>({id:w.id,label:w.label})),backends:[...new Set(runtime.manager.list().workers.map(w=>w.backend))],tasks:runtime.store.tickets.list().map(t=>({id:t.id,title:t.title})),contexts:runtime.store.list<any>('router-admission').filter(a=>a.state==='accepted'&&runtime.store.get<any>('router-route',a.triggerId)&&!runtime.scopes.binding(runtime.store.get<any>('router-route',a.triggerId).entryId).privateActor).map(a=>{const route=runtime.store.get<any>('router-route',a.triggerId),entry=runtime.scopes.binding(route.entryId);return {id:a.triggerId,scopeId:route.scopeId,entryId:entry.id,title:runtime.store.triggers.get(a.triggerId)?.text.slice(0,70),conversationId:runtime.store.get<any>('chat-run',a.triggerId)?.conversationId,label:entry.nativeId+' · '+a.at}})});return
     }
     if(req.method==='GET'&&path==='/router-scopes'){send(res,200,runtime.scopes.snapshot());return}
     if(req.method==='GET'&&path==='/router-proactive/state'){send(res,200,runtime.proactive.snapshot(new URL(req.url!,'http://localhost').searchParams.get('scopeId')??''));return}
@@ -338,9 +338,14 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
         if(req.method==='GET'){send(res,200,{conversations:runtime.chat.list(owner,query.get('archived')==='true')});return}
         if(req.method==='POST'){send(res,201,runtime.chat.create(owner));return}
       }
-      const match=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})(?:\/(messages|events|cancel|files))?$/)
+      const match=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})(?:\/(messages|events|cancel|files|memory))?$/)
       if(match){
         const id=match[1]!,action=match[2]
+        if(action==='memory'&&req.method==='GET'){send(res,200,runtime.chat.memory(id,owner));return}
+        if(action==='memory'&&req.method==='POST'){
+          const input=z.object({kind:z.enum(['manage','memory']),command:z.unknown()}).strict().parse(await body(req))
+          send(res,200,runtime.chat.memory(id,owner,input));return
+        }
         if(!action&&req.method==='PATCH'){
           const patch=z.object({title:z.string().trim().min(1).max(100).optional(),archived:z.boolean().optional()}).strict().parse(await body(req))
           send(res,200,runtime.chat.update(id,owner,patch));return

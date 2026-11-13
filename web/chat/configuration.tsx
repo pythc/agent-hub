@@ -4,7 +4,7 @@ let controller: ReturnType<typeof mount> | undefined;
 let element: HTMLDivElement | undefined;
 let pending: Promise<void> | undefined;
 const active = () =>
-  !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
+  location.hash !== '#prompts/memory' && !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
   location.pathname === "/configure/" ||
   location.pathname === "/");
 async function prepare() {

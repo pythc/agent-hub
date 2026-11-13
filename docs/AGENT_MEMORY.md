@@ -38,13 +38,15 @@ flowchart LR
 | 知识检索 | Router 生成知识查询时已获得受控记忆。另记录实际回复明确引用的文档 ID 与版本；同一入口／actor 的重复使用最多提供 15% 排序加成，不扩大文档权限。 |
 | 证据 | 上下文和 Worker 查询绑定事实及来源 revision；使用前后检查当前权限。禁用、撤销或变更后，旧 manifest 不能继续作为有效记忆使用。发布单条事实不会额外发布其原始消息全文或未发布的历史版本。 |
 
-工作台入口是 `/memory-workbench`，也可从“Router 与记忆 → 长期记忆”进入。页面接入真实后端，支持学习设置、分类筛选、关键词与混合召回、候选前后对照、确认／拒绝、编辑、来源与历史、归档恢复、待处理重试、主题遗忘和范围清空。未配置 embedding 接口时使用词法召回。管理页沿用本机 operator 权限，不能冒充私有入口中的消息作者；私有入口使用其实际来源身份。
+日常入口是“对话 → 会话面板 → 记忆”，沿用现有主题、语言和标签布局；也可在“共享指令 → 协作偏好”查看已有公共入口。旧 `/memory-workbench` 地址跳转到应用内的 `/configure#prompts/memory`。界面只保留自动学习开关、查找、纠正、候选确认／不采用、忘记及按需展开的来源历史。模型、预算、语义检索等技术配置保留 API，不再放进日常界面。详见 [个性化与界面说明](PERSONAL_MEMORY_ADAPTATION.md)。
+
+自动学习开关影响界面标示的团队范围；关闭自动学习回到明确指令模式，已有记忆继续可用。原生会话面板以会话所有权及当前 Router 授权读取对应入口；公共入口管理不能冒充私有入口成员。未绑定范围的新会话显示空状态，不自动创建全局范围。
 
 实现入口为 `src/agent-memory.ts`、`src/memory-learning.ts`、`src/memory-policy.ts` 与 `src/memory-vectors.ts`；既有 `router-memory.ts` 继续负责来源、版本、发布及内容无关的撤销日志。Router 和 Worker 都通过受控查询路径使用记忆。暂停使用会保留存储；清空与遗忘不等于删除会话历史或供应商副本。
 
 可选 `reranker:{url,model,apiKeyEnv?,minScore,candidateLimit}` 接入 query-document 相关性重排，实现在 `src/memory-rerank.ts`。配置完整 rerank 接口地址，模型返回完整 indexed `[0,1]` 分数；分数适合排序，并不等同于“能够回答问题”的概率。未启用下述验证时，仍按配置的 `minScore` 筛选；默认 0.5 不代表所有模型都适用。候选默认 20、最多 40，重排超时 5 秒。候选限于当前授权记忆；无 embedding 时只有词法候选。embedding 和重排不计入记忆模型日预算。关闭宿主会取消并等待查询。
 
-可选 `verifyRelevance:true` 启用独立证据验证，工作台“容量、预算与语义检索 → 验证召回证据”可以配置。`src/memory-relevance.ts` 复用当前记忆模型选择链（策略 `extractBackend` / `extractModel`，继承 scope / Router 默认），把授权候选与问题交给模型逐项判断是否包含同一对象、所问事项的实际证据。模型不接收重排分数；此模式忽略 `minScore` 的过滤作用，只用重排排序。输出必须覆盖全部候选索引，支持项必须附有记忆正文内的精确非空引文。主机检查引文出处，语义相关性仍是可能出错的模型判断。不会因此写入、确认或删除记忆，也不修改任务目标、授权和验收标准。
+可选 `verifyRelevance:true` 启用独立证据验证，通过 `/agent-memory` 的 `configure` 命令设置。`src/memory-relevance.ts` 复用当前记忆模型选择链（策略 `extractBackend` / `extractModel`，继承 scope / Router 默认），把授权候选与问题交给模型逐项判断是否包含同一对象、所问事项的实际证据。模型不接收重排分数；此模式忽略 `minScore` 的过滤作用，只用重排排序。输出必须覆盖全部候选索引，支持项必须附有记忆正文内的精确非空引文。主机检查引文出处，语义相关性仍是可能出错的模型判断。不会因此写入、确认或删除记忆，也不修改任务目标、授权和验收标准。
 
 验证输入上限 256,000 字节，单次期限 60 秒。默认至多 20 项（配置 reranker 时沿用其候选上限），未检出的候选仍不能凭空补回。校验失败、超时、预算耗尽会返回 `partial`，并关闭这次相关项召回；不会退回未经验证的相关项。重排或 embedding 降级时仍可验证已有候选，但整体状态保留 `partial`。该门禁只覆盖相关项，已授权的画像、偏好、明确记住的常驻上下文仍有单独预算。结果缓存至多 60 秒，事实、来源、权限或策略变化会使结果失效；进程重启后重新验证。准备阶段目前没有接入每轮任务的取消信号，关闭宿主可以取消，单轮取消可能等待调用期限。
 
@@ -52,9 +54,9 @@ flowchart LR
 
 本轮两条漏召回修复、独立 88 问对照、延迟、剩余误差和回退步骤见 [检索验收记录](MEMORY_RETRIEVAL_VALIDATION_2026-11-08.md)。这些效果需要显式配置并启用重排，没有自动修改现有实例。回退至尚不认识 reranker 的版本前，必须先用新版移除该策略字段；已用隔离状态副本验证事实保留。
 
-回退到本次修复基线 `3db35f3` 前，先在新版关闭“验证召回证据”，确认持久策略已**移除** `verifyRelevance`，再停止宿主并切换旧代码；保存 `false` 也不足以兼容旧版严格 schema。该回退保留 reranker、事实和来源，不需要降级数据库。更早版本的 reranker / 数据库约束仍分别适用。
+历史基线 `3db35f3` 不认识 `verifyRelevance`，策略必须**移除**该字段，保存 `false` 也不兼容其严格 schema。这只是格式 2 阶段的策略回退条件；当前格式 3 不能仅靠移除字段退回旧程序，还需按下文恢复升级前备份。更早版本的 reranker / 数据库约束仍分别适用。
 
-升级时首次成功初始化记忆生命周期会把 SQLite `user_version` 提升到 **7**，记忆格式标记为 2。旧版宿主会拒绝打开 schema 7，避免把替换候选当作普通事实处理。升级前应在宿主停止后做既有 `backup`，保留完整 state、托管配置及撤销日志。需要回退时使用升级前备份和兼容程序；升级后的新任务、输入、外部效果或撤销记录不可通过简单覆盖丢弃。当前恢复流程保留原有推进／外部效果检查，未来 schema 会被拒绝。
+当前 SQLite `user_version` 为 **7**，个性化记忆格式标记为 **3**。格式 2 的现有事实和策略保留并升级；不认识格式 3 的旧程序拒绝读取，避免忽略临时偏好的适用范围。升级前应在宿主停止后做既有 `backup`，保留完整 state、托管配置及撤销日志。需要回退时使用升级前备份和兼容程序；升级后的新任务、输入、外部效果或撤销记录不可通过简单覆盖丢弃。当前恢复流程保留原有推进／外部效果检查，未来 schema 会被拒绝。
 
 可复现测试：
 
@@ -67,7 +69,7 @@ AGENTHUB_CODEX=/path/to/codex \
 MEMORY_ACCEPTANCE_DIR=/tmp/agenthub-memory-native \
 node --import tsx examples/agent-memory-smoke.ts
 
-# 启动隔离的真实 HTTP/SQLite 工作台，再在另一终端跑浏览器脚本。
+# 启动隔离的真实 HTTP/SQLite 应用壳与会话面板，再在另一终端跑浏览器脚本。
 MEMORY_BROWSER_DIR=/tmp/agenthub-memory-browser \
 node --import tsx examples/agent-memory-browser.ts
 MEMORY_BROWSER_DIR=/tmp/agenthub-memory-browser \
