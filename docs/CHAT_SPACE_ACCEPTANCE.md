@@ -34,3 +34,9 @@
 - [深色模式](images/chat-space-worker-dark.png)
 - [手机窗口](images/chat-space-worker-mobile.png)
 - [聊天设置](images/chat-space-settings-light.png)
+
+## Agents 列表消息预览复核（2026-11-14）
+
+名称统一为“Agents 列表”。名称下显示该窗口的最新消息；Worker 预览包含 Router 发给它的派工或它的回复，空窗口显示“暂无消息”。预览独立读取，不受当前翻页、当前选择的 Agent 或群聊最近 100 条窗口影响。长文本单行省略，完整预览可悬停查看。
+
+本次 `npm run check`：96 个文件通过，1457 个测试通过，1 个已有跳过。新增断言覆盖最新 Worker 回复、翻旧页、群聊窗口之外的 Worker 消息、不同聊天隔离和空状态；浏览器 6 组流程全部通过，包含中文新标题、真实预览、只读提示、浅深主题与 390px。浏览器证据仍使用确定性模型，与随后独立的外部平台实测分开记录。

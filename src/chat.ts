@@ -312,7 +312,12 @@ export class ChatSessions {
     for(const row of identities)if(row.speaker){const speaker=JSON.parse(String(row.speaker)) as Speaker;participants.set(speaker.id,speaker)}
     const router=this.router(last?.triggerId??'');participants.set(router.id,router)
     for(const worker of workers)participants.set(worker.id,this.worker(worker.id))
-    const result={conversation:this.publicConversation(c),messages:messages.slice(-100),hasMore:messages.length>100,run:last?{id:last.id,state,createdAt:last.createdAt}:null,workers,calls,routerId:router.id,participants:[router,...[...participants.values()].filter(p=>p.id!==router.id).sort((a,b)=>Number(b.kind==='router')-Number(a.kind==='router'))],readiness:this.readiness()}
+    const latestMessage=this.host.store.db.prepare("SELECT substr(json_extract(body,'$.text'),1,280) AS text,json_extract(body,'$.role') AS role,json_extract(body,'$.speaker.label') AS speaker FROM records WHERE kind='chat-message' AND json_extract(body,'$.conversationId')=? AND (? IS NULL OR json_extract(body,'$.speaker.id')=? OR json_extract(body,'$.recipient.id')=?) ORDER BY json_extract(body,'$.sequence') DESC LIMIT 1")
+    const agents=[router,...[...participants.values()].filter(p=>p.id!==router.id).sort((a,b)=>Number(b.kind==='router')-Number(a.kind==='router'))].map(agent=>{
+      const target=agent.id===router.id?null:agent.id,row=latestMessage.get(id,target,target,target)
+      return {...agent,latestMessage:row?{text:String(row.text),role:row.role as 'user'|'assistant',speaker:row.speaker?String(row.speaker):null}:null}
+    })
+    const result={conversation:this.publicConversation(c),messages:messages.slice(-100),hasMore:messages.length>100,run:last?{id:last.id,state,createdAt:last.createdAt}:null,workers,calls,routerId:router.id,participants:agents,readiness:this.readiness()}
     return result
   }
   /** A durable revision plus a fresh full projection recovers SSE gaps without replaying execution. */

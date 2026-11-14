@@ -23,11 +23,14 @@ with sync_playwright() as p:
   page.get_by_role('link',name='设置',exact=True).click();page.get_by_role('navigation',name='设置分区',exact=True).get_by_role('button',name='聊天',exact=True).click();expect(page.get_by_role('heading',name='聊天显示',exact=True)).to_be_visible()
  def chat():
   page.locator('.function-link[href="/chat"]').click();expect(page.locator('.conversation-body')).to_be_visible()
- settings();page.get_by_role('radio',name='好友列表',exact=False).check();expect(page.get_by_role('radio',name='好友列表',exact=False)).to_be_checked();expect(page.get_by_role('button',name='清空所有记忆和上下文',exact=True)).to_be_enabled();page.screenshot(path=str(root/'settings-light.png'),full_page=True);chat()
+ settings();page.get_by_role('radio',name='Agents 列表',exact=False).check();expect(page.get_by_role('radio',name='Agents 列表',exact=False)).to_be_checked();expect(page.get_by_role('button',name='清空所有记忆和上下文',exact=True)).to_be_enabled();page.screenshot(path=str(root/'settings-light.png'),full_page=True);chat()
  expect(page.get_by_role('textbox',name='向 Router 发送消息',exact=True)).to_have_value('保留这份未发送的草稿')
  expect(page.locator('.agent-contact')).to_have_count(3)
+ expect(page.get_by_role('heading',name='Agents 列表',exact=True)).to_be_visible()
  assert page.locator('.agent-contact .agent-portrait[data-agent-id="developer"]').get_attribute('src')==worker_portrait
- page.locator('.agent-contact').filter(has_text='开发 Worker').click()
+ expect(page.locator('.agent-contact').filter(has=page.locator('.agent-name',has_text='开发 Worker')).locator('small')).to_have_text('摘要截断已修改，A😀B 在限制三个字时保持完整。回归验证通过。')
+ expect(page.locator('.agent-contact').filter(has=page.locator('.agent-name',has_text='复核 Worker')).locator('small')).to_have_text('暂无消息')
+ page.locator('.agent-contact').filter(has=page.locator('.agent-name',has_text='开发 Worker')).click()
  expect(page.get_by_role('textbox',name='请与 Router 对话',exact=True)).to_be_disabled();expect(page.get_by_role('button',name='发送消息',exact=True)).to_have_count(0)
  expect(page.locator('.message')).to_have_count(2)
  expect(page.locator('.assistant-body').filter(has_text='请修复摘要遇到 emoji 被截断的问题')).to_be_visible();expect(page.locator('.assistant-body').filter(has_text='摘要截断已修改')).to_be_visible()
@@ -38,10 +41,10 @@ with sync_playwright() as p:
  assert page.locator('.agent-contact .agent-portrait[data-agent-id="developer"]').get_attribute('src')==worker_portrait
  assert context.request.get(f['url']+'/api/chat/space').json()['conversation']['id']==original
  passed('display switching, selecting a Worker, navigation and reload preserve the same chat and Router draft')
- page.get_by_role('button',name='切换为深色模式',exact=True).click();page.locator('.agent-contact').filter(has_text='开发 Worker').click();expect(page.locator('.message')).to_have_count(2);page.screenshot(path=str(root/'worker-dark.png'),full_page=True)
+ page.get_by_role('button',name='切换为深色模式',exact=True).click();page.locator('.agent-contact').filter(has=page.locator('.agent-name',has_text='开发 Worker')).click();expect(page.locator('.message')).to_have_count(2);page.screenshot(path=str(root/'worker-dark.png'),full_page=True)
  assert page.locator('.agent-contact .agent-portrait[data-kind="router"]').evaluate('(img)=>getComputedStyle(img).filter')=='invert(1)'
  assert page.locator('.agent-contact .agent-portrait[data-agent-id="developer"]').evaluate('(img)=>getComputedStyle(img).filter')=='none'
- page.set_viewport_size({'width':390,'height':844});page.get_by_role('button',name='打开导航',exact=True).click();expect(page.locator('.agent-contact').filter(has_text='复核 Worker')).to_be_visible();page.locator('.agent-contact').filter(has_text='复核 Worker').click();expect(page.get_by_role('heading',name='暂无协作消息',exact=True)).to_be_visible();expect(page.get_by_role('textbox',name='请与 Router 对话',exact=True)).to_be_disabled()
+ page.set_viewport_size({'width':390,'height':844});page.get_by_role('button',name='打开导航',exact=True).click();expect(page.locator('.agent-contact').filter(has=page.locator('.agent-name',has_text='复核 Worker'))).to_be_visible();page.locator('.agent-contact').filter(has=page.locator('.agent-name',has_text='复核 Worker')).click();expect(page.get_by_role('heading',name='暂无协作消息',exact=True)).to_be_visible();expect(page.get_by_role('textbox',name='请与 Router 对话',exact=True)).to_be_disabled()
  assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
  page.screenshot(path=str(root/'worker-mobile.png'),full_page=True);passed('dark mode and 390px navigation/read-only empty state have no horizontal overflow')
  page.set_viewport_size({'width':1440,'height':960});settings();page.get_by_role('button',name='清空所有记忆和上下文',exact=True).click();page.get_by_role('button',name='取消',exact=True).click();assert context.request.get(f['url']+'/api/chat/space').json()['conversation']['id']==original

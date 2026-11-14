@@ -896,7 +896,7 @@ function Chat(p: ChatProps) {
     return () => observer.disconnect();
   }, []);
 
-  const participants = snapshot?.participants ?? [{id:"router",label:"Router",kind:"router" as const},...(boot?.workers??[]).map(w=>({id:w.id,label:w.label,kind:"worker" as const}))];
+  const participants = snapshot?.participants ?? [{id:"router",label:"Router",kind:"router" as const,latestMessage:null},...(boot?.workers??[]).map(w=>({id:w.id,label:w.label,kind:"worker" as const,latestMessage:null}))];
   const currentRouter = participants.find(a=>a.id===(snapshot?.routerId??"router"))!;
   const selected = participants.find(a=>a.id===selectedAgent) ?? currentRouter;
   const readonly = display === "agents" && selected?.id !== currentRouter?.id;
@@ -1231,11 +1231,15 @@ function Chat(p: ChatProps) {
             user={boot?.user}
             views={views.map(view=>({id:view.id,label:view.label[lang]}))}
           />
-          {display === "agents" && !configuring ? <aside className="conversation-sidebar" id="agent-list" inert={(narrow && !menu) || (narrow && navExpanded)} aria-label={L("Agents", "好友列表")}>
-            <header className="conversation-heading"><h2>{L("Agents", "好友列表")}</h2></header>
-            <div className="agent-list">{participants.map(agent=><button key={agent.id} className="agent-contact" aria-pressed={selected?.id===agent.id} onClick={()=>{setSelectedAgent(agent.id);if(narrow)closeNavigation()}}>
-              <AgentAvatar id={agent.id} kind={agent.kind} size={36} /><span>{agent.label}<small>{agent.id===currentRouter?.id?L('Talk to Router','与 Router 对话'):L('Read only','只读')}</small></span>
-            </button>)}</div>
+          {display === "agents" && !configuring ? <aside className="conversation-sidebar" id="agent-list" inert={(narrow && !menu) || (narrow && navExpanded)} aria-label={L("Agents", "Agents 列表")}>
+            <header className="conversation-heading"><h2>{L("Agents", "Agents 列表")}</h2></header>
+            <div className="agent-list">{participants.map(agent=>{
+              const latest=agent.latestMessage,prefix=latest?.role==='user'?L('You: ','你：'):latest?.speaker&&latest.speaker!==agent.label?latest.speaker+': ':'';
+              const preview=latest?prefix+latest.text.replace(/\s+/g,' ').trim():L('No messages yet','暂无消息');
+              return <button key={agent.id} className="agent-contact" aria-pressed={selected?.id===agent.id} onClick={()=>{setSelectedAgent(agent.id);if(narrow)closeNavigation()}}>
+                <AgentAvatar id={agent.id} kind={agent.kind} size={36} /><span><span className="agent-name">{agent.label}</span><small title={preview}>{preview}</small></span>
+              </button>
+            })}</div>
           </aside> : null}
           {menu ? (
             <button
