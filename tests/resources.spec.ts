@@ -110,3 +110,19 @@ it('exercises every host resource family through the shared paginated reader',as
  const admin=['tickets','triggers','threads','decisions','decision/'+decision.id,'settings','settings/work','settings/delivery','prompts','prompts/defaults','prompt-preview/worker','prompt-preview/router','models','models/codex']
  for(const resource of admin)expect(await f.h.resources.read({resource}),resource).toBeDefined()
 })
+
+it('lets the owning assignment page retained tool output without replaying it or exposing other contexts',async()=>{
+ const f=await fixture(),id='retained',resource='model-tool-receipt/'+id
+ const receipt={id,ticketId:f.t.id,assignmentId:f.owner.assignmentId,at:Date.now(),result:{success:true,text:'完整消息'.repeat(800)}}
+ f.h.store.put('model-tool-receipt',id,receipt)
+ let offset=0,body=''
+ for(;;){const response=await f.h.workerTools.call(f.owner,'superagent_read',{resource,offset,limit:800});const page=JSON.parse(response.contentItems[0]!.text!);body+=page.text;if(page.nextOffset===null)break;offset=page.nextOffset}
+ expect(JSON.parse(body)).toEqual(receipt.result)
+ for(const principal of [{...f.owner,ticketId:'other'},{...f.owner,assignmentId:'old'},{...f.owner,agentId:'child'}])await expect(f.h.resources.read({resource},principal)).rejects.toThrow()
+ f.h.store.put('model-tool-receipt',id,{...receipt,assignmentId:undefined})
+ await expect(f.h.resources.read({resource},f.owner)).rejects.toThrow('outside')
+ expect((await f.h.resources.read({resource})).text).toContain('完整消息')
+ f.h.store.put('model-tool-receipt',id,receipt)
+ f.h.store.put('task-continuation',f.t.id,{ticketId:f.t.id,triggerId:'request',discussion:'local:topic',text:'Continue authorized work',at:receipt.at,inputIds:[],priorReports:[],priorAssignments:[],priorJobs:[],priorMessages:[],priorToolCalls:[]})
+ await expect(f.h.resources.read({resource},f.owner)).rejects.toThrow('quarantined')
+})

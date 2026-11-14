@@ -71,9 +71,15 @@ export function sandboxCommand(s:CommandSpec,platform=process.platform):{command
  const command=(process.env.PATH??'').split(delimiter).map(p=>resolve(p,'bwrap')).find(existsSync)??'bwrap'
  return {command,args}
 }
-export function sandboxEnvironment(scratch:string,developerBin?:string){
+export function networkEnvironment(){
+ const keys=['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy']
+ const env=Object.fromEntries(keys.filter(key=>process.env[key]!==undefined).map(key=>[key,process.env[key]!]))
+ if(keys.some(key=>!key.toLowerCase().startsWith('no_')&&env[key]))env.NODE_USE_ENV_PROXY='1'
+ return env
+}
+export function sandboxEnvironment(scratch:string,developerBin?:string,network=false){
  const env=Object.fromEntries(['PATH','USER','LOGNAME','LANG','LC_ALL','SYSTEMROOT','SystemRoot'].filter(key=>process.env[key]!==undefined).map(key=>[key,process.env[key]!]))
- Object.assign(env,{HOME:scratch,TMPDIR:scratch,TMP:scratch,TEMP:scratch})
+ Object.assign(env,{HOME:scratch,TMPDIR:scratch,TMP:scratch,TEMP:scratch},network?networkEnvironment():{})
  // Resolve Apple's shims against the selected installation without the per-user xcrun cache.
  if(developerBin){env.DEVELOPER_DIR=dirname(dirname(developerBin));env.xcrun_nocache='1'}
  // Keep higher-priority tools first.

@@ -8,7 +8,7 @@ import {Ajv2020} from 'ajv/dist/2020.js'
 import {z} from 'zod'
 import {MessageSource,UncertainDelivery,sourceChangeSchema,stableDigest,type SourceContext} from './sources.ts'
 import {pointer,readPluginPackage,type PluginPackage} from './plugin-package.ts'
-import {sandboxCommand,type SandboxDriver} from './sandbox.ts'
+import {sandboxCommand,networkEnvironment,type SandboxDriver} from './sandbox.ts'
 import {hostPrivateFiles} from './private-files.ts'
 import type {SourceConfig} from './config.ts'
 import type {Store} from './store.ts'
@@ -165,7 +165,7 @@ export class ProcessSource extends MessageSource {
     readPluginPackage(this.pkg.directory,this.pkg.digest)
     const scratch=mkdtempSync(join(tmpdir(),'agenthub-plugin-'));this.scratch=scratch
     try{
-      const runner=fileURLToPath(new URL('./plugin-worker.mjs',import.meta.url)),env:Record<string,string>={PATH:process.env.PATH??'',HOME:scratch,TMPDIR:scratch}
+      const runner=fileURLToPath(new URL('./plugin-worker.mjs',import.meta.url)),env:Record<string,string>={PATH:process.env.PATH??'',HOME:scratch,TMPDIR:scratch,...(this.pkg.manifest.network?networkEnvironment():{})}
       for(const path of Object.values(this.pkg.manifest.credentials)){
         const name=pointer(this.config,path);if(name===undefined)continue
         if(typeof name!=='string'||!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)||!process.env[name])throw Error('Plugin credential is unavailable')

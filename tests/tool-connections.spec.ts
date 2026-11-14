@@ -45,6 +45,13 @@ it('discovers real stdio tools, validates arguments, preserves structured/image/
   const {host,owner,calls}=await fixture()
   const list=await host.workerTools.call(owner,'superagent_tools',{})
   expect(list.contentItems[0]!.text).toContain('echo');expect(list.contentItems[0]!.text).not.toContain('hidden')
+  expect(list.contentItems[0]!.text!.length).toBeLessThan(1000);expect(list.contentItems[0]!.text).not.toContain('inputSchema')
+  const schema=await host.workerTools.call(owner,'superagent_tools',{connection:'docs',tool:'constrained'})
+  expect(schema.contentItems[0]!.text).toContain('https://json-schema.org/draft/2020-12/schema');expect(schema.contentItems[0]!.text).not.toContain('data:image')
+  await expect(host.workerTools.call(owner,'superagent_tools',{tool:'echo'})).rejects.toThrow('connection')
+  await expect(host.workerTools.call(owner,'superagent_tools',{connection:'docs',tool:'hidden'})).rejects.toThrow('not advertised')
+  await expect(host.workerTools.call(owner,'superagent_tools',{connection:'ungranted'})).rejects.toThrow()
+
   const output=await host.workerTools.call(owner,'superagent_tool',input())
   expect(output).toMatchObject({success:true,contentItems:[{type:'inputText',text:'actual tool output'},{type:'inputText',text:JSON.stringify({structuredContent:{text:'actual tool output'}})}]})
   expect((await host.workerTools.call(owner,'superagent_tool',input('image'))).contentItems[0]!.type).toBe('inputImage')

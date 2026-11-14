@@ -97,7 +97,10 @@ export class RouterScopes {
    if(old&&(old.sourceId!==source.id||old.privateActor!==x.privateActor))throw Error('Entry identity cannot change')
    this.checkRevision(old?.revision??0,x.expectedRevision)
    const next:EntryBinding={id:entryId,tenantId:scope.tenantId,sourceId:source.id,provider:source.kind,accountNamespace:x.accountNamespace,nativeId:x.nativeId,scopeId:scope.id,revision:(old?.revision??0)+1,active:x.active,history:x.history,...(x.privateActor?{privateActor:x.privateActor}:{})}
-   this.store.put('entry-binding',entryId,next);this.bump(next.tenantId);return next
+   this.store.put('entry-binding',entryId,next)
+   // A first binding grants a new entry; only changing an existing binding can revoke prior context.
+   if(old)this.bump(next.tenantId)
+   return next
   }
   if(x.action==='task.channel'){
    const owner=this.ownership(x.ticketId),entry=this.binding(x.entryId)

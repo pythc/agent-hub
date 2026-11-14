@@ -82,11 +82,16 @@ export class ToolConnections {
     }while(cursor)
     return result.filter(t=>config.allowedTools.includes(t.name))
   }
-  async catalog(owner:WorkOwner){
+  async catalog(owner:WorkOwner,selection:{connection?:string;tool?:string}={}){
     const ids:string[]=this.host.store.get<any>('run',owner.ticketId)?.agentOptions?.toolConnections??[]
     const result=[]
     const signal=AbortSignal.any([this.shutdown.signal,AbortSignal.timeout(60000)])
-    for(const id of ids){this.allowed(owner,id);result.push({connection:id,tools:await this.tools(owner,id,signal)})}
+    for(const id of selection.connection?[selection.connection]:ids){
+      this.allowed(owner,id)
+      const tools=await this.tools(owner,id,signal)
+      if(selection.tool&&!tools.some(t=>t.name===selection.tool))throw Error('Tool is not advertised by the configured MCP server')
+      result.push({connection:id,tools:selection.tool?tools.filter(t=>t.name===selection.tool).map(({name,description,inputSchema,annotations})=>({name,description,inputSchema,annotations})):tools.map(({name})=>({name}))})
+    }
     return result
   }
   call(owner:WorkOwner,input:{connection:string;tool:string;arguments:Record<string,unknown>;requestId:string}):Promise<ToolResult>{

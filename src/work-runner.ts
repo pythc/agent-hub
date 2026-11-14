@@ -9,7 +9,7 @@ let bytes=0,droppedBytes=0,stopping=false,killTimer:ReturnType<typeof setTimeout
 const scratch=mkdtempSync(join(tmpdir(),'agenthub-job-'))
 let launch:ReturnType<typeof sandboxCommand>
 try{launch=sandboxCommand({...spec,scratch})}catch(error){closeSync(output);rmSync(scratch,{recursive:true,force:true});throw error}
-const env=sandboxEnvironment(scratch,launch.developerBin)
+const env=sandboxEnvironment(scratch,launch.developerBin,spec.network)
 const child=spawn(launch.command,launch.args,{cwd:spec.cwd,env,stdio:['ignore','pipe','pipe'],shell:false})
 
 const append=(chunk:Buffer)=>{const count=Math.min(chunk.length,Math.max(0,spec.maxOutputBytes-bytes));if(count)writeSync(output,chunk.subarray(0,count));bytes+=count;droppedBytes+=chunk.length-count}

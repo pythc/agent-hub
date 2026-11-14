@@ -68,14 +68,20 @@ export class Resources {
    if(resource==='catalog')return {resources:[...allowed,'feishu/'+trigger.id+'/image/<key>','feishu/'+trigger.id+'/file/<key>'],admission:true}
    if(!allowed.includes(resource)&&!['image','file'].some(kind=>resource.startsWith('feishu/'+trigger.id+'/'+kind+'/')))throw Error('Admission may only read its current source message and attachments')
   }
-  if(resource.startsWith('model-tool-receipt/')){
-   this.admin(principal)
-   const id=resource.slice('model-tool-receipt/'.length),value=this.host.store.get('model-tool-receipt',id)
-   if(!value||this.host.memory.cleanup.blocked('model-tool-receipt',id,value))throw Error('Tool receipt unavailable or deleted')
-   return this.textPage(JSON.stringify(value),offset,limit,'',resource)
-  }
   const scopeSignature=()=>{if(principal.triggerId){const t=this.reached(principal,principal.triggerId);this.host.scopes.assertTrigger(t);return stableDigest(this.host.scopes.context(t,t.source+':'+t.threads[0]!.id)?.route??t.id)}if(!principal.ticketId||!this.host.scopes.enabled())return;const context=this.host.store.get<{manifest:import('./router-memory.ts').ContextManifest}>('task-context',principal.ticketId);if(!context)throw Error('Scoped reads require a verified task context');this.host.memory.validate(context.manifest);return stableDigest(context.manifest)}
   const signature=scopeSignature()
+  if(resource.startsWith('model-tool-receipt/')){
+   const id=resource.slice('model-tool-receipt/'.length),value=this.host.store.get<any>('model-tool-receipt',id)
+   if(!value||this.host.memory.cleanup.blocked('model-tool-receipt',id,value))throw Error('Tool receipt unavailable or deleted')
+   if(principal.ticketId){
+    const ticket=this.ticket(principal),run=this.host.store.get<Run>('run',ticket.id)
+    if(value.ticketId!==ticket.id||!value.assignmentId||value.assignmentId!==principal.assignmentId||value.assignmentId!==run?.assignmentId||value.agentId!==principal.agentId)throw Error('Tool receipt is outside this assignment')
+    const continuation=this.host.store.get<TaskContinuation>('task-continuation',ticket.id)
+    if(continuation&&(!value.at||value.at<=continuation.at))throw Error('Prior context body is quarantined; inspect effect identities only')
+    if(value.contextId){const manifest=this.host.store.get<import('./router-memory.ts').ContextManifest>('context-manifest',value.contextId);if(!manifest)throw Error('Receipt context is unavailable');this.host.memory.validate(manifest)}
+   }
+   return this.textPage(JSON.stringify(principal.ticketId?value.result:value),offset,limit,'',resource)
+  }
   if(resource==='catalog'){
    const run=principal.ticketId?this.host.store.get<Run>('run',this.ticket(principal).id):undefined
    const threadId=principal.agentId?this.host.store.get<{threadId?:string}>('work',principal.agentId)?.threadId:run?.threadId

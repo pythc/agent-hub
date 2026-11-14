@@ -134,7 +134,7 @@ export default {
 
 `headerEnv` 对应变量的值是完整头值，例如 `Bearer ...`；不会再次拼接 Bearer。`env` 将宿主环境变量映射为子进程变量，不在 JSON 中保存凭据值。stdio 不继承全部宿主环境，未显式映射的服务凭据不会自动可用。
 
-为 Worker 设置 `toolConnections: ["documents"]` 后，它先调用 `superagent_tools` 获取实际工具 schema，再调用：
+为 Worker 设置 `toolConnections: ["documents"]` 后，它先调用 `superagent_tools` 获取工具名称，再传入 `connection` 和 `tool` 获取所选工具的实际 schema，然后调用：
 
 ```json
 {
@@ -170,3 +170,8 @@ npm test
 ## Packaged source plugins
 
 For digest-pinned process-isolated v2 packages, reference Feishu/Slack setup, scoped resource tools and controlled code upgrade/rollback, see [PLUGINS.md](PLUGINS.md). The earlier trusted module interface remains the v1 compatibility path; its host-context APIs are not exposed to v2 children.
+
+
+工具返回内容超出当前上下文单次结果预算时，宿主保留完整结果并返回 `model-tool-receipt/<id>`。当前拥有该结果的 Worker 可通过 `superagent_read` 分页读取（建议 `limit: 800`，按 `nextOffset` 继续），无需操作员代读，也不能通过再次执行写操作获取结果。回执仍受任务、assignment、子 Agent、上下文撤销和历史删除约束。
+
+允许网络访问的托管命令和来源插件继承宿主标准 HTTP/HTTPS/ALL/NO_PROXY 环境设置；禁止网络访问的命令不继承这些设置。宿主的其他凭据环境不会因此传入命令沙箱。

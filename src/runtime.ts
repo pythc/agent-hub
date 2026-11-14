@@ -403,7 +403,8 @@ export class Runtime {
     this.usage.begin(activity,role,context)
     const originalBudget=request.onBudget
     request.onBudget=receipt=>{this.store.put('context-budget',activity,{activity,...context,scopeId,...receipt,at:Date.now()});originalBudget?.(receipt)}
-    request.retainToolResult=(callId,result)=>{const id=activity+':'+callId;this.store.put('model-tool-receipt',id,{id,activity,...context,scopeId,result});return id}
+    const receiptAssignment=context.ticketId?this.store.get<Run>('run',context.ticketId)?.assignmentId:undefined
+    request.retainToolResult=(callId,result)=>{const id=activity+':'+callId;this.store.put('model-tool-receipt',id,{id,activity,...context,scopeId,assignmentId:receiptAssignment,contextId:manifest?.id,at:Date.now(),result});return id}
     const onBackend=request.onBackend,onModel=request.onModel,onTool=request.onTool
     request={...request,onBackend:id=>{this.activity.update(activity,{backend:id});this.usage.update(activity,{backend:id});onBackend?.(id)},onModel:model=>{this.activity.update(activity,{model});this.usage.update(activity,{model});onModel?.(model)},...(role==='router'&&onTool?{onTool:(name,args,callId)=>this.activity.tool(name,context,()=>onTool(name,args,callId),activity,chatToolDetails(name,args))}:{})}
     this.activity.update(activity,{backend:request.backendId,model:request.model})

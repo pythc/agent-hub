@@ -5,7 +5,7 @@ import {ListToolsRequestSchema,CallToolRequestSchema} from '@modelcontextprotoco
 
 const server=new Server({name:'connector-contract-fixture',version:'1'},{capabilities:{tools:{}}})
 const schema={type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false}
-server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:['echo','write','crash','hang','fail','image','hidden','constrained'].map(name=>({name,inputSchema:name==='constrained'?{$schema:'https://json-schema.org/draft/2020-12/schema',type:'object',allOf:[{properties:{text:{type:'string'}}}],required:['text'],unevaluatedProperties:false}:schema}))}))
+server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:['echo','write','crash','hang','fail','image','hidden','constrained'].map(name=>({name,description:'Tool '+name,icons:[{src:'data:image/png;base64,'+'a'.repeat(10000)}],inputSchema:name==='constrained'?{$schema:'https://json-schema.org/draft/2020-12/schema',type:'object',allOf:[{properties:{text:{type:'string'}}}],required:['text'],unevaluatedProperties:false}:schema}))}))
 server.setRequestHandler(CallToolRequestSchema,async(request,extra)=>{
   appendFileSync(process.argv[2],JSON.stringify(request.params)+'\n')
   if(request.params.name==='crash')process.exit(0)

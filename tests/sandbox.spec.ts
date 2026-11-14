@@ -1,7 +1,7 @@
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,rmSync,realpathSync,symlinkSync} from 'node:fs'
 import {join,dirname} from 'node:path'
 import {tmpdir} from 'node:os'
-import {afterEach,it,expect} from 'vitest'
+import {afterEach,it,expect,vi} from 'vitest'
 import {configSchema} from '../src/config.ts'
 import {Store} from '../src/store.ts'
 import {WorkManager,type WorkOwner} from '../src/work.ts'
@@ -169,4 +169,21 @@ it('constructs a minimal Linux namespace with read-only root inputs and hidden p
  expect(command.args).toContain(f.config.stateDir);expect(command.command.endsWith('bwrap')).toBe(true)
  const masked=command.args.lastIndexOf(realpathSync(f.config.stateDir)),remounted=command.args.indexOf(realpathSync(cwd),masked+1)
  expect(remounted).toBeGreaterThan(masked);expect(command.args[remounted-1]).toBe('--ro-bind')
+})
+
+it.skipIf(!supported)('uses the configured proxy in a network-enabled managed shell without leaking other host secrets',async()=>{
+ const f=fixture(),requests:string[]=[],proxy=createServer((req,res)=>{requests.push(req.url!);res.end('proxy-reached')})
+ await new Promise<void>(r=>proxy.listen(0,'127.0.0.1',r))
+ const endpoint='http://127.0.0.1:'+(proxy.address() as any).port
+ try{
+  for(const key of ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'])vi.stubEnv(key,endpoint)
+  for(const key of ['NO_PROXY','no_proxy'])vi.stubEnv(key,'')
+  vi.stubEnv('AGENTHUB_FIXTURE_KEY','must-not-leak')
+  expect(sandboxEnvironment(f.root)).not.toHaveProperty('HTTP_PROXY')
+  f.config.work.network=true
+  const job=await f.manager.shell(f.owner,'curl --max-time 3 http://proxy-fixture.invalid/test && test -z "$AGENTHUB_FIXTURE_KEY"','proxy',0)
+  const ended=await settle(f,job.id,5000)
+  expect(ended.exitCode,f.manager.read(f.owner,job.id).output).toBe(0)
+  expect(f.manager.read(f.owner,job.id).output).toContain('proxy-reached');expect(requests).toEqual(['http://proxy-fixture.invalid/test'])
+ }finally{vi.unstubAllEnvs();proxy.closeAllConnections();await new Promise<void>(r=>proxy.close(()=>r()))}
 })

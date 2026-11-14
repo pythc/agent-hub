@@ -161,6 +161,19 @@ it('F04 new group binding does not import historical memory',()=>{
  const f=fixture();f.remember();f.scopes.command({action:'entry.bind',operationId:'new',expectedRevision:0,scopeId:'p1',sourceId:'local',accountNamespace:'account',nativeId:'new'})
  expect(f.memory.query(f.context('new'),{}).items).toEqual([])
 })
+it('keeps existing task context valid when a new unrelated entry is bound, but invalidates rebinding',()=>{
+ const f=fixture(),c=f.context();f.remember()
+ f.scopes.own('ongoing',c,'codex')
+ const packet=f.memory.build(c,{request:'Continue the existing task'},'router'),epoch=f.scopes.epoch(c.route.tenantId)
+ const bind={action:'entry.bind',operationId:'add-unrelated',expectedRevision:0,scopeId:'p1',sourceId:'local',accountNamespace:'account',nativeId:'brand-new',history:'group'}
+ f.scopes.command(bind)
+ expect(f.scopes.epoch(c.route.tenantId)).toBe(epoch)
+ expect(()=>f.memory.validate(packet.manifest)).not.toThrow()
+ expect(()=>f.scopes.checkTask('ongoing',c,true)).not.toThrow()
+ expect(f.memory.query(f.context('brand-new'),{}).items).toEqual([])
+ f.scopes.command({...bind,operationId:'disable-new',expectedRevision:1,active:false})
+ expect(()=>f.memory.validate(packet.manifest)).toThrow('expired')
+})
 it('F06/F21 rejects foreign evidence and body-provided scope fields',()=>{
  const f=fixture(),e=f.memory.ingest(f.context())
  expect(()=>f.memory.command(f.context('g2'),{action:'remember',operationId:'mix',expectedRevision:0,subject:'summary',content:'Public summary',sourceIds:[e.id]})).toThrow('outside')
