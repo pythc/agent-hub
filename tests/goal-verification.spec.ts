@@ -364,12 +364,14 @@ it('exposes host command receipts and launch restrictions to the independent fin
   f.h.store.put('work',jobId,{id:jobId,ticketId:task.id,assignmentId,cwd:r.cwd,sandbox:'workspace-write',depth:0,kind:'shell',command,state:'completed',exitCode:0,notify:'collected',createdAt:1,endedAt:2})
   writeFileSync(join(f.h.work.directory,jobId+'.spec.json'),JSON.stringify({id:jobId,cwd:r.cwd,command,sandboxDriver:'seatbelt',sandbox:'workspace-write',network:false,privateState:'must-not-be-exposed'}))
   writeFileSync(join(f.h.work.directory,jobId+'.output'),'calculation verified: 42\n')
+  f.h.store.put('tool-receipt','provider-pr',{id:'provider-pr',ticketId:task.id,connection:'github',tool:'create_pull_request',state:'complete',result:{content:[{type:'text',text:'{\"url\":\"https://example.test/pr/1\"}'}]}})
   return ready()
  },async(r,input)=>{
   for(const e of input.evidence){const result=await r.onTool!('goal_evidence',{id:e.id},e.id);if(e.kind==='execution'){
    const envelope=JSON.parse((result as any).contentItems[0].text),ledger=JSON.parse(envelope.content)
    expect(ledger.jobs[0]).toMatchObject({command,exitCode:0,recordedPolicy:{network:false,sandboxDriver:'seatbelt'}})
    expect(ledger.jobs[0].output).toMatchObject({text:'calculation verified: 42\n',complete:true,hash:expect.any(String)})
+   expect(ledger.externalTools[0]).toMatchObject({id:'provider-pr',tool:'create_pull_request',resultComplete:true,result:{content:[{type:'text',text:expect.stringContaining('https://example.test/pr/1')}]}})
    expect(envelope.content).not.toContain('must-not-be-exposed');inspected=true
   }}
   return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Checked host receipts and artifact',evidenceIds:input.evidence.map((e:any)=>e.id)}))}
@@ -543,4 +545,16 @@ it('accepts absolute, lowercase and uppercase addresses against a real xlsx',asy
  f.start({criteria,nodes:[{id:'build',title:'Build',instruction:'Create workbook',workerId:'one',criterionIds:criteria.map(c=>c.id)}]})
  await until(f,()=>f.goal().state==='completed')
  expect(f.rounds().some(r=>r.state==='passed')).toBe(true)
+})
+
+it('bounds provider payload evidence without treating omitted or uncertain results as successful effects',()=>{
+ const f=fixture(),ticketId='provider-evidence'
+ for(const [id,value] of Object.entries({large:{state:'complete',result:{text:'L'.repeat(130*1024)}},small:{state:'complete',result:{isError:true,content:[{type:'text',text:'permission denied'}]}},uncertain:{state:'uncertain'},foreign:{state:'complete',result:{text:'other-task-secret'}}}))f.h.store.put('tool-receipt',id,{id,ticketId:id==='foreign'?'other':ticketId,connection:'api',tool:'write',...value})
+ const ledger=JSON.parse((f.h.verification as any).execution(ticketId))
+ expect(ledger.externalTools).toHaveLength(3)
+ expect(ledger.externalTools[0]).toMatchObject({resultComplete:false,resultBytes:expect.any(Number),resultHash:expect.any(String)})
+ expect(ledger.externalTools[0]).not.toHaveProperty('result')
+ expect(ledger.externalTools[1]).toMatchObject({resultComplete:true,result:{isError:true}})
+ expect(ledger.externalTools[2]).toMatchObject({state:'uncertain',resultComplete:false})
+ expect(JSON.stringify(ledger)).not.toContain('other-task-secret')
 })

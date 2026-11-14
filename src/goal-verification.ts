@@ -70,12 +70,19 @@ export class GoalVerification {
    }catch{output={complete:false,reason:'Host output could not be captured within the bounded evidence limit'}}
    return {id:w.id,assignmentId:w.assignmentId,kind:w.kind,state:w.state,exitCode:w.exitCode,error:w.error?.slice(0,1000),command:w.command?.slice(0,16000),commandTruncated:(w.command?.length??0)>16000,commandHash:w.command?stableDigest(w.command):undefined,recordedPolicy:policy,output}
   })
+  let receiptBytes=128*1024
+  const externalTools=receipts.slice(0,100).map(r=>{
+   const value=this.host.store.get<any>('tool-receipt',r.id),result=value?.result
+   const bytes=result===undefined?0:Buffer.byteLength(JSON.stringify(result)),complete=result!==undefined&&bytes<=receiptBytes
+   if(complete)receiptBytes-=bytes
+   return {id:r.id,connection:r.connection,tool:r.tool,state:r.state,resource:r.resource,resultComplete:complete,...(complete?{result}:{reason:result===undefined?'No provider result retained':'Result exceeds this evidence snapshot; request a narrower provider read'}),...(result===undefined?{}:{resultBytes:bytes,resultHash:stableDigest(result)})}
+  })
   const workflowActions=this.host.workflows.list().filter(a=>a.ticketId===ticketId).map(({id,state,receipt})=>({id,state,receipt}))
   const cap=this.host.store.get<any>('capabilities',ticketId)
   // These records are host-owned API receipts, not model-authored files or
   // opaque tool output. Preserve uncertain phases and scope by the record key.
   const prefix=ticketId+':',publications=this.host.store.db.prepare("SELECT body FROM records WHERE kind='pr-delivery' AND substr(id,1,?)=? ORDER BY id LIMIT 101").all(prefix.length,prefix).map(row=>{const r=JSON.parse(String(row.body));return {phase:r.phase,sourceId:r.sourceId,repository:r.repository,branch:r.branch,number:r.number,url:r.url,head:r.sha,draft:r.draft,confirmedAt:r.confirmedAt}})
-  return JSON.stringify({basis:'Host-managed execution ledger; not a Worker assertion',scope:'Task-side commands and tool calls. Configured model inference is outside task-side network policy. This is not an audit of unrelated OS processes.',complete:all.length<=100&&calls.length<=200&&receipts.length<=100&&publications.length<=100,jobs,toolCalls:calls.slice(0,200).map(a=>({id:a.id,name:a.name,state:a.state})),externalTools:receipts.slice(0,100).map(r=>({id:r.id,connection:r.connection,tool:r.tool,state:r.state})),...(workflowActions.length?{workflowActions}:{}),repositoryPublications:publications.slice(0,100),publicationBasis:'Confirmed receipts describe provider readback at confirmedAt, not a fresh remote query; creating or uncertain phases do not prove success.',managedCapabilities:cap?{managed:cap.managed,mcpServers:cap.mcpServers}:null})
+  return JSON.stringify({basis:'Host-managed execution ledger; not a Worker assertion',scope:'Task-side commands and tool calls. Configured model inference is outside task-side network policy. This is not an audit of unrelated OS processes.',complete:all.length<=100&&calls.length<=200&&receipts.length<=100&&publications.length<=100,jobs,toolCalls:calls.slice(0,200).map(a=>({id:a.id,name:a.name,state:a.state})),externalTools,externalToolBasis:'Original provider payloads retained by the host, not Worker-authored quotations. A complete call may still return an API error. resultComplete=false cannot prove omitted content.',...(workflowActions.length?{workflowActions}:{}),repositoryPublications:publications.slice(0,100),publicationBasis:'Confirmed receipts describe provider readback at confirmedAt, not a fresh remote query; creating or uncertain phases do not prove success.',managedCapabilities:cap?{managed:cap.managed,mcpServers:cap.mcpServers}:null})
  }
  failureEvidence(g:RouterGoal):Evidence[]{
   const c=this.host.goals.context(g),items:Evidence[]=[];let bytes=0
