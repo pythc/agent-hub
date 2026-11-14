@@ -56,4 +56,6 @@ npm run build:chat
 
 浏览器数据位于 `<stateDir>/browser`。现有数据库备份命令不包含整个 Chrome profile：迁移或备份时应停止宿主，同时保存数据库、该目录及外置密钥。只恢复数据库不能恢复登录信息，丢失密钥无法还原保存密码。网站会话有效期、跨站 SSO、设备绑定及二次认证仍由网站决定；不会承诺永久登录或跨机器无条件迁移。
 
+Worker 可用 `superagent_browser` 的 `screenshot` 动作导出 PNG，默认当前视口，`fullPage: true` 捕获整页。截图由现有隔离浏览器生成，存为本任务的只读附件；返回完整路径、字节数和 SHA-256，Worker 可用受管 shell 复制到请求的工作区位置，并用 `superagent_read image/<相对路径>` 检查图像。关闭浏览器不会删除交付附件，清理任务历史时统一删除。截图沿用会话归属、人类接管和请求去重规则，不需要放宽普通 shell 的浏览器进程权限。实现调用 [agent-browser 的截图命令](https://agent-browser.dev/commands#core)。验收保留原始 PNG 及宿主捕获回执；哈希和页面标题不能替代视觉质量检查。
+
 当前验收覆盖 macOS + 本机 Chrome。Linux/Windows、任意外部网站、Chrome 扩展、下载/文件选择、系统 Passkey 和复杂跨站登录流程未计入通过项。见[验收记录](BROWSER_ACCEPTANCE_2026-11-07.md)及[开源许可](THIRD_PARTY_BROWSER.md)。

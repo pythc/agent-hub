@@ -21,6 +21,8 @@ import type { Model } from "../src/model.ts";
 import { serve } from "../src/server.ts";
 import type { Server } from "node:http";
 
+const screenshotBytes=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=","base64");
+
 class Driver implements BrowserDriver {
   tabs = new Map<string, any[]>();
   calls: { id: string; args: string[] }[] = [];
@@ -29,6 +31,7 @@ class Driver implements BrowserDriver {
   scripts: string[] = [];
   gate?: () => Promise<void>;
   openGate?: () => Promise<void>;
+  screenshotGate?: () => Promise<void>;
   fail = false;
   snapshotText = '- button "Continue" [ref=e1]';
   async version() {
@@ -58,6 +61,10 @@ class Driver implements BrowserDriver {
     if (args[0] === "tab" && args[1] === "list")
       return { tabs: this.tabs.get(s.id) ?? [] };
     if (args[0] === "snapshot") return { snapshot: this.snapshotText };
+    if (args[0] === "screenshot") {
+      await this.screenshotGate?.();
+      writeFileSync(args[1]!,screenshotBytes);
+    }
     return {};
   }
   async evaluate(_: DriverSession, expression: string) {
@@ -200,6 +207,39 @@ const open = (h: Runtime, o: WorkOwner, profileId?: string) =>
     profileId,
     requestId: randomUUID(),
   }) as Promise<any>;
+
+it("exports an owned PNG attachment once and retains it when the browser closes",async()=>{
+  const {host,owner,driver}=await fixture(),s=await open(host,owner);
+  const input={action:"screenshot" as const,sessionId:s.id,requestId:"capture",fullPage:true};
+  const result:any=await host.browser.tool(owner,input);
+  expect(readFileSync(result.screenshot.path)).toEqual(screenshotBytes);
+  expect(statSync(result.screenshot.path).mode&0o777).toBe(0o400);
+  expect(host.store.get("asset",result.screenshot.id)).toEqual(result.screenshot);
+  expect(result.screenshot).toMatchObject({ticketId:owner.ticketId,assignmentId:owner.assignmentId,mime:"image/png",sha256:expect.stringMatching(/^[a-f0-9]{64}$/)});
+  expect(await host.browser.tool(owner,input)).toEqual(result);
+  expect(driver.calls.filter(c=>c.args[0]==="screenshot")).toHaveLength(1);
+  expect(driver.calls.find(c=>c.args[0]==="screenshot")!.args).toEqual(["screenshot",result.screenshot.path,"--full"]);
+  await expect(host.browser.tool({...owner,assignmentId:"old"},input)).rejects.toThrow("no longer");
+  await host.browser.tool(owner,{action:"close",sessionId:s.id,requestId:"close"});
+  expect(readFileSync(result.screenshot.path)).toEqual(screenshotBytes);
+});
+
+it("does not publish a screenshot after browser control changes",async()=>{
+  const {host,owner,driver}=await fixture(),s=await open(host,owner);
+  let release!:()=>void,started!:()=>void;
+  const begin=new Promise<void>(r=>{started=r});
+  driver.screenshotGate=()=>{started();return new Promise<void>(r=>{release=r})};
+  const captured=host.browser.tool(owner,{action:"screenshot",sessionId:s.id,requestId:"capture"}).catch(e=>e);
+  await begin;
+  const human=host.browser.takeover("alice",s.id,randomUUID());
+  release();
+  expect(await captured).toMatchObject({code:"browser_control_changed"});
+  await human;
+  expect(host.store.list("asset")).toHaveLength(0);
+  const path=driver.calls.find(c=>c.args[0]==="screenshot")!.args[1]!;
+  expect(()=>statSync(path)).toThrow();
+  await expect(host.browser.tool(owner,{action:"screenshot",sessionId:s.id,requestId:"new-capture"})).rejects.toThrow("waiting for the user");
+});
 
 it("gives Workers separate real-driver sessions and fences cross-assignment and subagent IDs", async () => {
   const { host, owner, driver } = await fixture(),

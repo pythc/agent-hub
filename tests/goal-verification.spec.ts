@@ -267,6 +267,12 @@ it.each(['ready','blocked'] as const)('processes a same-entry follow-up before r
   if(attempt===1){entered=true;await new Promise<void>(done=>{release=done});return {...ready('outdated answer'),state}}
   expect(r.input).toContain('Use the new measurement')
   writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready('verified the new measurement')
+ },async(r,input)=>{
+  const followups=input.evidence.find((e:any)=>e.key==='admitted-followups');expect(followups).toBeDefined()
+  const page:any=await r.onTool!('goal_evidence',{id:followups.id},'read-human-followups')
+  expect(JSON.parse(page.contentItems[0].text).content).toContain('Use the new measurement')
+  for(const e of input.evidence)await r.onTool!('goal_evidence',{id:e.id},'read-'+e.id)
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Checked the result against the admitted human clarification',evidenceIds:c.allowedEvidenceIds}))}
  });f.start()
  await until(f,()=>entered)
  const id=f.goal().taskIds[0]!,message=f.h.receive('local','alice',{id:'new-evidence',thread:'test',scope:'test',text:'Use the new measurement',addressed:true}) as any
@@ -463,6 +469,24 @@ it('corrects document citation mistakes with scoped short references without rep
  expect(f.goal().contract).toEqual(original.contract)
  expect(f.rounds().every(r=>r.snapshot.evidence.every(e=>e.id.startsWith('evidence-'))&&r.checks.every(c=>c.evidenceIds.every(id=>id.startsWith('evidence-'))))).toBe(true)
  expect(f.h.store.list('goal-verification-attempt')).toHaveLength(1)
+})
+
+it('retains PNG bytes and scopes actual browser capture receipts to the reviewed task',async()=>{
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=','base64')
+ const f=fixture(r=>{
+  writeFileSync(join(r.cwd,'page.png'),png)
+  for(const ticketId of [r.activity!.ticketId!,'another-task'])f.h.store.put('browser-receipt',ticketId,{id:ticketId,state:'complete',result:{id:'session',url:'https://example.com',title:'Example Domain',screenshot:{ticketId,sha256:'observed-capture-hash'}}})
+  return ready()
+ },async(_r,input)=>{
+  const file=input.evidence.find((e:any)=>e.kind==='file'),execution=input.inlineEvidence.find((e:any)=>e.id===input.evidence.find((e:any)=>e.kind==='execution').id)
+  const ledger=execution.content?JSON.parse(execution.content):execution.execution
+  expect(JSON.stringify(ledger)).toContain('observed-capture-hash');expect(JSON.stringify(ledger)).not.toContain('another-task')
+  expect(file.artifact.mime).toBe('image/png')
+  expect(f.h.artifacts.download(file.artifact.id).bytes).toEqual(png)
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Capture receipt and versioned file retained; no visual quality claim',evidenceIds:c.allowedEvidenceIds}))}
+ })
+ f.start({criteria:[{id:'sum',description:'Deliver a real captured PNG',files:['page.png']}]})
+ await until(f,()=>f.goal().state==='completed')
 })
 
 it('retains insufficient verification after bounded retries instead of releasing or looping',async()=>{

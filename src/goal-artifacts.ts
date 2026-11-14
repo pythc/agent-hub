@@ -11,7 +11,7 @@ import type {WorkOwner} from './work.ts'
 import {stableDigest} from './sources.ts'
 import {atomicPrivateFile} from './managed-config.ts'
 
-const mimeTypes:Record<string,string>={'.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pdf':'application/pdf','.mp4':'video/mp4'}
+const mimeTypes:Record<string,string>={'.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pdf':'application/pdf','.mp4':'video/mp4','.png':'image/png'}
 export interface ArtifactVersion {id:string;goalId:string;ticketId:string;nodeId:string;path:string;version:number;sha256:string;size:number;mime:string}
 type CellCheck=Extract<NonNullable<GoalCriterion['check']>,{kind:'xlsx_cell_equals'}>
 

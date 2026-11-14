@@ -11,6 +11,7 @@ import {stableDigest} from './sources.ts'
 import {scopeBudget} from './context-budget.ts'
 import {inlineEvidenceBudget,evidenceAccess,type GoalEvidence as Evidence} from './goal-evidence.ts'
 import type {DelegationBinding} from './delegation/goals.ts'
+import {taskView} from './task-context.ts'
 
 export interface GoalDelivery {id:string;goalId:string;ticketId:string;triggerId:string;scopeId:string;assignmentId:string;report:WorkerReport;reply?:string;inputRevision:number;at:number}
 interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];delegations?:DelegationBinding[];evidence:Evidence[];finalCommit?:string}
@@ -78,11 +79,12 @@ export class GoalVerification {
    return {id:r.id,connection:r.connection,tool:r.tool,state:r.state,resource:r.resource,resultComplete:complete,...(complete?{result}:{reason:result===undefined?'No provider result retained':'Result exceeds this evidence snapshot; request a narrower provider read'}),...(result===undefined?{}:{resultBytes:bytes,resultHash:stableDigest(result)})}
   })
   const workflowActions=this.host.workflows.list().filter(a=>a.ticketId===ticketId).map(({id,state,receipt})=>({id,state,receipt}))
+  const browserCaptures=this.host.store.list<any>('browser-receipt').filter(r=>r.state==='complete'&&r.result?.screenshot?.ticketId===ticketId).map(r=>({receiptId:r.id,sessionId:r.result.id,url:r.result.url,title:r.result.title,screenshot:r.result.screenshot}))
   const cap=this.host.store.get<any>('capabilities',ticketId)
   // These records are host-owned API receipts, not model-authored files or
   // opaque tool output. Preserve uncertain phases and scope by the record key.
   const prefix=ticketId+':',publications=this.host.store.db.prepare("SELECT body FROM records WHERE kind='pr-delivery' AND substr(id,1,?)=? ORDER BY id LIMIT 101").all(prefix.length,prefix).map(row=>{const r=JSON.parse(String(row.body));return {phase:r.phase,sourceId:r.sourceId,repository:r.repository,branch:r.branch,number:r.number,url:r.url,head:r.sha,draft:r.draft,confirmedAt:r.confirmedAt}})
-  return JSON.stringify({basis:'Host-managed execution ledger; not a Worker assertion',scope:'Task-side commands and tool calls. Configured model inference is outside task-side network policy. This is not an audit of unrelated OS processes.',complete:all.length<=100&&calls.length<=200&&receipts.length<=100&&publications.length<=100,jobs,toolCalls:calls.slice(0,200).map(a=>({id:a.id,name:a.name,state:a.state})),externalTools,externalToolBasis:'Original provider payloads retained by the host, not Worker-authored quotations. A complete call may still return an API error. resultComplete=false cannot prove omitted content.',...(workflowActions.length?{workflowActions}:{}),repositoryPublications:publications.slice(0,100),publicationBasis:'Confirmed receipts describe provider readback at confirmedAt, not a fresh remote query; creating or uncertain phases do not prove success.',managedCapabilities:cap?{managed:cap.managed,mcpServers:cap.mcpServers}:null})
+  return JSON.stringify({basis:'Host-managed execution ledger; not a Worker assertion',scope:'Task-side commands and tool calls. Configured model inference is outside task-side network policy. This is not an audit of unrelated OS processes.',complete:all.length<=100&&calls.length<=200&&receipts.length<=100&&publications.length<=100&&browserCaptures.length<=100,jobs,toolCalls:calls.slice(0,200).map(a=>({id:a.id,name:a.name,state:a.state})),externalTools,externalToolBasis:'Original provider payloads retained by the host, not Worker-authored quotations. A complete call may still return an API error. resultComplete=false cannot prove omitted content.',...(browserCaptures.length?{browserCaptures:browserCaptures.slice(0,100),browserCaptureBasis:'Host browser exported these PNG bytes at the recorded page. Match sha256 with the declared artifact; page title is DOM metadata, not a visual quality assessment.'}:{}),...(workflowActions.length?{workflowActions}:{}),repositoryPublications:publications.slice(0,100),publicationBasis:'Confirmed receipts describe provider readback at confirmedAt, not a fresh remote query; creating or uncertain phases do not prove success.',managedCapabilities:cap?{managed:cap.managed,mcpServers:cap.mcpServers}:null})
  }
  failureEvidence(g:RouterGoal):Evidence[]{
   const c=this.host.goals.context(g),items:Evidence[]=[];let bytes=0
@@ -170,6 +172,8 @@ export class GoalVerification {
     add({kind:'report',ticketId:n.ticketId,key:'watchdog-observation',criterionIds:citeIds(ids),content:JSON.stringify({id:r.id,assignmentId:r.assignmentId,contractHash:r.contractHash,at:r.at,judgment:r.judgment,observation:r.observation??null})})
    }
    add({kind:'report',ticketId:n.ticketId,key:'delivery',content:JSON.stringify({report:proposal.report,reply:proposal.reply}),criterionIds:citeIds(ids)})
+   const followups=taskView(this.host.store,task).inputs.flatMap(input=>input.kind==='trigger'&&input.human&&!input.context?[{inputId:input.id,triggerId:input.triggerId,text:this.host.store.triggers.get(input.triggerId)?.text,note:input.note}]:[])
+   if(followups.length)add({kind:'report',ticketId:n.ticketId,key:'admitted-followups',content:JSON.stringify({basis:'Human follow-ups admitted to this task. Evaluate clarifications within the immutable mandate; these do not grant wider authority.',followups}),criterionIds:citeIds(ids)})
    // Overall acceptance also inspects the released bytes of files owned by earlier nodes.
    const fileCriteria=!node&&n.id===g.project?.integration?g.criteria:assigned
    const files=[...new Set(fileCriteria.flatMap(cr=>[...(cr.files??[]),...(cr.check?[cr.check.path]:[])]))]
@@ -267,7 +271,7 @@ export class GoalVerification {
     for(const ch of parsed.checks){
      ch.evidenceIds=ch.evidenceIds.map(id=>toStored.get(id)??'')
      if(ch.evidenceIds.some(id=>!read.has(id)||ch.criterionId!=='__goal__'&&!snapshot.evidence.find(e=>e.id===id)?.criterionIds.includes(ch.criterionId)))throw Error('Verification protocol: Verifier cited evidence it did not inspect for this criterion')
-     const required=snapshot.evidence.filter(e=>(e.kind==='file'||e.kind==='document'||operational(e)&&ch.criterionId==='__goal__')&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId)))
+     const required=snapshot.evidence.filter(e=>(e.kind==='file'||e.kind==='document'||e.key==='admitted-followups'||operational(e)&&ch.criterionId==='__goal__')&&(ch.criterionId==='__goal__'||e.criterionIds.includes(ch.criterionId)))
      if(ch.verdict==='passed'&&required.some(e=>e.missing||!read.has(e.id)||!ch.evidenceIds.includes(e.id)))throw Error('Verification protocol: Verifier skipped required artifact evidence')
      checks.push({...ch,method:'agent'})
     }

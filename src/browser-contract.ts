@@ -120,6 +120,7 @@ export const browserToolSchema = z
     action: z.enum([
       "profiles",
       "open",
+      "screenshot",
       "navigate",
       "snapshot",
       "click",
@@ -151,13 +152,14 @@ export const browserToolSchema = z
     credentialId: z.string().uuid().optional(),
     revision: z.number().int().min(0).optional(),
     requestId: z.string().min(1).max(200),
+    fullPage: z.boolean().optional(),
   })
   .strict();
 export type BrowserToolInput = z.infer<typeof browserToolSchema>;
 export const browserToolDefinition = {
   name: "superagent_browser",
   description:
-    "Use an isolated real browser owned by this assignment. profiles lists granted login profiles and saved account IDs; open creates a session (optional profileId copies authorized login state for the URL). snapshot returns current refs and revision. click/fill/press MUST use that revision; refresh after a stale reference or human handoff. login fills a sign-in form using a saved credential ID without revealing its password; inspect the returned snapshot and explicitly submit if appropriate. request_takeover lets the user operate this browser. While human control is active, wait for the user; never bypass it. Reuse requestId only for identical input; uncertain actions must be reconciled by reading the page, never blindly repeated.",
+    "Use an isolated real browser owned by this assignment, including when the shell sandbox cannot launch Chrome. profiles lists granted login profiles and saved account IDs; open creates a session (optional profileId copies authorized login state for the URL). snapshot returns current refs and revision. screenshot exports a PNG as a task attachment with its path and hash; copy it with managed shell to the requested workspace location, then read image/<relative-path> to inspect it. fullPage optionally captures beyond the viewport. click/fill/press MUST use that revision; refresh after a stale reference or human handoff. login fills a sign-in form using a saved credential ID without revealing its password; inspect the returned snapshot and explicitly submit if appropriate. request_takeover lets the user operate this browser. While human control is active, wait for the user; never bypass it. Reuse requestId only for identical input; uncertain actions must be reconciled by reading the page, never blindly repeated.",
   validator: browserToolSchema,
   schema: {
     type: "object",
@@ -182,6 +184,7 @@ export const browserToolDefinition = {
         description: "Revision returned by the most recent snapshot",
       },
       requestId: { type: "string" },
+      fullPage: { type: "boolean" },
     },
     required: ["action", "requestId"],
   },

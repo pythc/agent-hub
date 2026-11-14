@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, chmodSync } from "node:fs";
 import { join } from "node:path";
+import { evidenceBytes } from "./goal-artifacts.ts";
 import type { Runtime } from "./runtime.ts";
 import type { WorkOwner } from "./work.ts";
 import { workerProfiles } from "./worker-pool.ts";
@@ -914,6 +915,27 @@ export class BrowserManager {
             );
         };
         guard();
+        if (input.action === "screenshot") {
+          const id=randomUUID(),directory=join(this.host.config.stateDir,"assets",id),path=join(directory,"screenshot.png");
+          mkdirSync(directory,{recursive:true,mode:0o700});
+          this.record(key,fingerprint,"running");
+          try {
+            await this.driver.run(s,["screenshot",path,...(input.fullPage?["--full"]:[])],s.controller.signal);
+            guard();
+            const bytes=evidenceBytes(directory,"screenshot.png",32*1024*1024);
+            if(!bytes||!bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))throw new BrowserError("browser_screenshot","Browser did not return a PNG screenshot.");
+            chmodSync(path,0o400);
+            const screenshot={id,path,name:"screenshot.png",bytes:bytes.length,ticketId:owner.ticketId,assignmentId:owner.assignmentId,resource:"asset/"+id,mime:"image/png",sha256:createHash("sha256").update(bytes).digest("hex")};
+            const result={...await this.snapshot(s),screenshot};
+            guard();
+            this.host.store.atomic(()=>{this.host.store.put("asset",id,screenshot);this.record(key,fingerprint,"complete",result)});
+            return result;
+          } catch(error) {
+            rmSync(directory,{recursive:true,force:true});
+            this.record(key,fingerprint,"uncertain");
+            throw error;
+          }
+        }
         if (input.action === "close") {
           this.record(key, fingerprint, "running");
           await this.closeSession(s, false);
@@ -921,7 +943,7 @@ export class BrowserManager {
           this.record(key, fingerprint, "complete", result);
           return result;
         }
-        const { sessionId, profileId, requestId, ...args } = input,
+        const { sessionId, profileId, requestId, fullPage, ...args } = input,
           action = browserAction.parse(args);
         // Validation and ownership failures are retryable with the same requestId; only execution is receipted.
         if (
