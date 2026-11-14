@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
-import { mkdirSync, rmSync, chmodSync } from "node:fs";
+import { mkdirSync, rmSync, chmodSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { evidenceBytes } from "./goal-artifacts.ts";
 import type { Runtime } from "./runtime.ts";
@@ -926,8 +926,14 @@ export class BrowserManager {
             if(!bytes||!bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))throw new BrowserError("browser_screenshot","Browser did not return a PNG screenshot.");
             chmodSync(path,0o400);
             const screenshot={id,path,name:"screenshot.png",bytes:bytes.length,ticketId:owner.ticketId,assignmentId:owner.assignmentId,resource:"asset/"+id,mime:"image/png",sha256:createHash("sha256").update(bytes).digest("hex")};
-            const result={...await this.snapshot(s),screenshot};
+            const page=await this.snapshot(s);
             guard();
+            // The native model's filesystem policy excludes host state. Deliver
+            // writable tasks a fresh workspace file instead of asking the model
+            // to reinterpret that policy for an attachment exception.
+            const workspacePath=owner.sandbox==='workspace-write'?join(realpathSync(owner.cwd),'roppo-screenshot-'+id+'.png'):undefined;
+            if(workspacePath)writeFileSync(workspacePath,bytes,{flag:'wx',mode:0o600});
+            const result={...page,screenshot:{...screenshot,...(workspacePath?{workspacePath}:{})}};
             this.host.store.atomic(()=>{this.host.store.put("asset",id,screenshot);this.record(key,fingerprint,"complete",result)});
             return result;
           } catch(error) {

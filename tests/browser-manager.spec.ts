@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   rmSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -215,6 +216,7 @@ it("exports an owned PNG attachment once and retains it when the browser closes"
   expect(readFileSync(result.screenshot.path)).toEqual(screenshotBytes);
   expect(statSync(result.screenshot.path).mode&0o777).toBe(0o400);
   expect(host.store.get("asset",result.screenshot.id)).toEqual(result.screenshot);
+  expect(result.screenshot.workspacePath).toBeUndefined();
   expect(result.screenshot).toMatchObject({ticketId:owner.ticketId,assignmentId:owner.assignmentId,mime:"image/png",sha256:expect.stringMatching(/^[a-f0-9]{64}$/)});
   expect(await host.browser.tool(owner,input)).toEqual(result);
   expect(driver.calls.filter(c=>c.args[0]==="screenshot")).toHaveLength(1);
@@ -222,6 +224,15 @@ it("exports an owned PNG attachment once and retains it when the browser closes"
   await expect(host.browser.tool({...owner,assignmentId:"old"},input)).rejects.toThrow("no longer");
   await host.browser.tool(owner,{action:"close",sessionId:s.id,requestId:"close"});
   expect(readFileSync(result.screenshot.path)).toEqual(screenshotBytes);
+});
+
+it("delivers a new screenshot directly into a writable task workspace",async()=>{
+  const {host,owner,root}=await fixture(),writer={...owner,sandbox:"workspace-write" as const},s=await open(host,writer);
+  const input={action:"screenshot" as const,sessionId:s.id,requestId:"workspace-capture"};
+  const result:any=await host.browser.tool(writer,input);
+  expect(result.screenshot.workspacePath).toBe(join(realpathSync(root),'roppo-screenshot-'+result.screenshot.id+'.png'));
+  expect(readFileSync(result.screenshot.workspacePath)).toEqual(screenshotBytes);
+  expect(await host.browser.tool(writer,input)).toEqual(result);
 });
 
 it("does not publish a screenshot after browser control changes",async()=>{
