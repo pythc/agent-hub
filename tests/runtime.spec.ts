@@ -122,12 +122,16 @@ describe('source-independent host', () => {
     const first = new Runtime(config, { model })
     first.receive('local', 'alice', { id: '1', thread: 'docs', text: 'Compare documents', addressed: true })
     await settle(first, () => first.store.deliveries().some(d => d.kind==='reply' && d.status === 'sent'))
+    const previous=first.store.list<any>('run')[0]!
+    first.store.put('run',previous.ticketId,{...previous,toolsDigest:'schema-before-upgrade'})
     await first.close()
     const second = new Runtime(config, { model }); hosts.push(second)
     second.receive('local', 'alice', { id: '2', thread: 'docs', text: 'Explain that change', addressed: true })
     await settle(second, () => second.store.deliveries().filter(d=>d.kind==='reply').length === 2 && second.store.deliveries().every(d => d.status === 'sent'))
     expect(second.store.tickets.list()).toHaveLength(1)
     expect(model.requests.at(-1)!.threadId).toBe('native-2')
+    expect(model.requests.at(-1)!.workerMcp).toBeUndefined()
+    expect(model.requests.at(-1)!.tools?.some(t=>t.name==='superagent_tools')).toBe(true)
   })
   it('quarantines an ambiguous in-flight activation at restart', async () => {
     const config = configuration()

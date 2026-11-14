@@ -160,8 +160,8 @@ export class CodexModel implements Model {
         const effective=(await client.call('config/read',{includeLayers:false,cwd:request.cwd})).config
         const mcp=Object.fromEntries(Object.keys(effective.mcp_servers??{}).map(name=>[name,{enabled:false}]))
         if(request.workerMcp)mcp['superagent-worker']={...request.workerMcp,enabled:true,default_tools_approval_mode:'approve'} as any
-        if(request.role==='router'&&request.threadId&&request.tools?.length&&guardedTool){
-          bridge=await codexToolBridge(request.tools,guardedTool,request.signal)
+        if(request.threadId&&request.tools?.length&&guardedTool){
+          bridge=await codexToolBridge(request.tools,guardedTool,request.signal,request.role==='router'?'roppo-router':'roppo-worker')
           mcp[bridge.name]=bridge.config as any
         }
         const filesystem:Record<string,string>={':root':'deny',':minimal':'read','/opt/homebrew':'read',':tmpdir':'write',':slash_tmp':'write',[request.cwd]:request.sandbox==='workspace-write'?'write':'read'}
@@ -169,7 +169,7 @@ export class CodexModel implements Model {
         for(const path of hostPrivateFiles())filesystem[path]='deny'
         isolated={...managedContext,mcp_servers:mcp,plugins:Object.fromEntries(Object.keys(effective.plugins??{}).map(name=>[name,{enabled:false}])),features:managedFeatures,default_permissions:'superagent-managed',permissions:{'superagent-managed':{extends:request.sandbox==='workspace-write'?':workspace':':read-only',filesystem,network:{enabled:false}}}}
       }
-      const developerInstructions=request.instructions+(bridge?'\nFor this activation use the roppo-router MCP tools: they expose the current tools and schemas. Older native dynamic tools may remain in history; do not substitute those for this activation’s MCP tools.':'')
+      const developerInstructions=request.instructions+(bridge?'\nFor this activation use the '+bridge.name+' MCP tools: they expose the current tools and schemas. Older native dynamic tools may remain in history; do not substitute those for this activation’s MCP tools.':'')
       context.setInstructions(developerInstructions)
       const params = {
         ...threadOptions,
@@ -194,7 +194,7 @@ export class CodexModel implements Model {
         const status=await client.call('mcpServerStatus/list',{threadId,limit:100})
         const active=(status.data??[]).filter((server:any)=>Object.keys(server.tools??{}).length).map((s:any)=>s.name)
         if(active.some((name:string)=>name!=='superagent-worker'&&name!==bridge?.name))throw Error('Unexpected MCP capability in managed worker: '+active.join(', '))
-        if(bridge&&!active.includes(bridge.name))throw Error('Current Router tools are unavailable in the resumed Codex thread')
+        if(bridge&&!active.includes(bridge.name))throw Error('Current Agent tools are unavailable in the resumed Codex thread')
         request.onCapabilities?.({mcpServers:active,disabledPlugins:Object.keys((isolated as any).plugins??{}),managed:true})
       }
       if (request.title) await client.call('thread/name/set', { threadId, name: request.title })

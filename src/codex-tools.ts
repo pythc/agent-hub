@@ -5,10 +5,10 @@ import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/st
 import {CallToolRequestSchema,ListToolsRequestSchema} from '@modelcontextprotocol/sdk/types.js'
 import type {ModelRequest,ToolSpec} from './model.ts'
 
-/** Native dynamic tools are fixed when a thread starts. A resumed Router gets
+/** Native dynamic tools are fixed when a thread starts. A resumed Agent gets
  * this activation's tools over MCP, retaining its original thread and history. */
-export async function codexToolBridge(tools:ToolSpec[],invoke:NonNullable<ModelRequest['onTool']>,signal?:AbortSignal){
- const name='roppo-router',secret=Buffer.from('Bearer '+randomBytes(32).toString('hex'))
+export async function codexToolBridge(tools:ToolSpec[],invoke:NonNullable<ModelRequest['onTool']>,signal?:AbortSignal,name='roppo-router'){
+ const secret=Buffer.from('Bearer '+randomBytes(32).toString('hex'))
  const available=new Map(tools.map(tool=>[tool.name,tool])),servers=new Set<Server>()
  let closed=false,origin=''
  const http=createServer((req,res)=>{void (async()=>{
@@ -26,7 +26,7 @@ export async function codexToolBridge(tools:ToolSpec[],invoke:NonNullable<ModelR
   res.once('close',()=>{servers.delete(server);void server.close().catch(()=>{})})
   server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[...available.values()].map(({type,...tool})=>tool)}))
   server.setRequestHandler(CallToolRequestSchema,async request=>{
-   if(closed||signal?.aborted||!available.has(request.params.name))throw Error('Tool is unavailable in this Router activation')
+   if(closed||signal?.aborted||!available.has(request.params.name))throw Error('Tool is unavailable in this Agent activation')
    const result=await invoke(request.params.name,request.params.arguments??{},randomUUID())
    return {isError:!result.success,content:result.contentItems.map(item=>{
     if(item.type==='inputImage'){

@@ -31,7 +31,6 @@ import { assessment, assessmentSchema,proactiveAssessmentSchema,implementationAl
 import {WorkManager,type WorkOwner,type WorkItem} from './work.ts'
 import {Resources} from './resources.ts'
 import {WorkerTools,workerSpecs} from './worker-tools.ts'
-import {fileURLToPath} from 'node:url'
 import {Setup} from './setup.ts'
 import {Reviews} from './review.ts'
 import {Merger} from './merge.ts'
@@ -466,11 +465,6 @@ export class Runtime {
     const message={kind:'work_completed',id:item.id,state:item.state,resource:'job/'+item.id,error:item.error}
     if(item.agentId)this.store.put('agent-input',item.id,{agentId:item.agentId,...message,read:false})
     else {const prior=this.store.tickets.get(item.ticketId)?.inputs.map(i=>i.id)??[];this.engine.note(item.ticketId,JSON.stringify(message));allowNewTaskInputs(this.store,item.ticketId,prior)}
-  }
-  private workerMcp(owner:WorkOwner){
-    if(!this.endpoint)throw Error('Legacy native threads require the running worker MCP bridge')
-    const grant=this.workerTools.grant(owner)
-    return {command:process.execPath,args:['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('./cli.ts',import.meta.url)),'worker-mcp',this.endpoint,grant]}
   }
   private availableWorkerSpecs(){return workerSpecs.filter(s=>(this.config.work.sandboxDriver!=='disabled'||s.name!=='superagent_shell')&&(s.name!=='superagent_artifact'||this.delegation.enabled))}
   private async runAgent(item:WorkItem,signal:AbortSignal):Promise<{threadId:string;result:unknown}>{
@@ -1083,7 +1077,7 @@ export class Runtime {
       run.agentOptions=agentOptions
       const instructions=composeExecutionPrompt(this.config,{role:'worker',environment:{cwd:run.cwd,ticketId:ticket.id,mandate:ticket.mandate.scope,matchedRules:this.config.rules.filter(r=>ticket.mandate.basis.rules?.includes(r.id))},policyVersion:ticket.mandate.policyVersion,delegated:!!delegated,managedGoal:!!projectGoal?.managed,project}).text
       const owner:WorkOwner={ticketId:ticket.id,assignmentId,cwd:run.cwd,sandbox:source.sandbox,depth:0,network:delegatedTask?delegatedTask.contract.permissions.network&&this.config.work.network:this.config.work.network}
-      const specs=this.availableWorkerSpecs().filter(s=>s.name!=='superagent_artifact'||!!delegatedTask),toolsDigest=digest(JSON.stringify(specs)),legacy=!!saved?.threadId&&saved.toolsDigest!==toolsDigest&&(!this.model.describe||this.model.describe(saved.threadId).kind==='codex')
+      const specs=this.availableWorkerSpecs().filter(s=>s.name!=='superagent_artifact'||!!delegatedTask),toolsDigest=digest(JSON.stringify(specs))
       if(!this.validWork(owner))throw Error('Assignment authority ended before model execution')
       this.work.turnStarted(ticket.id,assignmentId)
       const result = await this.runModel({
@@ -1092,7 +1086,7 @@ export class Runtime {
         model:saved?.threadId?undefined:saved?.rebuild?saved.model:dispatch?.profile.model??(this.config.execution.workers?undefined:this.config.models.worker),
         title: ticket.title, cwd: run.cwd, sandbox: source.sandbox, threadId: saved?.threadId, schema: delegated?.mode==='client'?{...reportSchema,properties:{...reportSchema.properties,handbacks:{...reportSchema.properties.handbacks,maxItems:0}}}:reportSchema,archiveOnComplete:true,
         instructions,
-        managed:true,privateState:this.config.stateDir,...(legacy?{workerMcp:this.workerMcp(owner)}:{tools:specs}),onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),
+        managed:true,privateState:this.config.stateDir,tools:specs,onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),
         input: JSON.stringify({...(saved?.rebuild?{handoff:this.store.get('context-handoff',saved.rebuild),notice:'Explicit context rebuild. This is the same task and reviewed workspace. Only the current authorized mandate and permitted inputs are included. Retained effect identities prevent duplicate execution; old text is quarantined when permissions changed.'}:{}), ...(saved?.migration?{migration:this.store.get('worker-migration',saved.migration),notice:'Continue this logical task in a new backend session. Inspect prior results and artifacts; never repeat completed effects blindly.'}:{}),sourceContext, mandate: ticket.mandate, connectionCheck:this.connectionCheck(ticket.origin.triggerIds.map(id=>this.store.triggers.get(id)).filter((t):t is Trigger=>!!t)), relatedThreads:ticket.follows, ...(!saved ? { origin: ticket.origin.triggerIds.map(id => this.store.triggers.get(id)) } : {}), inputs: inputs.map(i => i.kind === 'trigger' ? { ...i, event: this.store.triggers.get(i.triggerId) } : i) }),
         signal: controller.signal,
         onHumanRequest:request=>this.approvals.request(ticket.id,request),
@@ -1101,7 +1095,7 @@ export class Runtime {
           this.store.put('progress',ticket.id,{ticketId:ticket.id,at:Date.now(),event})
           if(event==='thread/waitingForWriter'){run.waitingForWriter=true;persist()}
         },
-        onThread: id => { delete run.error;if(!legacy){run.toolsVersion=4;run.toolsDigest=toolsDigest;} run.waitingForWriter=false; run.threadId = id; persist() },
+        onThread: id => { delete run.error;run.toolsVersion=4;run.toolsDigest=toolsDigest; run.waitingForWriter=false; run.threadId = id; persist() },
         onModel:model=>{run.model=model;persist()},
         onTurn: id => { run.turnId = id; run.phase = 'running'; this.store.put('prompt-use',id,{ticketId:ticket.id,threadId:run.threadId,revision:promptRevision,digest:digest(instructions),at:Date.now()});persist() },
       })
