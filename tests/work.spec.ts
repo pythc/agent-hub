@@ -45,6 +45,16 @@ it('holds a review server without a slot or completion wake after handoff',async
  expect(f.manager.active('task','a')).toHaveLength(0)
  await settle(f,item.id);expect(f.wakes).toEqual([])
 })
+it('copies its granted attachment from private state while keeping another task attachment unreadable',async()=>{
+ const f=fixture(),directory=join(f.root,'state','assets');mkdirSync(directory)
+ const own=join(directory,'own.png'),other=join(directory,'other.png');writeFileSync(own,'captured image',{mode:0o400});writeFileSync(other,'private other task',{mode:0o400})
+ f.store.put('asset','own',{id:'own',ticketId:f.owner.ticketId,path:own})
+ f.store.put('asset','other',{id:'other',ticketId:'different-task',path:other})
+ const quote=(path:string)=>"'"+path.replaceAll("'","'\\''")+"'"
+ const item=await f.manager.shell(f.owner,'cp '+quote(own)+' copied.png && ! cat '+quote(other)+' >/dev/null 2>&1','copy-attachment',0)
+ expect((await settle(f,item.id)).exitCode).toBe(0)
+ expect(readFileSync(join(f.cwd,'copied.png'),'utf8')).toBe('captured image')
+})
 it('kills command descendants when its assignment ends',async()=>{
  const f=fixture(),item=await f.manager.shell(f.owner,'(printf ready > ready.txt; while [ ! -f release.txt ]; do sleep 0.05; done; printf escaped > escaped.txt) & wait','slow',0)
  // A release barrier prevents a busy CI runner from writing before cancellation.
