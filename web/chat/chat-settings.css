@@ -18,7 +18,6 @@
 .agent-contact:hover,.agent-contact[aria-pressed=true]{background:var(--c-hover)}
 .agent-contact>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .agent-contact small{display:block;color:var(--c-muted);font-size:12px;margin-top:3px}
-.agent-avatar{display:grid;place-items:center;width:28px;height:28px;flex-shrink:0;border-radius:8px;background:var(--c-soft);color:var(--c-muted)}
 .message-recipient{color:var(--c-muted);font-size:12px;font-weight:400}
 .worker-readonly{display:flex;align-items:center;gap:12px;padding:8px 0}
 .worker-readonly textarea{flex:1;resize:none;background:transparent;border:0;font-size:14px;padding:12px;min-width:0;color:var(--c-muted)}

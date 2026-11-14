@@ -37,7 +37,6 @@ import {
   Copy,
   AlertCircle,
   RefreshCw,
-  Network,
   Wrench,
 } from "lucide-react";
 import type { ChatSessions } from "../../src/chat.ts";
@@ -51,7 +50,7 @@ import { Configuration } from "./configuration.tsx";
 import {WorkspaceView,useWorkspaceViews} from './workspace-view.tsx';
 import { FilesPanel } from "./files.tsx";
 import { BrowserPanel } from "./browser.tsx";
-import mark from "../../src/ui/assets/roppo-mark.png";
+import { AgentAvatar } from "./agent-avatar.tsx";
 import "../../src/ui/theme.css";
 import "./style.css";
 import "./navigation.css";
@@ -127,15 +126,6 @@ const Context = createContext({
   workers: [] as Worker[],
 });
 const useUI = () => useContext(Context);
-function Logo({ small = false }: { small?: boolean }) {
-  return (
-    <img
-      className={small ? "roppo-mark small" : "roppo-mark"}
-      src={mark}
-      alt=""
-    />
-  );
-}
 function IconButton({
   label,
   children,
@@ -235,7 +225,7 @@ function AssistantMessage() {
       data-streaming={streaming ? "true" : undefined}
     >
       <div className="assistant-identity">
-        {speaker?.kind === "worker" ? <span className="agent-avatar"><Wrench size={15}/></span> : <Logo small />}
+        <AgentAvatar id={speaker?.id} kind={speaker?.kind} size={32} />
         <strong>{speaker?.label ?? "Router"}</strong>
         {recipient ? <span className="message-recipient">→ {recipient.label}</span> : null}
         {streaming ? (
@@ -319,6 +309,7 @@ function WorkerRows({
           <details className="worker-row" key={w.id}>
             <summary>
               <span className="worker-name">
+                <AgentAvatar id={w.id} kind="worker" size={24} />
                 <StatusIcon state={state} />
                 <span>{w.label}</span>
               </span>
@@ -506,7 +497,7 @@ function TeamPanel({
             className={"router-node" + (active && connected ? " running" : "")}
             data-state={active && connected ? "running" : "idle"}
           >
-            <Logo small />
+            <AgentAvatar size={28} />
             <strong>Router</strong>
             {active && connected ? (
               <LoaderCircle size={13} className="spin" />
@@ -533,11 +524,8 @@ function TeamPanel({
                     className="worker-node"
                     data-state={working ? "running" : workerState(w)}
                   >
-                    {working ? (
-                      <LoaderCircle size={17} className="spin" />
-                    ) : (
-                      <Network size={17} />
-                    )}
+                    <AgentAvatar id={w.id} kind="worker" size={32} />
+                    {working ? <LoaderCircle size={13} className="spin" /> : null}
                     <span>{w.label}</span>
                     {tool ? (
                       <span className="node-tool">
@@ -1246,7 +1234,7 @@ function Chat(p: ChatProps) {
           {display === "agents" && !configuring ? <aside className="conversation-sidebar" id="agent-list" inert={(narrow && !menu) || (narrow && navExpanded)} aria-label={L("Agents", "好友列表")}>
             <header className="conversation-heading"><h2>{L("Agents", "好友列表")}</h2></header>
             <div className="agent-list">{participants.map(agent=><button key={agent.id} className="agent-contact" aria-pressed={selected?.id===agent.id} onClick={()=>{setSelectedAgent(agent.id);if(narrow)closeNavigation()}}>
-              <span className="agent-avatar">{agent.kind==='router'?<Network size={17}/>:<Wrench size={17}/>}</span><span>{agent.label}<small>{agent.id===currentRouter?.id?L('Talk to Router','与 Router 对话'):L('Read only','只读')}</small></span>
+              <AgentAvatar id={agent.id} kind={agent.kind} size={36} /><span>{agent.label}<small>{agent.id===currentRouter?.id?L('Talk to Router','与 Router 对话'):L('Read only','只读')}</small></span>
             </button>)}</div>
           </aside> : null}
           {menu ? (
@@ -1351,7 +1339,7 @@ function Chat(p: ChatProps) {
                     ) : null}
                     <ThreadPrimitive.Empty>
                       <div className="empty-state">
-                        <Logo />
+                        <AgentAvatar id={selected.id} kind={selected.kind} size={72} />
                         <h1>
                           {readonly ? L("No collaboration messages yet", "暂无协作消息") : L("What shall we work on?", "今天想完成什么？")}
                         </h1>

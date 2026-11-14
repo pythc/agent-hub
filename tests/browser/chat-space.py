@@ -13,6 +13,9 @@ with sync_playwright() as p:
  expect(page.locator('.assistant-body').filter(has_text='开发 Worker 已完成修复和回归验证，请验收。')).to_be_visible(timeout=20000)
  expect(page.locator('.assistant-identity strong').filter(has_text='开发 Worker')).to_have_count(1)
  expect(page.locator('.assistant-body').filter(has_text='请修复摘要遇到 emoji 被截断的问题，并运行回归验证。')).to_be_visible()
+ page.wait_for_function("Array.from(document.querySelectorAll('.agent-portrait')).every(img => img.complete && img.naturalWidth > 0)")
+ worker_portrait=page.locator('.assistant-identity .agent-portrait[data-agent-id="developer"]').get_attribute('src')
+ assert worker_portrait and worker_portrait.endswith('.webp')
  passed('group chat shows the real Router delegation, Worker reply and Router final response with speaker identities')
  page.screenshot(path=str(root/'group-light.png'),full_page=True)
  original=context.request.get(f['url']+'/api/chat/space').json()['conversation']['id'];composer.fill('保留这份未发送的草稿')
@@ -23,6 +26,7 @@ with sync_playwright() as p:
  settings();page.get_by_role('radio',name='好友列表',exact=False).check();expect(page.get_by_role('radio',name='好友列表',exact=False)).to_be_checked();expect(page.get_by_role('button',name='清空所有记忆和上下文',exact=True)).to_be_enabled();page.screenshot(path=str(root/'settings-light.png'),full_page=True);chat()
  expect(page.get_by_role('textbox',name='向 Router 发送消息',exact=True)).to_have_value('保留这份未发送的草稿')
  expect(page.locator('.agent-contact')).to_have_count(3)
+ assert page.locator('.agent-contact .agent-portrait[data-agent-id="developer"]').get_attribute('src')==worker_portrait
  page.locator('.agent-contact').filter(has_text='开发 Worker').click()
  expect(page.get_by_role('textbox',name='请与 Router 对话',exact=True)).to_be_disabled();expect(page.get_by_role('button',name='发送消息',exact=True)).to_have_count(0)
  expect(page.locator('.message')).to_have_count(2)
@@ -31,9 +35,12 @@ with sync_playwright() as p:
  page.screenshot(path=str(root/'worker-light.png'),full_page=True)
  page.get_by_role('button',name='前往 Router',exact=True).click();expect(page.get_by_role('textbox',name='向 Router 发送消息',exact=True)).to_have_value('保留这份未发送的草稿')
  page.reload();page.wait_for_load_state('networkidle');expect(page.locator('.agent-contact')).to_have_count(3);expect(page.get_by_role('textbox',name='向 Router 发送消息',exact=True)).to_have_value('保留这份未发送的草稿')
+ assert page.locator('.agent-contact .agent-portrait[data-agent-id="developer"]').get_attribute('src')==worker_portrait
  assert context.request.get(f['url']+'/api/chat/space').json()['conversation']['id']==original
  passed('display switching, selecting a Worker, navigation and reload preserve the same chat and Router draft')
- page.get_by_role('button',name='切换为深色模式',exact=True).click();page.locator('.agent-contact').filter(has_text='开发 Worker').click();page.screenshot(path=str(root/'worker-dark.png'),full_page=True)
+ page.get_by_role('button',name='切换为深色模式',exact=True).click();page.locator('.agent-contact').filter(has_text='开发 Worker').click();expect(page.locator('.message')).to_have_count(2);page.screenshot(path=str(root/'worker-dark.png'),full_page=True)
+ assert page.locator('.agent-contact .agent-portrait[data-kind="router"]').evaluate('(img)=>getComputedStyle(img).filter')=='invert(1)'
+ assert page.locator('.agent-contact .agent-portrait[data-agent-id="developer"]').evaluate('(img)=>getComputedStyle(img).filter')=='none'
  page.set_viewport_size({'width':390,'height':844});page.get_by_role('button',name='打开导航',exact=True).click();expect(page.locator('.agent-contact').filter(has_text='复核 Worker')).to_be_visible();page.locator('.agent-contact').filter(has_text='复核 Worker').click();expect(page.get_by_role('heading',name='暂无协作消息',exact=True)).to_be_visible();expect(page.get_by_role('textbox',name='请与 Router 对话',exact=True)).to_be_disabled()
  assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
  page.screenshot(path=str(root/'worker-mobile.png'),full_page=True);passed('dark mode and 390px navigation/read-only empty state have no horizontal overflow')

@@ -59,3 +59,51 @@ P3 follow-up: broader physical-device and cross-browser motion/performance measu
 - [x] Open combined comparisons, run browser/native checks and complete self-review.
 
 final result: passed
+
+
+---
+
+# 2026-11-14 · Roppo Agent 头像
+
+范围：把用户确认的 R 形角色接入已有内置 Chat；不是重建概念稿的展示板。此前记录保留在本文件上方。
+
+## Comparison target and evidence
+
+- Source visual truth: `docs/images/agent-identity-concept.png`，1536 × 1024，用户本次明确选择的第一版。
+- Full implementation: `docs/images/agent-identity-worker-light.png`、`agent-identity-worker-dark.png`，1440 × 960 CSS/pixel，DPR 1，已等待 Worker 对话加载完成；保留真实产品界面。
+- Focused asset comparison: `docs/images/agent-identity-portrait-proof.png`，1440 × 960 CSS/pixel，DPR 1；同一浏览器中渲染五个生产 WebP，在浅深背景显示 24/32/36/72 px 头像，另提供大图查看轮廓和边缘。
+- Mobile: `docs/images/agent-identity-contacts-mobile.png`、`agent-identity-empty-mobile.png`，390 × 844 CSS/pixel，DPR 1。
+- Team context: `docs/images/agent-identity-team-dark.png`，1440 × 960，真实团队动态区域。
+- 选定稿与实际界面在同一次比较输入中打开；之后又将选定稿、小尺寸校样、深色对话和手机列表放在同一次输入中检查。源稿是角色展示板，产品截图是实际聊天；比较角色形体、配色和小尺寸表现，不声称页面布局像素等同。
+
+## Findings
+
+没有剩余可执行的 P0/P1/P2 视觉问题。R 形轮廓、双眼、哑光色系和四款 Worker 的顶部差异保留，正文与发言者名称对齐，头像完整且未拉伸。
+
+第一次深色截图抓到了切换好友后的过渡内容，不能用来比较相同状态；验收脚本已等待两条 Worker 协作消息加载完成，并重新捕获了深色截图。这是证据状态修正，没有据此修改产品行为。
+
+## Required fidelity surfaces
+
+- Fonts/typography：现有字体、名称、说明和正文样式保留；头像不承载额外文案。
+- Spacing/layout：消息头像 32 px，对应正文左缩进 44 px；好友列表 36 px；团队详情适配头像后的行内间距；手机无横向溢出，输入区和导航可用。
+- Colors/tokens：墨黑 Router 与四款低饱和 Worker 保留；深色 Router 采用浅色轮廓，Worker 不反色。状态仍有文字和图标，不依赖头像颜色。
+- Image quality：真实生成透明素材，发布为 256 px WebP；在实际大小和放大图检查，无可见白底、彩边、截肢或遮挡。透明原图的极低 alpha 边缘没有在最终浏览器合成中形成可见瑕疵。五款合计 42,110 bytes。没有使用手绘 SVG 或 CSS 图形替代角色。
+- Copy/content：保留“与 Router 对话”“只读”“请与 Router 对话”等原产品文案，没有新增配置项或将开发/测试职业绑定到某一角色。
+
+## Browser and functional checks
+
+构建和 TypeScript 通过；现有 Chat 浏览器脚本 6 组流程通过，包含固定空间、Worker 只读、草稿、显示切换、清空/重新提交、头像加载与重新加载后的身份一致。额外检查团队动态和移动端空白页。page error / 非预期 console error 均为 0；裸宿主已有的可选发现接口 404 单独排除。
+
+IAB 控制工具连接超时；实际渲染由项目既有 Python Playwright 验收方式完成，使用本机已有 Playwright 1.65.1 / Chromium。宿主为隔离测试实例，模型为确定性回复；未部署用户实例。
+
+## Implementation checklist
+
+- [x] 保留用户选择的第一版角色。
+- [x] 五款透明生产素材，稳定 ID 选择，无新增配置。
+- [x] 消息、联系人、团队动态、空白页统一头像。
+- [x] 浅深主题、小尺寸与 390 px 实际渲染检查。
+- [x] 既有交互回归与代码自审。
+
+P3：四款 Worker 形象允许复用；名称作为身份区分。概念稿的表情变体不属于本次静态头像接入。
+
+final result: passed

@@ -1,0 +1,2 @@
+.agent-portrait{display:block;flex-shrink:0;object-fit:contain;user-select:none}
+:root[data-theme=dark] .agent-portrait[data-kind=router]{filter:invert(1)}
