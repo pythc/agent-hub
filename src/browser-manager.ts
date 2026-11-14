@@ -831,6 +831,17 @@ export class BrowserManager {
         input.requestId,
       ]),
       fingerprint = hash(input);
+    const record = (state: Receipt["state"], result?: unknown) => {
+      this.host.store.put("browser-receipt", key, {
+        id: key,
+        fingerprint,
+        ticketId: owner.ticketId,
+        assignmentId: owner.assignmentId,
+        action: input.action,
+        state,
+        ...(result !== undefined ? { result } : {}),
+      });
+    };
     const current = this.calls.get(key);
     if (current) {
       if (current.fingerprint !== fingerprint)
@@ -875,7 +886,7 @@ export class BrowserManager {
             })),
         };
       if (input.action === "open") {
-        this.record(key, fingerprint, "running");
+        record("running");
         try {
           const s = await this.create(
             p.user,
@@ -885,10 +896,10 @@ export class BrowserManager {
             input.url ?? "about:blank",
           );
           const value = await this.snapshot(s);
-          this.record(key, fingerprint, "complete", value);
+          record("complete", value);
           return value;
         } catch (error) {
-          this.record(key, fingerprint, "uncertain");
+          record("uncertain");
           throw error;
         }
       }
@@ -918,7 +929,7 @@ export class BrowserManager {
         if (input.action === "screenshot") {
           const id=randomUUID(),directory=join(this.host.config.stateDir,"assets",id),path=join(directory,"screenshot.png");
           mkdirSync(directory,{recursive:true,mode:0o700});
-          this.record(key,fingerprint,"running");
+          record("running");
           try {
             await this.driver.run(s,["screenshot",path,...(input.fullPage?["--full"]:[])],s.controller.signal);
             guard();
@@ -934,19 +945,19 @@ export class BrowserManager {
             const workspacePath=owner.sandbox==='workspace-write'?join(realpathSync(owner.cwd),'roppo-screenshot-'+id+'.png'):undefined;
             if(workspacePath)writeFileSync(workspacePath,bytes,{flag:'wx',mode:0o600});
             const result={...page,screenshot:{...screenshot,...(workspacePath?{workspacePath}:{})}};
-            this.host.store.atomic(()=>{this.host.store.put("asset",id,screenshot);this.record(key,fingerprint,"complete",result)});
+            this.host.store.atomic(()=>{this.host.store.put("asset",id,screenshot);record("complete",result)});
             return result;
           } catch(error) {
             rmSync(directory,{recursive:true,force:true});
-            this.record(key,fingerprint,"uncertain");
+            record("uncertain");
             throw error;
           }
         }
         if (input.action === "close") {
-          this.record(key, fingerprint, "running");
+          record("running");
           await this.closeSession(s, false);
           const result = { closed: true };
-          this.record(key, fingerprint, "complete", result);
+          record("complete", result);
           return result;
         }
         const { sessionId, profileId, requestId, fullPage, ...args } = input,
@@ -960,36 +971,23 @@ export class BrowserManager {
             "browser_stale_snapshot",
             "Read a fresh snapshot before acting.",
           );
-        this.record(key, fingerprint, "running");
+        record("running");
         try {
           await this.perform(s, action, guard);
           const result =
             action.action === "request_takeover"
               ? this.view(s)
               : await this.snapshot(s);
-          this.record(key, fingerprint, "complete", result);
+          record("complete", result);
           return result;
         } catch (error) {
-          this.record(key, fingerprint, "uncertain");
+          record("uncertain");
           throw error;
         }
       });
     })().finally(() => this.calls.delete(key));
     this.calls.set(key, { fingerprint, promise });
     return promise;
-  }
-  private record(
-    id: string,
-    fingerprint: string,
-    state: Receipt["state"],
-    result?: unknown,
-  ) {
-    this.host.store.put("browser-receipt", id, {
-      id,
-      fingerprint,
-      state,
-      ...(result !== undefined ? { result } : {}),
-    });
   }
   async closeOwned(user: string, id: string, client: string, epoch: number) {
     const s = this.session(id, user);

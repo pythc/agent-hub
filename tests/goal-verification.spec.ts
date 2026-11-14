@@ -600,3 +600,16 @@ it('bounds provider payload evidence without treating omitted or uncertain resul
  expect(ledger.externalTools[2]).toMatchObject({state:'uncertain',resultComplete:false})
  expect(JSON.stringify(ledger)).not.toContain('other-task-secret')
 })
+
+it('retains task-owned browser action results for acceptance without inferring ownership of old receipts',()=>{
+ const f=fixture(),ticketId='browser-evidence'
+ for(const [id,value] of Object.entries({large:{state:'complete',result:{snapshot:'L'.repeat(130*1024)}},small:{state:'complete',result:{url:'https://www.iana.org/help/example-domains',title:'Example Domains',snapshot:'- heading "Example Domains"'}},uncertain:{state:'uncertain'},foreign:{state:'complete',result:{snapshot:'other-task-secret'}}}))f.h.store.put('browser-receipt',id,{id,ticketId:id==='foreign'?'other':ticketId,assignmentId:'assignment',action:'navigate',...value})
+ f.h.store.put('browser-receipt','legacy',{id:'legacy',state:'complete',result:{snapshot:'unowned-result'}})
+ const ledger=JSON.parse((f.h.verification as any).execution(ticketId))
+ expect(ledger.browserActions).toHaveLength(3)
+ expect(ledger.browserActions[0]).toMatchObject({resultComplete:false,resultBytes:expect.any(Number),resultHash:expect.any(String)})
+ expect(ledger.browserActions[0]).not.toHaveProperty('result')
+ expect(ledger.browserActions[1]).toMatchObject({action:'navigate',resultComplete:true,result:{title:'Example Domains'}})
+ expect(ledger.browserActions[2]).toMatchObject({state:'uncertain',resultComplete:false})
+ expect(JSON.stringify(ledger)).not.toMatch(/other-task-secret|unowned-result/)
+})

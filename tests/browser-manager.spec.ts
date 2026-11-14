@@ -230,6 +230,7 @@ it("delivers a new screenshot directly into a writable task workspace",async()=>
   const {host,owner,root}=await fixture(),writer={...owner,sandbox:"workspace-write" as const},s=await open(host,writer);
   const input={action:"screenshot" as const,sessionId:s.id,requestId:"workspace-capture"};
   const result:any=await host.browser.tool(writer,input);
+  expect(host.store.list('browser-receipt')).toEqual(expect.arrayContaining([expect.objectContaining({ticketId:writer.ticketId,assignmentId:writer.assignmentId,action:'screenshot',state:'complete',result})]));
   expect(result.screenshot.workspacePath).toBe(join(realpathSync(root),'roppo-screenshot-'+result.screenshot.id+'.png'));
   expect(readFileSync(result.screenshot.workspacePath)).toEqual(screenshotBytes);
   expect(await host.browser.tool(writer,input)).toEqual(result);
