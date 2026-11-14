@@ -244,11 +244,11 @@ export class GoalVerification {
    if(semantic.length&&checks.every(c=>c.verdict==='passed')){
     const snapshot=round.snapshot
     const stage=node?{kind:'node',node:{id:node.id,title:node.title,instruction:node.instruction},otherNodes:g.nodes?.filter(n=>n.id!==node.id).map(n=>({id:n.id,title:n.title,criterionIds:n.criterionIds}))}:{kind:'overall',...(finalCommit?{finalCommit}:{})}
-    // Use short round-local references on code projects. Ledger records retain the full evidence hashes.
-    const presented=g.project?snapshot.evidence.map((e,i)=>({...e,id:'e'+(i+1)})):snapshot.evidence
+    // Use short round-local references for every task. Ledger records retain the full evidence hashes.
+    const presented=snapshot.evidence.map((e,i)=>({...e,id:'e'+(i+1)}))
     const toStored=new Map(presented.map((e,i)=>[e.id,snapshot.evidence[i]!.id])),toPresented=new Map([...toStored].map(([alias,stored])=>[stored,alias]))
-    const requested=g.project?semantic.map(cr=>({...cr,allowedEvidenceIds:presented.filter(e=>cr.id==='__goal__'||e.criterionIds.includes(cr.id)).map(e=>e.id)})):semantic
-    const previous=g.project&&round.attempts>1?this.host.store.get<{error?:string}>('goal-verification-attempt',round.id+':'+(round.attempts-1))?.error:undefined
+    const requested=semantic.map(cr=>({...cr,allowedEvidenceIds:presented.filter(e=>cr.id==='__goal__'||e.criterionIds.includes(cr.id)).map(e=>e.id)}))
+    const previous=round.attempts>1?this.host.store.get<{error?:string}>('goal-verification-attempt',round.id+':'+(round.attempts-1))?.error:undefined
     const modelInput={kind:'goal_verification',stage,...(previous?{previousResponseError:previous}:{}),objective:g.objective,originalRequest:g.contract?this.host.store.triggers.get(g.contract.triggerId)?.text:undefined,authorizationScope:g.contract?.mandate.scope,criteria:requested,programChecks:checks.map(ch=>({...ch,evidenceIds:ch.evidenceIds.map(id=>toPresented.get(id)!)})),evidence:presented.map(({content,...meta})=>meta)}
     const access=evidenceAccess(presented,scopeBudget(this.host.scopes.scope(g.scopeId).contextBytes).toolReserveBytes,()=>{const current=this.host.goals.get(g.id);if(!current||!this.current(round!,current))throw Error('Acceptance evidence or authority changed')},inlineEvidenceBudget(modelInput,this.host.goalEvidenceBudget(g)))
     const result=await this.host.runGoalVerifier(g,id,{

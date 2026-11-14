@@ -263,7 +263,7 @@ export class Runtime {
     this.store.recoverDeliveries()
     for (const run of this.store.list<Run>('run')) {
       if (run.phase === 'running' || run.phase === 'starting' || run.phase === 'background' || run.phase==='interrupted' || run.phase === 'uncertain' || run.phase === 'delivering' || run.phase==='merging') {
-        this.store.put('run', run.ticketId, { ...run, phase: 'uncertain', error: 'Host stopped during execution; inspect native history and workspace before retry' })
+        this.store.put('run', run.ticketId, { ...run, phase: 'uncertain', error: run.phase==='uncertain'&&run.error?run.error:'Host stopped during execution; inspect native history and workspace before retry' })
         const ticket = this.store.tickets.get(run.ticketId)
         const recover=!this.watchdog.recovering(run.ticketId)&&config.work.autoRecover&&['running','starting','background','interrupted'].includes(run.phase)&&ticket&&!ticket.ended
         if (ticket && !ticket.ended && runningAssignment(ticket)) {

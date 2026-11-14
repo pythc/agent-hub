@@ -137,9 +137,11 @@ describe('source-independent host', () => {
     const config = configuration()
     const first = new Runtime(config, { model: new FixtureModel() })
     first.store.put('run', 'unknown', { ticketId: 'unknown', assignmentId: 'a', cwd: config.sources[0]!.cwd, phase: 'running', threadId: 'thread-a' })
+    first.store.put('run', 'prior-error', { ticketId: 'prior-error', assignmentId: 'b', cwd: config.sources[0]!.cwd, phase: 'uncertain', threadId: 'thread-b',error:'Provider preflight rejected current schema' })
     await first.close()
     const second = new Runtime(config, { model: new FixtureModel() }); hosts.push(second)
     expect(second.store.get<any>('run', 'unknown').phase).toBe('uncertain')
+    expect(second.store.get<any>('run', 'prior-error').error).toBe('Provider preflight rejected current schema')
   })
 })
 

@@ -447,6 +447,24 @@ it('retries a truncated overall evidence review without repeating work or changi
  expect(f.h.goals.command({action:'inspect',id:f.goal().id},f.context()).attempts).toHaveLength(1)
 })
 
+it('corrects document citation mistakes with scoped short references without repeating the Worker',async()=>{
+ let tries=0
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'guide.md'),'Verified guide');return ready('Guide saved at guide.md')},async(_r,input)=>{
+  tries++
+  expect(input.evidence.map((e:any)=>e.id)).toEqual(input.evidence.map((_:any,i:number)=>'e'+(i+1)))
+  const file=input.evidence.find((e:any)=>e.kind==='file')
+  for(const criterion of input.criteria)expect(criterion.allowedEvidenceIds).toEqual(input.evidence.filter((e:any)=>criterion.id==='__goal__'||e.criterionIds.includes(criterion.id)).map((e:any)=>e.id))
+  if(tries===2)expect(input.previousResponseError).toContain('Verifier cited evidence it did not inspect for this criterion')
+  return {checks:input.criteria.map((c:any)=>({criterionId:c.id,verdict:'passed',explanation:'Inspected the supplied original evidence',evidenceIds:tries===1&&c.id==='reply'?[file.id]:c.allowedEvidenceIds}))}
+ })
+ const original=f.start({criteria:[{id:'doc',description:'The complete guide',files:['guide.md']},{id:'reply',description:'Reply with its location'}],nodes:[{id:'build',title:'Guide',instruction:'Write a guide and provide its location',workerId:'one',criterionIds:['doc','reply']}]})
+ await until(f,()=>f.goal().state==='completed')
+ expect(tries).toBe(3);expect([...f.attempts.values()]).toEqual([1]);expect(f.h.store.list('goal-repair')).toHaveLength(0)
+ expect(f.goal().contract).toEqual(original.contract)
+ expect(f.rounds().every(r=>r.snapshot.evidence.every(e=>e.id.startsWith('evidence-'))&&r.checks.every(c=>c.evidenceIds.every(id=>id.startsWith('evidence-'))))).toBe(true)
+ expect(f.h.store.list('goal-verification-attempt')).toHaveLength(1)
+})
+
 it('retains insufficient verification after bounded retries instead of releasing or looping',async()=>{
  let tries=0
  const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()},async(r,input)=>{
