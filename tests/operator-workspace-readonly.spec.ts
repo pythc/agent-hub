@@ -95,19 +95,21 @@ it.each(['scheduled_skill','goal_wake','scheduled_dependency_goal_wake'] as cons
   derived=scheduledSkill(f)
  }
  const ticket=await task(f,derived),http=await listen(f),detail='/entry-workspace/task/'+encodeURIComponent(ticket.id)
- const verify=async()=>{
+ const verify=async(contractAvailability=scenario==='goal_wake'?'not_captured':'available')=>{
   const before=state(f);expect(before.waiters.size).toBe(1)
   const list=await http.get('/entry-workspace');expect(list.status).toBe(200)
   const work=await list.json();expect(work.tasks).toContainEqual(expect.objectContaining({id:ticket.id,state:'attention',question:'Which local document?',approvalIds:[...before.waiters.keys()]}))
   unchanged(f,before)
   const response=await http.get(detail);expect(response.status).toBe(200)
   const body=await response.json();expect(body).toMatchObject({id:ticket.id,question:'Which local document?',approvals:[{id:[...before.waiters.keys()][0],method:'item/commandExecution/requestApproval',request:{threadId:'fixture-session',turnId:'fixture-turn',command:'local fixture metadata'}}]})
+  expect(body.contractView).toMatchObject({schema:1,readOnly:true,availability:contractAvailability})
+  if(contractAvailability==='unavailable')expect(body.contractView).toMatchObject({objective:null,scope:null,criteria:[],basis:{contract:null,goalId:null}})
   unchanged(f,before)
  }
  await verify()
  f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(missing.id)
  expect(f.host.store.get('router-route',derived.anchor.trigger.id)).toBeDefined()
- await verify();expect(f.host.store.get('router-route',missing.id)).toBeUndefined()
+ await verify('unavailable');expect(f.host.store.get('router-route',missing.id)).toBeUndefined()
  // Neither the HTTP read scope nor its caught nested lookup can leak into
  // ordinary execution. Default goal observation still derives normal routes.
  expect(f.host.goals.snapshot().some(g=>g.id===derived.goal.id)).toBe(true)
