@@ -28,6 +28,12 @@ export const scopeCommandSchema=z.discriminatedUnion('action',[
 export class RouterScopeAmbiguity extends Error {}
 /** Host control plane. No organization entities or mutable authority enter dsh-core. */
 export class RouterScopes {
+ private readOnlyDepth=0
+ /** Synchronous observation only: missing routes cannot be established by nested authority checks. */
+ readOnly<T>(read:()=>T):T {
+  this.readOnlyDepth++
+  try{return read()}finally{this.readOnlyDepth--}
+ }
  constructor(readonly store:Store,readonly config:Config,private busy:(ticketId:string)=>boolean=()=>false,private registry:SourceRegistry=builtinSources){}
  enabled(){return this.store.list<ManagementScope>('management-scope').length>0}
  scope(id:string){const s=this.store.get<ManagementScope>('management-scope',id);if(!s)throw Error('Unknown management scope');return s}
@@ -156,6 +162,7 @@ export class RouterScopes {
  route(trigger:Trigger,discussion:string):RouterRoute|undefined{
   if(!this.enabled())return
   const previous=this.store.get<RouterRoute>('router-route',trigger.id);if(previous)return previous
+  if(this.readOnlyDepth)throw Error('Existing Router route required for read-only observation')
   const entry=this.entry(trigger);if(!entry||!this.sourceActive(entry))throw Error('Entry is unassigned or unavailable')
   let scope=this.scope(entry.scopeId),task:TaskOwnership|undefined
   const references=this.store.list<TaskOwnership>('task-ownership').filter(t=>trigger.text.includes(t.ticketId))

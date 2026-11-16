@@ -21,9 +21,9 @@ export class Approvals {
   hasLiveRequest(id:string,now=Date.now()):boolean{
     try{
       const item=this.store.get<Approval>('approval',id)
-      if(!Number.isFinite(now)||!this.pending.has(id)||item?.id!==id||item.status!=='pending')return false
+      if(!Number.isSafeInteger(now)||now<0||now>8.64e15||!this.pending.has(id)||item?.id!==id||item.status!=='pending')return false
       if(!item.native||typeof item.native.id!=='string'||typeof item.native.method!=='string'||!item.native.params||typeof item.native.params!=='object'||Array.isArray(item.native.params))return false
-      return Number.isSafeInteger(item.createdAt)&&item.createdAt>=0&&Number.isSafeInteger(item.expiresAt)&&item.createdAt<=now&&item.expiresAt>now&&item.expiresAt>item.createdAt
+      return Number.isSafeInteger(item.createdAt)&&item.createdAt>=0&&item.createdAt<=8.64e15&&Number.isSafeInteger(item.expiresAt)&&item.expiresAt<=8.64e15&&item.createdAt<=now&&item.expiresAt>now&&item.expiresAt>item.createdAt
     }catch{return false}
   }
   answer(id:string,value:unknown):void{

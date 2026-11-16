@@ -496,6 +496,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       requireCurrentOperator(req)
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
       const query=new URL(req.url!,requestOrigin).searchParams
+      if([...query].some(([key,value])=>!['offset','limit'].includes(key)||query.getAll(key).length!==1||!/^(0|[1-9][0-9]*)$/.test(value))){send(res,400,{code:'operator_attention_query_invalid'});return}
       const input=z.object({offset:z.coerce.number().int().min(0).max(1_000_000).default(0),limit:z.coerce.number().int().min(1).max(100).default(25)}).strict().safeParse(Object.fromEntries(query))
       if(!input.success){send(res,400,{code:'operator_attention_query_invalid'});return}
       try{send(res,200,new OperatorAttention(()=>runtime).snapshot(input.data.offset,input.data.limit))}catch{send(res,503,{code:'operator_attention_unavailable'})};return

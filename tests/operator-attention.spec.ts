@@ -12,15 +12,19 @@ import type {Ticket} from '../src/vendor/dsh-core/index.ts'
 import type {Run} from '../src/store.ts'
 import type {RouterGoal} from '../src/router-goals.ts'
 import type {WorkflowAction} from '../src/workflow-actions.ts'
+import type {ScopeContext} from '../src/router-scope.ts'
+import type {Trigger} from '../src/vendor/dsh-core/index.ts'
+import type {ScheduledRun} from '../src/router-proactive.ts'
+import {packet,publicIdentity,readIdentity} from '../src/delegation/identity.ts'
 
 const roots:string[]=[],hosts:Runtime[]=[],servers:Awaited<ReturnType<typeof serve>>[]=[]
 afterEach(async()=>{vi.restoreAllMocks();for(const server of servers.splice(0)){await server.closeRuntime();await new Promise<void>(r=>server.server.close(()=>r()))}for(const host of hosts.splice(0))if(!(host as any).closing)await host.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
-function fixture(){
+function fixture(delegated=false){
  const root=mkdtempSync(join(tmpdir(),'operator-attention-'));roots.push(root)
- const config=configSchema.parse({stateDir:join(root,'state'),port:0,acceptMode:'auto',work:{sandboxDriver:'disabled',autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:2},workers:[{id:'one',backend:'codex'},{id:'two',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice']}]})
+ const config=configSchema.parse({stateDir:join(root,'state'),port:0,...(delegated?{delegation:{enabled:true}}:{}),acceptMode:'auto',work:{sandboxDriver:'disabled',autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:2},workers:[{id:'one',backend:'codex'},{id:'two',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice']},...(delegated?[{id:'delegation',kind:'delegation',cwd:root,sandbox:'read-only',workspace:{mode:'directory'}}]:[])]})
  const model={describe:()=>({id:'codex',kind:'codex',resume:true,images:false,nativeTakeover:false,tools:true,steering:false,promptRefresh:false}),history:vi.fn(async()=>({turns:[]})),run:vi.fn(async()=>{throw Error('No inference is permitted in this fixture')})}
  const host=new Runtime(config,{model});hosts.push(host)
- host.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:[JSON.stringify(['local','alice'])],workerIds:['one','two'],sourceIds:['local'],backendIds:['codex']}})
+ host.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:[JSON.stringify(['local','alice'])],workerIds:['one','two'],sourceIds:config.sources.map(source=>source.id),backendIds:['codex']}})
  host.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'topic',history:'group'})
  const {triggerId}=host.receive('local','alice',{id:'request',thread:'topic',scope:'topic',text:'Continuously produce and verify the requested result. Never deploy.',addressed:true}) as {triggerId:string}
  const trigger=host.store.triggers.get(triggerId)!,context=host.scopes.context(trigger,'local:topic')!
@@ -28,8 +32,9 @@ function fixture(){
  const deliver=vi.spyOn(host.sources.get('local')!,'deliver')
  return {host,root,context,trigger,projection,model,deliver}
 }
-async function task(f:ReturnType<typeof fixture>,key='task'){
- const result=await f.host.manager.call({action:'assign',id:'one',revision:f.host.settings.current().revision,requestId:key,text:'SECRET_PROMPT'}, {discussion:'local:topic',trigger:f.trigger,scoped:f.context})
+async function task(f:ReturnType<typeof fixture>,key='task',anchor?:{trigger:Trigger;context:ScopeContext}){
+ const trigger=anchor?.trigger??f.trigger,context=anchor?.context??f.context
+ const result=await f.host.manager.call({action:'assign',id:'one',revision:f.host.settings.current().revision,requestId:key,text:'SECRET_PROMPT'}, {discussion:context.route.discussion,trigger,scoped:context})
  const ticket=f.host.store.tickets.get(result.ticketId)!,assignment=ticket.assignments.at(-1)!
  f.host.engine.assignmentStarted(ticket.id,assignment.id)
  f.host.store.put('run',ticket.id,{ticketId:ticket.id,assignmentId:assignment.id,cwd:f.root,phase:'human',threadId:'session',turnId:'turn',backendId:'codex',workerId:'one'} satisfies Run)
@@ -51,6 +56,15 @@ function approval(f:ReturnType<typeof fixture>,ticket:Ticket,method='item/comman
  f.host.store.put('approval',item.id,{...item,createdAt})
  return {...item,createdAt}
 }
+function liveWaiters(f:ReturnType<typeof fixture>){
+ const map=(f.host.approvals as unknown as {pending:Map<string,unknown>}).pending
+ return {map,entries:new Map(map)}
+}
+function expectWaitersUnchanged(f:ReturnType<typeof fixture>,before:ReturnType<typeof liveWaiters>){
+ const map=(f.host.approvals as unknown as {pending:Map<string,unknown>}).pending
+ expect(map).toBe(before.map);expect([...map.keys()]).toEqual([...before.entries.keys()])
+ for(const [id,waiter] of before.entries)expect(map.get(id)).toBe(waiter)
+}
 function at(f:ReturnType<typeof fixture>){return Math.max(Date.now(),...f.host.store.list<Approval>('approval').map(a=>a.createdAt))+2}
 function question(f:ReturnType<typeof fixture>,ticket:Ticket){f.host.engine.report(ticket.id,{state:'blocked',summary:'SECRET_REPORT',question:'SECRET_QUESTION'});return f.host.store.tickets.get(ticket.id)!}
 function workflow(f:ReturnType<typeof fixture>,ticket:Ticket){
@@ -69,7 +83,7 @@ it('counts two permissions, a question, acceptance review and unknown effect as 
  const f=fixture(),ticket=question(f,await task(f)),one=approval(f,ticket),two=approval(f,ticket,'item/permissions/requestApproval');projectReview(f,ticket)
  f.host.store.outbox.send({id:'unknown-message',ticketId:ticket.id,kind:'reply',text:'SECRET_MESSAGE',channel:{source:'local',thread:'topic',address:{thread:'topic'}}})
  f.host.store.db.prepare("UPDATE outbox SET status='uncertain',error='SECRET_RESPONSE' WHERE id='unknown-message'").run()
- const before=dbState(f),pending=(f.host.approvals as any).pending.size,result=f.projection.snapshot(0,25,at(f))
+ const before=dbState(f),pending=liveWaiters(f),result=f.projection.snapshot(0,25,at(f))
  expect(result).toMatchObject({schema:1,readOnly:true,total:5,more:false})
  expect(result.items.filter(r=>r.kind==='native_approval')).toHaveLength(2)
  expect(result.items.filter(r=>r.state==='waiting_permission')).toHaveLength(2)
@@ -78,7 +92,7 @@ it('counts two permissions, a question, acceptance review and unknown effect as 
  expect(result.items.find(r=>r.kind==='effect_unknown')?.next).toEqual({kind:'records',id:ticket.id})
  expect(f.host.approvals.hasLiveRequest(one.id,at(f))).toBe(true);expect(f.host.approvals.hasLiveRequest(two.id,at(f))).toBe(true)
  expect(f.projection.snapshot(0,25,at(f)).items.map(r=>r.id)).toEqual(result.items.map(r=>r.id))
- expect(dbState(f)).toBe(before);expect((f.host.approvals as any).pending.size).toBe(pending)
+ expect(dbState(f)).toBe(before);expectWaitersUnchanged(f,pending)
  expect(f.model.run).not.toHaveBeenCalled();expect(f.model.history).not.toHaveBeenCalled();expect(f.deliver).not.toHaveBeenCalled()
  const json=JSON.stringify(result);expect(json).not.toContain('SECRET');expect(json).not.toContain('params');expect(json).not.toContain('command');expect(json).not.toContain('approve')
 })
@@ -92,11 +106,11 @@ it('returns actual times or null and an observed fingerprint, never a new deadli
  expect(f.projection.snapshot(2,1,at(f))).toMatchObject({total:2,items:[],more:false})
 })
 it('observes an expired live waiter without expiring it or changing the pending map/database',async()=>{
- const f=fixture(),ticket=await task(f),item=approval(f,ticket),before=dbState(f),pending=(f.host.approvals as any).pending.size
+ const f=fixture(),ticket=await task(f),item=approval(f,ticket),before=dbState(f),pending=liveWaiters(f)
  expect(f.host.approvals.hasLiveRequest(item.id,item.expiresAt)).toBe(false)
  expect(f.projection.snapshot(0,25,item.expiresAt).items[0]).toMatchObject({state:'expired',expiresAt:item.expiresAt})
  expect(f.host.store.get<Approval>('approval',item.id)?.status).toBe('pending')
- expect((f.host.approvals as any).pending.size).toBe(pending);expect(dbState(f)).toBe(before)
+ expectWaitersUnchanged(f,pending);expect(dbState(f)).toBe(before)
 })
 it('never revives a persisted pending approval after restart and preserves existing startup expiry behavior',async()=>{
  const f=fixture(),ticket=await task(f),item=approval(f,ticket),restarted=new Approvals(f.host.store),before=dbState(f)
@@ -199,7 +213,7 @@ it('enforces current operator GET-only access, bounded pagination, fixed failure
  expect((await fetch(endpoint)).status).toBe(401);expect((await fetch(endpoint,{headers:{authorization:'Bearer wrong'}})).status).toBe(401)
  const before=dbState(f),response=await fetch(endpoint,{headers});expect(response.status).toBe(200);expect(await response.json()).toMatchObject({schema:1,readOnly:true,total:1});expect(dbState(f)).toBe(before)
  for(const method of ['POST','DELETE','PUT','HEAD'])expect((await fetch(endpoint,{headers,method})).status).toBe(405)
- for(const query of ['?offset=-1','?limit=101','?limit=0','?offset=1000001','?secret=SECRET_QUERY']){
+ for(const query of ['?offset=-1','?limit=101','?limit=0','?offset=1000001','?secret=SECRET_QUERY','?offset=0&offset=1','?limit=1&limit=1','?offset=','?limit=','?offset=%20','?limit=+','?limit=%201%20','?offset=1.0','?limit=1e1']){
   const invalid=await fetch(endpoint+query,{headers});expect(invalid.status).toBe(400);expect(await invalid.json()).toEqual({code:'operator_attention_query_invalid'})
  }
  vi.spyOn(f.host.memory,'readOnly').mockImplementation(()=>{throw Error('SECRET_PRIVATE_EXCEPTION')})
@@ -253,4 +267,100 @@ it('treats a same-millisecond native request and assignment start as unproven in
  const f=fixture(),ticket=await task(f),item=approval(f,ticket),createdAt=Date.parse(ticket.assignments.at(-1)!.startedAt!)
  f.host.store.put('approval',item.id,{...item,createdAt})
  const before=dbState(f);expect(f.projection.snapshot(0,25,at(f)).items[0]?.state).toBe('unavailable');expect(dbState(f)).toBe(before)
+})
+
+function scheduled(f:ReturnType<typeof fixture>){
+ const schedule=f.host.proactive.command({action:'schedule.put',scopeId:'team',operationId:'schedule-put',expectedRevision:0,schedule:{id:'attention-check',name:'Attention check',triggerId:f.trigger.id,prompt:'Observe the authorized local task without sending',mode:'standalone',notification:'silent',timing:{kind:'once',startAt:new Date(Date.now()+60_000).toISOString(),timezone:'Etc/UTC'}}}) as any
+ const run=f.host.proactive.command({action:'schedule.run',scopeId:'team',id:schedule.id,operationId:'schedule-run',expectedRevision:schedule.revision}) as ScheduledRun
+ expect(run.state).toBe('queued');const trigger=f.host.store.triggers.get(run.triggerId!)!
+ expect(trigger.meta.origin).toBe('scheduler')
+ const context=f.host.scopes.context(trigger,trigger.source+':'+trigger.threads[0]!.id)!
+ return {trigger,context}
+}
+function goalWake(f:ReturnType<typeof fixture>,anchor={trigger:f.trigger,context:f.context}){
+ const goal=f.host.goals.command({action:'start',operationId:'read-goal',expectedRevision:0,title:'Read goal',objective:'Produce the authorized local result',authorizationQuote:'Continuously produce and verify',criteria:[{id:'result',description:'Produce the result',files:[],documents:[]}]},anchor.context) as RouterGoal
+ f.host.store.db.prepare("UPDATE jobs SET state='done' WHERE kind='router'").run()
+ f.host.store.put('router-goal',goal.id,{...goal,nextAt:Date.now()-1})
+ f.host.goals.tick()
+ const wake=f.host.store.list<{goalId:string;triggerId:string}>('goal-wake').find(value=>value.goalId===goal.id)!
+ expect(wake).toBeDefined();const trigger=f.host.store.triggers.get(wake.triggerId)!
+ expect(trigger.meta.origin).toBe('goal-controller')
+ const context=f.host.scopes.context(trigger,goal.discussion)!
+ return {trigger,context}
+}
+it('keeps a real scheduled worker delegation read-only when its original human anchor route is missing',async()=>{
+ const f=fixture(),anchor=scheduled(f),ticket=question(f,await task(f,'scheduled-task',anchor));approval(f,ticket)
+ expect(f.host.store.get<{parentTrigger:string}>('router-delegation',ticket.origin.triggerId)?.parentTrigger).toBe(anchor.trigger.id)
+ expect(f.projection.snapshot(0,25,at(f)).total).toBe(2)
+ f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(f.trigger.id)
+ expect(f.host.store.get('router-route',anchor.trigger.id)).toBeDefined()
+ const before=dbState(f),pending=liveWaiters(f)
+ expect(f.projection.snapshot(0,25,at(f)).total).toBe(0)
+ expect(f.host.store.get('router-route',f.trigger.id)).toBeUndefined();expect(dbState(f)).toBe(before);expectWaitersUnchanged(f,pending)
+ expect(f.model.run).not.toHaveBeenCalled();expect(f.model.history).not.toHaveBeenCalled();expect(f.deliver).not.toHaveBeenCalled()
+})
+it('keeps a real goal-wake worker delegation read-only when its inner goal anchor route is missing',async()=>{
+ const f=fixture(),anchor=goalWake(f),ticket=question(f,await task(f,'goal-task',anchor));approval(f,ticket)
+ expect(f.projection.snapshot(0,25,at(f)).total).toBe(2)
+ f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(f.trigger.id)
+ const before=dbState(f),pending=liveWaiters(f)
+ expect(f.projection.snapshot(0,25,at(f)).total).toBe(0);expect(dbState(f)).toBe(before);expectWaitersUnchanged(f,pending)
+ expect(f.host.store.get('router-route',anchor.trigger.id)).toBeDefined();expect(f.host.store.get('router-route',f.trigger.id)).toBeUndefined()
+ expect(f.model.run).not.toHaveBeenCalled();expect(f.deliver).not.toHaveBeenCalled()
+})
+it('guards the full real scheduled to dependent goal-wake to original human anchor chain',async()=>{
+ const f=fixture(),received=f.host.receive('local','alice',{id:'other-anchor',thread:'other-thread',scope:'topic',text:f.trigger.text,addressed:true}) as {triggerId:string}
+ const human=f.host.store.triggers.get(received.triggerId)!,wake=goalWake(f,{trigger:human,context:f.host.scopes.context(human,'local:other-thread')!})
+ f.host.store.put('router-input-set',f.trigger.id,{triggerIds:[wake.trigger.id]})
+ const anchor=scheduled(f),ticket=question(f,await task(f,'nested-task',anchor));approval(f,ticket)
+ expect(f.projection.snapshot(0,25,at(f)).total).toBe(2)
+ f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(human.id)
+ expect(f.host.store.get('router-route',f.trigger.id)).toBeDefined();expect(f.host.store.get('router-route',wake.trigger.id)).toBeDefined();expect(f.host.store.get('router-route',anchor.trigger.id)).toBeDefined()
+ const before=dbState(f),pending=liveWaiters(f)
+ expect(f.projection.snapshot(0,25,at(f)).total).toBe(0);expect(dbState(f)).toBe(before);expectWaitersUnchanged(f,pending)
+ expect(f.host.store.get('router-route',human.id)).toBeUndefined();expect(f.model.run).not.toHaveBeenCalled();expect(f.model.history).not.toHaveBeenCalled();expect(f.deliver).not.toHaveBeenCalled()
+})
+it('restores nested synchronous route guards on return and throw while default context keeps lazy route creation',()=>{
+ const f=fixture(),existing=dbState(f)
+ expect(f.host.scopes.readOnly(()=>f.host.scopes.readOnly(()=>f.host.scopes.context(f.trigger,'local:topic')))?.route.triggerId).toBe(f.trigger.id)
+ expect(dbState(f)).toBe(existing)
+ f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(f.trigger.id)
+ const before=dbState(f),derive=vi.spyOn(f.host.scopes,'entry')
+ f.host.scopes.readOnly(()=>{
+  expect(()=>f.host.scopes.readOnly(()=>f.host.scopes.context(f.trigger,'local:topic'))).toThrow('Existing Router route required')
+  expect(()=>f.host.scopes.context(f.trigger,'local:topic')).toThrow('Existing Router route required')
+ })
+ expect(derive).not.toHaveBeenCalled();expect(dbState(f)).toBe(before)
+ expect(()=>f.host.scopes.readOnly(()=>{throw Error('fixture throw')})).toThrow('fixture throw')
+ expect(f.host.scopes.context(f.trigger,'local:topic')?.route.triggerId).toBe(f.trigger.id)
+ expect(f.host.store.get('router-route',f.trigger.id)).toBeDefined();expect(derive).toHaveBeenCalledOnce()
+})
+it('rejects Date-out-of-range or fractional liveness metadata without touching pending waiters or database',async()=>{
+ const f=fixture(),ticket=await task(f),item=approval(f,ticket)
+ for(const change of [{createdAt:8.64e15+1},{expiresAt:8.64e15+1},{createdAt:0.5},{expiresAt:item.expiresAt+0.5}]){
+  f.host.store.put('approval',item.id,{...item,...change});const before=dbState(f),pending=liveWaiters(f)
+  expect(f.host.approvals.hasLiveRequest(item.id,at(f))).toBe(false);expect(dbState(f)).toBe(before);expectWaitersUnchanged(f,pending)
+ }
+ f.host.store.put('approval',item.id,item)
+ for(const now of [8.64e15+1,NaN,Infinity,-1,0.5])expect(f.host.approvals.hasLiveRequest(item.id,now)).toBe(false)
+ expect(()=>f.projection.snapshot(0,25,8.64e15+1)).toThrow('operator_attention_query_invalid')
+ f.host.store.put('approval',item.id,{...item,createdAt:8.64e15-2,expiresAt:8.64e15})
+ expect(f.host.approvals.hasLiveRequest(item.id,8.64e15-1)).toBe(true);expect(f.projection.snapshot(0,25,8.64e15-1).items[0]?.expiresAt).toBe(8.64e15)
+})
+it('preserves real signed in-process delegated authority while read-only context refuses a missing private route',async()=>{
+ const f=fixture(true),peer=readIdentity(f.root)
+ f.host.delegation.bindEndpoint('http://127.0.0.1:49191')
+ const ticket=f.host.delegation.pairing({expectedRevision:0,policy:{workerIds:['one'],scopeId:'team'}})
+ await f.host.delegation.receive(packet(peer,f.host.delegation.identity.id,'pair',{ticket,peer:publicIdentity(peer)}))
+ const now=Date.now(),contract={version:1,delegationId:'attention-inbound',rootId:'attention-root',parentTriggerId:f.trigger.id,issuer:peer.id,target:f.host.delegation.identity.id,ancestors:[peer.id],principal:{source:'local',actor:'alice'},text:'Observe local result',acceptance:'Inspect records only',artifacts:[],permissions:{write:false,shell:false,network:false,subagents:false},limits:{maxActivations:12,maxConcurrent:2,durationMs:600000},createdAt:now,deadline:now+60_000}
+ const remote=await f.host.delegation.receive(packet(peer,f.host.delegation.identity.id,'submit',{grantId:ticket.id,payload:{contract,leaseUntil:now+15_000}})) as {triggerId:string;discussion:string}
+ const trigger=f.host.store.triggers.get(remote.triggerId)!
+ expect(f.host.scopes.readOnly(()=>f.host.routerIngress.authority(trigger.id)).basis).toMatchObject({via:'listed',authority:'delegation:attention-inbound'})
+ expect(f.host.scopes.readOnly(()=>f.host.scopes.context(trigger,remote.discussion))).toBeDefined()
+ f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(trigger.id)
+ const before=dbState(f),pending=liveWaiters(f)
+ expect(()=>f.host.scopes.readOnly(()=>f.host.scopes.readOnly(()=>{f.host.routerIngress.authority(trigger.id);return f.host.scopes.context(trigger,remote.discussion)}))).toThrow('Existing Router route required')
+ expect(f.projection.snapshot().total).toBe(0);expect(dbState(f)).toBe(before);expectWaitersUnchanged(f,pending)
+ expect(f.model.run).not.toHaveBeenCalled();expect(f.model.history).not.toHaveBeenCalled();expect(f.deliver).not.toHaveBeenCalled()
+ expect(f.host.scopes.context(trigger,remote.discussion)).toBeDefined()
 })

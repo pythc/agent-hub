@@ -21,7 +21,7 @@ export interface OperatorAttentionItem {
 export interface OperatorAttentionSnapshot {
  schema:1;readOnly:true;observedAt:number;total:number;offset:number;limit:number;more:boolean;items:OperatorAttentionItem[]
 }
-const timestamp=(v:unknown):number|null=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0?v:null
+const timestamp=(v:unknown):number|null=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0&&v<=8.64e15?v:null
 const labels:Record<string,string>={local:'Local operator',feishu:'Feishu',slack:'Slack',wecom:'WeCom',github:'GitHub',webhook:'HTTP events',delegation:'Delegated team'}
 const supportedNative=new Set(['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','item/tool/requestUserInput'])
 function sourceLabel(host:Runtime,sourceId:string){return labels[host.config.sources.find(s=>s.id===sourceId)?.kind??'']??'Connection'}
@@ -89,7 +89,7 @@ export class OperatorAttention {
  snapshot(offset=0,limit=25,now=Date.now()):OperatorAttentionSnapshot {
   if(!Number.isSafeInteger(offset)||offset<0||offset>1_000_000||!Number.isSafeInteger(limit)||limit<1||limit>100||timestamp(now)===null)throw Error('operator_attention_query_invalid')
   const host=this.host()
-  return host.memory.readOnly(()=>{
+  return host.scopes.readOnly(()=>host.memory.readOnly(()=>{
    const items:OperatorAttentionItem[]=[],visible=new Map(host.store.tickets.list().filter(t=>taskVisible(host,t)).map(t=>[t.id,t]))
    const add=(kind:AttentionKind,key:string,state:AttentionState,sourceId:string,createdAt:unknown,expiresAt:unknown,facts:unknown,next:OperatorAttentionItem['next'],ticket?:Ticket)=>{
     const owner=ticket&&host.scopes.ownership(ticket.id),assignment=ticket?.assignments.at(-1)
@@ -175,6 +175,6 @@ export class OperatorAttention {
    }
    items.sort((a,b)=>(b.createdAt??-1)-(a.createdAt??-1)||a.id.localeCompare(b.id))
    return {schema:1,readOnly:true,observedAt:now,total:items.length,offset,limit,more:offset+limit<items.length,items:items.slice(offset,offset+limit)}
-  })
+  }))
  }
 }
