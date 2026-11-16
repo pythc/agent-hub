@@ -13,6 +13,7 @@ on:
       - 'package*.json'
       - 'examples/container-*'
       - 'tests/container-acceptance-diagnostics.py'
+      - 'tests/ci-host-diagnostics.py'
   workflow_dispatch:
 
 permissions:
@@ -31,15 +32,21 @@ jobs:
         with:
           persist-credentials: false
       - name: Verify safe failure diagnostics
-        run: python3 tests/container-acceptance-diagnostics.py
+        run: |
+          python3 tests/container-acceptance-diagnostics.py
+          python3 tests/ci-host-diagnostics.py
       - name: Build the runtime image
         env:
           ROPPO_IMAGE: roppo:ci
         run: docker compose build roppo
       - name: Verify an isolated container and its private volume
+        id: acceptance
         run: >-
           python3 examples/container-acceptance.py
           .local/container-ci
           --project "roppo-acceptance-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           --image roppo:ci
           --port 14439
+      - name: Summarize host sandbox denial metadata
+        if: failure() && steps.acceptance.outcome == 'failure' && runner.os == 'Linux'
+        run: python3 deployment/ci-host-diagnostics.py
