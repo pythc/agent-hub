@@ -60,7 +60,24 @@ with sync_playwright() as p:
   workers=api('/workers');unknown=api('/workers',{'action':'assign','id':'research','revision':workers['revision'],'requestId':str(uuid.uuid4()),'discussion':'browser-unknown','text':'fixture-unknown-effect: exercise reconciliation fence.'})
   trace.get_by_role('button',name='Refresh',exact=True).click();expect(trace.get_by_label('Show',exact=True).locator('option[value="'+unknown['ticketId']+'"]').first).to_be_attached(timeout=15000);trace.get_by_label('Show',exact=True).select_option(unknown['ticketId'])
   expect(trace.locator('[data-facet=effects]')).to_have_attribute('data-state','unknown',timeout=15000);expect(trace.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible();shot('trace-unknown-effect-dark.png')
-  trace.get_by_role('button',name='Stop task',exact=True).click();trace.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped',timeout=15000)
+  def stop_from_current_view():
+   trace.get_by_role('button',name='Stop task',exact=True).click()
+   with page.expect_response(lambda response:response.url==info['base']+'/api/execution-trace/recover' and response.request.method=='POST') as stopped:
+    trace.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click()
+   return stopped.value
+  stopped=stop_from_current_view()
+  if stopped.status==409:
+   # An outbox transition may legitimately invalidate the first observation.
+   # Verify the existing fence, then explicitly inspect and confirm once again.
+   # Never retry an uncertain/started command or weaken its production gate.
+   assert stopped.json().get('code')=='trace_changed'
+   expect(trace.get_by_role('alert')).to_contain_text('This task changed')
+   shot('trace-cancel-state-changed-dark.png')
+   trace.get_by_role('button',name='Try refresh',exact=True).click();expect(trace.get_by_role('alert')).not_to_be_visible()
+   expect(trace.locator('[data-facet=effects]')).to_have_attribute('data-state','unknown')
+   stopped=stop_from_current_view()
+  assert stopped.ok,('cancel_failed',stopped.status)
+  expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped',timeout=15000)
   page.reload();trace.get_by_label('Show',exact=True).select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
   checks.append('actual typed unknown-effect failure is fenced; inspect before retry; explicit cancellation persists after reload and cannot resume')
 
