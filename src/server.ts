@@ -1,3 +1,8 @@
+import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
+import {ConnectorManagement,ConnectorError} from './connector-management.ts'
+import {ExecutionTrace,TraceError} from './execution-trace.ts'
+import {BackendRegistry} from './backends/registry.ts'
+import {BackendPluginError} from './backends/plugin-contract.ts'
 import {deploymentMaintenance,DeploymentError} from './deployment-maintenance.ts'
 import {requestHostOrigin} from './http-deployment.ts'
 import {serveDelegation} from './delegation/server.ts'
@@ -53,6 +58,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
   async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=(async()=>{await delegationServer?.close();delegationServer=undefined;await runtime.close()})()}await closingRuntime}
   const market=new PluginMarket(()=>runtime,options.pluginGitHub)
+  const templates=new WorkerTemplates(()=>runtime),connectors=new ConnectorManagement(()=>runtime),trace=new ExecutionTrace(()=>runtime)
   async function rebuild(config:Config,activationId?:string){
     await stopRuntime()
     if(stopping)throw Error('Host is stopping')
@@ -67,6 +73,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   try{watchdogToken=readFileSync(watchdogTokenPath,'utf8').trim()}catch{watchdogToken=randomBytes(32).toString('hex');writeFileSync(watchdogTokenPath,watchdogToken,{mode:0o600,flag:'wx'})}
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
+    if(error instanceof WorkerTemplateError||error instanceof ConnectorError||error instanceof TraceError){send(response,error.status,{code:error.code,error:error.code});return}
     if(error instanceof DeploymentError){send(response,error.status,{code:error.code,error:error.message});return}
     if(error instanceof MarketError){if(error.code==='market_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof WebhookError){send(response,error.status,{code:error.code});return}
@@ -202,6 +209,52 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/api/worker-templates'||path.startsWith('/api/worker-templates/')){
+      requireCurrentOperator(req)
+      if(path==='/api/worker-templates'&&req.method==='GET'){send(res,200,templates.snapshot());return}
+      if(req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
+      const input=await operatorBody(req)
+      if(path==='/api/worker-templates/preview'){send(res,200,templates.preview(input));return}
+      if(path==='/api/worker-templates/install'){send(res,200,templates.install(input));return}
+      if(path==='/api/worker-templates/export'){send(res,200,templates.export(input));return}
+      if(path==='/api/worker-templates/remove'){send(res,200,templates.remove(input));return}
+      if(path==='/api/worker-templates/create'){send(res,200,await templates.create(input));return}
+      send(res,404,{code:'not_found'});return
+    }
+    if(path==='/api/connectors'||path.startsWith('/api/connectors/')){
+      requireCurrentOperator(req)
+      if(path==='/api/connectors'&&req.method==='GET'){send(res,200,connectors.snapshot());return}
+      if(req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
+      const input=await operatorBody(req)
+      if(path==='/api/connectors/validate'){send(res,200,connectors.validate(input));return}
+      if(path==='/api/connectors/plan'){const planned=connectors.plan(input);send(res,200,onboarding.sourcePlan(planned.revision,planned.source,planned.credentials));return}
+      if(path==='/api/connectors/probe'){send(res,200,await connectors.probe(input));return}
+      if(path==='/api/connectors/control'){send(res,200,connectors.control(input));return}
+      send(res,404,{code:'not_found'});return
+    }
+    if(path==='/api/execution-trace'||path.startsWith('/api/execution-trace/')){
+      requireCurrentOperator(req)
+      if(req.method==='GET'){
+        const query=Object.fromEntries(new URL(req.url!,requestOrigin).searchParams)
+        if(path==='/api/execution-trace'){send(res,200,trace.snapshot(query));return}
+        if(path==='/api/execution-trace/events'){send(res,200,trace.events(query));return}
+      }
+      if(path==='/api/execution-trace/recover'&&req.method==='POST'){send(res,200,await trace.recover(await operatorBody(req)));return}
+      send(res,405,{code:'method_not_allowed'});return
+    }
+    if(path==='/api/execution-backends/probe'&&req.method==='POST'){
+      const input=z.object({id:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),revision:z.number().int().nonnegative()}).strict().parse(await operatorBody(req))
+      if(input.revision!==runtime.settings.current().revision){send(res,409,{code:'settings_conflict'});return}
+      const definition=runtime.config.backends[input.id]
+      if(!definition||definition.kind!=='plugin'){send(res,400,{code:'backend_probe_unsupported'});return}
+      try{
+        const result=await new BackendRegistry({...runtime.config,turnTimeoutMs:Math.min(runtime.config.turnTimeoutMs,20000)},runtime.store).probe(input.id)
+        requireCurrentOperator(req)
+        if(input.revision!==runtime.settings.current().revision){send(res,409,{code:'settings_conflict'});return}
+        send(res,200,{id:input.id,revision:input.revision,checkedAt:Date.now(),available:result.available,authenticated:result.authenticated,remoteVerified:false,modelCallVerified:false})
+      }catch(error){if(error instanceof AccountError||error instanceof OnboardingError)throw error;send(res,400,{code:error instanceof BackendPluginError?error.code:'backend_probe_failed',modelCallVerified:false})}
+      return
+    }
     if(path==='/deployment/maintenance'&&req.method==='POST'){send(res,200,await deploymentMaintenance(runtime,await body(req)));return}
     if(path==='/webhooks'&&req.method==='GET'){send(res,200,runtime.webhooks.snapshot());return}
     if(path==='/webhooks/detail'&&req.method==='GET'){send(res,200,runtime.webhooks.detail(new URL(req.url??'/',requestOrigin).searchParams.get('id')??''));return}

@@ -25,3 +25,10 @@ The actual local app started at `http://127.0.0.1:35263`, using a synthetic mode
 Cloud only. No main merge, public deployment, paid calls, real IM messages or real ACP inference. Template requirements do not grant permissions. Existing plugin onboarding and managed admission remain authoritative. Standard ACP is explicitly ineligible for managed Worker use. Unknown external effects are not replayed. Octop was documentation/behavior reference only; no copied code/prompts/tests or translation.
 
 See [RECOVERY_HANDOFF.md](RECOVERY_HANDOFF.md) for exact pending actions and known review issues.
+
+## Recovery work in new environment (current)
+The original checkout, Git objects and artifacts were absent after reconnection. Fresh isolated checkout: `/workspace/scratch/f110c34c6b30/agent-hub-recovery`, based on existing remote handoff `0f626fd51a26c30714b1ad0f31636c0785ca20b0`. Latest main was rechecked and is still `cfa1c8e49c978e6b1f8b141764dae7d0bbce1ed7`. The initial remote checkout was backed up to ignored `.local/recovery/remote-handoff.bundle`; no existing remote history was overwritten.
+
+All four module agents retain complete original file-write commands and are restoring those contents, rather than claiming a disk/commit recovery. Coordinator API/navigation changes were also restored from retained write records. Prior test results above are historical only. Every module is being committed and published remotely as soon as ready, with new test evidence appended below.
+
+The identified stale backend-probe UI issue is fixed in the restored coordinator changes: cache validity requires both settings revision and current workspace; reset clears the cache. Actual browser acceptance and final integrated checks remain pending.

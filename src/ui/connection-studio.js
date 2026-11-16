@@ -1,6 +1,6 @@
-const connectionStudio = { kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '[]', model: '', check: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [] }
+const connectionStudio = { backendProbes: {}, kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '[]', model: '', check: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [] }
 function connectionStudioReset() {
-  Object.assign(connectionStudio, { kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '[]', model: '', check: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [] })
+  Object.assign(connectionStudio, { backendProbes: {}, kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '[]', model: '', check: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [] })
   connectionStudio.definitionId = ''
 }
 async function connectionDiscover() {

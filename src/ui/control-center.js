@@ -2,7 +2,8 @@ function controlConnections() {
   return Object.entries({ codex: { kind: 'codex' }, ...(S.base?.config.backends || {}) }).map(([id, backend]) => {
     let endpoint = ''
     try { endpoint = new URL(backend.baseUrl).hostname } catch {}
-    return { id, kind: backend.kind, model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
+    const capabilities = S.snap?.backendCatalog?.find(item => item.id === id)
+    return { id, kind: backend.kind, managedEligible: capabilities?.managedEligible, managedMissing: capabilities?.managedMissing || [], model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
       label: backend.label || (backend.kind === 'codex' ? 'Codex' : [endpoint, backend.model].filter(Boolean).join(' · ') || id),
       connectionType: backend.subscription ? 'subscription' : backend.kind === 'codex' || backend.kind === 'plugin' ? 'cli' : 'api' }
   })
@@ -346,7 +347,15 @@ function controlModels() {
   const architecture = operator.work?.architecture
   const services = controlConnections()
   const rows = services.map(service => {
-    const check = opButton(L('Check connection', '检查连接'), () => {
+    const check = opButton(service.kind === 'plugin' ? L('Probe protocol', '探测协议') : L('Check connection', '检查连接'), () => {
+      if (service.kind === 'plugin') {
+        void entryRun('backend-probe', async () => {
+          const result = await api('/api/execution-backends/probe', {id:service.id,revision:S.snap.current.revision})
+          connectionStudio.backendProbes ||= {}
+          connectionStudio.backendProbes[service.id] = {...result,workspaceId:workspaceContext.activeId}
+        })
+        return
+      }
       if (entryModel.touched && !confirm(L('Discard the unsaved service draft?', '放弃未保存的模型服务草稿？'))) return
       Object.assign(entryModel, {
         creating: false, name: '', mode: 'existing', existingId: service.id, open: true,
@@ -354,6 +363,8 @@ function controlModels() {
       })
       void checkEntryModel()
     }, 'button')
+    const cachedProbe = connectionStudio.backendProbes?.[service.id]
+    const probe = cachedProbe?.revision === S.snap?.current?.revision && cachedProbe?.workspaceId === workspaceContext.activeId ? cachedProbe : null
     const roles = []
     if (S.base.config.decision?.provider?.kind === 'backend' && S.base.config.decision.provider.id === service.id) roles.push(L('Decision layer', '决策层'))
     if (architecture?.router?.backend === service.id) roles.push('Router')
@@ -369,7 +380,7 @@ function controlModels() {
     const type = ({api: L('API service', 'API 服务'), cli: L('CLI backend', 'CLI 后端'), subscription: L('Subscription', '订阅账号')})[service.connectionType]
     const mark = add(el('span', 'model-service-mark'), icon(service.connectionType === 'cli' ? 'terminal' : 'cpu'))
     return add(el('li', 'model-service-row'),
-      add(el('div', 'model-service-identity'), mark, add(el('div'), el('h3', '', service.label), el('span', 'model-service-meta', type + ' · ' + protocol))),
+      add(el('div', 'model-service-identity'), mark, add(el('div'), el('h3', '', service.label), el('span', 'model-service-meta', type + ' · ' + protocol), service.managedEligible === false ? el('small', 'hint', L('Cannot serve as a managed Worker. Missing: ', '无法担任受管 Worker，缺少：') + service.managedMissing.join(', ')) : null, probe ? el('small', 'hint', L('Protocol: ', '协议：') + (probe.available ? L('reachable', '可达') : L('unavailable', '不可用')) + ' · ' + L('Authentication: ', '认证：') + (probe.authenticated === true ? L('verified', '已验证') : probe.authenticated === false ? L('required', '待认证') : L('unknown', '未知')) + ' · ' + new Date(probe.checkedAt).toLocaleTimeString() + ' · ' + L('Model call unverified', '模型调用未验证')) : null)),
       add(el('div', 'model-service-assignment'), el('span', 'model-service-model', service.model || L('Service default', '服务默认模型')),
         add(el('div', 'model-service-roles'), ...roles.map(role => el('span', '', role)), roles.length ? null : el('span', '', L('Unassigned', '未分配')))), actions)
   })
