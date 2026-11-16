@@ -63,32 +63,41 @@ def api(route, body=None, authorized=True, origin=None):
         return error.code, json.load(error)
 
 def startup_diagnostics():
-    # Capture before the finally cleanup removes the only failed container.
-    # Never dump Config/Env, credentials or application state files.
-    def safe(text):
-        text = re.sub(r'#pair=[A-Za-z0-9_-]+', '#pair=REDACTED', text)
-        text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+', r'\1REDACTED', text)
-        text = re.sub(r'(?i)(["\']?(?:password|token|secret|authorization)["\']?\s*[:=]\s*)["\']?[^\s,"\'}]+', r'\1REDACTED', text)
-        return text[-16000:]
+    # Only fixed probe classifications and allow-listed state metadata may reach
+    # CI output. Application logs and Health.Log can contain configured secrets;
+    # heuristic redaction cannot make those arbitrary strings safe to publish.
     try:
-        result = compose('logs', '--no-color', '--tail', '80', 'roppo', check=False)
-        logs = safe(result.stdout + result.stderr)
-        (args.output / 'runtime-failure.log').write_text(logs)
-        print('Runtime diagnostics (redacted):\n' + logs, file=sys.stderr)
-        # Fixed no-op probe under the exact Compose security policy. No app
-        # entrypoint, state mutation, external calls or credential reads.
         probe = compose('run', '--rm', '--no-deps', '--entrypoint', 'bwrap', 'roppo', '--unshare-all', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true', check=False)
-        probe_log = safe(probe.stdout + probe.stderr)
-        (args.output / 'sandbox-startup-failure.log').write_text(probe_log)
-        print('Sandbox no-op diagnostics (redacted):\n' + probe_log, file=sys.stderr)
+        probe_error = probe.stderr
+        if 'Failed to make / slave: Permission denied' in probe_error:
+            classification = 'root_mount_propagation_permission_denied'
+        elif 'Creating new namespace failed' in probe_error:
+            classification = 'namespace_creation_failed'
+        elif 'No permissions to create new namespace' in probe_error:
+            classification = 'namespace_permission_denied'
+        else:
+            classification = 'unclassified' if probe.returncode else 'passed'
+        diagnostic = {'exitCode': probe.returncode, 'classification': classification}
+        (args.output / 'sandbox-startup-failure.json').write_text(json.dumps(diagnostic))
+        print('Sandbox no-op diagnostic: ' + json.dumps(diagnostic), file=sys.stderr)
         ids = compose('ps', '--all', '--quiet', 'roppo', check=False).stdout.split()
         for container_id in ids:
             if not re.fullmatch(r'[a-f0-9]{12,64}', container_id):
                 continue
-            state = run(['docker', 'inspect', '--format', '{{json .State}}', container_id], check=False)
-            health = safe(state.stdout + state.stderr)
-            (args.output / ('container-state-' + container_id[:12] + '.json')).write_text(health)
-            print('Container state (redacted):\n' + health, file=sys.stderr)
+            result = run(['docker', 'inspect', '--format', '{{json .State}}', container_id], check=False)
+            state = json.loads(result.stdout)
+            metadata = {key: state[key] for key in ('Running', 'Paused', 'Restarting', 'OOMKilled', 'Dead') if isinstance(state.get(key), bool)}
+            if type(state.get('ExitCode')) is int:
+                metadata['ExitCode'] = state['ExitCode']
+            if state.get('Status') in ('created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead'):
+                metadata['Status'] = state['Status']
+            health = state.get('Health', {})
+            if health.get('Status') in ('starting', 'healthy', 'unhealthy', 'none'):
+                metadata['HealthStatus'] = health['Status']
+            if type(health.get('FailingStreak')) is int:
+                metadata['HealthFailingStreak'] = health['FailingStreak']
+            (args.output / ('container-state-' + container_id[:12] + '.json')).write_text(json.dumps(metadata))
+            print('Container state metadata: ' + json.dumps(metadata), file=sys.stderr)
     except Exception as error:
         print('Could not collect container diagnostics: ' + type(error).__name__, file=sys.stderr)
 

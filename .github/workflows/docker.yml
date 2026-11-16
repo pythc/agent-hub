@@ -12,6 +12,7 @@ on:
       - 'plugins/**'
       - 'package*.json'
       - 'examples/container-*'
+      - 'tests/container-acceptance-diagnostics.py'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +30,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Verify safe failure diagnostics
+        run: python3 tests/container-acceptance-diagnostics.py
       - name: Build the runtime image
         env:
           ROPPO_IMAGE: roppo:ci
