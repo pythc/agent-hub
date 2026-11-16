@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto'
+import {types as nodeTypes} from 'node:util'
 import {z} from 'zod'
 import {Ajv2020} from 'ajv/dist/2020.js'
 import {configSchema,type SourceConfig} from './config.ts'
@@ -59,9 +60,29 @@ export class ConnectorManagement {
  private definition(kind:string){const definition=this.host().sourceRegistry.connectionDefinitions().find(d=>d.kind===kind);if(!definition)throw new ConnectorError('connector_missing',404);return definition}
  private source(sourceId:string){const config=this.host().config.sources.find(s=>s.id===sourceId);if(!config)throw new ConnectorError('connector_missing',404);return config}
  private fingerprint(config:SourceConfig){return stableDigest(config)}
- private issues(definition:Definition|undefined,values:readonly {field:unknown;code:unknown}[]):ConnectorFieldIssue[]{
-  const names=new Set(['label','actors',...(definition?.setup?.fields.map(f=>f.name)??[])]),seen=new Set<string>()
-  return values.filter((issue):issue is ConnectorFieldIssue=>!!issue&&typeof issue==='object'&&typeof issue.field==='string'&&names.has(issue.field)&&typeof issue.code==='string'&&issueCodes.includes(issue.code)).filter(issue=>{const key=issue.field+':'+issue.code;if(seen.has(key))return false;seen.add(key);return true}).slice(0,32).map(({field,code})=>({field,code}))
+ private issues(definition:Definition|undefined,values:unknown):ConnectorFieldIssue[]{
+  try{
+   // Hook results are metadata, never objects whose getters/iterators we execute.
+   if(nodeTypes.isProxy(values)||!Array.isArray(values))return []
+   const length=Object.getOwnPropertyDescriptor(values,'length')?.value
+   if(!Number.isSafeInteger(length)||length<0||length>256)return []
+   const names=new Set(['label','actors',...(definition?.setup?.fields.map(f=>f.name)??[])]),seen=new Set<string>(),result:ConnectorFieldIssue[]=[]
+   for(let i=0;i<length&&result.length<32;i++){
+    const slot=Object.getOwnPropertyDescriptor(values,String(i))
+    if(!slot||!Object.hasOwn(slot,'value'))continue
+    const issue=slot.value
+    if(!issue||typeof issue!=='object'||nodeTypes.isProxy(issue))continue
+    const prototype=Object.getPrototypeOf(issue)
+    if(prototype!==Object.prototype&&prototype!==null)continue
+    const fieldProperty=Object.getOwnPropertyDescriptor(issue,'field'),codeProperty=Object.getOwnPropertyDescriptor(issue,'code')
+    if(!fieldProperty||!codeProperty||!Object.hasOwn(fieldProperty,'value')||!Object.hasOwn(codeProperty,'value'))continue
+    const field:unknown=fieldProperty.value,code:unknown=codeProperty.value
+    if(typeof field!=='string'||!names.has(field)||typeof code!=='string'||!issueCodes.includes(code))continue
+    const key=field+':'+code;if(seen.has(key))continue
+    seen.add(key);result.push({field,code:code as ConnectorIssueCode})
+   }
+   return result
+  }catch{return []} // Malformed hook metadata remains a fixed form-level error.
  }
  private parseDraft(value:unknown){
   const parsed=draftSchema.safeParse(value)
@@ -87,7 +108,7 @@ export class ConnectorManagement {
     }
    }catch{/* Unmappable schema failures stay form-level, never raw Ajv material. */}
   }
-  try{reported.push(...this.host().sourceRegistry.validationIssues(config))}catch{/* Plugin errors cannot become public exception text. */}
+  try{reported.push(...this.issues(definition,this.host().sourceRegistry.validationIssues(config)))}catch{/* Plugin errors cannot become public exception text. */}
   return this.issues(definition,reported)
  }
  private credentialAvailability(plan:{source:SourceConfig;credentials:Record<string,string>}){
