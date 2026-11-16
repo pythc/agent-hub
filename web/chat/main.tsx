@@ -889,7 +889,7 @@ function Chat(p: ChatProps) {
     automations: L("Event automations", "事件自动化"),
     "worker-templates": L("Worker templates", "Worker 模板"),
     connectors: L("Connectors", "连接器"),
-    "execution-trace": L("Execution trace", "执行轨迹"),
+    "execution-trace": L("Task progress", "任务进展"),
     execution: L("Agent team", "Agent 团队"),
     deployments: L("Deployments", "部署"),
     models: L("Model connections", "模型连接"),

@@ -49,9 +49,9 @@ with sync_playwright() as p:
 
   workers=api('/workers');api('/workers',{'action':'resume','id':'browser-review','revision':workers['revision'],'requestId':str(uuid.uuid4())});workers=api('/workers')
   assigned=api('/workers',{'action':'assign','id':'browser-review','revision':workers['revision'],'requestId':str(uuid.uuid4()),'discussion':'browser-acceptance','text':'Complete the deterministic local acceptance task.'})
-  page.goto(info['base']+'/configure#execution-trace');trace=page.locator('.trace-page');expect(trace.get_by_role('heading',name='Execution trace',exact=True)).to_be_visible();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId'])
-  expect(trace.locator('.trace-task-detail')).to_contain_text('Retained in task history',timeout=15000);expect(trace.locator('.trace-task-detail')).to_contain_text('A completed tool call alone does not verify a commit');expect(trace.locator('.trace-evidence')).to_contain_text('Unverified');shot('trace-result-evidence-dark.png')
-  page.reload();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId']);expect(trace.locator('.trace-timeline li').first).to_be_visible();event_count=trace.locator('.trace-timeline li').count();assert event_count>0
+  page.goto(info['base']+'/configure#execution-trace');trace=page.locator('.trace-page');expect(trace.get_by_role('heading',name='Task progress',exact=True)).to_be_visible();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId'])
+  expect(trace.locator('[data-facet=execution]')).to_have_attribute('data-state','finished',timeout=15000);trace.locator('.trace-records summary').click();expect(trace.locator('.trace-evidence')).to_contain_text('Unverified');assert trace.locator('.trace-evidence strong').all_text_contents()==['Unverified','Unverified','Unverified'];shot('trace-result-evidence-dark.png')
+  page.reload();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId']);trace.locator('.trace-records summary').click();expect(trace.locator('.trace-timeline li').first).to_be_visible();event_count=trace.locator('.trace-timeline li').count();assert event_count>0
   def fail_refresh(route):route.fulfill(status=503,json={'code':'fixture_temporarily_unavailable'})
   page.route('**/api/execution-trace?*',fail_refresh);trace.get_by_role('button',name='Refresh',exact=True).click();expect(trace.get_by_role('alert')).to_contain_text('Updates are unavailable');assert trace.locator('.trace-timeline li').count()>=event_count;shot('trace-refresh-failure-dark.png')
   page.unroute('**/api/execution-trace?*',fail_refresh);trace.get_by_role('button',name='Try refresh',exact=True).click();expect(trace.get_by_role('alert')).not_to_be_visible()
@@ -59,9 +59,9 @@ with sync_playwright() as p:
 
   workers=api('/workers');unknown=api('/workers',{'action':'assign','id':'research','revision':workers['revision'],'requestId':str(uuid.uuid4()),'discussion':'browser-unknown','text':'fixture-unknown-effect: exercise reconciliation fence.'})
   trace.get_by_role('button',name='Refresh',exact=True).click();expect(trace.get_by_label('Show',exact=True).locator('option[value="'+unknown['ticketId']+'"]').first).to_be_attached(timeout=15000);trace.get_by_label('Show',exact=True).select_option(unknown['ticketId'])
-  expect(trace.locator('.trace-task-detail')).to_contain_text('Some effects are unconfirmed',timeout=15000);expect(trace.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible();shot('trace-unknown-effect-dark.png')
+  expect(trace.locator('[data-facet=effects]')).to_have_attribute('data-state','unknown',timeout=15000);expect(trace.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible();shot('trace-unknown-effect-dark.png')
   trace.get_by_role('button',name='Stop task',exact=True).click();trace.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped',timeout=15000)
-  page.reload();trace.get_by_label('Show',exact=True).select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
+  page.reload();trace.get_by_label('Show',exact=True).select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
   checks.append('actual typed unknown-effect failure is fenced; inspect before retry; explicit cancellation persists after reload and cannot resume')
 
   page.emulate_media(reduced_motion='reduce');page.set_viewport_size({'width':390,'height':844})

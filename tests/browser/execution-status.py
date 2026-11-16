@@ -22,8 +22,11 @@ with sync_playwright() as p:
   expect(facet('execution')).to_have_attribute('data-state','finished')
   expect(facet('acceptance')).to_have_attribute('data-state','passed')
   expect(facet('delivery')).to_have_attribute('data-state','held')
-  expect(facet('delivery')).to_contain_text('Remote confirmation and read status are not verified.')
-  shot('status-current-light.png');checks.append('real local goal completed and independently verified while held delivery remains separate')
+  assert not page.locator('.trace-records').evaluate('(e)=>e.open')
+  assert page.locator('.trace-facts').is_hidden()
+  assert all('Task ' in label and not label.startswith('Task ') for label in page.locator('#trace-task option').all_text_contents()[1:])
+  assert page.locator('.trace-page').evaluate("e=>Array.from(e.querySelectorAll('*')).filter(n=>n.getClientRects().length&&n.textContent.trim()).every(n=>parseFloat(getComputedStyle(n).fontSize)>=14)")
+  shot('status-current-light.png');page.locator('.trace-records summary').focus();page.keyboard.press('Enter');assert page.locator('.trace-records').evaluate('(e)=>e.open');shot('status-records-light.png');page.keyboard.press('Enter');checks.append('real local goal completed and independently verified while held delivery remains separate')
   page.reload();select(info['verifiedTicketId']);expect(facet('acceptance')).to_have_attribute('data-state','passed')
   original_rounds=verification_digest()
   change=str(uuid.uuid4());(root/'control.json').write_text(json.dumps({'action':'change_artifact','id':change}))
@@ -36,7 +39,7 @@ with sync_playwright() as p:
   assert verification_digest()==original_rounds
   checks.append('artifact changed after current acceptance; actual refresh and full reload show stale; read-only SQLite digest confirms retained rounds unchanged')
   select(info['unknownTicketId']);expect(facet('effects')).to_have_attribute('data-state','unknown')
-  expect(page.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible()
+  expect(page.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible()
   page.get_by_role('button',name='Stop task',exact=True).click();page.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click()
   expect(facet('execution')).to_have_attribute('data-state','cancelled');expect(facet('effects')).to_have_attribute('data-state','unknown')
   shot('status-cancelled-unknown-dark.png');page.reload();select(info['unknownTicketId'])
@@ -49,7 +52,7 @@ with sync_playwright() as p:
   page.locator('.trace-page').evaluate('(e)=>e.scrollTop=0');shot('status-mobile-reduced-motion.png')
   facet('acceptance').scroll_into_view_if_needed();shot('status-mobile-acceptance-delivery.png')
   page.set_viewport_size({'width':1440,'height':1100});page.get_by_role('button',name='Switch to Chinese',exact=True).click()
-  expect(page.locator('.trace-page h1')).to_have_text('执行轨迹');shot('status-chinese-dark.png')
+  expect(page.locator('.trace-page h1')).to_have_text('任务进展');shot('status-chinese-dark.png')
   checks.append('actual narrow page, dark/light, verified keyboard focus, reduced motion and Chinese rendering')
   def legacy_snapshot(route):
    response=route.fetch();body=response.json()
@@ -60,6 +63,18 @@ with sync_playwright() as p:
   for name in ['execution','effects','acceptance','delivery']:expect(facet(name)).to_have_attribute('data-state','unknown')
   shot('status-legacy-service-unknown.png');page.unroute('**/api/execution-trace?*',legacy_snapshot)
   checks.append('actual browser compatibility fault injection: missing status response renders all facets unknown without trusting legacy success')
+  page.get_by_role('button',name='切换为英文',exact=True).click()
+  page.get_by_role('button',name='Switch to light mode',exact=True).click()
+  def recorded_snapshot(route):
+   response=route.fetch();body=response.json()
+   for task in body.get('tasks',[]):
+    task['status']['delivery']={'state':'recorded','counts':{'total':1,'pending':0,'retry_wait':0,'sending':0,'uncertain':0,'held':0,'dropped':0,'recorded':1},'evidence':'host_record','scope':'external'}
+   route.fulfill(response=response,json=body)
+  page.route('**/api/execution-trace?*',recorded_snapshot)
+  page.reload();select(info['verifiedTicketId']);expect(facet('delivery')).to_have_attribute('data-state','recorded')
+  expect(facet('delivery')).to_contain_text('The system recorded it as sent; receipt is unconfirmed.')
+  shot('status-recorded-unconfirmed-light.png')
+  checks.append('browser-only synthetic recorded projection shows unconfirmed receipt explicitly; no real send performed')
   assert not errors,errors
   report={'result':'passed','checks':checks,'pageErrors':errors,'mode':info['mode'],'realIm':False,'realAcp':False,'screenshots':[str(s) for s in out.glob('*.png')]}
   (root/'browser-report.json').write_text(json.dumps(report,indent=2,ensure_ascii=False));print(json.dumps(report,ensure_ascii=False))
