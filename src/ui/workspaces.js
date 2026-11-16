@@ -114,7 +114,7 @@ async function workspaceSwitch(id) {
     workspaceShowPicker(); return false
   }
   if (!workspaceContext.items.some(item => item.id === id)) return false
-  let success = false
+  let success = false,current=()=>false
   await entryRun('workspace-switch', async () => {
     // Load everything before swapping identity; a failing scope cannot borrow old data.
     const [snap, entries, work] = await Promise.all([
@@ -143,18 +143,24 @@ async function workspaceSwitch(id) {
     resetGuideSession()
     entryState.page = 'home'
     const committedEpoch=workspaceContext.epoch,committedAccount=workspaceAccountId(),committedSession=workspaceContext.sessionIsolation
-    const current=()=>workspaceContext.epoch===committedEpoch&&workspaceContext.activeId===id&&workspaceAccountId()===committedAccount&&workspaceContext.sessionIsolation===committedSession
+    current=()=>workspaceContext.epoch===committedEpoch&&workspaceContext.activeId===id&&workspaceAccountId()===committedAccount&&workspaceContext.sessionIsolation===committedSession
     // Publish one complete identity/default-route commit. Secondary reads must
     // never restore this default after the user has chosen another page.
     workspaceNotify()
     if(typeof configurationHost!=='undefined'&&configurationHost)window.dispatchEvent(new Event('roppo:navigation'))
-    if(!current())return
-    await loadGuideContext()
-    if(!current())return
-    await Promise.all([connectionDiscover(), integrationsDiscover()])
-    if(current())success = true
+    success = true
   })
-  return success
+  // entryRun owns its busy/finally lifecycle. Optional read-only refreshes must
+  // not keep navigation locked after the workspace identity has committed.
+  if(!success||!current())return false
+  try{
+    await loadGuideContext()
+    if(!current())return false
+    await Promise.all([connectionDiscover(), integrationsDiscover()])
+  }catch{
+    if(current()){entryError(new ApiError(503,{code:'workspace_refresh_failed',error:L('Workspace details could not be refreshed. Reload to try again.','工作区详情未能更新，请重新加载后重试。')}));render()}
+  }
+  return current()
 }
 function workspaceTrigger() {
   const current = workspaceCurrent()

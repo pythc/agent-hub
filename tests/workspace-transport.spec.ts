@@ -5,7 +5,7 @@ import {configurationContent} from '../web/chat/configuration-plugin.ts'
 import {workspaceBlockMessage,preserveWorkspaceLink,type WorkspaceTransport} from '../web/chat/workspace-transport.ts'
 function fixture(href='http://localhost/configure',fetcher?:(path:string,options:any)=>Promise<any>){
  const events=new Map<string,Set<()=>void>>(),calls:{path:string;options:any}[]=[]
- const location={href,replace:vi.fn()},context=createContext({URL,Map,Set,Promise,Object,JSON,AbortSignal,AbortController,crypto,console,location,
+ const location={href,replace:vi.fn(),get hash(){return new URL(this.href).hash},get pathname(){return new URL(this.href).pathname},get search(){return new URL(this.href).search}},context=createContext({URL,Map,Set,Promise,Object,JSON,AbortSignal,AbortController,crypto,console,location,clearTimeout,
   history:{replaceState(_state:unknown,_unused:string,url:URL){location.href=String(url)},pushState(_state:unknown,_unused:string,url:URL){location.href=String(url)}},Event,
   entryState:{account:null,operator:true,inventoryRequest:0},S:{token:'',authed:false},connectionStudioReset(){},integrationsReset(){},
   window:{addEventListener(name:string,fn:()=>void){if(!events.has(name))events.set(name,new Set());events.get(name)!.add(fn)},removeEventListener(name:string,fn:()=>void){events.get(name)?.delete(fn)}},
@@ -51,9 +51,7 @@ it('discovers the managed context and notifies subscribers synchronously after c
  await b.transport.request('/api/example');expect(b.calls.at(-1)!.path).toBe('/workspaces/studio/api/example')
 })
 it('committed workspace switch synchronizes the explicit selector before notifying during held secondary refreshes',async()=>{
- const b=fixture('http://localhost/configure?workspace=studio#tasks',async path=>response(path.endsWith('/configuration')?{current:{revision:1,config:{}},history:[]}:path.endsWith('/entry-setup')?{entries:[],revision:1}:{tasks:[]}));b.ready(true)
- b.get(`function dirty(){return false} function entryHasDraft(){return false} async function entryRun(label,fn){await fn()} function resetDraft(){} const operator={};const entryModel={};const teamStudio={};const executionView={};function resetGuideSession(){} async function loadGuideContext(){return new Promise(()=>{})}`)
- const seen:any[]=[];b.transport.subscribe(()=>seen.push(b.transport.context()));void b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));expect(seen.at(-1)).toMatchObject({state:'ready',activeId:'other',epoch:1});expect(new URL(b.location.href).searchParams.get('workspace')).toBe('other');await expect(b.transport.ready()).resolves.toMatchObject({state:'ready',activeId:'other'});await b.transport.request('/api/example');expect(b.calls.at(-1)!.path).toBe('/workspaces/other/api/example')
+ const b=switchingFixture(),seen:any[]=[];b.transport.subscribe(()=>seen.push(b.transport.context()));const result=b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));expect(seen.at(-1)).toMatchObject({state:'ready',activeId:'other',epoch:1});expect(new URL(b.location.href).searchParams.get('workspace')).toBe('other');await expect(b.transport.ready()).resolves.toMatchObject({state:'ready',activeId:'other'});expect(b.get('entryState.busy')).toBe('');b.release();await result
 })
 it.each(['epoch','activeId','accountId','sessionIsolation'])('rejects stale bindings before sending after %s changes, even for identical IDs/revisions',async change=>{
  const b=fixture();b.ready(true);const old=b.transport.context(),bound=b.transport.bind(old)
@@ -104,11 +102,9 @@ it('rejects an aborted read even if a mocked response ignores its signal',async(
  const b=fixture();b.ready();const controller=new AbortController();controller.abort();await expect(b.transport.request('/api/example',undefined,false,undefined,controller.signal)).rejects.toMatchObject({name:'AbortError'})
 })
 
-it('keeps a committed explicit workspace ready after secondary refresh failure',async()=>{
- const b=fixture('http://localhost/configure?workspace=studio#tasks',async path=>response(path.endsWith('/configuration')?{current:{revision:1,config:{}},history:[]}:path.endsWith('/entry-setup')?{entries:[],revision:1}:{tasks:[]}));b.ready(true)
- b.get(`function dirty(){return false} function entryHasDraft(){return false} async function entryRun(label,fn){await fn()} function resetDraft(){} const operator={};const entryModel={};const teamStudio={};const executionView={};function resetGuideSession(){} async function loadGuideContext(){throw Error('secondary unavailable')}`)
- const seen:any[]=[];b.transport.subscribe(()=>seen.push({context:b.transport.context(),href:b.location.href}));await expect(b.get("workspaceSwitch('other')")).rejects.toThrow('secondary unavailable')
- expect(seen.at(-1).context).toMatchObject({state:'ready',activeId:'other'});expect(new URL(seen.at(-1).href).searchParams.get('workspace')).toBe('other');await expect(b.transport.ready()).resolves.toMatchObject({state:'ready',activeId:'other'})
+it('keeps a committed explicit workspace ready after secondary refresh failure and reports only a fixed safe error',async()=>{
+ const b=switchingFixture(),result=b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));b.fail(Error('SECRET_RAW_SECONDARY'));expect(await result).toBe(true)
+ expect(b.transport.context()).toMatchObject({state:'ready',activeId:'other'});expect(new URL(b.location.href).hash).toBe('#tasks');expect(b.get('entryState.busy')).toBe('');expect(b.get('entryState.error.code')).toBe('workspace_refresh_failed');expect(JSON.stringify(b.get('entryState.error'))).not.toContain('SECRET')
 })
 it.each(['?workspace=other&unrelated=remove','?workspace=&unrelated=remove','?workspace=studio&workspace=other',''])('preserves workspace selector semantics through existing embedded navigation: %s',query=>{
  const b=fixture('http://localhost/configure'+query+'#tasks');b.ready(true);b.get(`const configurationHost={};function workspaceHash(){return 'execution'}`)
@@ -128,9 +124,14 @@ it.each(['?workspace=studio','?workspace=','?workspace=studio&workspace=other'])
 function switchingFixture(stage:'guide'|'connections'='guide'){
  const b=fixture('http://localhost/configure?workspace=studio#execution/configuration',async path=>response(path.endsWith('/configuration')?{current:{revision:11,config:{fixture:'other'}},history:[]}:path.endsWith('/entry-setup')?{entries:[],revision:11}:{tasks:[]}));b.ready(true)
  let release!:()=>void,fail!:(error:Error)=>void;b.context.secondaryGate=new Promise<void>((resolve,reject)=>{release=resolve;fail=reject});b.context.secondaryStage=stage;b.context.navigationNotifications=[]
- b.get(`const configurationHost={};function dirty(){return false} function entryHasDraft(){return false} async function entryRun(label,fn){await fn()} function resetDraft(value){S.base=value} const operator={};const entryModel={};const teamStudio={};const executionView={};function resetGuideSession(){} const secondaryCalls=[];async function loadGuideContext(){secondaryCalls.push('guide');if(secondaryStage==='guide')await secondaryGate} async function connectionDiscover(){secondaryCalls.push('connections');if(secondaryStage==='connections')await secondaryGate} async function integrationsDiscover(){secondaryCalls.push('integrations')} entryState.page='execution'`)
- b.context.window.dispatchEvent=()=>{b.context.navigationNotifications.push(b.location.href);return true}
- return {...b,release,fail,navigate(hash:string){b.context.nextHash=hash;b.get(`entryState.page=nextHash==='execution/configuration'?'execution':'home';const target=new URL(location.href);target.hash=nextHash;history.pushState(null,'',target)`)}}
+ b.get(`const configurationHost={active:()=>!['#connectors','#worker-templates','#execution-trace'].includes(location.hash)};function dirty(){return false} function entryHasDraft(){return false} function resetDraft(value){S.base=value} const operator={};const entryModel={};const teamStudio={};const executionView={mode:'configuration'};function resetGuideSession(){} let promptPreviewOpen=false;function ensureEntryInventory(){} function entrySafeDetail(value){return value} const renderStates=[];function render(){renderStates.push({busy:entryState.busy,page:entryState.page,href:location.href})} const secondaryCalls=[],secondaryBusy=[];async function loadGuideContext(){secondaryCalls.push('guide');secondaryBusy.push(entryState.busy);if(secondaryStage==='guide')await secondaryGate} async function connectionDiscover(){secondaryCalls.push('connections');secondaryBusy.push(entryState.busy);if(secondaryStage==='connections')await secondaryGate} async function integrationsDiscover(){secondaryCalls.push('integrations');secondaryBusy.push(entryState.busy)} entryState.page='execution';entryState.busy='';`)
+ const source=readFileSync(new URL('../src/ui/entry-session.js',import.meta.url),'utf8')
+ // Use the real busy/finally owner and real Configuration.activate navigation path.
+ b.get(source.slice(source.indexOf('const workspacePages ='),source.indexOf('function chooseEntryRole(')))
+ b.get(source.slice(source.indexOf('function entryError('),source.indexOf('async function loadEntryGuide()')))
+ b.context.document={getElementById:()=>null}
+ b.context.window.dispatchEvent=()=>{b.context.navigationNotifications.push(b.location.href);b.get('applyWorkspaceLocation()');return true}
+ return {...b,release,fail,navigate(hash:string){b.context.nextHash=hash;return b.get(`(()=>{const target=new URL(location.href);target.hash=nextHash;history.pushState(null,'',target);return applyWorkspaceLocation()})()`)}}
 }
 it('publishes the default switch target, snapshot and validated selector together before secondary reads finish',async()=>{
  const b=switchingFixture(),seen:any[]=[];b.location.href='http://localhost/?workspace=studio&temporary=remove#execution/configuration';b.transport.subscribe(()=>seen.push({context:b.transport.context(),href:b.location.href,page:b.get('entryState.page'),revision:b.get('S.snap?.current.revision'),entryRevision:b.get('entryState.data?.revision')}))
@@ -139,10 +140,15 @@ it('publishes the default switch target, snapshot and validated selector togethe
 })
 for(const stage of ['guide','connections'] as const)for(const destination of ['connectors','execution/configuration'])for(const outcome of ['resolve','reject'])it(`preserves user navigation to ${destination} after ${stage} refresh ${outcome}`,async()=>{
  const b=switchingFixture(stage),result=b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));expect(new URL(b.location.href).hash).toBe('#tasks');b.navigate(destination);const chosen=b.location.href,notifications=b.context.navigationNotifications.length
- if(outcome==='reject'){const rejected=expect(result).rejects.toThrow('secondary unavailable');b.fail(Error('secondary unavailable'));await rejected}else{b.release();expect(await result).toBe(true)}
+ expect(b.get('entryState.busy')).toBe('');expect(b.get('secondaryBusy').every((busy:string)=>busy==='')).toBe(true);if(destination==='execution/configuration')expect(b.get('executionView.mode')).toBe('configuration')
+ if(outcome==='reject')b.fail(Error('SECRET_RAW_SECONDARY'));else b.release();expect(await result).toBe(true)
  expect(b.location.href).toBe(chosen);expect(new URL(b.location.href).searchParams.get('workspace')).toBe('other');expect(b.get('entryState.page')).toBe(destination==='execution/configuration'?'execution':'home');expect(b.context.navigationNotifications).toHaveLength(notifications);expect(b.transport.context()).toMatchObject({state:'ready',activeId:'other'})
 })
 it('does not continue old secondary stages or overwrite a newer context/navigation after reset',async()=>{
  const b=switchingFixture(),old=b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));b.get('workspaceReset()');b.ready(true);b.get("S.snap={current:{revision:99}};workspaceContext.epoch++");const next=new URL(b.location.href);next.searchParams.set('workspace','studio');next.hash='connectors';b.location.href=String(next);const chosen=b.location.href,context=b.transport.context(),notifications=b.context.navigationNotifications.length
  b.release();expect(await old).toBe(false);expect(b.location.href).toBe(chosen);expect(b.transport.context()).toEqual(context);expect(b.get('S.snap.current.revision')).toBe(99);expect(b.get('secondaryCalls')).toEqual(['guide']);expect(b.context.navigationNotifications).toHaveLength(notifications)
+})
+
+it('leaves the existing entryRun busy gate intact and starts no primary or secondary reads when another operation owns it',async()=>{
+ const b=switchingFixture();b.get("S.busy='save'");expect(await b.get("workspaceSwitch('other')")).toBe(false);expect(b.get('S.busy')).toBe('save');expect(b.get('entryState.busy')).toBe('');expect(b.calls).toEqual([]);expect(b.get('secondaryCalls')).toEqual([]);expect(b.transport.context().activeId).toBe('studio')
 })
