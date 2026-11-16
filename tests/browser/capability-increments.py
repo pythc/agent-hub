@@ -65,21 +65,34 @@ with sync_playwright() as p:
    with page.expect_response(lambda response:response.url==info['base']+'/api/execution-trace/recover' and response.request.method=='POST') as stopped:
     trace.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click()
    return stopped.value
+  # Separate, labelled browser-only stale-observation injection: the actual
+  # Runtime must reject this cancellation before recording/executing it.
+  def stale_cancel_observation(route):
+   response=route.fetch();assert response.ok
+   data=response.json()
+   item=next(task for task in data['tasks'] if task['id']==unknown['ticketId'])
+   item['observed']='0'*64
+   route.fulfill(response=response,json=data)
+  page.route('**/api/execution-trace?*',stale_cancel_observation)
+  trace.get_by_role('button',name='Refresh',exact=True).click()
+  expect(trace.get_by_role('button',name='Refresh',exact=True)).to_be_enabled()
   stopped=stop_from_current_view()
+  assert stopped.status==409,('stale_cancel_observation_not_fenced',stopped.status)
+  page.unroute('**/api/execution-trace?*',stale_cancel_observation)
   if stopped.status==409:
    # An outbox transition may legitimately invalidate the first observation.
    # Verify the existing fence, then explicitly inspect and confirm once again.
    # Never retry an uncertain/started command or weaken its production gate.
    assert stopped.json().get('code')=='trace_changed'
    expect(trace.get_by_role('alert')).to_contain_text('This task changed')
-   shot('trace-cancel-state-changed-dark.png')
+   shot('trace-browser-injected-stale-cancel-dark.png')
    trace.get_by_role('button',name='Try refresh',exact=True).click();expect(trace.get_by_role('alert')).not_to_be_visible()
    expect(trace.locator('[data-facet=effects]')).to_have_attribute('data-state','unknown')
    stopped=stop_from_current_view()
   assert stopped.ok,('cancel_failed',stopped.status)
   expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped',timeout=15000)
   page.reload();trace.get_by_label('Show',exact=True).select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
-  checks.append('actual typed unknown-effect failure is fenced; inspect before retry; explicit cancellation persists after reload and cannot resume')
+  checks.append('actual typed unknown-effect failure is fenced; separately labelled browser-only stale observation is rejected before cancellation; explicit UI refresh and renewed confirmation stops the task and persists after reload without resume')
 
   page.emulate_media(reduced_motion='reduce');page.set_viewport_size({'width':390,'height':844})
   for route,selector in [('worker-templates','.templates-page'),('connectors','.connector-page'),('execution-trace','.trace-page')]:
