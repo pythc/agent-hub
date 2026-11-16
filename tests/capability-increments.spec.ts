@@ -4,6 +4,7 @@ import {mkdtempSync,readFileSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
+import {request as httpRequest} from 'node:http'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import {serve} from '../src/server.ts'
@@ -75,4 +76,24 @@ it('retains unknown effects across refresh and rejects stale or unsafe recovery'
  expect((await f.api('/api/execution-trace/recover',{...input,requestId:randomUUID(),action:'inspect',revision:task.revision+1})).body.code).toBe('trace_settings_conflict')
  expect(JSON.stringify((await f.api('/api/execution-trace')).body)).not.toContain('PRIVATE_RAW_PROVIDER_ERROR')
  expect((await f.api('/api/execution-trace?ticketId='+encodeURIComponent(task.id))).body.tasks[0].observed).toBe(task.observed)
+})
+
+it('rechecks the operator after a slow onboarding apply body completes',async()=>{
+ const f=await fixture(),password='Synthetic-password-2026!'
+ const setup=await fetch(f.host.url+'/account/setup',{method:'POST',headers:f.headers,body:JSON.stringify({username:'slow-body',displayName:'Synthetic',password,remember:true})})
+ expect(setup.status).toBe(201)
+ const cookie=setup.headers.get('set-cookie')!.split(';')[0]!
+ const current=(await f.api('/api/connectors')).body
+ const plan=await f.api('/api/connectors/plan',{revision:current.revision,kind:'feishu',label:'Never applied',actors:['operator'],credentialMode:'environment',fields:{chats:['oc_fixture']},credentials:{'app-id':'FIXTURE_ID','app-secret':'FIXTURE_SECRET'}})
+ expect(plan.status).toBe(200)
+ const body=JSON.stringify({id:plan.body.id})
+ const entered=new Promise<void>(resolve=>f.host.server.on('request',req=>{if(req.url==='/api/plugin-market/connection/apply')resolve()}))
+ let req:ReturnType<typeof httpRequest>
+ const result=new Promise<number>((resolve,reject)=>{req=httpRequest(f.host.url+'/api/plugin-market/connection/apply',{method:'POST',headers:{cookie,origin:f.host.url,'content-type':'application/json','content-length':Buffer.byteLength(body)}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode!))});req.on('error',reject);req.write(body.slice(0,5))})
+ await entered
+ const logout=await fetch(f.host.url+'/account/logout-all',{method:'POST',headers:{cookie,origin:f.host.url,'content-type':'application/json'},body:'{}'})
+ expect(logout.status).toBe(200)
+ req!.end(body.slice(5));expect(await result).toBe(401)
+ expect((await f.api('/api/connectors')).body.revision).toBe(current.revision)
+ expect((await f.api('/api/connectors')).body.instances).toHaveLength(0)
 })

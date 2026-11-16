@@ -302,7 +302,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,200,onboarding.sourcePlan(input.revision,source,credentials));return
     }
     if(path==='/api/plugin-market/connection/apply'&&req.method==='POST'){
-      const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));changing=true
+      const input=z.object({id:z.string().uuid()}).strict().parse(await operatorBody(req));changing=true
       try{send(res,200,await onboarding.apply(input.id,rebuild))}finally{changing=false}return
     }
     if(path==='/api/workspace-views'||path.startsWith('/api/workspace-views/')){

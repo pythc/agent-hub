@@ -20,7 +20,7 @@ with sync_playwright() as p:
   expect(review).to_contain_text('Installation grants no permissions');shot('template-review-light.png')
   review.get_by_role('button',name='Install reviewed recipe',exact=True).click();expect(review.get_by_role('button',name='Create Worker',exact=True)).to_be_visible()
   review.get_by_role('button',name='Create Worker',exact=True).click();review.get_by_label('Worker ID',exact=True).fill('browser-review');review.get_by_label('Display name',exact=True).fill('Browser review')
-  expect(review.get_by_label('Execution backend').locator('option[value="acp"]')).to_be_disabled()
+  expect(review.get_by_label('Execution backend').locator('option[value="acp"]')).to_have_attribute('disabled','')
   review.get_by_role('button',name='Create paused Worker',exact=True).click();expect(section.get_by_role('status')).to_contain_text('Worker created and paused')
   worker=next(w for w in api('/workers')['workers'] if w['id']=='browser-review');assert worker['state']=='paused' and worker['tools']==[] and worker['toolConnections']==[]
   page.reload();expect(section.locator('.template-card').filter(has_text='v1.0.0')).to_have_count(1)
@@ -36,8 +36,8 @@ with sync_playwright() as p:
   expect(connections).to_contain_text('Read, receive, send and target-channel permissions remain unverified');shot('connectors-diagnostics-dark.png')
   connections.get_by_role('button',name='Add connection',exact=True).click();dialog=page.get_by_role('dialog');expect(dialog).to_be_visible()
   dialog.get_by_label('Installed app').select_option('feishu');dialog.get_by_role('button',name='Continue',exact=True).click()
-  dialog.get_by_label('Connection name',exact=True).fill('Browser Feishu fixture');dialog.get_by_label('Allowed actor IDs',exact=True).fill('operator');dialog.get_by_label('Use existing host environment references',exact=True).check()
-  dialog.get_by_label('App ID *',exact=True).fill('FIXTURE_FEISHU_APP_ID');dialog.get_by_label('App secret *',exact=True).fill('FIXTURE_FEISHU_APP_SECRET');dialog.get_by_label('Chat IDs *',exact=True).fill('oc_browser_fixture')
+  dialog.get_by_label('Connection name',exact=True).fill('Browser Feishu fixture');dialog.get_by_label('Allowed actor IDs',exact=False).fill('operator');dialog.get_by_label('Use existing host environment references',exact=True).check()
+  dialog.get_by_label('App ID *',exact=False).fill('FIXTURE_FEISHU_APP_ID');dialog.get_by_label('App secret *',exact=False).fill('FIXTURE_FEISHU_APP_SECRET');dialog.get_by_label('Chat IDs *',exact=False).fill('oc_browser_fixture')
   dialog.get_by_role('button',name='Review connection',exact=True).click();expect(dialog).to_contain_text('Ready to apply');expect(dialog).to_contain_text('It does not authenticate, send a message or grant Worker tools');shot('connector-reviewed-plan-dark.png')
   dialog.get_by_role('button',name='Apply connection',exact=True).click();expect(dialog).not_to_be_visible(timeout=15000)
   expect(connections.locator('.connector-card').filter(has_text='Browser Feishu fixture')).to_contain_text('Disabled');page.reload();expect(connections.locator('.connector-card').filter(has_text='Browser Feishu fixture')).to_contain_text('Disabled')
@@ -58,10 +58,10 @@ with sync_playwright() as p:
   checks.append('explicit Worker activation and real scheduler fixture run; persisted dispatch/result; independent commit/test/deploy evidence; reload/failed-refresh recovery')
 
   workers=api('/workers');unknown=api('/workers',{'action':'assign','id':'research','revision':workers['revision'],'requestId':str(uuid.uuid4()),'discussion':'browser-unknown','text':'fixture-unknown-effect: exercise reconciliation fence.'})
-  trace.get_by_role('button',name='Refresh',exact=True).click();expect(trace.get_by_label('Show').locator('option[value="'+unknown['ticketId']+'"]').first).to_be_attached(timeout=15000);trace.get_by_label('Show').select_option(unknown['ticketId'])
+  trace.get_by_role('button',name='Refresh',exact=True).click();expect(trace.get_by_label('Show',exact=True).locator('option[value="'+unknown['ticketId']+'"]').first).to_be_attached(timeout=15000);trace.get_by_label('Show',exact=True).select_option(unknown['ticketId'])
   expect(trace.locator('.trace-task-detail')).to_contain_text('Some effects are unconfirmed',timeout=15000);expect(trace.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible();shot('trace-unknown-effect-dark.png')
   trace.get_by_role('button',name='Stop task',exact=True).click();trace.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped',timeout=15000)
-  page.reload();trace.get_by_label('Show').select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
+  page.reload();trace.get_by_label('Show',exact=True).select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
   checks.append('actual typed unknown-effect failure is fenced; inspect before retry; explicit cancellation persists after reload and cannot resume')
 
   page.emulate_media(reduced_motion='reduce');page.set_viewport_size({'width':390,'height':844})
