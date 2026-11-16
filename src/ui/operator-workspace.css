@@ -1903,3 +1903,18 @@ body.operator-menu-open { overflow:hidden; }
 .workspace-load-error{margin:24px 0}
 @keyframes workspace-loading-turn{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.workspace-loading::before{animation:none}}
+
+
+.attention-supplement { display:grid;gap:12px;font-size:14px;line-height:1.5;margin-bottom:20px; }
+.attention-observed { display:block;font-size:14px;color:var(--muted); }
+.attention-record-row { display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--canvas); }
+.attention-record-row h3 { margin:0;font-size:16px;font-weight:600; }
+.attention-record-row p { margin:4px 0 0;font-size:14px; }
+.attention-status-lines { margin:12px 0 0;padding-left:20px;font-size:14px;line-height:1.6; }
+.attention-update-failed { margin:0;font-size:14px; }
+.attention-record-dialog p { font-size:14px;line-height:1.6;overflow-wrap:anywhere; }
+.attention-record-dialog .button { margin:8px 8px 0 0; }
+@media(max-width:480px){.attention-record-row{align-items:flex-start;flex-direction:column;gap:12px}.attention-record-row .button{align-self:flex-start}}
+@media(prefers-reduced-motion:reduce){.attention-supplement *,.attention-record-dialog *{scroll-behavior:auto;animation:none;transition:none}}
+
+.attention-record-dialog .drawer-header,.attention-record-dialog .drawer-header span { font-size:14px; }

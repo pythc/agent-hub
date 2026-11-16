@@ -170,6 +170,7 @@ function entryNavigate(page, id = '', options = {}) {
   entryState.role = 'operator'
   S.surface = 'entries'
   operator.drawer = null
+  if(typeof attentionPageChanged==='function')attentionPageChanged()
   if (page !== 'execution') {
     executionView.inspect = null
     executionView.instructions = null
