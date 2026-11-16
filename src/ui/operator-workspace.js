@@ -227,7 +227,7 @@ function opTaskTable(tasks) {
   return workspaceTable(
     [L('Task', '任务'), L('Source', '入口'), L('Status', '状态'), L('Updated', '更新')],
     tasks.map(task => {
-      const button = opButton(task.title, () => openOperatorTask(task.id), 'text-button')
+      const button = opButton(task.displayTitle||task.title, () => openOperatorTask(task.id), 'text-button')
       button.id = 'work-' + task.id
       return [
         add(el('div', 'table-title'), opMark(task.entryId), add(el('div'), button,
@@ -285,7 +285,7 @@ function opAttentionCard(task) {
   return add(el('article', 'attention-item'),
     add(el('div', 'item-topline'), opMark(task.entryId, 'small'),
       el('span', '', task.context || entryName(task.entryId)), el('time', '', opTime(task.updatedAt))),
-    add(el('div', 'item-heading'), el('h3', '', task.title), open),
+    add(el('div', 'item-heading'), el('h3', '', task.displayTitle||task.title), open),
     el('p', '', task.question || task.summary || label),attentionStatusRows('task',task.id))
 }
 function workflowOutcome(p){
@@ -507,7 +507,7 @@ function opTaskDialog(){
   const task=operator.drawer;if(!task)return null
   const currentProof=operatorTaskProofCurrent(operator.drawerProof)
   const dialog=el('dialog');dialog.id='operator-task';dialog.setAttribute('aria-labelledby','operator-task-title')
-  const title=el('h2','',task.title);title.id='operator-task-title'
+  const title=el('h2','',task.displayTitle||task.title);title.id='operator-task-title'
   const body=add(el('div','drawer-body'),opMark(task.entryId,'large'),title,el('p','',task.context||entryName(task.entryId)),add(el('dl','drawer-meta'),el('dt','',L('State','当前状态')),el('dd','',opTaskLabel(task.state)),el('dt','',L('Source software','来源软件')),el('dd','',entryName(task.entryId)),el('dt','',L('Follow up','后续结果')),el('dd','',L('In the original conversation','返回发起任务的原会话'))),add(el('div','message'),el('small','',L('Original request','原始请求')),el('p','',task.message)))
   for(const [label,value]of [[L('Assistant needs your input','助手需要你补充'),task.question],[L('Latest progress','最新进展'),task.summary===task.question?'':task.summary],[L('Actual reply','实际回复'),task.result]])if(value)body.append(add(el('div','message'),el('small','',label),el('p','',value)))
   if(task.resultTruncated)body.append(el('p','flow-help',L('This result is shortened. Read the complete resource in advanced controls.','结果较长，此处已缩短。可在完整任务控制台读取全文。')))

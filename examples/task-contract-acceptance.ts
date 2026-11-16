@@ -39,7 +39,7 @@ async function observe(stage:string){
 }
 await observe('initial_actual_managed_detail')
 const savedRoute=runtime.store.get<RouterRoute>('router-route',trigger.id)!
-writeFileSync(join(root,'browser.json'),JSON.stringify({base:host.url,url:host.url+'/configure#tasks/history',cookie:setup.headers.get('set-cookie')!.split(';')[0]!,managedId,ordinaryId:ordinary.ticketId,objective:'Analyze the local project without changing files',mode}),{mode:0o600})
+writeFileSync(join(root,'browser.json'),JSON.stringify({base:host.url,url:host.url+'/configure#tasks/history',cookie:setup.headers.get('set-cookie')!.split(';')[0]!,managedId,displayTitle:'Analyze',ordinaryId:ordinary.ticketId,objective:'Analyze the local project without changing files',mode}),{mode:0o600})
 let previous='',busy=false
 const timer=setInterval(()=>{if(busy||closing)return;void(async()=>{try{
  const file=join(root,'control.json');if(!existsSync(file))return;const raw=readFileSync(file,'utf8');if(raw===previous||raw.length>1024)return;previous=raw;const command=JSON.parse(raw)

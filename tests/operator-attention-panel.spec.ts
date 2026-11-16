@@ -182,3 +182,10 @@ it('does not claim empty when legacy work is absent or its current refresh fails
  f.get("operator.work={attention:[],workflowActions:[],projectReviews:[]}");expect(text(f.get('opAttention()'))).toContain('暂无待处理事项')
  f.context.api=async()=>{throw {status:503}};await f.get('readOperatorWork()');expect(f.get('operator.error')).toBe(true);expect(f.get('operator.attentionView.snapshot.total')).toBe(0);expect(text(f.get('opAttention()'))).toContain('更新失败');expect(text(f.get('opAttention()'))).not.toContain('暂无待处理事项')
 })
+
+it('uses readable titles on existing cards and details while keeping task action identity and old-server fallback',async()=>{
+ const f=fixture();f.get("operator.work={attention:[]}");f.context.api=async(...args:any[])=>{f.apiCalls.push(args);return {id:'task-1',title:'RAW_GENERATED_PACKET',displayTitle:'[Bug] Review the result',approvals:[]}}
+ const card=f.get("opAttentionCard({id:'task-1',title:'RAW_GENERATED_PACKET',displayTitle:'[Bug] Review the result',entryId:'local'})");expect(text(card)).toContain('[Bug] Review the result');expect(text(card)).not.toContain('RAW_GENERATED_PACKET')
+ await button(card,'查看详情').onclick();expect(f.apiCalls[0][0]).toBe('/entry-workspace/task/task-1');const dialog=f.get('opTaskDialog()');expect(walk(dialog).find(n=>n.tagName==='h2').textContent).toBe('[Bug] Review the result');expect(f.get('operator.drawer.id')).toBe('task-1')
+ expect(text(f.get("opAttentionCard({id:'legacy',title:'Human task',entryId:'local'})"))).toContain('Human task')
+})
