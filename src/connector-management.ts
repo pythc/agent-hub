@@ -1,5 +1,7 @@
 import {randomUUID} from 'node:crypto'
+import {types as nodeTypes} from 'node:util'
 import {z} from 'zod'
+import {Ajv2020} from 'ajv/dist/2020.js'
 import {configSchema,type SourceConfig} from './config.ts'
 import type {Runtime} from './runtime.ts'
 import {pointer} from './plugin-package.ts'
@@ -7,7 +9,8 @@ import {stableDigest} from './sources.ts'
 
 const id=z.string().regex(/^[a-z][a-z0-9_-]{0,100}$/)
 const revision=z.number().int().nonnegative()
-const draftSchema=z.object({revision,kind:id,label:z.string().trim().min(1).max(100),actors:z.array(z.string().trim().min(1).max(200)).min(1).max(100),fields:z.record(z.string().max(100),z.union([z.string().max(16000),z.array(z.string().max(300)).max(100)])).default({}),credentials:z.record(z.string().max(100),z.string().min(1).max(16000)).default({}),credentialMode:z.enum(['value','environment']).default('value')}).strict()
+const credentialPresent=(name:string)=>Object.hasOwn(process.env,name)&&typeof process.env[name]==='string'&&process.env[name]!.length>0
+const draftSchema=z.object({revision,kind:id,label:z.string().trim().min(1).max(100),actors:z.array(z.string().trim().min(1).max(200)).max(100),intent:z.literal('draft').optional(),fields:z.record(z.string().max(100),z.union([z.string().max(16000),z.array(z.string().max(300)).max(100)])).default({}),credentials:z.record(z.string().max(100),z.string().min(1).max(16000)).default({}),credentialMode:z.enum(['value','environment']).default('value')}).strict()
 export const connectorProbeSchema=z.object({sourceId:id,revision,level:z.enum(['configuration','reachable','authentication','capabilities']),requestId:z.string().uuid()}).strict()
 const controlSchema=z.object({sourceId:id,revision,enabled:z.boolean(),requestId:z.string().uuid()}).strict()
 export type ConnectorLayer=z.infer<typeof connectorProbeSchema>['level']
@@ -16,9 +19,12 @@ export interface ConnectorDiagnostic {
  id:string;sourceId:string;revision:number;level:ConnectorLayer;status:DiagnosticStatus;code:string;startedAt:number;finishedAt?:number
  checkedCapabilities?:'member_directory'[];checkedScopes?:number;realCall:false;evidenceMode:'configured-adapter'|'fixture'
 }
-/** Fixed codes are deliberately the only error material exposed by this service. */
+export type ConnectorIssueCode='required'|'invalid_format'|'invalid_environment_reference'|'credential_unavailable'|'too_many'|'unsupported_field'
+export interface ConnectorFieldIssue {field:string;code:ConnectorIssueCode}
+const issueCodes:readonly string[]=['required','invalid_format','invalid_environment_reference','credential_unavailable','too_many','unsupported_field']
+/** Only declared field names and fixed codes may cross the error boundary. */
 export class ConnectorError extends Error {
- constructor(readonly code:'connector_invalid'|'connector_conflict'|'connector_missing'|'connector_disabled'|'connector_unsupported'|'connector_request_conflict'|'connector_busy',readonly status=400){super(code)}
+ constructor(readonly code:'connector_invalid'|'connector_conflict'|'connector_missing'|'connector_disabled'|'connector_unsupported'|'connector_request_conflict'|'connector_busy'|'connector_actors_required',readonly status=400,readonly issues?:ConnectorFieldIssue[]){super(code)}
 }
 const safeParse=<T>(schema:z.ZodType<T>,value:unknown):T=>{const parsed=schema.safeParse(value);if(!parsed.success)throw new ConnectorError('connector_invalid');return parsed.data}
 type Definition=ReturnType<Runtime['sourceRegistry']['connectionDefinitions']>[number]
@@ -54,6 +60,65 @@ export class ConnectorManagement {
  private definition(kind:string){const definition=this.host().sourceRegistry.connectionDefinitions().find(d=>d.kind===kind);if(!definition)throw new ConnectorError('connector_missing',404);return definition}
  private source(sourceId:string){const config=this.host().config.sources.find(s=>s.id===sourceId);if(!config)throw new ConnectorError('connector_missing',404);return config}
  private fingerprint(config:SourceConfig){return stableDigest(config)}
+ private issues(definition:Definition|undefined,values:unknown):ConnectorFieldIssue[]{
+  try{
+   // Hook results are metadata, never objects whose getters/iterators we execute.
+   if(nodeTypes.isProxy(values)||!Array.isArray(values))return []
+   const length=Object.getOwnPropertyDescriptor(values,'length')?.value
+   if(!Number.isSafeInteger(length)||length<0||length>256)return []
+   const names=new Set(['label','actors',...(definition?.setup?.fields.map(f=>f.name)??[])]),seen=new Set<string>(),result:ConnectorFieldIssue[]=[]
+   for(let i=0;i<length&&result.length<32;i++){
+    const slot=Object.getOwnPropertyDescriptor(values,String(i))
+    if(!slot||!Object.hasOwn(slot,'value'))continue
+    const issue=slot.value
+    if(!issue||typeof issue!=='object'||nodeTypes.isProxy(issue))continue
+    const prototype=Object.getPrototypeOf(issue)
+    if(prototype!==Object.prototype&&prototype!==null)continue
+    const fieldProperty=Object.getOwnPropertyDescriptor(issue,'field'),codeProperty=Object.getOwnPropertyDescriptor(issue,'code')
+    if(!fieldProperty||!codeProperty||!Object.hasOwn(fieldProperty,'value')||!Object.hasOwn(codeProperty,'value'))continue
+    const field:unknown=fieldProperty.value,code:unknown=codeProperty.value
+    if(typeof field!=='string'||!names.has(field)||typeof code!=='string'||!issueCodes.includes(code))continue
+    const key=field+':'+code;if(seen.has(key))continue
+    seen.add(key);result.push({field,code:code as ConnectorIssueCode})
+   }
+   return result
+  }catch{return []} // Malformed hook metadata remains a fixed form-level error.
+ }
+ private parseDraft(value:unknown){
+  const parsed=draftSchema.safeParse(value)
+  if(!parsed.success){
+   const kind=value&&typeof value==='object'?'kind'in value?value.kind:undefined:undefined
+   const definition=typeof kind==='string'?this.host().sourceRegistry.connectionDefinitions().find(d=>d.kind===kind):undefined
+   const issues=parsed.error.issues.map(issue=>({field:issue.path[0]==='fields'||issue.path[0]==='credentials'?issue.path[1]:issue.path[0],code:issue.code==='too_small'?'required':issue.code==='too_big'?'too_many':'invalid_format'}))
+   throw new ConnectorError('connector_invalid',400,this.issues(definition,issues))
+  }
+  if(!parsed.data.actors.length&&parsed.data.intent!=='draft')throw new ConnectorError('connector_invalid',400,[{field:'actors',code:'required'}])
+  if(parsed.data.intent==='draft'&&parsed.data.actors.length)throw new ConnectorError('connector_invalid',400,[{field:'actors',code:'invalid_format'}])
+  return parsed.data
+ }
+ private configurationIssues(definition:Definition,config:SourceConfig):ConnectorFieldIssue[]{
+  const fields=definition.setup?.fields??[],reported:{field:unknown;code:unknown}[]=[]
+  if('configSchema'in definition&&definition.configSchema){
+   try{
+    const validate=new Ajv2020({strict:false,validateFormats:false}).compile(definition.configSchema)
+    if(!validate(config))for(const error of validate.errors??[]){
+     const path=error.instancePath+(error.keyword==='required'?'/'+String(error.params.missingProperty):'')
+     const field=fields.find(f=>{const target=fieldPath(definition,f);return path===target||path.startsWith(target+'/')})
+     if(field)reported.push({field:field.name,code:error.keyword==='required'||error.keyword==='minItems'||error.keyword==='minLength'?'required':error.keyword==='maxItems'||error.keyword==='maxLength'?'too_many':'invalid_format'})
+    }
+   }catch{/* Unmappable schema failures stay form-level, never raw Ajv material. */}
+  }
+  try{reported.push(...this.issues(definition,this.host().sourceRegistry.validationIssues(config)))}catch{/* Plugin errors cannot become public exception text. */}
+  return this.issues(definition,reported)
+ }
+ private credentialAvailability(plan:{source:SourceConfig;credentials:Record<string,string>}){
+  const definition=this.definition(plan.source.kind)
+  return (definition.setup?.fields??[]).filter(field=>Object.values(definition.credentials).includes(fieldPath(definition,field))).flatMap(field=>{
+   const name=pointer(plan.source,fieldPath(definition,field))
+   return typeof name==='string'?[{field:field.name,available:Object.hasOwn(plan.credentials,name)&&typeof plan.credentials[name]==='string'&&plan.credentials[name]!.length>0||credentialPresent(name)}]:[]
+  })
+ }
+
  private configured(config:SourceConfig){
   try{configSchema.shape.sources.element.parse(config);this.host().sourceRegistry.validate(config);return true}catch{return false}
  }
@@ -68,50 +133,55 @@ export class ConnectorManagement {
     const head=host.store.get<{id:string}>('connector-diagnostic-head',config.id+':'+level),record=records.find(d=>d.id===head?.id)
     return [level,record?{...record,current:record.revision===current&&host.store.get<ConnectorDiagnostic&{fingerprint:string}>('connector-diagnostic',record.id)?.fingerprint===this.fingerprint(config)}:null]
    }))
-   return {id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:!!process.env[String(pointer(config,path))]}))}
+   return {id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
   }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them
   * directly to Onboarding.sourcePlan and returns only its reviewed plan. */
  plan(value:unknown):{revision:number;source:SourceConfig;credentials:Record<string,string>}{
-  const input=safeParse(draftSchema,value);this.checkRevision(input.revision)
+  const input=this.parseDraft(value);this.checkRevision(input.revision)
   const host=this.host(),definition=this.definition(input.kind),fields=definition.setup?.fields
   if(!fields?.length)throw new ConnectorError('connector_unsupported')
   const credentials:Record<string,string>={},supplied=new Set([...Object.keys(input.fields),...Object.keys(input.credentials)])
   if([...supplied].some(key=>!fields.some(f=>f.name===key)))throw new ConnectorError('connector_invalid')
-  const draft:Record<string,unknown>={id:'app-'+randomUUID().slice(0,12),kind:input.kind,label:input.label,allowedActors:[...new Set(input.actors)],cwd:host.config.sources.find(s=>s.kind==='local')?.cwd??host.config.sources[0]!.cwd,sandbox:'read-only',enabled:false}
+  const draft:Record<string,unknown>={id:'app-'+randomUUID().slice(0,12),kind:input.kind,label:input.label,allowedActors:[...new Set(input.actors)],cwd:host.config.sources.find(s=>s.kind==='local')?.cwd??host.config.sources[0]!.cwd,sandbox:'read-only',enabled:false,allowedBots:[]}
+  const invalid=(field:string,code:ConnectorIssueCode)=>new ConnectorError('connector_invalid',400,this.issues(definition,[{field,code}]))
   for(const field of fields){
    const path=fieldPath(definition,field),credential=Object.values(definition.credentials).includes(path)
    if(!writableField(definition,path))throw new ConnectorError('connector_unsupported')
    if(credential){
-    if(input.fields[field.name]!==undefined)throw new ConnectorError('connector_invalid')
+    if(input.fields[field.name]!==undefined)throw invalid(field.name,'unsupported_field')
     const secret=input.credentials[field.name]
-    if(!secret){if(field.required)throw new ConnectorError('connector_invalid');continue}
+    if(!secret){if(field.required)throw invalid(field.name,'required');continue}
     const name=input.credentialMode==='environment'?secret:'AGENTHUB_SETUP_CONNECTOR_'+randomUUID().replaceAll('-','').toUpperCase()
-    if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))throw new ConnectorError('connector_invalid')
+    if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))throw invalid(field.name,'invalid_environment_reference')
     if(input.credentialMode==='value')credentials[name]=secret
     setField(draft,path,name)
    }else{
-    if(input.credentials[field.name]!==undefined)throw new ConnectorError('connector_invalid')
+    if(input.credentials[field.name]!==undefined)throw invalid(field.name,'unsupported_field')
     let raw=input.fields[field.name]
     if(field.input==='tags'&&typeof raw==='string')raw=raw.split(/[\n,]/).map(s=>s.trim()).filter(Boolean)
-    if(field.required&&(raw===undefined||raw===''||Array.isArray(raw)&&!raw.length))throw new ConnectorError('connector_invalid')
+    if(field.required&&(raw===undefined||raw===''||Array.isArray(raw)&&!raw.length))throw invalid(field.name,'required')
     if(raw!==undefined&&raw!=='')setField(draft,path,raw)
    }
   }
-  const parsed=configSchema.shape.sources.element.safeParse(draft);if(!parsed.success)throw new ConnectorError('connector_invalid')
-  try{host.sourceRegistry.validate(parsed.data)}catch{throw new ConnectorError('connector_invalid')}
+  const parsed=configSchema.shape.sources.element.safeParse(draft);if(!parsed.success)throw new ConnectorError('connector_invalid',400,this.issues(definition,parsed.error.issues.flatMap(issue=>{const path='/'+issue.path.join('/'),field=fields.find(f=>{const target=fieldPath(definition,f);return path===target||path.startsWith(target+'/')});return field?[{field:field.name,code:'invalid_format'}]:[]})))
+  const validationConfig=structuredClone(parsed.data),freeze=(value:unknown):void=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value)}};freeze(validationConfig)
+  try{host.sourceRegistry.validate(validationConfig)}catch{throw new ConnectorError('connector_invalid',400,this.configurationIssues(definition,validationConfig))}
   return {revision:input.revision,source:parsed.data,credentials}
  }
  validate(value:unknown){
-  try{const plan=this.plan(value);return {valid:true,revision:plan.revision,code:'configuration_valid',networkTested:false,realCall:false,startsDisabled:true}}
-  catch(error){if(error instanceof ConnectorError&&error.code==='connector_invalid')return {valid:false,code:error.code,networkTested:false,realCall:false};throw error}
+  try{const plan=this.plan(value);return {valid:true,revision:plan.revision,code:'configuration_valid',networkTested:false,realCall:false,startsDisabled:true,credentialAvailability:this.credentialAvailability(plan)}}
+  catch(error){if(error instanceof ConnectorError&&error.code==='connector_invalid')return {valid:false,code:error.code,networkTested:false,realCall:false,issues:error.issues??[]};throw error}
  }
  control(value:unknown){
   const input=safeParse(controlSchema,value),host=this.host(),fingerprint=stableDigest(input),receipt=host.store.get<{fingerprint:string;result:unknown}>('connector-control',input.requestId)
   if(receipt){if(receipt.fingerprint!==fingerprint)throw new ConnectorError('connector_request_conflict',409);return receipt.result}
   this.checkRevision(input.revision);this.source(input.sourceId)
-  if(['local','delegation'].includes(this.source(input.sourceId).kind))throw new ConnectorError('connector_unsupported')
+  const source=this.source(input.sourceId)
+  if(['local','delegation'].includes(source.kind))throw new ConnectorError('connector_unsupported')
+  const deliberateAdmission=Object.values(source.admission).some(rule=>rule.unlistedAddressed!=='ignore'||rule.unlistedUnaddressed!=='ignore')
+  if(input.enabled&&source.capabilities.events&&!source.allowedActors.length&&!source.allowedBots.length&&!deliberateAdmission)throw new ConnectorError('connector_actors_required',409,[{field:'actors',code:'required'}])
   return host.store.atomic(()=>{
    this.checkRevision(input.revision)
    const saved=host.updateSettings(input.revision,{sources:host.config.sources.map(s=>s.id===input.sourceId?{...s,enabled:input.enabled}:s)})

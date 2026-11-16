@@ -2,18 +2,24 @@ import {useEffect,useRef,useState} from 'react'
 import {Activity,ArrowRight,Check,CheckCircle2,Clock3,FileCheck2,GitCommitHorizontal,History,LoaderCircle,RefreshCw,ShieldQuestion,Square,Terminal,Wrench} from 'lucide-react'
 import type {TraceEvent,TraceTask,TraceStage,TraceState} from '../../src/execution-trace.ts'
 import {readTaskStatus,type StatusState} from './execution-status-view.ts'
+import {useWorkspaceTransport} from './workspace-context.tsx'
+import type {WorkspaceBinding} from './workspace-transport.ts'
 import './execution-trace.css'
 
 type Snapshot={visibility:string;at:number;revision:number;cursor:number;total:number;offset:number;more:boolean;tasks:TraceTask[]}
 type Events={visibility:string;events:TraceEvent[];cursor:number;head:number;more:boolean;at:number}
 type Action=TraceTask['actions'][number]
 class TraceRequestError extends Error {constructor(readonly code:string){super(code)}}
-async function request<T>(path:string,signal?:AbortSignal,body?:unknown):Promise<T>{
- const response=await fetch('/api/execution-trace'+path,{credentials:'same-origin',signal,...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{})})
- if(response.status===401){location.assign('/chat');throw new TraceRequestError('login_required')}
- const result=await response.json()
- if(!response.ok)throw new TraceRequestError(typeof result.code==='string'?result.code:'trace_request_failed')
- return result
+async function request<T>(binding:WorkspaceBinding,path:string,isCurrent:()=>boolean,signal?:AbortSignal,body?:unknown):Promise<T>{
+ try{return await binding.request<T>('/api/execution-trace'+path,body,false,undefined,body===undefined?signal:undefined)}catch(cause){
+  if(!isCurrent())throw new TraceRequestError('trace_obsolete')
+  const error=cause as {status?:number;payload?:{code?:unknown}}
+  // The shared legacy transport owns current-session login handling. Never let an
+  // old page add a second redirect after its context has already changed.
+  if(error?.status===401)throw new TraceRequestError('login_required')
+  const code=error?.payload?.code,allowed=['trace_changed','trace_settings_conflict','trace_task_missing','trace_reconcile_required','trace_recovery_uncertain','trace_action_unavailable','trace_cursor_ahead']
+  throw new TraceRequestError(typeof code==='string'&&allowed.includes(code)?code:'trace_request_failed')
+ }
 }
 const stageNames:Record<TraceStage,[string,string]>={task:['Task','任务'],assignment:['Dispatch','派工'],run:['Execution','执行'],approval:['Permission','授权'],tool:['Tool activity','工具动态'],result:['Result','结果'],acceptance:['Acceptance','验收'],job:['Scheduled work','调度'],delivery:['Delivery','交付'],recovery:['Recovery','恢复'],commit:['Commit evidence','提交证据'],test:['Test evidence','测试证据'],deployment:['Deployment evidence','部署证据']}
 const stateNames:Record<TraceState,[string,string]>={queued:['Queued','已排队'],running:['Running','运行中'],waiting:['Waiting','等待中'],ready:['Result ready','结果就绪'],blocked:['Needs input','需要处理'],failed:['Failed','失败'],cancelled:['Stopped','已停止'],completed:['Completed','已完成'],interrupted:['Interrupted','已中断'],uncertain:['Check outcome','核查结果'],pending:['Pending','待处理'],resolved:['Resolved','已处理'],expired:['Expired','已过期'],passed:['Passed','通过'],insufficient:['Evidence missing','证据不足'],errored:['Check failed','检查失败'],stale:['Out of date','已过时'],sent:['Sent, receipt unconfirmed','已发出，待确认收到'],held:['On hold','已挂起'],dropped:['Stopped','已停止'],idle:['Idle','空闲'],starting:['Starting','启动中'],background:['Working','处理中'],human:['Human control','人工接管'],delivering:['Delivering','交付中'],merging:['Merging','合并中'],complete:['Result recorded','有结果记录'],ended:['Ended','已结束'],observed:['Observed','已记录'],sending:['Sending','发送中'],applying:['Applying','正在应用'],applied:['Applied','已应用'],declined:['Declined','已拒绝']}
@@ -45,51 +51,61 @@ function workerName(id:string|undefined,language:'en'|'zh-CN'){
 }
 function StageIcon({stage}:{stage:TraceStage}){const Icon=stage==='approval'?ShieldQuestion:stage==='acceptance'||stage==='test'?FileCheck2:stage==='commit'?GitCommitHorizontal:stage==='tool'?Wrench:stage==='run'?Terminal:stage==='result'?CheckCircle2:stage==='assignment'?ArrowRight:Clock3;return <Icon size={16} aria-hidden="true"/>}
 export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
+ const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh,word=(names:[string,string])=>names[language==='en'?0:1]
  const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmStop,setConfirmStop]=useState(false),[truncated,setTruncated]=useState(false)
  const taskNumbers=useRef(new Map<string,number>())
  const taskName=(item:TraceTask)=>{if(!taskNumbers.current.has(item.id))taskNumbers.current.set(item.id,taskNumbers.current.size+1);return workerName(item.workerId,language)+L(' · Task ',' · 任务 ')+taskNumbers.current.get(item.id)}
  const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<()=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
+ const page=useRef({binding,contextKey,selected}),pageRead=useRef<AbortSignal|null>(null)
+ page.current={binding,contextKey,selected}
+ const pageCurrent=()=>page.current.binding===binding&&page.current.contextKey===contextKey&&page.current.selected===selected&&!readSignal.aborted
  const task=snapshot?.tasks.find(t=>t.id===selected),active=snapshot?.tasks.filter(t=>['running','starting','background'].includes(t.state)).length??0,waiting=snapshot?.tasks.filter(t=>['waiting','blocked'].includes(t.state)).length??0,uncertain=snapshot?.tasks.filter(t=>t.unknownEffects).length??0
  useEffect(()=>{
-  const controller=new AbortController(),current=++generation.current;let fetching=false,hasMore=false
-  cursor.current=0;visibility.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop(false)
+  const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal]),current=++generation.current;let fetching=false,hasMore=false
+  pageRead.current=signal
+  const isCurrent=()=>generation.current===current&&pageCurrent()&&!signal.aborted
+  cursor.current=0;visibility.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop(false);setBusy(false)
   const readEvents=async()=>{
+   if(!isCurrent())return
    const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
-   const data=await request<Events>('/events?'+query,controller.signal)
-   if(generation.current!==current||controller.signal.aborted)return
+   const data=await request<Events>(binding,'/events?'+query,isCurrent,signal)
+   if(!isCurrent())return
    if(visibility.current&&visibility.current!==data.visibility){visibility.current=data.visibility;cursor.current=0;setEvents([]);hasMore=false;setMore(false);return}
    visibility.current=data.visibility;cursor.current=data.cursor;hasMore=data.more;setMore(data.more)
    setEvents(previous=>{const seen=new Set(previous.map(e=>e.id)),all=[...previous,...data.events.filter(e=>!seen.has(e.id))];if(all.length>600)setTruncated(true);return all.slice(-600)})
   }
   const refresh=async()=>{
-   if(fetching)return
+   if(fetching||!isCurrent())return
    fetching=true
    try{
-    const data=await request<Snapshot>('?limit=100',controller.signal)
-    if(generation.current!==current||controller.signal.aborted)return
+    const data=await request<Snapshot>(binding,'?limit=100',isCurrent,signal)
+    if(!isCurrent())return
     if(visibility.current&&visibility.current!==data.visibility){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}
     visibility.current=data.visibility;setSnapshot(data)
     if(!hasMore)await readEvents()
-    setError('')
-   }catch(cause){if(!controller.signal.aborted&&generation.current===current){const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead'){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}}}
-   finally{if(!controller.signal.aborted&&generation.current===current){setLoading(false);fetching=false}}
+    if(isCurrent())setError('')
+   }catch(cause){if(isCurrent()){const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead'){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}}}
+   finally{if(isCurrent()){setLoading(false);fetching=false}}
   }
   refreshRef.current=refresh
-  eventRef.current=async()=>{if(fetching)return;fetching=true;try{await readEvents();setError('')}catch{if(!controller.signal.aborted)setError('trace_refresh_failed')}finally{fetching=false}}
+  eventRef.current=async()=>{if(fetching||!isCurrent())return;fetching=true;try{await readEvents();if(isCurrent())setError('')}catch{if(isCurrent())setError('trace_refresh_failed')}finally{if(isCurrent())fetching=false}}
   void refresh();const timer=setInterval(()=>void refresh(),3000)
-  return()=>{controller.abort();clearInterval(timer)}
- },[selected])
+  return()=>{controller.abort();clearInterval(timer);if(generation.current===current)generation.current++}
+ },[selected,binding,contextKey,readSignal])
  const failure=(code:string)=>code==='trace_changed'||code==='trace_settings_conflict'?L('This task changed. Review its current state before trying again.','任务状态已变更，请核对最新状态后重试。'):code==='trace_reconcile_required'?L('Check the external outcome before repeating any work.','请先核查外部结果，再决定是否重复执行。'):code==='trace_recovery_uncertain'?L('The action could not be confirmed. Check the current task and original session.','操作结果尚未确认，请检查当前任务和原会话。'):code==='trace_action_unavailable'?L('This action is no longer available. Review the latest task state.','此操作已不可用，请查看最新任务状态。'):code==='trace_cursor_ahead'?L('The saved history changed. Refresh to reload the timeline.','历史记录已变更，请刷新以重新加载轨迹。'):L('Updates are unavailable. Your last known state is still shown.','暂时无法更新，当前显示最近一次已知状态。')
  async function recover(action:Action){
-  if(!task||busy)return
+  const current=generation.current,signal=pageRead.current
+  const isCurrent=()=>generation.current===current&&pageCurrent()&&!!signal&&!signal.aborted
+  if(!task||busy||!isCurrent())return
   setBusy(true);setActionError('');setNotice('');setConfirmStop(false)
   try{
-   const result=await request<{status:string}>('/recover',undefined,{ticketId:task.id,action,revision:task.revision,observed:task.observed,requestId:crypto.randomUUID()})
+   const result=await request<{status:string}>(binding,'/recover',isCurrent,undefined,{ticketId:task.id,action,revision:task.revision,observed:task.observed,requestId:crypto.randomUUID()})
+   if(!isCurrent())return
    const messages:Record<string,[string,string]>={inspected:['Current task state checked.','已核对当前任务状态。'],history_verified:['The original session is readable. External outcomes still need review.','原会话可读取，外部结果仍需核查。'],history_unavailable:['The original session could not be read. No work was repeated.','暂时无法读取原会话，未重复执行任务。'],resumed:['Resuming the original task and session.','正在恢复原任务及原会话。'],cancelled:['Task stopped. Existing external effects remain.','任务已停止，已发生的外部效果仍保留。']}
    setNotice(word(messages[result.status]??['Action completed.','操作已完成。']))
-  }catch(cause){setActionError(cause instanceof TraceRequestError?cause.code:'trace_recovery_uncertain')}
-  finally{await refreshRef.current();setBusy(false)}
+  }catch(cause){if(isCurrent())setActionError(cause instanceof TraceRequestError?cause.code:'trace_recovery_uncertain')}
+  finally{if(isCurrent()){await refreshRef.current();if(isCurrent())setBusy(false)}}
  }
  const guidance=task?.next==='reconcile'?L('Check the actual outcome before trying again.','请先核查实际结果，再决定是否重试。'):task?.next==='answer_approval'?L('This task needs permission. Use its existing approval controls.','任务需要授权，请在原任务中处理。'):task?.next==='reconnect'?L('Review the connection and verify authentication before continuing.','请先检查连接配置并验证认证状态。'):task?.next==='review_context'?L('Access changed. Review it before continuing.','访问权限已变更，请核对后再继续。'):task?.next==='follow_up'?L('The Worker needs your reply in the original conversation.','Worker 等待你的回复，请回到原会话继续。'):null
  const timeline=<>

@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest'
-import {mkdtempSync,rmSync} from 'node:fs'
+import {mkdtempSync,rmSync,readFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {randomUUID} from 'node:crypto'
@@ -9,14 +9,15 @@ import {SourceRegistry} from '../src/source-plugins.ts'
 import {MessageSource} from '../src/sources.ts'
 import {ConnectorManagement} from '../src/connector-management.ts'
 import {pluginManifestSchema} from '../src/plugin-package.ts'
+import {serve} from '../src/server.ts'
 
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const host of hosts.splice(0))await host.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});delete process.env.CONNECTOR_TEST_TOKEN})
-function fixture(options:ConstructorParameters<typeof ConnectorManagement>[1]={}){
+function fixture(options:ConstructorParameters<typeof ConnectorManagement>[1]={},events=true){
  const root=mkdtempSync(join(tmpdir(),'connector-management-'));roots.push(root)
  const registry=new SourceRegistry()
  registry.register({apiVersion:1,kind:'fixture-im',label:'Fixture IM',create:c=>new MessageSource(c),scopes:c=>c.options.channels as string[],connection:{scopesPath:'/options/channels',credentials:{TOKEN:'/options/tokenEnv'},validate:c=>{if(!Array.isArray(c.options.channels)||!c.options.channels.length||typeof c.options.team!=='string')throw Error('Invalid fixture fields')},setup:{description:'Fixture app setup',serviceUrl:'http://127.0.0.1:1234/',fields:[{name:'team',label:'Team ID',path:'/options/team',required:true,secret:false},{name:'channels',label:'Channel IDs',path:'/options/channels',input:'tags',required:true,secret:false},{name:'token',label:'Bot credential',path:'/options/tokenEnv',required:true,secret:true}]}}})
- const config=configSchema.parse({stateDir:join(root,'state'),port:0,work:{sandboxDriver:'disabled',network:false},sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator'],workspace:{mode:'source'}},{id:'team',kind:'fixture-im',cwd:root,allowedActors:['USER'],options:{channels:['C1','C2'],team:'T1',tokenEnv:'CONNECTOR_TEST_TOKEN'}}]})
+ const config=configSchema.parse({stateDir:join(root,'state'),port:0,work:{sandboxDriver:'disabled',network:false},sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator'],workspace:{mode:'source'}},{id:'team',kind:'fixture-im',cwd:root,allowedActors:['USER'],capabilities:{events,replies:true,resources:true},options:{channels:['C1','C2'],team:'T1',tokenEnv:'CONNECTOR_TEST_TOKEN'}}]})
  const host=new Runtime(config,{sourceRegistry:registry,model:{async run(){throw Error('No model calls expected')}}});hosts.push(host)
  const source=host.sources.get('team')!;source.identity=vi.fn(async()=>({id:'verified-bot',type:'bot',verified:true}));source.members=vi.fn(async()=>[{id:'USER',bot:false}]);source.deliver=vi.fn(async()=>{});source.poll=vi.fn(async()=>{})
  const manager=new ConnectorManagement(()=>host,{evidenceMode:'fixture',...options})
@@ -35,7 +36,7 @@ it('builds a disabled source recipe for existing onboarding without saving, gran
  const f=fixture(),plan=f.manager.plan(f.draft)
  expect(plan.source).toMatchObject({kind:'fixture-im',enabled:false,allowedActors:['USER'],options:{team:'T1',channels:['C1','C2']},sandbox:'read-only'})
  expect(Object.values(plan.credentials)).toEqual(['never-echo-this-credential']);expect(plan.source.options.tokenEnv).toMatch(/^AGENTHUB_SETUP_CONNECTOR_/)
- expect(f.manager.validate(f.draft)).toEqual({valid:true,revision:0,code:'configuration_valid',networkTested:false,realCall:false,startsDisabled:true})
+ expect(f.manager.validate(f.draft)).toEqual({valid:true,revision:0,code:'configuration_valid',networkTested:false,realCall:false,startsDisabled:true,credentialAvailability:[{field:'token',available:true}]})
  expect(f.host.config.sources).toHaveLength(2);expect(f.host.config.toolConnections).toEqual({});expect(f.source.identity).not.toHaveBeenCalled()
  expect(JSON.stringify(f.manager.snapshot())).not.toContain('never-echo-this-credential')
 })
@@ -163,4 +164,112 @@ it('does not claim passed evidence when the metadata receipt cannot be persisted
  }
  expect(await f.probe('authentication')).toMatchObject({status:'interrupted',code:'diagnostic_store_unavailable'})
  f.host.store.put=original
+})
+
+
+it('accepts empty actors only for an explicit disabled draft without grants, adapter calls or writes',()=>{
+ const f=fixture(),before=f.host.store.db.prepare('SELECT * FROM records ORDER BY rowid').all(),settings=f.host.settings.current()
+ const draft={...f.draft,intent:'draft',actors:[]},plan=f.manager.plan(draft)
+ expect(plan.source).toMatchObject({enabled:false,allowedActors:[],allowedBots:[],admission:{},sandbox:'read-only'})
+ expect(plan.source.memberSync).toBeUndefined();expect(f.manager.validate(draft)).toMatchObject({valid:true,startsDisabled:true,networkTested:false,realCall:false})
+ expect(f.manager.validate({...f.draft,actors:[]})).toMatchObject({valid:false,issues:[{field:'actors',code:'required'}]})
+ expect(f.manager.validate({...f.draft,intent:'draft'})).toMatchObject({valid:false,issues:[{field:'actors',code:'invalid_format'}]})
+ expect(f.host.settings.current()).toEqual(settings);expect(f.host.store.db.prepare('SELECT * FROM records ORDER BY rowid').all()).toEqual(before)
+ expect(f.host.config.toolConnections).toEqual({});expect(f.source.identity).not.toHaveBeenCalled();expect(f.source.members).not.toHaveBeenCalled();expect(f.source.poll).not.toHaveBeenCalled();expect(f.source.deliver).not.toHaveBeenCalled()
+})
+it('returns only declared field names and fixed issue codes for local validation',()=>{
+ const f=fixture()
+ expect(f.manager.validate({...f.draft,credentials:{}})).toMatchObject({valid:false,issues:[{field:'token',code:'required'}]})
+ expect(f.manager.validate({...f.draft,fields:{...f.draft.fields,channels:''}})).toMatchObject({valid:false,issues:[{field:'channels',code:'required'}]})
+ expect(f.manager.validate({...f.draft,credentialMode:'environment',credentials:{token:'SECRET bad env'}})).toMatchObject({valid:false,issues:[{field:'token',code:'invalid_environment_reference'}]})
+ const result=f.manager.validate({revision:0,kind:'feishu',label:'Feishu',actors:['ou_user'],fields:{chats:'SECRET_NOT_CHAT'},credentials:{'app-id':'cli_demo','app-secret':'SECRET_VALUE'}})
+ expect(result).toMatchObject({valid:false,issues:[{field:'chats',code:'invalid_format'}]});expect(JSON.stringify(result)).not.toMatch(/SECRET_|Zod|instancePath/)
+})
+it('reports missing environment material locally without authenticating or preventing disabled storage',()=>{
+ const f=fixture(),draft={...f.draft,intent:'draft',actors:[],credentialMode:'environment',credentials:{token:'CONNECTOR_TEST_TOKEN'}}
+ delete process.env.CONNECTOR_TEST_TOKEN
+ expect(f.manager.validate(draft)).toMatchObject({valid:true,credentialAvailability:[{field:'token',available:false}],networkTested:false,realCall:false})
+ expect(f.manager.plan(draft).source.enabled).toBe(false)
+ process.env.CONNECTOR_TEST_TOKEN='SECRET_LOCAL_CREDENTIAL'
+ const result=f.manager.validate(draft)
+ expect(result).toMatchObject({valid:true,credentialAvailability:[{field:'token',available:true}]});expect(JSON.stringify(result)).not.toMatch(/SECRET_|CONNECTOR_TEST_TOKEN/)
+ expect(f.source.identity).not.toHaveBeenCalled();expect(f.source.members).not.toHaveBeenCalled()
+})
+it('rejects ordinary empty-admission enable before any settings or receipt write while allowing disable',()=>{
+ const f=fixture();f.host.updateSettings(0,{sources:f.host.config.sources.map(s=>s.id==='team'?{...s,enabled:false,allowedActors:[]}:s)})
+ const before=f.host.store.db.prepare('SELECT * FROM records ORDER BY rowid').all(),update=vi.spyOn(f.host,'updateSettings'),put=vi.spyOn(f.host.store,'put')
+ expect(()=>f.manager.control({sourceId:'team',revision:1,enabled:true,requestId:randomUUID()})).toThrow('connector_actors_required')
+ expect(update).not.toHaveBeenCalled();expect(put).not.toHaveBeenCalled();expect(f.host.store.db.prepare('SELECT * FROM records ORDER BY rowid').all()).toEqual(before)
+ expect(f.host.config.sources.find(s=>s.id==='team')).toMatchObject({enabled:false,allowedActors:[]})
+ expect(f.manager.control({sourceId:'team',revision:1,enabled:false,requestId:randomUUID()})).toMatchObject({enabled:false});expect(f.source.identity).not.toHaveBeenCalled()
+})
+it.each(['bots','custom','tools'])('preserves existing explicit %s admission or separate tool authority',mode=>{
+ const f=fixture({},mode!=='tools'),source=f.host.config.sources.find(s=>s.id==='team')!
+ f.host.updateSettings(0,{sources:f.host.config.sources.map(s=>s.id===source.id?{...s,enabled:false,allowedActors:[],...(mode==='bots'?{allowedBots:['BOT']}:mode==='custom'?{admission:{C1:{unlistedAddressed:'explicit',unlistedUnaddressed:'ignore',listedUnaddressed:'inferred'}}}:{capabilities:{events:false,replies:true,resources:true}})}:s)})
+ const tools=structuredClone(f.host.config.toolConnections)
+ expect(f.manager.control({sourceId:'team',revision:1,enabled:true,requestId:randomUUID()})).toMatchObject({enabled:true})
+ expect(f.host.config.toolConnections).toEqual(tools);expect(f.source.identity).not.toHaveBeenCalled();expect(f.source.members).not.toHaveBeenCalled();expect(f.source.poll).not.toHaveBeenCalled()
+})
+it('does not trust arbitrary local-plugin issue text or let validation mutate a draft into an enabled source',()=>{
+ const f=fixture()
+ f.host.sourceRegistry.register({apiVersion:1,kind:'issue-plugin',label:'Issue plugin',create:c=>new MessageSource(c),connection:{scopesPath:'/options/rooms',validate:()=>{throw Error('SECRET_EXCEPTION')},validateFields:()=>[{field:'rooms',code:'invalid_format',raw:'SECRET_RAW'},{field:'SECRET_FIELD',code:'invalid_format'},{field:'rooms',code:'SECRET_CODE'},null] as any,setup:{description:'Fixture',fields:[{name:'rooms',label:'Rooms',path:'/options/rooms',required:true,secret:false}]}}})
+ const value={revision:0,kind:'issue-plugin',label:'Plugin',intent:'draft',actors:[],fields:{rooms:'room'},credentials:{}}
+ expect(f.manager.validate(value)).toMatchObject({valid:false,issues:[{field:'rooms',code:'invalid_format'}]});expect(JSON.stringify(f.manager.validate(value))).not.toContain('SECRET')
+ f.host.sourceRegistry.register({apiVersion:1,kind:'mutating-plugin',label:'Mutating plugin',create:c=>new MessageSource(c),connection:{scopesPath:'/options/rooms',validate:c=>{c.enabled=true;c.allowedActors.push('UNAUTHORIZED')},setup:{description:'Fixture',fields:[{name:'rooms',label:'Rooms',path:'/options/rooms',required:true,secret:false}]}}})
+ expect(f.manager.validate({...value,kind:'mutating-plugin'})).toMatchObject({valid:false});expect(f.host.config.sources).toHaveLength(2)
+})
+
+it('maps packaged JSON-schema paths only to declared form fields without exposing schema input',()=>{
+ const f=fixture(),definition=f.host.sourceRegistry.connectionDefinitions().find(d=>d.kind==='fixture-im')!
+ f.host.sourceRegistry.packages.push({manifest:{id:'fixture-package',kind:'fixture-im',label:'Fixture IM',version:'1.0.0',setup:definition.setup,credentials:definition.credentials,scopesPath:definition.scopesPath,configSchema:{type:'object',properties:{options:{type:'object',properties:{team:{type:'string',pattern:'^T[A-Z0-9]+$'}}}}}}} as any)
+ const result=f.manager.validate({...f.draft,fields:{...f.draft.fields,team:'SECRET_BAD_TEAM'}})
+ expect(result).toMatchObject({valid:false,issues:[{field:'team',code:'invalid_format'}]});expect(JSON.stringify(result)).not.toMatch(/SECRET|pattern|instancePath|params/)
+})
+it('does not mistake inherited object properties for available credential material',()=>{
+ const f=fixture(),value={...f.draft,credentialMode:'environment',credentials:{token:'constructor'}}
+ expect(f.manager.validate(value)).toMatchObject({valid:true,credentialAvailability:[{field:'token',available:false}]});expect(f.source.identity).not.toHaveBeenCalled()
+})
+
+
+it('never evaluates throwing or changing issue accessors before either public validation boundary',()=>{
+ const f=fixture(),read=vi.fn(()=>{throw Error('SECRET_GETTER_EXCEPTION')})
+ let metadata:unknown=[{get field(){return read()},code:'invalid_format'}]
+ f.host.sourceRegistry.register({apiVersion:1,kind:'accessor-issues',label:'Accessor issues',create:c=>new MessageSource(c),connection:{scopesPath:'/options/rooms',validate:()=>{throw Error('SECRET_VALIDATOR')},validateFields:()=>metadata as any,setup:{description:'Local fixture',fields:[{name:'rooms',path:'/options/rooms',label:'Rooms',secret:false,required:true}]}}})
+ const value={revision:0,kind:'accessor-issues',label:'Draft',intent:'draft',actors:[],fields:{rooms:'ROOM'},credentials:{}}
+ const verify=()=>{expect(f.manager.validate(value)).toMatchObject({valid:false,code:'connector_invalid',issues:[]});try{f.manager.plan(value);throw Error('Expected rejection')}catch(error){expect(error).toMatchObject({code:'connector_invalid',issues:[]});expect(String(error)).not.toContain('SECRET')}}
+ verify();expect(read).not.toHaveBeenCalled()
+ let fieldReads=0,codeReads=0
+ metadata=[{get field(){return ++fieldReads<=2?'rooms':'SECRET_CHANGED_FIELD'},get code(){return ++codeReads<=2?'invalid_format':'SECRET_CHANGED_CODE'}}]
+ verify();expect(fieldReads).toBe(0);expect(codeReads).toBe(0)
+})
+it('accepts only bounded own data issues without invoking proxy traps, inherited fields or array iterators',()=>{
+ const f=fixture(),trap=vi.fn(()=>{throw Error('SECRET_PROXY_TRAP')})
+ let metadata:unknown
+ f.host.sourceRegistry.register({apiVersion:1,kind:'data-issues',label:'Data issues',create:c=>new MessageSource(c),connection:{scopesPath:'/options/rooms',validate:()=>{throw Error('SECRET_VALIDATOR')},validateFields:()=>metadata as any,setup:{description:'Local fixture',fields:[{name:'rooms',path:'/options/rooms',label:'Rooms',secret:false,required:true}]}}})
+ const value={revision:0,kind:'data-issues',label:'Draft',intent:'draft',actors:[],fields:{rooms:'ROOM'},credentials:{}}
+ const revoked=Proxy.revocable({field:'rooms',code:'required'},{});revoked.revoke()
+ const indexed:unknown[]=[];Object.defineProperty(indexed,'0',{get:trap});indexed.length=1
+ const inherited=Object.create({get field(){return trap()},code:'required'})
+ for(metadata of [null,{},'SECRET_STRING',new Set([{field:'rooms',code:'required'}]),Promise.resolve([]),new Proxy([],{get:trap,getOwnPropertyDescriptor:trap}),[new Proxy({field:'rooms',code:'required'},{get:trap,getPrototypeOf:trap,getOwnPropertyDescriptor:trap})],[revoked.proxy],indexed,[inherited],[['rooms','required']],Array(257).fill({field:'rooms',code:'required'})]){
+  expect(f.manager.validate(value)).toMatchObject({valid:false,code:'connector_invalid',issues:[]})
+ }
+ const safe=Object.assign(Object.create(null),{field:'rooms',code:'required',raw:'SECRET_IGNORED'})
+ metadata=[safe,safe,{field:'rooms',code:'invalid_format',raw:'SECRET_IGNORED'}]
+ Object.defineProperty(metadata,Symbol.iterator,{get:trap})
+ expect(f.manager.validate(value)).toMatchObject({valid:false,issues:[{field:'rooms',code:'required'},{field:'rooms',code:'invalid_format'}]})
+ expect(trap).not.toHaveBeenCalled()
+})
+it('keeps accessor and malformed-plugin failures inside fixed HTTP validate and plan envelopes',async()=>{
+ const f=fixture();let metadata:unknown
+ f.host.sourceRegistry.register({apiVersion:1,kind:'http-issues',label:'HTTP issues',create:c=>new MessageSource(c),connection:{scopesPath:'/options/rooms',validate:()=>{throw Error('SECRET_VALIDATOR')},validateFields:()=>metadata as any,setup:{description:'Local fixture',fields:[{name:'rooms',path:'/options/rooms',label:'Rooms',secret:false,required:true}]}}})
+ const http=await serve(f.host),headers={'content-type':'application/json',authorization:'Bearer '+readFileSync(http.tokenPath,'utf8').trim()},value={revision:0,kind:'http-issues',label:'Draft',intent:'draft',actors:[],fields:{rooms:'ROOM'},credentials:{}}
+ try{
+  for(metadata of [[{get field(){throw Error('SECRET_GETTER_EXCEPTION')},code:'required'}],[{get code(){throw Error('SECRET_CODE_EXCEPTION')},field:'rooms'}],new Proxy([],{get(){throw Error('SECRET_ARRAY_PROXY')}})]){
+   for(const path of ['/api/connectors/validate','/api/connectors/plan']){
+    const response=await fetch(http.url+path,{method:'POST',headers,body:JSON.stringify(value)}),body=await response.json()
+    expect(response.status).toBe(path.endsWith('/validate')?200:400);expect(body).toMatchObject({code:'connector_invalid'});expect(body.issues??[]).toEqual([]);expect(JSON.stringify(body)).not.toMatch(/SECRET|stack|instancePath|rawResponse/)
+   }
+  }
+  expect(f.source.identity).not.toHaveBeenCalled();expect(f.source.members).not.toHaveBeenCalled();expect(f.host.config.sources).toHaveLength(2)
+ }finally{await new Promise<void>(resolve=>http.server.close(()=>resolve()))}
 })

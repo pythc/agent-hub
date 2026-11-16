@@ -8,6 +8,7 @@ export default {
   label:'Feishu / 飞书',
   create:config=>new FeishuSource(config),
   connection:{
+    validateFields:config=>!config.feishu?.chats.length?[{field:'chats',code:'required'}]:config.feishu.chats.some(id=>!/^oc_[A-Za-z0-9_-]+$/.test(id))?[{field:'chats',code:'invalid_format'}]:[],
     validate:config=>{if(!config.feishu?.chats.length||config.feishu.chats.some(id=>!/^oc_[A-Za-z0-9_-]+$/.test(id)))throw Error('Explicit Feishu chat IDs are required')},
     scopesPath:'/feishu/chats',credentials:{APP_ID:'/feishu/appIdEnv',APP_SECRET:'/feishu/appSecretEnv'},
     setup:{serviceUrl:'https://open.feishu.cn',description:'Create an internal Feishu bot app, enable the bot, grant message read/reply and chat-member scopes, publish its version, and add it to each selected chat. This recipe uses REST polling for explicit chats. Lifecycle event streams require the existing CLI configuration. App credentials are kept in the host credential store; they are never Worker environment variables.',fields:[
