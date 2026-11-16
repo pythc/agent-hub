@@ -69,9 +69,11 @@ with sync_playwright() as p:
   assert not any(path.startswith(families) for path in scoped)
   for family in families:assert any(path.startswith('/workspaces/studio'+family) for path in scoped),(family,scoped)
   page.get_by_role('link',name='Current workspace',exact=True).click();expect(page.locator('#workspace-picker')).to_be_visible();assert 'workspace=studio' in page.url
-  page.locator('#workspace-picker').get_by_role('button').filter(has_text='Other fixture').click();page.wait_for_url('**workspace=other*');page.goto(info['base']+'/configure?workspace=other#connectors');expect(page.locator('.connector-page')).to_be_visible();assert any(path.startswith('/workspaces/other/api/connectors') for path in scoped);shot(page,'workspace-optional-proxy-other.png')
+  page.locator('#workspace-picker').get_by_role('button').filter(has_text='Other fixture').click();page.wait_for_url('**workspace=other*');page.goto(info['base']+'/configure?workspace=other#connectors');expect(page.locator('.connector-page')).to_be_visible();expect(page.locator('.connector-card').first).to_be_visible();assert any(path.startswith('/workspaces/other/api/connectors') for path in scoped),scoped[-20:];shot(page,'workspace-optional-proxy-other.png')
   checks.append('explicitly synthetic optional-workspace proxy exercises all three real React pages with scoped paths only, and the actual picker keeps the selector when switching; this is not shipped multiworkspace support or real account isolation')
   ctx.close();assert not errors,errors
   report={'result':'passed','checks':checks,'pageErrors':errors,'realServerMode':'actual shipped single Runtime for unsupported links, template creation/reload and storage recovery','optionalWorkspaceMode':'browser proxy simulation over one Runtime; no server multiworkspace or real dual-account claim','realIm':False,'realAcp':False,'screenshots':[str(path) for path in out.glob('*.png')]}
   (root/'workspace-browser-report.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
+ except Exception:
+  (root/'workspace-browser-failure.json').write_text(json.dumps({'result':'failed','completedChecks':checks,'pageErrors':errors,'screenshots':[str(path) for path in out.glob('*.png')]},indent=2));raise
  finally:browser.close()

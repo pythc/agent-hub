@@ -129,3 +129,77 @@ function schedulerPanel(){
  return root
 }
 setInterval(()=>{if(schedulerVisible())void schedulerRefresh()},5000)
+
+// Retained resource observations; no timer, quota calculation or execution control.
+const resourceView={root:null,data:null,identity:null,busy:false,failed:false,loaded:false,request:0,controller:null,bridge:null,unsubscribe:null}
+function resourceIdentity(){
+ const account=entryState.account??null,bridge=resourceView.bridge?.context()
+ return {epoch:bridge?.epoch??workspaceContext.epoch,activeId:bridge?.activeId??workspaceContext.activeId,account,accountId:account?.authenticated===true?account.user?.id??null:null,session:account?.session??null,sessionExpiresAt:account?.session?.expiresAt??null,sessionRemember:account?.session?.remember??null,sessionIsolation:bridge?.sessionIsolation??workspaceContext.sessionIsolation??null,phase:bridge?.state??workspaceContext.transportPhase??null,authed:S.authed===true}
+}
+function resourceSameIdentity(a,b){return !!a&&Object.keys(b).every(key=>a[key]===b[key])}
+function resourceResetIdentity(){
+ const identity=resourceIdentity();if(resourceSameIdentity(resourceView.identity,identity))return
+ resourceView.controller?.abort()
+ Object.assign(resourceView,{identity,data:null,busy:false,failed:false,loaded:false,request:resourceView.request+1,controller:null})
+}
+function resourceSnapshot(value){
+ const number=n=>Number.isSafeInteger(n)&&n>=0,time=n=>number(n)&&n<=8640000000000000,fields=['inputTokens','cachedInputTokens','cacheWriteInputTokens','outputTokens','reasoningOutputTokens','totalTokens'],counts=['calls','reportedCalls','unknownCalls','partialCalls','steps'],purposes=['router','worker','subagent','verification','replanning','plan_review','memory','auxiliary','watchdog'],states=['starting','running','completed','failed','cancelled','interrupted']
+ const row=r=>r&&counts.every(key=>number(r[key]))&&r.reportedCalls<=r.calls&&r.unknownCalls===r.calls-r.reportedCalls&&r.partialCalls<=r.reportedCalls&&r.tokens&&fields.every(key=>r.tokens[key]===null||number(r.tokens[key]))
+ const total=(items,key)=>items.reduce((sum,item)=>{if(!number(item[key])||item[key]>Number.MAX_SAFE_INTEGER-sum)throw Error('resource_usage_invalid');return sum+item[key]},0)
+ const usage=value?.usage,context=value?.context,work=value?.work
+ if(value?.schema!==1||value.scope!=='host'||!time(value.observedAt)||!number(value.settingsRevision)||!row(usage)||!(usage.since===null||time(usage.since))||!number(usage.legacyUntrackedCalls)||(usage.watchdogUnavailable!==undefined&&typeof usage.watchdogUnavailable!=='boolean')||!usage.fieldReported||!fields.every(key=>number(usage.fieldReported[key])&&usage.fieldReported[key]<=usage.steps)||!Array.isArray(usage.groups)||usage.groups.length>purposes.length||!usage.groups.every(group=>row(group)&&purposes.includes(group.purpose))||new Set(usage.groups.map(group=>group.purpose)).size!==usage.groups.length||counts.some(key=>total(usage.groups,key)!==usage[key]))throw Error('resource_usage_invalid')
+ const contextFields=['retainedActivities','withinBudgetActivities','exceededActivities','unrecognizedActivities']
+ if(!context||!contextFields.every(key=>number(context[key]))||!(context.lastCheckAt===null||time(context.lastCheckAt))||total([{n:context.withinBudgetActivities},{n:context.exceededActivities},{n:context.unrecognizedActivities}],'n')!==context.retainedActivities||(context.withinBudgetActivities+context.exceededActivities===0)!==(context.lastCheckAt===null))throw Error('resource_usage_invalid')
+ const workFields=['retainedItems','unrecognizedStateItems','deadlineItems','pastDeadlineItems','invalidDeadlineItems'],limits=['maxAgentsPerTicket','maxDepth','backgroundTimeoutMs','maxOutputBytesPerShell']
+ if(!work||!workFields.every(key=>number(work[key]))||!work.states||!states.every(key=>number(work.states[key]))||total([...states.map(key=>({n:work.states[key]})),{n:work.unrecognizedStateItems}],'n')!==work.retainedItems||work.pastDeadlineItems>work.deadlineItems||work.deadlineItems>work.states.starting+work.states.running||work.invalidDeadlineItems>work.states.starting+work.states.running-work.deadlineItems||!work.limits||!limits.every(key=>number(work.limits[key])&&work.limits[key]>0))throw Error('resource_usage_invalid')
+ const pick=(item,keys)=>Object.fromEntries(keys.map(key=>[key,item[key]]))
+ return {schema:1,scope:'host',observedAt:value.observedAt,settingsRevision:value.settingsRevision,usage:{...pick(usage,['calls','reportedCalls','unknownCalls','partialCalls','legacyUntrackedCalls','since']),totalTokens:usage.tokens.totalTokens,watchdogUnavailable:usage.watchdogUnavailable===true},context:pick(context,[...contextFields,'lastCheckAt']),work:{...pick(work,workFields),states:pick(work.states,states),limits:pick(work.limits,limits)}}
+}
+function resourceAuthorized(){const phase=resourceView.bridge?.context().state??workspaceContext.transportPhase;return S.authed&&(!phase||phase==='ready')}
+function resourceVisible(){const root=resourceView.root;return !!(root?.isConnected&&!document.hidden&&root.getClientRects().length&&resourceAuthorized()&&(typeof configurationHost==='undefined'||configurationHost.active()))}
+function resourcePaint(){
+ resourceResetIdentity()
+ const root=resourceView.root;if(!root?.isConnected)return
+ const fields=root.resourceFields,data=resourceView.data,format=n=>n.toLocaleString(lang),date=n=>new Date(n).toLocaleString(lang,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})
+ root.dataset.state=resourceView.failed?(data?'stale':'unavailable'):data?'ready':resourceAuthorized()?'loading':'unavailable'
+ fields.state.hidden=!!data
+ fields.state.textContent=data?L('Recorded usage','已记录用量'):resourceView.failed||!resourceAuthorized()?L('Usage unavailable','用量暂不可用'):L('Loading usage…','正在读取用量…')
+ fields.refresh.textContent=resourceView.busy?L('Refreshing…','正在刷新…'):L('Refresh usage','刷新用量');fields.refresh.disabled=resourceView.busy||!resourceAuthorized()
+ fields.time.hidden=!data;if(data){fields.time.dateTime=new Date(data.observedAt).toISOString();fields.time.textContent=L('Observed at ','观测时间 ')+date(data.observedAt)}
+ fields.failure.hidden=!resourceView.failed;fields.failure.textContent=data?L('Update failed. Showing the snapshot from the time above.','更新失败，显示上方时间的旧记录。'):L('Usage could not be loaded. Try refreshing.','无法读取用量，请重试刷新。')
+ fields.metrics.hidden=!data;fields.details.hidden=!data;fields.coverage.hidden=!data;fields.observer.hidden=!data?.usage.watchdogUnavailable;fields.legacy.hidden=!data?.usage.legacyUntrackedCalls
+ if(!data){fields.time.dateTime='';for(const node of [...Object.values(fields.values),...Object.values(fields.extraValues)])node.textContent='—';for(const node of [fields.time,fields.coverage,fields.observer,fields.legacy,fields.contextTime])node.textContent='';return}
+ fields.values.tokens.textContent=data.usage.totalTokens===null?L('Not reported','未报告'):format(data.usage.totalTokens)
+ fields.coverage.textContent=L('Reported calls: ','有报告的调用：')+format(data.usage.reportedCalls)+' / '+format(data.usage.calls)+L(' · Unreported: ',' · 未报告：')+format(data.usage.unknownCalls)+L(' · Partial: ',' · 部分报告：')+format(data.usage.partialCalls)
+ fields.observer.textContent=L('Background monitor usage is unavailable.','后台监测用量暂不可用。');fields.legacy.textContent=L('Older calls without accounting: ','缺少用量记录的旧调用：')+format(data.usage.legacyUntrackedCalls)
+ for(const [key,node]of Object.entries(fields.extraValues)){const [group,section,name]=key.split('.'),value=name?data[group][section][name]:data[group][section];node.textContent=typeof value==='number'?format(value):L('Not recorded','尚无记录')}
+ fields.contextTime.textContent=data.context.lastCheckAt===null?L('No recognized check recorded.','尚无可识别的检查记录。'):L('Last retained check: ','最近保留的检查：')+date(data.context.lastCheckAt)
+}
+async function resourceRefresh(){
+ resourceResetIdentity();if(resourceView.busy||!resourceVisible())return
+ const request=++resourceView.request,identity=resourceView.identity,controller=new AbortController();resourceView.controller=controller;resourceView.busy=true;resourceView.loaded=true;resourcePaint()
+ try{const data=resourceSnapshot(await api('/api/resource-usage',undefined,false,workspaceContext.activeId,controller.signal));if(request!==resourceView.request||!resourceSameIdentity(identity,resourceIdentity()))return;resourceView.data=data;resourceView.failed=false}
+ catch(error){if(request!==resourceView.request||!resourceSameIdentity(identity,resourceIdentity()))return;if(error?.status===401||error?.status===403)resourceView.data=null;resourceView.failed=true}
+ finally{if(request===resourceView.request){resourceResetIdentity();resourceView.busy=false;resourceView.controller=null;resourcePaint()}}
+}
+function resourcePanel(){
+ if(!resourceView.bridge&&typeof workspaceBridge==='function')resourceView.bridge=workspaceBridge()
+ resourceResetIdentity()
+ if(!resourceView.unsubscribe&&resourceView.bridge)resourceView.unsubscribe=resourceView.bridge.subscribe(()=>{resourceResetIdentity();resourcePaint();queueMicrotask(()=>{if(!resourceView.loaded)void resourceRefresh()})})
+ const root=el('section','resource-panel');root.id='team-resource-usage';root.setAttribute('aria-labelledby','resource-usage-title')
+ const title=el('h2','',L('Workspace usage','当前环境用量'));title.id='resource-usage-title'
+ const state=el('strong','resource-state'),time=el('time','resource-time'),refresh=opButton(L('Refresh usage','刷新用量'),()=>void resourceRefresh(),'button');refresh.id='resource-refresh'
+ const failure=el('p','resource-failure');failure.setAttribute('role','alert')
+ const coverage=el('p','resource-coverage'),observer=el('p','resource-warning'),legacy=el('p','resource-warning'),metrics=el('dl','resource-metrics'),values={},details=el('details','resource-details'),extra=el('dl','resource-extra'),extraValues={}
+ const metric=(list,key,en,zh,target)=>{const cell=el('div'),value=el('dd','','—');target[key]=value;cell.append(el('dt','',L(en,zh)),value);list.append(cell)}
+ metric(metrics,'tokens','Reported tokens','已报告 token',values)
+ for(const [key,en,zh]of [
+  ['context.retainedActivities','Retained context checks','保留的上下文检查'],['context.withinBudgetActivities','Within the recorded limit','记录中未超限'],['context.exceededActivities','Recorded over limit','记录中已超限'],['context.unrecognizedActivities','Unrecognized checks','不可识别的检查'],
+  ['work.retainedItems','Retained work records','保留的工作记录'],['work.states.starting','Recorded as starting','记录为启动中'],['work.states.running','Recorded as running','记录为运行中'],['work.states.completed','Recorded as completed','记录为已完成'],['work.states.failed','Recorded as failed','记录为失败'],['work.states.cancelled','Recorded as cancelled','记录为已取消'],['work.states.interrupted','Recorded as interrupted','记录为已中断'],['work.unrecognizedStateItems','Unrecognized work states','不可识别的工作状态'],['work.deadlineItems','Recorded active deadlines','活动记录中的期限'],['work.pastDeadlineItems','Recorded deadlines in the past','记录期限已过'],['work.invalidDeadlineItems','Invalid recorded deadlines','无效期限记录'],
+  ['work.limits.maxAgentsPerTicket','Subagents per task limit','单任务子 Agent 上限'],['work.limits.maxDepth','Nesting depth limit','嵌套层数上限'],['work.limits.backgroundTimeoutMs','Background interval (ms)','后台期限间隔（毫秒）'],['work.limits.maxOutputBytesPerShell','Stored shell output limit (bytes)','Shell 输出保留上限（字节）']])metric(extra,key,en,zh,extraValues)
+ const contextTime=el('p','resource-context-time');details.append(el('summary','',L('View retained checks and limits','查看保留检查与配置限制')),el('p','',L('These records and configured limits do not show current free capacity. A past deadline does not prove work was stopped.','这些记录与配置限制不代表当前可用容量，期限已过也不代表工作已经停止。')),contextTime,extra,el('p','resource-note',L('Reported tokens are not a bill or remaining quota.','已报告 token 不代表账单或剩余额度。')))
+ root.append(add(el('div','resource-heading'),add(el('div'),title,state),refresh),time,failure,metrics,coverage,observer,legacy,details)
+ root.resourceFields={state,time,refresh,failure,metrics,coverage,observer,legacy,values,details,extraValues,contextTime};resourceView.root=root
+ queueMicrotask(()=>{resourcePaint();if(!resourceView.loaded)void resourceRefresh()})
+ return root
+}
