@@ -38,6 +38,7 @@ import {observeRepository} from './repository-source.ts'
 import {loadManagedConfig} from './managed-config.ts'
 import {loadMarketConfig,recoverMarket} from './plugin-market-state.ts'
 import {workerProfiles} from './worker-pool.ts'
+import {schedulerStatus,schedulerRoutingKind,schedulerRoutingKey,schedulerInteractiveJob,schedulerFollowupSlot} from './scheduler-status.ts'
 import type {WorkerProfile} from './backend-config.ts'
 import {mergeOptions} from './agent-options.ts'
 import {agentOptionsSchema} from './backend-config.ts'
@@ -89,6 +90,7 @@ export class Runtime {
   readonly watchdog:HostWatchdog
   get isPaused(){return this.paused}
   get activeExecutions(){return this.controllers.size}
+  schedulerStatus(){return schedulerStatus(this,[...this.runningJobs.keys()],[...this.controllers.keys()])}
   executionActive(id:string){return this.controllers.has(id)}
   interruptForWatchdog(id:string){this.controllers.get(id)?.abort(Error('Watchdog recovery requested'))}
   interruptForAutomation(id:string){this.controllers.get(id)?.abort(Error('Automation authorization or execution state stopped'));this.toolConnections.cancel(id);this.approvals.cancel(id)}
@@ -629,7 +631,7 @@ export class Runtime {
       this.engine.evaluateDue()
       reconsiderRouterFollowups(this)
       for(const id of this.liveInputs.keys())void this.deliverLiveInputs(id)
-      const interactive=(job:Job)=>job.kind==='followup'||job.kind==='router-followup'||(job.kind==='execute'&&!!this.store.tickets.get((job.payload as any).ticketId)?.inputs.some(i=>i.kind==='trigger'&&i.human&&this.store.tickets.get((job.payload as any).ticketId)!.undelivered.includes(i.id)))
+      const interactive=(job:Job)=>schedulerInteractiveJob(this.store,job)
       for (const job of this.store.jobs().sort((a,b)=>Number(interactive(b))-Number(interactive(a)))) {
         const payload = job.payload as any
         if(['start','execute'].includes(job.kind)){
@@ -654,13 +656,13 @@ export class Runtime {
           this.store.jobState(job.id,'blocked','Task requires Router ownership after mode upgrade')
           continue
         }
-        const routing=['assess','followup','router','router-admit','router-followup','router-batch','router-scheduled-followup','router-skill-run','workflow-decision','goal-verify','goal-replan'].includes(job.kind)
+        const routing=schedulerRoutingKind(job.kind)
         const routerDiscussion=['router','router-followup','router-batch','router-scheduled-followup'].includes(job.kind)?payload.discussion:job.kind==='router-admit'?this.routerIngress.get(payload.triggerId)?.discussion:undefined
         const serialRouter=!!routerDiscussion
         if(routerDiscussion&&(this.routingDiscussions.has(routerDiscussion)||this.controllers.has('router:'+routerDiscussion)))continue
         if(this.store.db.prepare('SELECT state FROM jobs WHERE id=?').get(job.id)?.state!=='pending')continue
-        const followupSlot=interactive(job)&&(!this.config.execution.workers||!!(payload.ticketId&&this.store.get<Run>('run',payload.ticketId)?.threadId))
-        const isRouting=(id:string)=>['assess:','followup:','router:','router-admit:','router-followup:','router-batch:','workflow-decision:','goal-verify:','goal-replan:'].some(prefix=>id.startsWith(prefix))
+        const followupSlot=schedulerFollowupSlot(this,job)
+        const isRouting=schedulerRoutingKey
         const workers=[...this.runningJobs.keys()].filter(id=>!isRouting(id)).length
         const reserved=this.store.list<Run>('run').filter(r=>r.phase==='background'&&r.ticketId!==payload.ticketId&&!this.controllers.has(r.ticketId)&&this.work.active(r.ticketId,r.assignmentId).length).length
         if(routing?[...this.runningJobs.keys()].filter(isRouting).length>=4:workers+reserved>=workerProfiles(this.config).length+(followupSlot?1:0))continue

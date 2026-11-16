@@ -209,6 +209,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/api/scheduler-status'){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      try{send(res,200,runtime.schedulerStatus())}catch{send(res,503,{code:'scheduler_status_unavailable'})};return
+    }
     if(path==='/api/worker-templates'||path.startsWith('/api/worker-templates/')){
       requireCurrentOperator(req)
       if(path==='/api/worker-templates'&&req.method==='GET'){send(res,200,templates.snapshot());return}
