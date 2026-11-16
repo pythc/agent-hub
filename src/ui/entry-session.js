@@ -391,6 +391,7 @@ async function acceptEntryInvite() {
 async function startEntrySession() {
   if (entryState.loading) return
   entryState.loading = true
+  workspaceTransportPending()
   entryState.sessionChecked = false
   entryState.error = null
   if (!entryState.sharedGuide && !entryState.invite && entryState.role === 'user') {
@@ -411,6 +412,7 @@ async function startEntrySession() {
     entryState.sessionChecked = true
     entryState.operator = session.operator === true
     entryState.account = session.account || null
+    workspaceSessionCommit()
     if (session.account?.authenticated && !entryState.invite && location.pathname !== "/usage") entryState.role = "operator"
     render()
     if (entryState.operator && entryState.role !== 'user') {
@@ -424,6 +426,7 @@ async function startEntrySession() {
     entryError(error)
   } finally {
     entryState.loading = false
+    if (workspaceContext.transportPhase==='pending') workspaceTransportBlock(entryState.operator?'workspace_initialization_failed':'workspace_session_required')
     render()
   }
 }

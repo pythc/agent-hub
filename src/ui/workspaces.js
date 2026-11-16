@@ -1,12 +1,68 @@
 // An inventory opt-in is required before any workspace-scoped request is sent.
-const workspaceContext = { managed: false, activeId: '', items: [], canCreate: false, epoch: 0, error: '', requestId: '', creation: { name: '', kind: 'organization' } }
+const workspaceContext = { managed: false, activeId: '', items: [], canCreate: false, epoch: 0, error: '', requestId: '', creation: { name: '', kind: 'organization' }, discovered: false, transportPhase: 'pending', transportCode: '', sessionIsolation: crypto.randomUUID() }
+
+// Readiness is a UI projection of the existing context, never permission authority.
+const workspaceListeners = new Set()
+function workspaceNotify() { for (const listener of [...workspaceListeners]) { try { listener() } catch {} } }
+function workspaceAccountId() { const account=entryState.account; return account?.authenticated === true && typeof account.user?.id === 'string' && account.user.id ? account.user.id : null }
+function workspaceRequested() {
+  const params=new URL(location.href).searchParams, values=params.getAll('workspace')
+  if (!params.has('workspace')) return null
+  if (values.length !== 1 || !values[0] || !/^[a-zA-Z0-9_-]{1,80}$/.test(values[0])) throw new ApiError(409,{code:'workspace_invalid',error:'This workspace link is invalid. Open a valid workspace link.'})
+  return values[0]
+}
+function workspaceTransportPending() { workspaceContext.epoch++; workspaceContext.transportPhase='pending';workspaceContext.transportCode='';workspaceNotify() }
+function workspaceTransportBlock(code) { workspaceContext.transportPhase='blocked';workspaceContext.transportCode=code;workspaceNotify() }
+function workspaceSessionCommit() { workspaceContext.epoch++;workspaceContext.sessionIsolation=crypto.randomUUID();workspaceContext.transportPhase='pending';workspaceContext.transportCode='';workspaceNotify() }
+function workspaceSessionEnded() { workspaceContext.epoch++;workspaceContext.sessionIsolation=crypto.randomUUID();workspaceTransportBlock('workspace_session_ended') }
+function workspaceTransportCommitReady() { if (!workspaceContext.discovered || !S.authed) {workspaceTransportBlock('workspace_initialization_failed');return} workspaceContext.transportPhase='ready';workspaceContext.transportCode='';workspaceNotify() }
+function workspaceBridgeSnapshot() {
+  let state=workspaceContext.transportPhase, code=workspaceContext.transportCode
+  try {
+    const requested=workspaceRequested()
+    if (requested && workspaceContext.discovered && !workspaceContext.managed) {state='blocked';code='workspace_unsupported'}
+    else if (requested && workspaceContext.discovered && (!workspaceContext.items.some(item=>item.id===requested) || requested!==workspaceContext.activeId)) {state='blocked';code='workspace_unavailable'}
+    if (state==='ready' && (!workspaceContext.discovered || !S.authed || workspaceContext.managed && !workspaceContext.items.some(item=>item.id===workspaceContext.activeId))) {state='blocked';code='workspace_unavailable'}
+  } catch {state='blocked';code='workspace_invalid'}
+  return Object.freeze({state,code:code||null,managed:workspaceContext.managed,activeId:workspaceContext.activeId,epoch:workspaceContext.epoch,accountId:workspaceAccountId(),sessionIsolation:workspaceContext.sessionIsolation})
+}
+function workspaceBridgeError(context) { return new ApiError(409,{code:context.code || 'workspace_pending',error:context.state==='pending'?'The workspace is still loading.':'This workspace is unavailable. Open a valid workspace link or sign in again.'}) }
+function workspaceBridge() {
+  let cached,serialized=''
+  const context=()=>{const next=workspaceBridgeSnapshot(),text=JSON.stringify(next);if(text!==serialized){serialized=text;cached=next}return cached}
+  const subscribe=listener=>{workspaceListeners.add(listener);const changed=()=>listener();for(const event of ['popstate','hashchange','roppo:navigation'])window.addEventListener(event,changed);return()=>{workspaceListeners.delete(listener);for(const event of ['popstate','hashchange','roppo:navigation'])window.removeEventListener(event,changed)}}
+  const ready=()=>new Promise((resolve,reject)=>{let unsubscribe=()=>{};const check=()=>{const current=context();if(current.state==='pending')return;unsubscribe();if(current.state==='ready')resolve(current);else reject(workspaceBridgeError(current))};unsubscribe=subscribe(check);check()})
+  const matches=(current,captured)=>current.state==='ready'&&captured.state==='ready'&&current.managed===captured.managed&&current.epoch===captured.epoch&&current.activeId===captured.activeId&&current.accountId===captured.accountId&&current.sessionIsolation===captured.sessionIsolation
+  const obsolete=()=>new ApiError(409,{code:'workspace_obsolete',error:'Workspace changed during request'})
+  const boundRequest=async(captured,path,body,publicRead=false,scope=captured.activeId,readSignal)=>{
+    const before=context()
+    if(before.state!=='ready')throw workspaceBridgeError(before)
+    if(!matches(before,captured)||scope!==captured.activeId)throw obsolete()
+    if(publicRead&&!['/health','/session','/pair','/operator-link','/entry-guide','/connect-info','/logout','/workspaces'].includes(path))throw obsolete()
+    let value
+    try {value=await api(path,body,publicRead,scope,readSignal)} catch(error) {const current=context();if(error instanceof ApiError&&error.status===401&&current.code==='workspace_session_ended'&&current.epoch===captured.epoch+1&&current.activeId===captured.activeId&&current.accountId===captured.accountId)throw error;if(!matches(current,captured))throw obsolete();throw error}
+    if(!matches(context(),captured))throw obsolete()
+    return value
+  }
+  const request=(path,body,publicRead=false,scope=workspaceContext.activeId,readSignal)=>boundRequest(context(),path,body,publicRead,scope,readSignal)
+  const bind=expected=>{
+    const current=context()
+    if(current.state!=='ready')throw workspaceBridgeError(current)
+    if(!matches(current,expected))throw obsolete()
+    const captured=Object.freeze({...expected})
+    return Object.freeze({context:captured,request:(path,body,publicRead=false,scope=captured.activeId,readSignal)=>boundRequest(captured,path,body,publicRead,scope,readSignal)})
+  }
+  return Object.freeze({context,subscribe,ready,request,bind})
+}
+
 function workspaceCurrent() {
   return workspaceContext.items.find(item => item.id === workspaceContext.activeId) ||
     { id: '', name: L('Current workspace', '当前工作区'), kind: 'personal', role: 'owner' }
 }
 function workspaceName() { return workspaceCurrent().name }
 function workspaceReset() {
-  Object.assign(workspaceContext, { managed: false, activeId: '', items: [], canCreate: false, epoch: workspaceContext.epoch + 1, error: '', requestId: '' })
+  Object.assign(workspaceContext, { managed: false, activeId: '', items: [], canCreate: false, epoch: workspaceContext.epoch + 1, error: '', requestId: '', discovered:false, transportPhase:'blocked', transportCode:'workspace_disconnected', sessionIsolation:crypto.randomUUID() })
+  workspaceNotify()
   connectionStudioReset(); integrationsReset()
   entryState.inventoryRequest++;entryState.inventoryLoading = false;entryState.inventoryError = false
 }
@@ -25,22 +81,30 @@ function workspaceValidate(data) {
   return data
 }
 async function workspaceDiscover() {
+  workspaceContext.discovered=false
+  workspaceTransportPending()
+  const discoveryEpoch=workspaceContext.epoch
   try {
+    const requested=workspaceRequested()
     const data = workspaceValidate(await api('/workspaces'))
-    const requested = new URL(location.href).searchParams.get('workspace')
     if (requested && !data.items.some(item => item.id === requested)) throw Error(L('This workspace is unavailable for the current account.', '当前账号无法访问此工作区。'))
     workspaceContext.items = data.items
     workspaceContext.activeId = requested || data.currentId
     workspaceContext.canCreate = data.canCreate === true
     workspaceContext.managed = true
     workspaceContext.error = ''
+    workspaceContext.discovered = true
+    workspaceNotify()
   } catch (error) {
-    if (![404, 405].includes(error.status)) throw error
-    if (new URL(location.href).searchParams.has('workspace')) throw Error(L('This host does not support the workspace in this link.', '此宿主不支持链接指定的工作区。'))
+    if(workspaceContext.epoch!==discoveryEpoch)throw error
+    if (![404, 405].includes(error.status)) {workspaceContext.discovered=false;workspaceTransportBlock(error.payload?.code==='workspace_invalid'?'workspace_invalid':'workspace_unavailable');throw error}
+    if (new URL(location.href).searchParams.has('workspace')) {workspaceContext.discovered=false;workspaceTransportBlock('workspace_unsupported');throw Error(L('This host does not support the workspace in this link.', '此宿主不支持链接指定的工作区。'))}
     workspaceContext.managed = false
     workspaceContext.activeId = ''
     workspaceContext.items = []
     workspaceContext.canCreate = false
+    workspaceContext.discovered = true
+    workspaceNotify()
   }
 }
 async function workspaceSwitch(id) {
@@ -63,6 +127,7 @@ async function workspaceSwitch(id) {
     entryState.inventoryRequest++;entryState.inventoryLoading = false;entryState.inventoryError = false
     workspaceContext.activeId = id
     workspaceContext.error = ''
+    workspaceNotify()
     S.snap = snap; resetDraft(snap.current); S.notice = null; S.status = null; S.promptIndex = null
     entryState.data = entries; entryState.error = null; entryState.draft = {}; entryState.touched = false
     entryState.plan = null; entryState.probe = null; entryState.applied = null; entryState.verification = null; entryState.share = null
@@ -130,6 +195,7 @@ function workspaceShowPicker() {
       await entryRun('workspace-create', async () => {
         const data = workspaceValidate(await api('/workspaces', request))
         workspaceContext.requestId = ''; workspaceContext.creation = { name: '', kind: 'organization' }; workspaceContext.items = data.items; workspaceContext.canCreate = data.canCreate === true
+        workspaceNotify()
         nextId = data.currentId
       })
       if (nextId) await workspaceSwitch(nextId)
