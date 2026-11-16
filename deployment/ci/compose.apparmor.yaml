@@ -1,0 +1,6 @@
+# Only examples/container-acceptance.py --ci-apparmor selects this overlay.
+# It is never selected by the production compose helper's own configuration.
+services:
+  roppo:
+    security_opt:
+      - apparmor=agenthub-bubblewrap-ci

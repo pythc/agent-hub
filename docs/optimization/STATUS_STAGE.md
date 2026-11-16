@@ -1,6 +1,6 @@
 # O07 status projection stage
 
-Status: implementing; no O07 completion claim. Branch `feat/optimization-status-20261116` starts at `4d107cbc53fb3b3d50f326a3f447193689881ecb` and leaves PR #10 container changes on their own line.
+Status: implementation and cloud-local acceptance recorded; current integrated CI and a separate recovery decision remain open. No O07 completion or Issue closure claim. Branch `feat/optimization-status-20261116` starts at `4d107cbc53fb3b3d50f326a3f447193689881ecb` and leaves PR #10 container changes on their own line.
 
 File ownership: execution_trace implements backend projection/current-evidence read-only chain and focused tests; worker_templates owns trace TSX/CSS; connectors independently reviews; root owns local deployment/browser fixtures, integration and records. ACP work line separately investigates CI in `agent-hub-ci`; one team slot remains free. User-authorized CI-only policy work must not touch this feature stage’s runtime sandbox settings.
 
@@ -27,3 +27,18 @@ Automatic approval review rejected its write to `src/execution-trace.ts` and `te
 ## Independent CI line
 
 The user subsequently approved a separate, explicitly selected `agenthub-bubblewrap-ci` profile only for the designated container on ephemeral GitHub-hosted Linux runners, with no replacement of an existing profile and all other controls retained. This authorization is specific to CI and does not approve the recovery POST action above. Stage-one read-only diagnostic remote `7cdc12ba1a69148e83590bdabdb0a718437f816d`, run 43883204232, confirmed AppArmor enabled and docker-default enforcing; the fixed probe reports root mount propagation permission denied. Kernel audit logs were unavailable, so attribution remains supported by policy/behavior, not audit-proven. A narrower policy candidate is being prepared and remains unverified until independent review and real positive/negative CI container tests.
+
+
+## Latest accepted local UI snapshot and integration checkpoint
+
+The user requested simple, readable language without small explanatory text or complex workflows. `148b514` reduces four cards to short states, keeps necessary unknown/stale/unconfirmed-send/cancellation information visible at 14px or larger, and puts technical records behind one optional disclosure. `5356135` aligns navigation and persists the updated actual-browser tests. Displayed Worker/task aliases are page-local labels, not new durable task identities; server IDs and actions are unchanged.
+
+At local `5356135` / remote `99c4ecbe581b0948b80dec50f354648b2e44b238`, host/frontend/view type checks and build passed; full Vitest: **1587 passed / 75 failed / 4 skipped**. All 75 failing identities exactly equal the separately rerun unchanged-main baseline in this cloud kernel. Independent status/view/trace review ran **93/93**, including all three delivery-identity race reproductions. The independent reviewer found no remaining read-only projection blocker. Local actual-browser status acceptance passed **6 groups / 10 screenshots / zero page errors**; original four-capability browser regression passed **6 groups / 14 screenshots / zero page errors**. See `STATUS_ACCEPTANCE.json` and `.local/optimization-status/simple-*-final*`. Desktop light and narrow dark actual screenshots were visually inspected; the recorded-send screenshot is truly light in the tracked run. All fixture apps were stopped by their own runner.
+
+Container CI passed separately at `ad34ddc0c1ee35e7f43d5c612555b213e42e447f`, run [43892304831](https://github.com/pythc/agent-hub/actions/runs/43892304831), job `133386478516`: default-policy no-op fails root propagation with permission denied; the narrow candidate no-op passes. All ten retained-boundary booleans are explicitly true. Actual Worker/private-state canary, Bubblewrap/Chromium, locking, backup/account preservation, crash recreation, upgrade/pause and interrupted maintenance recovery passed (13 groups). The subsequent failure had been old Compose lacking start --wait; only the ephemeral runner now selects hash-pinned official Compose 5.7.1. No production Compose/helper/seccomp changed. Kernel audit remains unavailable and is not claimed proven.
+
+The reviewed CI commits have been integrated locally after this UI snapshot. Their current combined head must receive its own CI results; earlier container success is not transferred to a different SHA. The separate rejected POST recovery change is still unimplemented and requires the pending explicit scope decision. Issues #18/#19 and master #11 remain open.
+
+## Parallel next stage
+
+O05 / [Issue #16](https://github.com/pythc/agent-hub/issues/16) is isolated on `feat/optimization-scheduler-20261116`, backend remote `8a26ea172484724e2107a655c1cfb7457a5fc36e`. Author tests 42/42; independent focused tests 19/19 and host types passed. It exposes aggregate actual scheduler occupancy without changing admission or routing quirks. A plain-language panel in the existing team settings is underway; UI, browser and full integration acceptance remain pending. It is not marked complete.
