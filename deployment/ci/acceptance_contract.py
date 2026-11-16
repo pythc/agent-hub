@@ -56,7 +56,7 @@ def actual_config(info):
 def bwrap_classification(result):
     if result.returncode == 0:
         return 'passed'
-    messages = (('Failed to make / slave', 'root_propagation_denied'),
+    messages = (('Failed to make / slave', 'root_propagation_failed'),
                 ('Failed to mount tmpfs', 'temporary_root_mount_failed'),
                 ('setting up newroot bind', 'root_bind_failed'),
                 ("Can't mount proc", 'proc_mount_failed'),
@@ -67,6 +67,18 @@ def bwrap_classification(result):
                 ('Failed to make old root rprivate', 'private_propagation_failed'),
                 ('Creating new namespace failed', 'namespace_creation_failed'))
     return next((code for message, code in messages if message in result.stderr), 'unclassified_failure')
+
+
+def bwrap_error(result):
+    """Only a fixed errno-text enum; stage alone never establishes permission denial."""
+    if result.returncode == 0:
+        return 'none'
+    errors = ((': Permission denied', 'permission_denied'),
+              (': Operation not permitted', 'operation_not_permitted'),
+              (': Invalid argument', 'invalid_argument'),
+              (': No such file or directory', 'not_found'),
+              (': Not found', 'not_found'))
+    return next((code for suffix, code in errors if result.stderr.rstrip().endswith(suffix)), 'unknown')
 
 
 def outer_controls(value):

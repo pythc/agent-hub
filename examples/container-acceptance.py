@@ -29,7 +29,7 @@ root = Path(__file__).resolve().parents[1]
 if args.ci_apparmor:
     sys.path.insert(0, str(root / 'deployment/ci'))
     from apparmor_control import compose_environment, local_docker
-    from acceptance_contract import actual_config, merged_config, bwrap_classification, outer_controls
+    from acceptance_contract import actual_config, merged_config, bwrap_classification, bwrap_error, outer_controls
     ci_environment = compose_environment(os.environ, args.project, args.subnet)
     local_docker(os.environ)
     if args.keep:
@@ -122,9 +122,9 @@ try:
         arguments = ['run', '--rm', '--no-deps', '--entrypoint', 'bwrap', 'roppo', '--unshare-all', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true']
         baseline = run(base_compose + arguments, check=False)
         baseline_result = bwrap_classification(baseline)
-        assert baseline_result == 'root_propagation_denied', 'Default-policy comparison did not reproduce the known boundary'
+        assert baseline_result == 'root_propagation_failed' and bwrap_error(baseline) in ('permission_denied', 'operation_not_permitted'), 'Default-policy comparison did not reproduce the known boundary'
         candidate = compose(*arguments, check=False)
-        comparison = {'baseline':baseline_result, 'candidate':bwrap_classification(candidate), 'kernelAudit':'unavailable_not_claimed'}
+        comparison = {'baseline':baseline_result, 'baselineError':bwrap_error(baseline), 'candidate':bwrap_classification(candidate), 'candidateError':bwrap_error(candidate), 'kernelAudit':'unavailable_not_claimed'}
         (args.output / 'ci-policy-comparison.json').write_text(json.dumps(comparison))
         print('CI policy comparison: ' + json.dumps(comparison))
         assert candidate.returncode == 0, 'CI candidate sandbox no-op failed; see fixed comparison classification'

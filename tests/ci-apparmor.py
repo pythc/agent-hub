@@ -109,6 +109,32 @@ class CiAppArmorTest(unittest.TestCase):
                 self.assertTrue(line.startswith(('mount fstype=tmpfs ', 'mount fstype=proc ', 'mount fstype=devpts ', 'mount options=')))
                 self.assertNotIn('options in', line)
 
+    def test_initial_root_bind_is_exact_recursive_self_bind(self):
+        rules = [line.strip() for line in control.POLICY.read_text().splitlines()]
+        exact = [line for line in rules if line.startswith('mount ') and '/tmp/newroot/ ->' in line]
+        self.assertEqual(exact, ['mount options=(rw,rbind) /tmp/newroot/ -> /tmp/newroot/,'])
+        self.assertNotIn('mount options=(rw,rbind) -> /tmp/,', rules)
+        self.assertIn('mount options=(rw,rbind) /oldroot/ -> /newroot/,', rules)
+        self.assertEqual([line for line in rules if line.startswith('remount ')], ['remount /newroot/,', 'remount /newroot/**,'])
+
+    def test_bwrap_errno_is_independent_of_stage_and_never_echoes_secrets(self):
+        import subprocess
+        for text, expected in (('Permission denied', 'permission_denied'),
+                               ('Operation not permitted', 'operation_not_permitted'),
+                               ('Invalid argument', 'invalid_argument'),
+                               ('No such file or directory', 'not_found'),
+                               ('Not found', 'not_found'),
+                               ('PRIVATE_UNRECOGNIZED', 'unknown')):
+            result = subprocess.CompletedProcess([], 1, 'PRIVATE_STDOUT', 'PRIVATE setting up newroot bind: ' + text)
+            self.assertEqual(acceptance.bwrap_classification(result), 'root_bind_failed')
+            self.assertEqual(acceptance.bwrap_error(result), expected)
+            self.assertNotIn('PRIVATE', acceptance.bwrap_error(result))
+        result = subprocess.CompletedProcess([], 1, '', 'Failed to make / slave: Invalid argument')
+        self.assertEqual(acceptance.bwrap_classification(result), 'root_propagation_failed')
+        self.assertEqual(acceptance.bwrap_error(result), 'invalid_argument')
+        self.assertEqual(acceptance.bwrap_error(subprocess.CompletedProcess([], 0, '', 'PRIVATE Permission denied')), 'none')
+        self.assertEqual(acceptance.bwrap_error(subprocess.CompletedProcess([], 1, '', 'Permission denied: PRIVATE')), 'unknown')
+
     def test_outer_controls_require_every_expected_boolean_true(self):
         required = {'profileEnforcing', 'effectiveCapabilitiesZero', 'boundingCapabilitiesZero',
                     'noNewPrivileges', 'seccompFiltering', 'rootTestIdentity', 'outerMountDenied',

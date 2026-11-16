@@ -1,6 +1,6 @@
 # Container CI blocker and proposed boundary decision
 
-Status: **a distinct CI-only candidate is now explicitly authorized and prepared; actual acceptance is pending**. The earlier wider roppo profile remains rejected and unimplemented. The new candidate has not been loaded on the development cloud host, production or the user’s Mac; no passing container result is claimed.
+Status: **the distinct authorized CI-only candidate was loaded enforcing on the ephemeral runner but failed at root bind; a narrow correction awaits actual acceptance**. The earlier wider roppo profile remains rejected and unimplemented. The new candidate has not been loaded on the development cloud host, production or the user’s Mac; no passing container result is claimed.
 
 ## Proven failure and separate checks
 
@@ -46,4 +46,11 @@ Stage-one run [43883204232](https://github.com/pythc/agent-hub/actions/runs/4388
 
 The candidate is under `deployment/ci/`, with [exact rules and source/license notes](../../deployment/ci/README.md). It limits filesystem types and setup paths/operations rather than granting naked mount/pivot permissions. Add-only load refuses a preexisting name, checks the local Docker default unix endpoint, and never modifies production compose.yaml/compose.sh. The opt-in exists only as acceptance `--ci-apparmor` with fixed Compose files and run-derived project identity. A pure endpoint guard precedes the workflow’s first Docker build; loader and acceptance recheck it.
 
-Prepared validation includes source/parser and synthetic scope/privacy tests plus actual CI assertions for merged/actual retained controls, fixed-profile enforce mode, outer mount/proc/sys/root-write denial and a default-versus-candidate no-op. Original private-state canary, Chromium, health/restart/upgrade acceptance is retained. Local syntax and synthetic tests do not establish real enforcement; remote candidate/container results are still pending. No real IM, external ACP Agent or paid model validation is claimed.
+Prepared validation includes source/parser and synthetic scope/privacy tests plus actual CI assertions for merged/actual retained controls, fixed-profile enforce mode, outer mount/proc/sys/root-write denial and a default-versus-candidate no-op. Original private-state canary, Chromium, health/restart/upgrade acceptance is retained. Local syntax and synthetic tests do not establish real enforcement; the first actual candidate result is recorded below and full container acceptance remains pending. No real IM, external ACP Agent or paid model validation is claimed.
+
+
+## First actual candidate result and bounded follow-up
+
+Source `59be30d5eacad399b04630f614e363137c133472`, run [43887447139](https://github.com/pythc/agent-hub/actions/runs/43887447139), job `133369335257`, passed the real Ubuntu parser and add-only enforce postcheck. Default-policy no-op failed at root propagation; the named candidate advanced to `root_bind_failed`. Application health, Worker/Chromium and negative retained-boundary acceptance did not run. The root-bind errno was not distinguished by that version's stage-only classifier. Kernel audit remained unavailable; neither causality nor a green container result is claimed.
+
+The next candidate adds only exact root-directory operations: `/tmp/newroot/` recursive self-bind, `/oldroot/` recursive bind to `/newroot/`, and remount of `/newroot/` itself, following Bubblewrap v0.8.0 and official AppArmor directory/glob and bind-flag semantics. It also separates fixed error enums from operation stages. [Source links, exact rule and remaining uncertainty](../../deployment/ci/README.md#first-actual-runner-candidate-and-narrow-root-bind-correction) are recorded in the CI scope documentation. It does not broaden filesystem types or descendant targets, add no-slash variants, change production settings or weaken retained controls. Another actual runner experiment remains required.

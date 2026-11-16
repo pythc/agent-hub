@@ -57,7 +57,12 @@ profile agenthub-bubblewrap-ci flags=(attach_disconnected,mediate_deleted) {
   mount fstype=tmpfs -> /newroot/**,
   mount fstype=proc -> /newroot/**,
   mount fstype=devpts -> /newroot/**,
-  # Initial root bind and selected source binds, before/after first pivot.
+  # v0.8.0 initial recursive self-bind targets the directory itself, not children.
+  # aa_bind_mount masks flags to MS_BIND|MS_REC; directory paths end in slash.
+  mount options=(rw,rbind) /tmp/newroot/ -> /tmp/newroot/,
+  # --ro-bind / / binds the old root onto the new root itself after first pivot.
+  mount options=(rw,rbind) /oldroot/ -> /newroot/,
+  # Selected source binds, before/after first pivot.
   mount options=(rw,bind) -> /tmp/newroot/**,
   mount options=(rw,bind,silent) -> /tmp/newroot/**,
   mount options=(rw,rbind) -> /tmp/newroot/**,
@@ -67,6 +72,8 @@ profile agenthub-bubblewrap-ci flags=(attach_disconnected,mediate_deleted) {
   mount options=(rw,rbind) -> /newroot/**,
   mount options=(rw,rbind,silent) -> /newroot/**,
   # Existing mounts only; no new filesystem type permission is implied.
+  # bind_mount remounts the root destination itself before its descendants.
+  remount /newroot/,
   remount /newroot/**,
   pivot_root oldroot=/tmp/oldroot/ /tmp/,
   pivot_root oldroot=/newroot/ /newroot/,
