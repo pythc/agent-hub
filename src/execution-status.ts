@@ -79,7 +79,7 @@ function acceptance(host:Runtime,ticket:Ticket):TaskStatusProjection['acceptance
  if(!round||round.goalId!==goal.id||round.scopeId!==goal.scopeId||round.entryId!==goal.entryId||!Array.isArray(round.ticketIds)||!round.ticketIds.includes(ticket.id)||(goal.finalRoundId?!!round.nodeId:round.nodeId!==node.id))return {...unknownAcceptance}
  if(!acceptanceStates.includes(round.state))return {...unknownAcceptance}
  const snapshot=round.snapshot,assignment=ticket.assignments.at(-1)
- if(!goal.contract||!snapshot||typeof snapshot.contract!=='string'||!/^[a-f0-9]{64}$/.test(snapshot.contract)||!Array.isArray(snapshot.tasks)||!Array.isArray(snapshot.evidence)||!snapshot.tasks.every(t=>typeof t.ticketId==='string'&&typeof t.assignmentId==='string'&&typeof t.reportHash==='string'&&/^[a-f0-9]{64}$/.test(t.reportHash)&&Number.isInteger(t.inputRevision)&&t.inputRevision>=1))return {...unknownAcceptance}
+ if(!goal.contract||!snapshot||typeof snapshot.contract!=='string'||!/^[a-f0-9]{64}$/.test(snapshot.contract)||!Array.isArray(snapshot.tasks)||!Array.isArray(snapshot.evidence)||!snapshot.tasks.every(t=>!!t&&typeof t==='object'&&typeof t.ticketId==='string'&&typeof t.assignmentId==='string'&&typeof t.reportHash==='string'&&/^[a-f0-9]{64}$/.test(t.reportHash)&&Number.isInteger(t.inputRevision)&&t.inputRevision>=1))return {...unknownAcceptance}
  const taskRefs=snapshot.tasks.filter(t=>t.ticketId===ticket.id)
  if(taskRefs.length!==1)return {...unknownAcceptance}
  if(taskRefs[0]!.assignmentId!==assignment?.id||taskRefs[0]!.inputRevision!==(owner?.dataRevision??1)||round.state==='stale')return {state:'stale',freshness:'stale'}
@@ -92,21 +92,22 @@ function delivery(host:Runtime,ticket:Ticket,all:Delivery[]):TaskStatusProjectio
  const retained=host.store.get<{assignmentId:string;report?:{state:string};reply?:string}>('goal-delivery',ticket.id)
  const ready=assignment?.report?.state==='ready'||retained?.assignmentId===assignment?.id&&retained?.report?.state==='ready'||ticket.ended?.outcome==='completed'
  const text=run?.result||(retained?.assignmentId===assignment?.id?retained?.reply:undefined)
+ const currentReceipt=(d:Delivery)=>{
+  if(!assignment)return false
+  // Content-derived reply IDs and millisecond timestamps can both be reused.
+  // Require causal host events for this assignment and its latest ready report.
+  const started=host.store.db.prepare("SELECT MAX(seq) AS seq FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='assignment.started' AND json_extract(body,'$.data.ticketId')=? AND json_extract(body,'$.data.assignmentId')=?").get(ticket.id,assignment.id)
+  const reported=host.store.db.prepare("SELECT MAX(seq) AS seq FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.entity')='ticket' AND json_extract(body,'$.entityId')=? AND json_extract(body,'$.ticketId')=? AND json_extract(body,'$.assignmentId')=? AND json_extract(body,'$.state')='ready' AND json_extract(body,'$.baseline')=0").get(ticket.id,ticket.id,assignment.id)
+  const first=host.store.db.prepare("SELECT seq,at,body FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')=? ORDER BY seq LIMIT 1").get(d.id)
+  if(!started?.seq||!reported?.seq||!first||Number(first.seq)<=Math.max(Number(started.seq),Number(reported.seq))||JSON.parse(String(first.body)).baseline!==0)return false
+  const reportAt=Date.parse(assignment.report?.at??'')
+  return Number.isFinite(reportAt)&&Date.parse(String(first.at))>=reportAt
+ }
  const result=(d:Delivery)=>{
   if(d.kind!=='reply'||d.id.startsWith('attention-reply:')||!ready)return false
-  if(d.ticketId===ticket.id){
-   if(typeof text!=='string'||!text.length||d.text!==text||!assignment)return false
-   // Core reply IDs are content-derived and can be reused across assignments.
-   // An equal body is not a new delivery receipt. Require the retained original
-   // outbox observation to follow this assignment's host lifecycle event.
-   const started=host.store.db.prepare("SELECT MAX(seq) AS seq FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='assignment.started' AND json_extract(body,'$.data.ticketId')=? AND json_extract(body,'$.data.assignmentId')=?").get(ticket.id,assignment.id)
-   const first=host.store.db.prepare("SELECT seq,at,body FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')=? ORDER BY seq LIMIT 1").get(d.id)
-   if(!started?.seq||!first||Number(first.seq)<=Number(started.seq)||JSON.parse(String(first.body)).baseline!==0)return false
-   const reportAt=Date.parse(assignment.report?.at??'')
-   return Number.isFinite(reportAt)&&Date.parse(String(first.at))>=reportAt
-  }
+  if(d.ticketId===ticket.id)return typeof text==='string'&&text.length>0&&d.text===text&&currentReceipt(d)
   const owner=host.store.get<{reportReads?:Record<string,string>}>('router-reply-owner',d.id)
-  return !!assignment?.report?.at&&owner?.reportReads?.[ticket.id]===assignment.report.at
+  return !!assignment?.report?.at&&owner?.reportReads?.[ticket.id]===assignment.report.at&&currentReceipt(d)
  }
  // Completed acknowledgements/notices and old reply bodies are not evidence
  // that this result was delivered. Unsettled messages remain visible regardless.

@@ -62,6 +62,16 @@ async function accepted(f:ReturnType<typeof fixture>,criteria:GoalCriterion[]=[{
  return {ticket:current(f,ticket),goal,round}
 }
 
+
+function attachContext(f:ReturnType<typeof fixture>,ticket:Ticket,goal:RouterGoal){
+ const packet=f.host.memory.build(f.context,{request:'Inspect retained task context'},'codex'),owner=f.host.scopes.ownership(ticket.id)!
+ packet.manifest.taskOwners=[{id:ticket.id,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}]
+ f.host.store.put('context-manifest',packet.manifest.id,packet.manifest)
+ f.host.store.put('task-context',ticket.id,{manifest:packet.manifest})
+ goal.contextIds=[...(goal.contextIds??[]),packet.manifest.id]
+ f.host.store.put('router-goal',goal.id,goal)
+}
+
 it('returns independent conservative facets for an unstarted assignment',async()=>{
  const f=fixture(),ticket=await task(f),status=projectTaskStatus(f.host,ticket,123)
  expect(status).toMatchObject({schema:1,observedAt:123,execution:{state:'queued'},effects:{state:'not_recorded',receiptCount:0},acceptance:{state:'not_recorded',freshness:'not_recorded'},delivery:{state:'not_recorded',evidence:'none',scope:'not_recorded'}})
@@ -147,6 +157,8 @@ it('does not claim legacy passed snapshots or old-assignment snapshots are curre
  const f=fixture(),a=await accepted(f)
  f.host.store.put('goal-verification',a.round.id,{...a.round,snapshot:undefined})
  expect(projectTaskStatus(f.host,current(f,a.ticket)).acceptance).toEqual({state:'stale',freshness:'unknown'})
+ f.host.store.put('goal-verification',a.round.id,{...a.round,snapshot:{...a.round.snapshot,tasks:[null]}})
+ expect(projectTaskStatus(f.host,current(f,a.ticket)).acceptance).toEqual({state:'stale',freshness:'unknown'})
  f.host.store.put('goal-verification',a.round.id,{...a.round,snapshot:{...a.round.snapshot,tasks:a.round.snapshot.tasks.map(t=>({...t,assignmentId:'old-assignment'}))}})
  expect(projectTaskStatus(f.host,current(f,a.ticket)).acceptance).toEqual({state:'stale',freshness:'stale'})
 })
@@ -195,6 +207,7 @@ it('adds a status facet while retaining legacy trace fields and recovery action 
 it('does not register a changed binary artifact or write any database fact during repeated GET-style projections',async()=>{
  const f=fixture();writeFileSync(join(f.root,'report.pdf'),Buffer.from('%PDF-1.4 old'))
  const a=await accepted(f,[{id:'pdf',description:'Inspect report',files:['report.pdf'],documents:[]}])
+ attachContext(f,a.ticket,a.goal)
  expect(projectTaskStatus(f.host,current(f,a.ticket)).acceptance.state).toBe('passed')
  writeFileSync(join(f.root,'report.pdf'),Buffer.from('%PDF-1.4 changed'))
  const before=dbState(f)
@@ -208,6 +221,7 @@ it('does not reconstruct a missing workbook cache on an observation request',asy
  const f=fixture(),book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([[42]]),'Ledger')
  writeFileSync(join(f.root,'ledger.xlsx'),XLSX.write(book,{type:'buffer',bookType:'xlsx'}))
  const a=await accepted(f,[{id:'cell',description:'A1 is 42',files:[],documents:[],check:{kind:'xlsx_cell_equals',path:'ledger.xlsx',sheet:'Ledger',cell:'A1',expected:42}}])
+ attachContext(f,a.ticket,a.goal)
  expect(projectTaskStatus(f.host,current(f,a.ticket)).acceptance.state).toBe('passed')
  f.host.store.db.prepare("DELETE FROM records WHERE kind='workbook-observation'").run()
  const before=dbState(f)
@@ -216,6 +230,7 @@ it('does not reconstruct a missing workbook cache on an observation request',asy
 })
 it('fails closed on a missing route without recreating authority while reading status',async()=>{
  const f=fixture(),a=await accepted(f)
+ attachContext(f,a.ticket,a.goal)
  f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(a.goal.triggerId)
  const before=dbState(f)
  expect(f.trace.snapshot({ticketId:a.ticket.id}).tasks[0]!.status.acceptance.state).toBe('stale')
@@ -223,6 +238,7 @@ it('fails closed on a missing route without recreating authority while reading s
 })
 it('does not apply an unsynchronized revocation ledger while projecting any trace facet',async()=>{
  const f=fixture(),a=await accepted(f),body={seq:1,previous:'',tenantId:'org',scopeId:'team',action:'forget',generation:0,id:'absent-fact',at:Date.now()}
+ attachContext(f,a.ticket,a.goal)
  appendFileSync(join(f.host.config.stateDir,'memory-revocations.jsonl'),JSON.stringify({...body,hash:stableDigest(body)})+'\n')
  const before=dbState(f)
  expect(()=>f.host.memory.assertReconciled()).toThrow('Memory reconciliation is required')
@@ -244,4 +260,25 @@ it('does not reuse a sent identical body from an older assignment as the current
  expect(dbState(f)).toBe(before)
  message(f,ticket,'identical-new','sent','reply',true)
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'recorded',evidence:'host_record',counts:{total:1,recorded:1}})
+})
+
+it.each([false,true])('does not confuse a sent progress reply with ready output at the same timestamp (Router=%s)',async router=>{
+ const f=fixture(),ticket=await task(f);run(f,ticket)
+ if(router){
+  f.host.store.put('router-reply-owner','progress-same',{taskIds:[ticket.id]})
+  f.host.store.outbox.send({id:'progress-same',kind:'reply',text:'Actual result',channel:{source:'external',thread:'topic',address:{thread:'topic'}}});f.host.store.delivered('progress-same')
+ }else message(f,ticket,'progress-same','sent','reply',true)
+ const first=f.host.store.db.prepare("SELECT seq,at FROM audit WHERE json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')='progress-same' ORDER BY seq LIMIT 1").get()!
+ const saved=f.host.store.get<Run>('run',ticket.id)!
+ f.host.store.put('run',ticket.id,{...saved,result:'Actual result'})
+ f.host.engine.report(ticket.id,{state:'ready',summary:'Actual result',question:null})
+ const ready=current(f,ticket),assignment=ready.assignments.at(-1)!
+ f.host.store.put('ticket',ticket.id,{...ready,assignments:ready.assignments.map(a=>a.id===assignment.id?{...a,report:{...a.report!,at:String(first.at)}}:a)})
+ if(router)f.host.store.put('router-reply-owner','progress-same',{taskIds:[ticket.id],reportReads:{[ticket.id]:String(first.at)}})
+ const latest=f.host.store.db.prepare("SELECT MAX(seq) AS seq FROM audit WHERE json_extract(body,'$.entity')='ticket' AND json_extract(body,'$.assignmentId')=? AND json_extract(body,'$.state')='ready'").get(assignment.id)!
+ expect(Number(latest.seq)).toBeGreaterThan(Number(first.seq))
+ expect(current(f,ticket).assignments.at(-1)!.report!.at).toBe(first.at)
+ const before=dbState(f)
+ expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'not_recorded',counts:{total:0,recorded:0}})
+ expect(dbState(f)).toBe(before)
 })
