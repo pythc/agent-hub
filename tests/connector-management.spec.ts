@@ -140,3 +140,27 @@ it('rejects invalid local-plugin setup URLs before constructing instances',()=>{
  expect(()=>f.host.sourceRegistry.register({apiVersion:1,kind:'bad-endpoint',label:'Bad endpoint',create:c=>new MessageSource(c),connection:{setup:{description:'Unsafe endpoint',serviceUrl:'https://user:secret@example.com',fields:[]}}})).toThrow('Invalid source plugin setup metadata')
  expect(()=>f.host.sourceRegistry.register({apiVersion:1,kind:'bad-path',label:'Bad path',create:c=>new MessageSource(c),connection:{setup:{description:'Unsafe path',fields:[{name:'value',label:'Value',path:'/options/__proto__/value',required:true,secret:false}]}}})).toThrow('Invalid source plugin setup metadata')
 })
+
+it('returns stale evidence when a late identity reply arrives while the old runtime store is closed',async()=>{
+ const f=fixture({timeoutMs:1000});let release!:(v:any)=>void;f.source.identity=()=>new Promise(r=>{release=r})
+ const pending=f.probe('authentication');await Promise.resolve()
+ await f.host.close();hosts.splice(hosts.indexOf(f.host),1)
+ release({id:'late-after-close',type:'bot',verified:true})
+ expect(await pending).toMatchObject({status:'stale',code:'configuration_changed'})
+})
+it('resolves timeout callbacks safely while the getter still points to a closed runtime',async()=>{
+ const f=fixture({timeoutMs:20});let release!:(v:any)=>void;f.source.identity=()=>new Promise(r=>{release=r})
+ const pending=f.probe('authentication');await Promise.resolve()
+ await f.host.close();hosts.splice(hosts.indexOf(f.host),1)
+ expect(await pending).toMatchObject({status:'stale',code:'configuration_changed'})
+ release({id:'late',type:'bot',verified:true});await Promise.resolve();await Promise.resolve()
+})
+it('does not claim passed evidence when the metadata receipt cannot be persisted',async()=>{
+ const f=fixture(),original=f.host.store.put.bind(f.host.store)
+ f.source.identity=async()=>{
+  f.host.store.put=((kind:string,id:string,value:unknown)=>{if(kind==='connector-diagnostic')throw Error('fixture metadata storage unavailable');original(kind,id,value)})
+  return {id:'bot',type:'bot',verified:true}
+ }
+ expect(await f.probe('authentication')).toMatchObject({status:'interrupted',code:'diagnostic_store_unavailable'})
+ f.host.store.put=original
+})

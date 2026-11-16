@@ -138,9 +138,20 @@ export class ConnectorManagement {
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),this.options.timeoutMs??20000)
   this.controllers.set(record.id,{sourceId:source.id,controller})
   host.store.atomic(()=>{host.store.put('connector-diagnostic',record.id,{...record,requestFingerprint});host.store.put('connector-diagnostic-head',source.id+':'+input.level,{id:record.id})})
+  const currentMatches=()=>{
+   // During a controlled restart the getter can briefly point to the closed
+   // old runtime. Diagnostic evidence must never keep that store alive or
+   // turn a late reply / timeout callback into an unhandled SQLite exception.
+   try{
+    const current=this.host(),config=current.config.sources.find(s=>s.id===source.id)
+    return current===host&&!!config&&current.settings.current().revision===record.revision&&this.fingerprint(config)===record.fingerprint&&(input.level==='configuration'||config.enabled)&&current.store.get<{id:string}>('connector-diagnostic-head',source.id+':'+input.level)?.id===record.id
+   }catch{return false}
+  }
+  const persist=(result:ConnectorDiagnostic)=>{
+   try{this.host().store.put('connector-diagnostic',record.id,{...result,requestFingerprint});return true}catch{return false}
+  }
   const guard=()=>{
-   const current=this.host(),config=current.config.sources.find(s=>s.id===source.id)
-   if(current!==host||!config||current.settings.current().revision!==record.revision||this.fingerprint(config)!==record.fingerprint||input.level!=='configuration'&&!config.enabled||current.store.get<{id:string}>('connector-diagnostic-head',source.id+':'+input.level)?.id!==record.id)throw new ConnectorError('connector_conflict',409)
+   if(!currentMatches())throw new ConnectorError('connector_conflict',409)
    controller.signal.throwIfAborted()
   }
   const work=(async()=>{
@@ -169,16 +180,15 @@ export class ConnectorManagement {
     else if(controller.signal.aborted){status='interrupted';code='probe_interrupted'}
     else{status='failed';code=input.level==='reachable'?'service_unreachable':input.level==='authentication'?'authentication_not_verified':input.level==='capabilities'?'directory_not_verified':'configuration_invalid'}
    }
-   const current=this.host(),config=current.config.sources.find(s=>s.id===source.id)
-   if(current!==host||!config||current.settings.current().revision!==record.revision||this.fingerprint(config)!==record.fingerprint||current.store.get<{id:string}>('connector-diagnostic-head',source.id+':'+input.level)?.id!==record.id){status='stale';code='configuration_changed';checkedCapabilities=undefined;checkedScopes=undefined}
+   if(!currentMatches()){status='stale';code='configuration_changed';checkedCapabilities=undefined;checkedScopes=undefined}
    const result={...record,status,code,finishedAt:this.now(),...(checkedCapabilities?{checkedCapabilities,checkedScopes}:{})}
-   current.store.put('connector-diagnostic',record.id,{...result,requestFingerprint})
+   if(!persist(result)&&result.status!=='stale'){result.status='interrupted';result.code='diagnostic_store_unavailable';delete result.checkedCapabilities;delete result.checkedScopes}
    // Metadata receipts cannot contain provider errors, identities or raw responses.
    return this.publicRecord(result)
   })()
   const interrupted=new Promise<ConnectorDiagnostic>(resolve=>{controller.signal.addEventListener('abort',()=>{
-   const current=this.host(),result={...record,status:'interrupted' as const,code:'probe_interrupted',finishedAt:this.now()}
-   if(current===host)current.store.put('connector-diagnostic',record.id,{...result,requestFingerprint})
+   const stale=!currentMatches(),result={...record,status:stale?'stale' as const:'interrupted' as const,code:stale?'configuration_changed':'probe_interrupted',finishedAt:this.now()}
+   persist(result)
    resolve(this.publicRecord(result))
   },{once:true})})
   const pending=Promise.race([work,interrupted]).finally(()=>{clearTimeout(timeout);this.controllers.delete(record.id);this.active.delete(record.id)})
