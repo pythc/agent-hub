@@ -1,4 +1,4 @@
-# Four capability increments — completed implementation and acceptance
+# Four capability increments — implementation and acceptance evidence
 
 Branch: `feat/worker-connector-acp-trace-20261116`.
 Main baseline rechecked: `cfa1c8e49c978e6b1f8b141764dae7d0bbce1ed7`.
@@ -13,7 +13,7 @@ Frozen implementation tested: local `b749a62266b3ba31dbe9784877da5c7a77a54e04`.
 | Connector management | implemented, committed, remotely preserved, locally accepted | 22 new tests; existing Slack/registry regressions; real Feishu wizard through existing onboarding; disabled initial state, scoped diagnostics, restart/revocation fences |
 | ACP outbound | implemented, committed, remotely preserved, locally accepted using synthetic peer | 21 new tests; actual immutable package + ProcessBackend + bubblewrap + fake ACP probe/run/same-session resume/permission denial; managed gate remains closed for standard ACP |
 | Execution trace/recovery | implemented, committed, remotely preserved, locally accepted | 22 new tests; durable audit cursor/SQLite restart/visibility/recovery; actual scheduler result, failed refresh, unknown-effect fence and cancellation persistence in browser |
-| Integration/acceptance | complete; full suite retains proven environment failures | 4 new HTTP tests including slow-body operator revocation; final host/frontend types/build pass; actual browser 6 workflow groups/14 screenshots/zero page errors; same-environment unchanged-main comparison |
+| Integration/acceptance | local evidence recorded; container CI blocked, latest-head acceptance pending | 4 new HTTP tests including slow-body operator revocation; final host/frontend types/build pass; actual browser 6 workflow groups/14 screenshots/zero page errors; same-environment unchanged-main comparison |
 
 ## Fresh required checks
 
@@ -41,3 +41,13 @@ Modules and integration were saved remotely as soon as committed through the con
 No user Mac, public deployment, main merge, paid model call or real external message was used. IM diagnostics do not establish receiving/sending/target-channel rights. ACP handshakes report authentication unknown, and standard ACP is explicitly ineligible for managed Workers. Real Feishu/Slack/ACP services and credentialed inference remain unverified. Full-suite green status requires an environment supporting the existing network-isolated sandbox; the same 75 cases fail on unchanged main here.
 
 Design, provenance, reproducible tests and migration/rollback: [DESIGN_AND_ACCEPTANCE.md](DESIGN_AND_ACCEPTANCE.md). Machine-readable summary: [ACCEPTANCE.json](ACCEPTANCE.json). Earlier interruption details remain in [RECOVERY_HANDOFF.md](RECOVERY_HANDOFF.md) for historical recovery context.
+
+
+## CI follow-up and optimization backlog — 2026-11-16
+
+- Unified backlog: [`../optimization/MASTER_TODO.md`](../optimization/MASTER_TODO.md), all 49 suggestions plus the four feature mappings, dependencies and eleven end-to-end acceptance scenarios. Nothing unaccepted is marked complete. Published remotely at `7da952133cf91a70d31c49b6c6a105ab0fbc53eb`.
+- Local `bec3d19636cdb76a8b60f80490c6d3c5e9c7699c` adds bounded/redacted pre-cleanup container diagnostics. Local `57b29ce95c153ab1f0b4de8b94afc301eca5634a` fixes a real cursor-test race and adds a fixed no-op sandbox probe. Corresponding source remote head: `ca6cbcfe699d3d0ec28116da039e5bebef6b752d`.
+- At that source head, regular CI run [43876934064](https://github.com/pythc/agent-hub/actions/runs/43876934064) **passed all three jobs**: Ubuntu 22.04/Node 22.19, Ubuntu 22.04/Node 24, GitHub-hosted macOS/Node 24. No user Mac was used. Four focused HTTP tests also passed locally; log `.local/ci-fix/cursor-regression.log`.
+- Container acceptance run [43876933980](https://github.com/pythc/agent-hub/actions/runs/43876933980), job `133332311390`, **failed** before listening: bubblewrap reports `Failed to make / slave: Permission denied`. This is an independent Docker/AppArmor startup failure, distinct from the cloud kernel's 75 baseline cases. A production-layout bootstrap mirror passed local init/runtime/HTTP health without bypassing production CI checks; it is not container acceptance.
+- A fixed-name opt-in AppArmor policy was proposed, independently reviewed at the design level, and **rejected by automatic approval review before any file was created**. Broad mount/unmount/pivot_root permissions would apply to all container processes. No policy was written, loaded, or installed, and the rejection has not been bypassed. Exact permission scope and required negative tests are recorded in [CONTAINER_CI_BLOCKER.md](CONTAINER_CI_BLOCKER.md). Explicit approval for that security-boundary change is pending; container CI stays blocked.
+- Backups: `.local/ci-fix/pre-fix.bundle`, `.local/ci-fix/pre-fix.diff`; feature changes were preserved remotely before the policy proposal. Real IM/ACP authentication, external sends, paid inference, public deployment and main merge remain unperformed.
