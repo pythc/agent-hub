@@ -64,3 +64,11 @@ Design, provenance, reproducible tests and migration/rollback: [DESIGN_AND_ACCEP
 ## O07 independent next stage
 
 O07 / Issue #18 proceeds on `feat/optimization-status-20261116`, draft PR #61, without pausing all work for CI. See [`../optimization/STATUS_STAGE.md`](../optimization/STATUS_STAGE.md) for exact module/review/browser evidence and the separately blocked recovery POST change. No Oxx issue has been closed. Container policy work is isolated in `agent-hub-ci` and limited to the newly user-approved CI-only profile; no production security setting has changed.
+
+
+## Latest cloud acceptance / parallel work
+
+- O07 source/UI frozen local5356135 / remote99c4ecbe: full check1587pass/75fail/4skip; all75 exact same failure identities as unchanged main. New readable UI actual browser6groups/10screens/0errors; four-capability regression6groups/14screens/0errors. Tests/screens and independent93focused review are documented in STATUS_STAGE/STATUS_ACCEPTANCE. No real IM/ACP claim.
+- Container CI original blocker resolved at remotead34ddc0, run43892304831/job133386478516. Explicit10 retained-boundary booleans and all13 original acceptance groups pass. Ordinary CI queued at check time. CI-only changes are now integrated in the O07 checkout and will be published as one checkpoint for a fresh combined-head run. No production security settings changed.
+- O05 backend remote8a26ea17 independently reviewed;42author/19independent tests pass. Simple existing-team-page frontend is in progress in agent-hub-scheduler. Issue16 open.
+- Rejected repository-unknown POST recovery guard remains unimplemented and pending explicit scope approval; no retry/bypass. All Issues remain open; latest user simple/readable/no-small-print requirement applies to ongoing UI work.

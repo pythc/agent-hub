@@ -246,3 +246,10 @@ P2 已全部进入总待办，而不是删除或默认永久不做；其中不�
 ## 17. 本轮独立评审回执
 
 独立审查者完整重读原计划 version 0 的 1,467 行，逐条对照确认 49 项标题/编号和混合优先级完整。初审指出依赖循环和真实 IM 阻塞被误作全局前置；`34a08ea` 修正为硬/共/后、M1–M10 和 S1-L/E、S2.0–2.4，独立复验通过。复验另指出共同完成定义与共享契约草案的条件引用/版本措辞不一致，本轮已澄清不得伪造尚不存在的 task/run/attempt 或通用 revision。此回执是文档评审，不是任何 Oxx 功能完成或 G01 正式冻结证明。
+
+
+## 18. GitHub tracking and latest staged evidence
+
+Master [#11](https://github.com/pythc/agent-hub/issues/11); O01–O49 map exactly to Issues **#12–#60** (`issue = O number + 11`). All remain open. O07 [#18](https://github.com/pythc/agent-hub/issues/18) / draft PR #61 now has independently reviewed four-axis code and the new simple/readable UI, with current local real-page acceptance and regression evidence in [STATUS_STAGE.md](STATUS_STAGE.md) / [STATUS_ACCEPTANCE.json](STATUS_ACCEPTANCE.json). The combined head still needs its own CI results, and the separately rejected O08 recovery POST change is unexecuted/pending scope approval; this does not close O07, O08 or the master.
+
+The CI-specific named narrow policy and pinned CLI passed real container acceptance at `ad34ddc0…`, run43892304831: ten boundary checks and thirteen actual container groups. Ordinary CI and later combined-head checks are tracked separately. The earlier broad policy rejection remains historical and was not bypassed; user subsequently explicitly authorized only the distinct ephemeral-CI profile. O05 [#16](https://github.com/pythc/agent-hub/issues/16) has read-only backend implementation/review on its isolated branch, while its simple team panel and actual UI acceptance are still pending. None of these intermediate results checks a whole Oxx row complete.
