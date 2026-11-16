@@ -511,10 +511,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='GET'&&path==='/entry-workspace'){
       const query=new URL(req.url!,'http://localhost').searchParams,input=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25),
         state:z.enum(['attention','running','replied','ready','closed','queued']).optional(),search:z.string().max(200).optional()}).parse(Object.fromEntries(query))
-      send(res,200,operatorWorkspace(runtime,input.offset,input.limit,{state:input.state,search:input.search}));return
+      try{send(res,200,runtime.scopes.readOnly(()=>runtime.memory.readOnly(()=>operatorWorkspace(runtime,input.offset,input.limit,{state:input.state,search:input.search}))))}catch{send(res,503,{code:'operator_workspace_unavailable'})};return
     }
     if(req.method==='GET'&&path.startsWith('/entry-workspace/task/')){
-      const task=operatorTask(runtime,decodeURIComponent(path.slice('/entry-workspace/task/'.length)));send(res,task?200:404,task??{code:'task_missing',error:'This work is no longer available.'});return
+      const id=decodeURIComponent(path.slice('/entry-workspace/task/'.length))
+      try{const task=runtime.scopes.readOnly(()=>runtime.memory.readOnly(()=>operatorTask(runtime,id)));send(res,task?200:404,task??{code:'task_missing',error:'This work is no longer available.'})}catch{send(res,503,{code:'operator_workspace_unavailable'})};return
     }
     if(req.method==='POST'&&path==='/entry-setup/probe'){const input=z.object({entryId:z.enum(entryIds),credentials:z.object({appId:z.string().trim().min(1).max(16000).optional(),appSecret:z.string().trim().min(1).max(16000).optional()}).strict().optional()}).strict().parse(await body(req));send(res,200,await entries.probe(input.entryId,input.credentials));return}
     if(req.method==='POST'&&path==='/entry-setup/plan'){send(res,200,entries.plan(await body(req)));return}
