@@ -2,6 +2,7 @@ import {useEffect,useRef,useState} from 'react'
 import {Activity,ArrowRight,Check,CheckCircle2,Clock3,FileCheck2,GitCommitHorizontal,History,LoaderCircle,RefreshCw,ShieldQuestion,Square,Terminal,Wrench} from 'lucide-react'
 import type {TraceEvent,TraceTask,TraceStage,TraceState} from '../../src/execution-trace.ts'
 import type {TaskStatusProjection} from '../../src/execution-status.ts'
+import {readTaskStatus,type StatusState} from './execution-status-view.ts'
 import './execution-trace.css'
 
 type Snapshot={visibility:string;at:number;revision:number;cursor:number;total:number;offset:number;more:boolean;tasks:TraceTask[]}
@@ -17,30 +18,6 @@ async function request<T>(path:string,signal?:AbortSignal,body?:unknown):Promise
 }
 const stageNames:Record<TraceStage,[string,string]>={task:['Task','任务'],assignment:['Dispatch','派工'],run:['Execution','执行'],approval:['Permission','授权'],tool:['Tool activity','工具动态'],result:['Result','结果'],acceptance:['Acceptance','验收'],job:['Scheduled work','调度'],delivery:['Delivery','交付'],recovery:['Recovery','恢复'],commit:['Commit evidence','提交证据'],test:['Test evidence','测试证据'],deployment:['Deployment evidence','部署证据']}
 const stateNames:Record<TraceState,[string,string]>={queued:['Queued','已排队'],running:['Running','运行中'],waiting:['Waiting','等待中'],ready:['Result ready','结果就绪'],blocked:['Needs input','需要处理'],failed:['Failed','失败'],cancelled:['Stopped','已停止'],completed:['Completed','已完成'],interrupted:['Interrupted','已中断'],uncertain:['Check outcome','核查结果'],pending:['Pending','待处理'],resolved:['Resolved','已处理'],expired:['Expired','已过期'],passed:['Passed','通过'],insufficient:['Evidence missing','证据不足'],errored:['Check failed','检查失败'],stale:['Out of date','已过时'],sent:['Host delivery record','宿主投递记录'],held:['On hold','已挂起'],dropped:['Withdrawn','已撤回'],idle:['Idle','空闲'],starting:['Starting','启动中'],background:['Working','处理中'],human:['Human control','人工接管'],delivering:['Delivering','交付中'],merging:['Merging','合并中'],complete:['Receipt retained','回执已保留'],ended:['Ended','已结束'],observed:['Observed','已记录'],sending:['Sending','发送中'],applying:['Applying','正在应用'],applied:['Applied','已应用'],declined:['Declined','已拒绝']}
-type StatusState<K extends 'execution'|'effects'|'acceptance'|'delivery'>=TaskStatusProjection[K]['state']|'unknown'
-type StatusView={observedAt:number|null;available:boolean;execution:StatusState<'execution'>;effects:StatusState<'effects'>;receiptCount:number|null;acceptance:StatusState<'acceptance'>;freshness:TaskStatusProjection['acceptance']['freshness'];delivery:StatusState<'delivery'>;counts:TaskStatusProjection['delivery']['counts']|null;scope:TaskStatusProjection['delivery']['scope']|'unknown';hostRecord:boolean}
-const object=(value:unknown):Record<string,unknown>|undefined=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:undefined
-function statusState<S extends string>(value:unknown,allowed:readonly S[]):S|'unknown'{return typeof value==='string'&&(allowed as readonly string[]).includes(value)?value as S:'unknown'}
-const count=(value:unknown):number|null=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null
-/** Render only the new projection; legacy aggregate state never supplies missing evidence. */
-export function readTaskStatus(value:unknown):StatusView{
- const unknown:StatusView={available:false,observedAt:null,execution:'unknown',effects:'unknown',receiptCount:null,acceptance:'unknown',freshness:'unknown',delivery:'unknown',counts:null,scope:'unknown',hostRecord:false}
- const root=object(value)
- if(root?.schema!==1)return unknown
- const observedAt=typeof root.observedAt==='number'&&Number.isFinite(root.observedAt)&&root.observedAt>=0&&!Number.isNaN(new Date(root.observedAt).getTime())?root.observedAt:null
- if(observedAt===null)return unknown
- const execution=object(root.execution),effects=object(root.effects),acceptance=object(root.acceptance),delivery=object(root.delivery)
- const rawCounts=object(delivery?.counts),keys=['total','pending','retry_wait','sending','uncertain','held','dropped','recorded'] as const
- const counts=rawCounts&&keys.every(key=>count(rawCounts[key])!==null)?Object.fromEntries(keys.map(key=>[key,rawCounts[key]])) as TaskStatusProjection['delivery']['counts']:null
- const receiptCount=count(effects?.receiptCount),freshness=statusState(acceptance?.freshness,['current','stale','unknown','not_recorded'] as const)
- let acceptanceState:StatusState<'acceptance'>=statusState(acceptance?.state,['not_recorded','pending','running','passed','failed','insufficient','errored','stale'] as const)
- if(freshness==='stale'||freshness!=='current'&&['passed','failed','insufficient','errored'].includes(acceptanceState))acceptanceState='stale'
- let effectState=statusState(effects?.state,['not_recorded','in_progress','recorded','unknown'] as const)
- if(effectState==='recorded'&&(receiptCount===null||receiptCount===0))effectState='unknown'
- let deliveryState=statusState(delivery?.state,['not_recorded','pending','retry_wait','sending','uncertain','held','dropped','recorded','partial'] as const)
- if(deliveryState==='recorded'&&delivery?.evidence!=='host_record')deliveryState='unknown'
- return {available:true,observedAt,execution:statusState(execution?.state,['not_started','queued','running','waiting_input','interrupted','failed','cancelled','finished'] as const),effects:effectState,receiptCount,acceptance:acceptanceState,freshness,delivery:deliveryState,counts,scope:statusState(delivery?.scope,['local','external','mixed','not_recorded'] as const),hostRecord:delivery?.evidence==='host_record'}
-}
 const executionLabels:Record<StatusState<'execution'>,[string,string]>={not_started:['Not started','尚未开始'],queued:['Queued','已排队'],running:['Running','执行中'],waiting_input:['Waiting for input','等待输入'],interrupted:['Interrupted','已中断'],failed:['Execution failed','执行失败'],cancelled:['Stopped','已停止'],finished:['Execution finished','执行已结束'],unknown:['Unknown','未知']}
 const effectLabels:Record<StatusState<'effects'>,[string,string]>={not_recorded:['No effect record','无效果记录'],in_progress:['In progress','效果处理中'],recorded:['Local receipts retained','本地回执已保留'],unknown:['Outcome unknown','效果未知']}
 const acceptanceLabels:Record<StatusState<'acceptance'>,[string,string]>={not_recorded:['No acceptance record','无验收记录'],pending:['Awaiting acceptance','等待验收'],running:['Checking evidence','正在验收'],passed:['Current evidence passed','当前证据通过'],failed:['Acceptance failed','验收未通过'],insufficient:['Evidence insufficient','证据不足'],errored:['Check failed','验收出错'],stale:['Recheck required','需重新验收'],unknown:['Unknown','未知']}
