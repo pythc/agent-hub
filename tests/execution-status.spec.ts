@@ -229,3 +229,19 @@ it('does not apply an unsynchronized revocation ledger while projecting any trac
  expect(f.trace.snapshot({ticketId:a.ticket.id}).tasks[0]!.status.acceptance.state).toBe('stale')
  expect(dbState(f)).toBe(before)
 })
+
+it('does not reuse a sent identical body from an older assignment as the current delivery receipt',async()=>{
+ const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready')
+ message(f,ticket,'identical-old','sent','reply',true)
+ expect(projectTaskStatus(f.host,current(f,ticket)).delivery.state).toBe('recorded')
+ const old=current(f,ticket),next={id:'new-identical',state:'pending' as const,createdAt:new Date().toISOString()}
+ f.host.store.put('ticket',ticket.id,{...old,ended:undefined,assignments:[...old.assignments,next]})
+ f.host.engine.assignmentStarted(ticket.id,next.id)
+ f.host.store.put('run',ticket.id,{...f.host.store.get<Run>('run',ticket.id)!,assignmentId:next.id,phase:'idle',result:'Actual result'})
+ f.host.engine.report(ticket.id,{state:'ready',summary:'Actual result',question:null})
+ const before=dbState(f),status=projectTaskStatus(f.host,current(f,ticket))
+ expect(status.delivery).toMatchObject({state:'not_recorded',evidence:'none',counts:{total:0,recorded:0}})
+ expect(dbState(f)).toBe(before)
+ message(f,ticket,'identical-new','sent','reply',true)
+ expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'recorded',evidence:'host_record',counts:{total:1,recorded:1}})
+})

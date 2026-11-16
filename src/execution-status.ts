@@ -94,7 +94,17 @@ function delivery(host:Runtime,ticket:Ticket,all:Delivery[]):TaskStatusProjectio
  const text=run?.result||(retained?.assignmentId===assignment?.id?retained?.reply:undefined)
  const result=(d:Delivery)=>{
   if(d.kind!=='reply'||d.id.startsWith('attention-reply:')||!ready)return false
-  if(d.ticketId===ticket.id)return typeof text==='string'&&text.length>0&&d.text===text
+  if(d.ticketId===ticket.id){
+   if(typeof text!=='string'||!text.length||d.text!==text||!assignment)return false
+   // Core reply IDs are content-derived and can be reused across assignments.
+   // An equal body is not a new delivery receipt. Require the retained original
+   // outbox observation to follow this assignment's host lifecycle event.
+   const started=host.store.db.prepare("SELECT MAX(seq) AS seq FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='assignment.started' AND json_extract(body,'$.data.ticketId')=? AND json_extract(body,'$.data.assignmentId')=?").get(ticket.id,assignment.id)
+   const first=host.store.db.prepare("SELECT seq,at,body FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')=? ORDER BY seq LIMIT 1").get(d.id)
+   if(!started?.seq||!first||Number(first.seq)<=Number(started.seq)||JSON.parse(String(first.body)).baseline!==0)return false
+   const reportAt=Date.parse(assignment.report?.at??'')
+   return Number.isFinite(reportAt)&&Date.parse(String(first.at))>=reportAt
+  }
   const owner=host.store.get<{reportReads?:Record<string,string>}>('router-reply-owner',d.id)
   return !!assignment?.report?.at&&owner?.reportReads?.[ticket.id]===assignment.report.at
  }
