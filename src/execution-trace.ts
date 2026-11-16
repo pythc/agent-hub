@@ -160,7 +160,9 @@ export class ExecutionTrace {
   const query=traceSnapshotSchema.parse(value),host=this.current()
   if(query.ticketId&&!visible(host,query.ticketId))throw new TraceError('trace_task_missing',404)
   const all=host.store.tickets.list().filter(t=>visible(host,t.id)&&(!query.ticketId||t.id===query.ticketId)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))
-  return {at:Date.now(),revision:host.settings.current().revision,visibility:this.visibility(host),cursor:this.head(host),total:all.length,offset:query.offset,more:query.offset+query.limit<all.length,tasks:all.slice(query.offset,query.offset+query.limit).map(t=>this.task(host,t))}
+  // GET observation must not materialize missing routes through nested authority checks.
+  // Recovery calls task() directly and retains its existing execution semantics.
+  return host.scopes.readOnly(()=>({at:Date.now(),revision:host.settings.current().revision,visibility:this.visibility(host),cursor:this.head(host),total:all.length,offset:query.offset,more:query.offset+query.limit<all.length,tasks:all.slice(query.offset,query.offset+query.limit).map(t=>this.task(host,t))}))
  }
  async recover(value:unknown):Promise<RecoveryResult>{
   const input=traceRecoverySchema.parse(value),host=this.current(),key=stableDigest(['execution-trace',input.requestId]),fingerprint=stableDigest(input)

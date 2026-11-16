@@ -316,3 +316,42 @@ it('does not reuse a same-millisecond receipt after a second ready report on an 
  expect(Date.parse(String(later.at))).toBeGreaterThan(Date.parse(String(first.at)))
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'recorded',evidence:'host_record',counts:{total:1,recorded:1}})
 })
+
+
+it('checks scheduled-skill acceptance without creating a missing original authority route',async()=>{
+ const f=fixture();f.host.pause(true)
+ const model=vi.spyOn(f.host.model,'run'),history=vi.spyOn(f.host.model,'history'),deliver=vi.spyOn(f.host.sources.get('local')!,'deliver')
+ const skill={id:'status-local-fixture',version:1}
+ // Local synthetic saved-method metadata and a retained passed round exercise
+ // the actual schedule/goal/verifier chain without provider acceptance.
+ f.host.store.put('skill-version',stableDigest([skill.id,skill.version]),{...skill,scopeId:'team',entryId:f.context.route.entryId,goalId:'fixture-seed',acceptanceId:'fixture-seed',template:{title:'Inspection',objective:'Inspect and report findings',criteria:[{id:'result',description:'Produce findings',files:[],documents:[]}],nodes:[{id:'build',title:'Inspect',instruction:'Inspect and report',workerId:'one',criterionIds:['result'],dependsOn:[]}]}})
+ const plan=f.host.proactive.command({action:'schedule.put',scopeId:'team',operationId:'skill-plan',expectedRevision:0,schedule:{id:'daily',name:'Check',triggerId:f.trigger.id,prompt:'Inspect scheduled work',skill,mode:'standalone',notification:'silent',timing:{kind:'once',startAt:new Date(Date.now()+60_000).toISOString(),timezone:'UTC'}}}) as {revision:number}
+ const scheduled=f.host.proactive.command({action:'schedule.run',scopeId:'team',operationId:'skill-launch',expectedRevision:plan.revision,id:'daily'}) as {id:string;triggerId:string}
+ f.host.proactive.runSkill(scheduled.id)
+ const saved=f.host.store.get<{goalId:string}>('router-schedule-run',scheduled.id)!,goal=f.host.goals.get(saved.goalId)!,trigger=f.host.store.triggers.get(scheduled.triggerId)!,discussion='local:'+trigger.threads[0]!.id,context=f.host.scopes.context(trigger,discussion)!
+ const assigned=await f.host.manager.call({action:'assign',id:'one',revision:f.host.settings.current().revision,requestId:'skill-task',text:'Inspect local fixture'},{discussion,trigger,scoped:context})
+ const ticket=f.host.store.tickets.get(assigned.ticketId)!
+ run(f,ticket)
+ goal.taskIds=[ticket.id];goal.nodes![0]!.ticketId=ticket.id;goal.nodes![0]!.state='running';f.host.store.put('router-goal',goal.id,goal)
+ f.host.verification.capture(ticket.id,{state:'ready',summary:'Fixture findings'},'Fixture findings')
+ const round=f.host.verification.ensure(goal,goal.nodes![0]);round.state='passed';f.host.store.put('goal-verification',round.id,round)
+ goal.nodes![0]!.roundId=round.id;goal.nodes![0]!.state='passed';f.host.store.put('router-goal',goal.id,goal)
+ const totalChanges=()=>Number(f.host.store.db.prepare('SELECT total_changes() AS count').get()!.count)
+ const positive=dbState(f),positiveChanges=totalChanges()
+ expect(f.host.verification.current(round,goal,{readOnly:true})).toBe(true)
+ expect(projectTaskStatus(f.host,current(f,ticket)).acceptance).toEqual({state:'passed',freshness:'current'});expect(dbState(f)).toBe(positive);expect(totalChanges()).toBe(positiveChanges)
+ f.host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(f.trigger.id)
+ expect(f.host.store.get('router-route',trigger.id)).toBeDefined()
+ const before=dbState(f),beforeChanges=totalChanges()
+ expect(f.host.verification.current(round,goal,{readOnly:true})).toBe(false)
+ expect(projectTaskStatus(f.host,current(f,ticket)).acceptance).toEqual({state:'stale',freshness:'stale'})
+ expect(f.trace.snapshot({ticketId:ticket.id}).tasks[0]!.status.acceptance).toEqual({state:'stale',freshness:'stale'})
+ expect(dbState(f)).toBe(before);expect(totalChanges()).toBe(beforeChanges);expect(f.host.store.get('router-route',f.trigger.id)).toBeUndefined()
+ // Default execution remains outside the observation scope and can derive its
+ // ordinary route. Subsequent reads accept the same retained evidence again.
+ expect(f.host.verification.current(round,goal)).toBe(true);expect(f.host.store.get('router-route',f.trigger.id)).toBeDefined()
+ const restored=dbState(f),restoredChanges=totalChanges()
+ expect(f.host.verification.current(round,goal,{readOnly:true})).toBe(true)
+ expect(projectTaskStatus(f.host,current(f,ticket)).acceptance).toEqual({state:'passed',freshness:'current'});expect(dbState(f)).toBe(restored);expect(totalChanges()).toBe(restoredChanges)
+ expect(model).not.toHaveBeenCalled();expect(history).not.toHaveBeenCalled();expect(deliver).not.toHaveBeenCalled()
+})

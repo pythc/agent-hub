@@ -1,4 +1,4 @@
-import {mkdtempSync,rmSync} from 'node:fs'
+import {mkdtempSync,rmSync,readFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach,expect,it,vi} from 'vitest'
@@ -8,6 +8,9 @@ import {ExecutionTrace,uninstallExecutionTrace,traceQuerySchema} from '../src/ex
 import type {Model} from '../src/model.ts'
 import type {Run} from '../src/store.ts'
 import {planHistory} from '../src/history-cleanup.ts'
+import {serve} from '../src/server.ts'
+import type {RouterGoal} from '../src/router-goals.ts'
+import type {ScheduledRun} from '../src/router-proactive.ts'
 
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const host of hosts.splice(0))await host.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
@@ -204,4 +207,74 @@ it('supports an offline hook rollback without deleting authoritative state or re
  expect(trace.events({cursor}).events).toEqual([])
  expect(host.store.get<Run>('run',ticket.id)!.phase).toBe('running')
  expect(trace.events({limit:200}).events.length).toBe(before)
+})
+
+
+it.each(['scheduled','goal_wake','scheduled_dependency_goal_wake'] as const)('keeps snapshot and protected GET read-only for a missing inner %s anchor',async scenario=>{
+ const root=mkdtempSync(join(tmpdir(),'trace-inner-route-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),port:0,acceptMode:'auto',work:{sandboxDriver:'disabled',autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['operator']}]})
+ const modelRun=vi.fn(async()=>{throw Error('No inference permitted')}),history=vi.fn(async()=>{throw Error('No history read permitted')})
+ const host=new Runtime(config,{model:{describe:()=>({id:'codex',kind:'codex',resume:true,tools:true,images:false,nativeTakeover:false,steering:false,promptRefresh:false}),run:modelRun,history}});hosts.push(host);host.pause(true)
+ const deliver=vi.spyOn(host.sources.get('local')!,'deliver')
+ host.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:[JSON.stringify(['local','operator'])],workerIds:['one'],sourceIds:['local'],backendIds:['codex']}})
+ host.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'topic',history:'group'})
+ const receive=(key:string,thread:string)=>{
+  const {triggerId}=host.receive('local','operator',{id:key,thread,scope:'topic',text:'Continuously inspect this project and report findings',addressed:true}) as {triggerId:string}
+  const trigger=host.store.triggers.get(triggerId)!
+  return {trigger,context:host.scopes.context(trigger,'local:'+thread)!}
+ }
+ const original=receive('original','topic');let missing=original.trigger,anchor=original
+ const wake=(input:typeof original)=>{
+  const goal=host.goals.command({action:'start',operationId:'wake-goal',expectedRevision:0,title:'Inspection',objective:'Inspect the requested result',authorizationQuote:'Continuously inspect',criteria:[{id:'result',description:'Report findings',files:[],documents:[]}]},input.context) as RouterGoal
+  host.store.db.prepare("UPDATE jobs SET state='done' WHERE kind='router'").run()
+  host.store.put('router-goal',goal.id,{...goal,nextAt:Date.now()-1});host.goals.tick()
+  const record=host.store.list<{goalId:string;triggerId:string}>('goal-wake').find(r=>r.goalId===goal.id)!
+  expect(record).toBeDefined();const trigger=host.store.triggers.get(record.triggerId)!
+  return {trigger,context:host.scopes.context(trigger,goal.discussion)!}
+ }
+ if(scenario==='goal_wake')anchor=wake(original)
+ if(scenario==='scheduled_dependency_goal_wake'){
+  const human=receive('nested-human','other'),inner=wake(human);missing=human.trigger
+  host.store.put('router-input-set',original.trigger.id,{triggerIds:[inner.trigger.id]})
+ }
+ if(scenario!=='goal_wake'){
+  const plan=host.proactive.command({action:'schedule.put',scopeId:'team',operationId:'plan',expectedRevision:0,schedule:{id:'daily',name:'Check',triggerId:original.trigger.id,prompt:'Inspect scheduled work',mode:'standalone',notification:'silent',timing:{kind:'once',startAt:new Date(Date.now()+60_000).toISOString(),timezone:'UTC'}}}) as {revision:number}
+  const scheduled=host.proactive.command({action:'schedule.run',scopeId:'team',operationId:'launch',expectedRevision:plan.revision,id:'daily'}) as ScheduledRun
+  expect(scheduled.triggerId).toBeDefined();const trigger=host.store.triggers.get(scheduled.triggerId!)!
+  anchor={trigger,context:host.scopes.context(trigger,'local:'+trigger.threads[0]!.id)!}
+ }
+ const result=await host.manager.call({action:'assign',id:'one',revision:host.settings.current().revision,requestId:'assign',text:'Inspect local fixture'},{discussion:anchor.context.route.discussion,trigger:anchor.trigger,scoped:anchor.context})
+ const ticket=host.store.tickets.get(result.ticketId)!,assignment=ticket.assignments.at(-1)!
+ host.engine.assignmentStarted(ticket.id,assignment.id)
+ host.store.put('run',ticket.id,{ticketId:ticket.id,assignmentId:assignment.id,cwd:root,phase:'human',threadId:'fixture-session',turnId:'fixture-turn',backendId:'codex',workerId:'one'} satisfies Run)
+ const waiting=host.approvals.request(ticket.id,{id:'local-fixture-approval',method:'item/commandExecution/requestApproval',params:{threadId:'fixture-session',turnId:'fixture-turn'}});void waiting.catch(()=>{})
+ const trace=new ExecutionTrace(()=>host),server=await serve(host)
+ try{
+  clearInterval((host as unknown as {timer:ReturnType<typeof setInterval>}).timer)
+  const dbState=()=>{
+   const rows:Record<string,unknown>={}
+   for(const row of host.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()){
+    const name=String(row.name);if(/^[a-z_0-9]+$/.test(name))rows[name]=host.store.db.prepare('SELECT * FROM '+name).all()
+   }
+   return JSON.stringify(rows,(_,value)=>typeof value==='bigint'?String(value):value instanceof Uint8Array?Array.from(value):value)
+  }
+  const totalChanges=()=>Number(host.store.db.prepare('SELECT total_changes() AS count').get()!.count)
+  const positive=dbState(),positiveChanges=totalChanges()
+  expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.actions).toContain('read_history');expect(dbState()).toBe(positive);expect(totalChanges()).toBe(positiveChanges)
+  host.store.db.prepare("DELETE FROM records WHERE kind='router-route' AND id=?").run(missing.id)
+  expect(host.store.get('router-route',anchor.trigger.id)).toBeDefined()
+  const before=dbState(),beforeChanges=totalChanges(),pending=(host.approvals as unknown as {pending:Map<string,unknown>}).pending,waiters=new Map(pending)
+  expect(waiters.size).toBe(1)
+  expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.actions).not.toContain('read_history');expect(dbState()).toBe(before);expect(totalChanges()).toBe(beforeChanges)
+  const token=readFileSync(server.tokenPath,'utf8').trim(),response=await fetch(server.url+'/api/execution-trace?ticketId='+encodeURIComponent(ticket.id),{headers:{Authorization:'Bearer '+token}})
+  expect(response.status).toBe(200);expect((await response.json()).tasks[0].actions).not.toContain('read_history')
+  expect(dbState()).toBe(before);expect(totalChanges()).toBe(beforeChanges);expect(host.store.get('router-route',missing.id)).toBeUndefined()
+  expect((host.approvals as unknown as {pending:Map<string,unknown>}).pending).toBe(pending);expect([...pending.keys()]).toEqual([...waiters.keys()]);for(const [id,waiter] of waiters)expect(pending.get(id)).toBe(waiter)
+  host.scopes.context(missing,'local:'+missing.threads[0]!.id)
+  expect(host.store.get('router-route',missing.id)).toBeDefined()
+  const restored=dbState(),restoredChanges=totalChanges();expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.actions).toContain('read_history');expect(dbState()).toBe(restored);expect(totalChanges()).toBe(restoredChanges)
+  expect(modelRun).not.toHaveBeenCalled();expect(history).not.toHaveBeenCalled();expect(deliver).not.toHaveBeenCalled()
+ }finally{
+  server.server.closeAllConnections();await new Promise<void>(resolve=>server.server.close(()=>resolve()));await server.closeRuntime();hosts.splice(hosts.indexOf(host),1)
+ }
 })
