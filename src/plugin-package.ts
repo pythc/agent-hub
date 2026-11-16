@@ -25,7 +25,7 @@ export const pluginManifestSchema=z.object({
   credentials:z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/),z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/)).default({}),
   network:z.boolean().default(false),
   tools:z.array(z.object({name:identifier,description:z.string().min(1).max(2000),resource:identifier,inputSchema:z.record(z.string(),z.unknown())}).strict()).max(100).default([]),
-  setup:z.object({description:z.string().max(4000),fields:z.array(z.object({name:identifier,label:z.string(),secret:z.boolean().default(false),required:z.boolean().default(false)}).strict()).max(30)}).strict().optional(),
+  setup:z.object({description:z.string().max(4000),serviceUrl:z.string().url().refine(value=>{const u=new URL(value);return !u.username&&!u.password&&!u.search&&!u.hash&&(u.protocol==='https:'||u.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname))},'Use HTTPS or loopback without URL credentials').optional(),fields:z.array(z.object({name:identifier,label:z.string(),path:z.string().regex(/^\/(?:[a-zA-Z][a-zA-Z0-9_-]*\/?)+$/).optional(),help:z.string().max(1000).optional(),placeholder:z.string().max(300).optional(),input:z.enum(['text','tags']).optional(),secret:z.boolean().default(false),required:z.boolean().default(false)}).strict()).max(30)}).strict().optional(),
 }).strict()
 export type PluginManifest=z.infer<typeof pluginManifestSchema>
 export interface PluginPackage {directory:string;manifest:PluginManifest;digest:string}

@@ -106,6 +106,14 @@
           },
           "directMessages": {
             "const": false
+          },
+          "appIdEnv": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "appSecretEnv": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
           }
         }
       }
@@ -116,20 +124,32 @@
     "fields": [
       {
         "name": "app-id-env",
-        "label": "App ID environment variable",
-        "required": true
+        "label": "App ID",
+        "required": true,
+        "path": "/feishu/appIdEnv",
+        "secret": true,
+        "input": "text",
+        "help": "From the same published Feishu bot application. Kept by the existing host credential store."
       },
       {
         "name": "app-secret-env",
-        "label": "App secret environment variable",
+        "label": "App secret",
         "secret": true,
-        "required": true
+        "required": true,
+        "path": "/feishu/appSecretEnv",
+        "input": "text",
+        "help": "From the same published Feishu bot application. Kept by the existing host credential store."
       },
       {
         "name": "chats",
-        "label": "Allowed chat IDs",
-        "required": true
+        "label": "Chat IDs",
+        "required": true,
+        "path": "/feishu/chats",
+        "secret": false,
+        "input": "tags",
+        "help": "Add the bot to these explicit oc_ chats; this package uses REST polling."
       }
-    ]
+    ],
+    "serviceUrl": "https://open.feishu.cn"
   }
 }

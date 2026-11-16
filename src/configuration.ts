@@ -18,7 +18,7 @@ export function configurationSnapshot(runtime:Runtime){
   backendCatalog:Object.entries(definitions).map(([id,definition])=>({
    id,kind:definition.kind,nativeTakeover:definition.kind==='codex'||definition.kind==='plugin'&&!!packages.get(definition.plugin)?.manifest.capabilities.nativeTakeover,
    images:definition.kind==='codex'||(definition.kind==='plugin'?!!packages.get(definition.plugin)?.manifest.capabilities.images:definition.images),
-   ...(isApiBackend(definition)?{model:definition.model,endpoint:definition.baseUrl}:definition.kind==='plugin'?{model:definition.model,plugin:definition.plugin,capabilities:packages.get(definition.plugin)?.manifest.capabilities}:{}),
+   ...(isApiBackend(definition)?{model:definition.model,endpoint:definition.baseUrl}:definition.kind==='plugin'?{model:definition.model,plugin:definition.plugin,capabilities:packages.get(definition.plugin)?.manifest.capabilities,managedEligible:['managed','tools','resume','history','contextBudget'].every(key=>packages.get(definition.plugin)?.manifest.capabilities[key as keyof import('./backends/plugin-contract.ts').BackendCapabilities]===true),managedMissing:['managed','tools','resume','history','contextBudget'].filter(key=>packages.get(definition.plugin)?.manifest.capabilities[key as keyof import('./backends/plugin-contract.ts').BackendCapabilities]!==true)}:{}),
    remoteVerified:false,
   })),
   sourceCapabilities:[...runtime.sources.values()].map(source=>({source:source.config.id,kind:source.config.kind,enabled:source.config.enabled,...source.config.capabilities,memberDirectory:!!source.members})),
