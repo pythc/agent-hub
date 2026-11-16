@@ -124,3 +124,25 @@ it.each(['?workspace=studio','?workspace=','?workspace=studio&workspace=other'])
  expect(preserveWorkspaceLink(new URL('http://localhost/configure?workspace=other#tasks'),current).searchParams.getAll('workspace')).toEqual(['other'])
  expect(preserveWorkspaceLink(new URL('http://different.example/configure#tasks'),current).search).toBe('')
 })
+
+function switchingFixture(stage:'guide'|'connections'='guide'){
+ const b=fixture('http://localhost/configure?workspace=studio#execution/configuration',async path=>response(path.endsWith('/configuration')?{current:{revision:11,config:{fixture:'other'}},history:[]}:path.endsWith('/entry-setup')?{entries:[],revision:11}:{tasks:[]}));b.ready(true)
+ let release!:()=>void,fail!:(error:Error)=>void;b.context.secondaryGate=new Promise<void>((resolve,reject)=>{release=resolve;fail=reject});b.context.secondaryStage=stage;b.context.navigationNotifications=[]
+ b.get(`const configurationHost={};function dirty(){return false} function entryHasDraft(){return false} async function entryRun(label,fn){await fn()} function resetDraft(value){S.base=value} const operator={};const entryModel={};const teamStudio={};const executionView={};function resetGuideSession(){} const secondaryCalls=[];async function loadGuideContext(){secondaryCalls.push('guide');if(secondaryStage==='guide')await secondaryGate} async function connectionDiscover(){secondaryCalls.push('connections');if(secondaryStage==='connections')await secondaryGate} async function integrationsDiscover(){secondaryCalls.push('integrations')} entryState.page='execution'`)
+ b.context.window.dispatchEvent=()=>{b.context.navigationNotifications.push(b.location.href);return true}
+ return {...b,release,fail,navigate(hash:string){b.context.nextHash=hash;b.get(`entryState.page=nextHash==='execution/configuration'?'execution':'home';const target=new URL(location.href);target.hash=nextHash;history.pushState(null,'',target)`)}}
+}
+it('publishes the default switch target, snapshot and validated selector together before secondary reads finish',async()=>{
+ const b=switchingFixture(),seen:any[]=[];b.location.href='http://localhost/?workspace=studio&temporary=remove#execution/configuration';b.transport.subscribe(()=>seen.push({context:b.transport.context(),href:b.location.href,page:b.get('entryState.page'),revision:b.get('S.snap?.current.revision'),entryRevision:b.get('entryState.data?.revision')}))
+ const result=b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));expect(seen.at(-1)).toMatchObject({context:{state:'ready',activeId:'other'},page:'home',revision:11,entryRevision:11});expect(new URL(seen.at(-1).href).pathname).toBe('/configure');expect(new URL(seen.at(-1).href).searchParams.has('temporary')).toBe(false);expect(new URL(seen.at(-1).href).hash).toBe('#tasks');expect(new URL(seen.at(-1).href).searchParams.get('workspace')).toBe('other');expect(b.context.navigationNotifications).toHaveLength(1)
+ b.release();expect(await result).toBe(true);expect(new URL(b.location.href).hash).toBe('#tasks');expect(b.get('entryState.page')).toBe('home')
+})
+for(const stage of ['guide','connections'] as const)for(const destination of ['connectors','execution/configuration'])for(const outcome of ['resolve','reject'])it(`preserves user navigation to ${destination} after ${stage} refresh ${outcome}`,async()=>{
+ const b=switchingFixture(stage),result=b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));expect(new URL(b.location.href).hash).toBe('#tasks');b.navigate(destination);const chosen=b.location.href,notifications=b.context.navigationNotifications.length
+ if(outcome==='reject'){const rejected=expect(result).rejects.toThrow('secondary unavailable');b.fail(Error('secondary unavailable'));await rejected}else{b.release();expect(await result).toBe(true)}
+ expect(b.location.href).toBe(chosen);expect(new URL(b.location.href).searchParams.get('workspace')).toBe('other');expect(b.get('entryState.page')).toBe(destination==='execution/configuration'?'execution':'home');expect(b.context.navigationNotifications).toHaveLength(notifications);expect(b.transport.context()).toMatchObject({state:'ready',activeId:'other'})
+})
+it('does not continue old secondary stages or overwrite a newer context/navigation after reset',async()=>{
+ const b=switchingFixture(),old=b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));b.get('workspaceReset()');b.ready(true);b.get("S.snap={current:{revision:99}};workspaceContext.epoch++");const next=new URL(b.location.href);next.searchParams.set('workspace','studio');next.hash='connectors';b.location.href=String(next);const chosen=b.location.href,context=b.transport.context(),notifications=b.context.navigationNotifications.length
+ b.release();expect(await old).toBe(false);expect(b.location.href).toBe(chosen);expect(b.transport.context()).toEqual(context);expect(b.get('S.snap.current.revision')).toBe(99);expect(b.get('secondaryCalls')).toEqual(['guide']);expect(b.context.navigationNotifications).toHaveLength(notifications)
+})

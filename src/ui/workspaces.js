@@ -124,12 +124,13 @@ async function workspaceSwitch(id) {
         !Array.isArray(entries.entries) || !Number.isInteger(entries.revision) || !Array.isArray(work.tasks))
       throw Error('Invalid workspace response')
     // Commit the URL before notifying: no observer may see a new ID with the old selector.
-    const url = new URL(location.href); url.searchParams.set('workspace', id); history.replaceState(null, '', url)
+    const url = new URL(location.href)
+    if(typeof configurationHost!=='undefined'&&configurationHost){url.pathname='/configure';url.search=''}
+    url.searchParams.set('workspace', id); url.hash='tasks'; history.replaceState(null, '', url)
     workspaceContext.epoch++
     entryState.inventoryRequest++;entryState.inventoryLoading = false;entryState.inventoryError = false
     workspaceContext.activeId = id
     workspaceContext.error = ''
-    workspaceNotify()
     S.snap = snap; resetDraft(snap.current); S.notice = null; S.status = null; S.promptIndex = null
     entryState.data = entries; entryState.error = null; entryState.draft = {}; entryState.touched = false
     entryState.plan = null; entryState.probe = null; entryState.applied = null; entryState.verification = null; entryState.share = null
@@ -140,10 +141,18 @@ async function workspaceSwitch(id) {
     teamStudio.selected = 'router'; teamStudio.tab = 'essentials'; connectionStudioReset(); integrationsReset()
     executionView.selected = null; executionView.inspect = null; executionView.callId = null; executionView.instructions = null
     resetGuideSession()
-    await loadGuideContext()
-    await Promise.all([connectionDiscover(), integrationsDiscover()])
     entryState.page = 'home'
-    updateWorkspaceLocation(); success = true
+    const committedEpoch=workspaceContext.epoch,committedAccount=workspaceAccountId(),committedSession=workspaceContext.sessionIsolation
+    const current=()=>workspaceContext.epoch===committedEpoch&&workspaceContext.activeId===id&&workspaceAccountId()===committedAccount&&workspaceContext.sessionIsolation===committedSession
+    // Publish one complete identity/default-route commit. Secondary reads must
+    // never restore this default after the user has chosen another page.
+    workspaceNotify()
+    if(typeof configurationHost!=='undefined'&&configurationHost)window.dispatchEvent(new Event('roppo:navigation'))
+    if(!current())return
+    await loadGuideContext()
+    if(!current())return
+    await Promise.all([connectionDiscover(), integrationsDiscover()])
+    if(current())success = true
   })
   return success
 }
