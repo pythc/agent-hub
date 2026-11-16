@@ -106,7 +106,13 @@ function workspaceHash() {
 }
 function updateWorkspaceLocation(replace = false) {
   const url = new URL(location.href)
-  if(typeof configurationHost !== 'undefined' && configurationHost){url.pathname='/configure';url.search=''}
+  if(typeof configurationHost !== 'undefined' && configurationHost){
+    // Keep explicit selectors, including invalid ones, so navigation cannot silently select the default.
+    const hasWorkspace=url.searchParams.has('workspace'),selectors=url.searchParams.getAll('workspace')
+    url.pathname='/configure';url.search=''
+    if(hasWorkspace)for(const value of selectors)url.searchParams.append('workspace',value)
+    else if(workspaceContext.managed&&workspaceContext.discovered&&workspaceContext.items.some(item=>item.id===workspaceContext.activeId))url.searchParams.set('workspace',workspaceContext.activeId)
+  }
   url.hash = workspaceHash()
   if (url.href !== location.href) {
     history[replace ? 'replaceState' : 'pushState'](null, '', url)

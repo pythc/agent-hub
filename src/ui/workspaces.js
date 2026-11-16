@@ -98,7 +98,7 @@ async function workspaceDiscover() {
   } catch (error) {
     if(workspaceContext.epoch!==discoveryEpoch)throw error
     if (![404, 405].includes(error.status)) {workspaceContext.discovered=false;workspaceTransportBlock(error.payload?.code==='workspace_invalid'?'workspace_invalid':'workspace_unavailable');throw error}
-    if (new URL(location.href).searchParams.has('workspace')) {workspaceContext.discovered=false;workspaceTransportBlock('workspace_unsupported');throw Error(L('This host does not support the workspace in this link.', '此宿主不支持链接指定的工作区。'))}
+    if (new URL(location.href).searchParams.has('workspace')) {workspaceContext.discovered=false;workspaceTransportBlock('workspace_unsupported');throw Error(L('The current environment does not support the workspace in this link.', '当前环境不支持链接指定的工作区。'))}
     workspaceContext.managed = false
     workspaceContext.activeId = ''
     workspaceContext.items = []
@@ -123,6 +123,8 @@ async function workspaceSwitch(id) {
     if (!Number.isInteger(snap.current?.revision) || !snap.current.config || !Array.isArray(snap.history) ||
         !Array.isArray(entries.entries) || !Number.isInteger(entries.revision) || !Array.isArray(work.tasks))
       throw Error('Invalid workspace response')
+    // Commit the URL before notifying: no observer may see a new ID with the old selector.
+    const url = new URL(location.href); url.searchParams.set('workspace', id); history.replaceState(null, '', url)
     workspaceContext.epoch++
     entryState.inventoryRequest++;entryState.inventoryLoading = false;entryState.inventoryError = false
     workspaceContext.activeId = id
@@ -141,7 +143,6 @@ async function workspaceSwitch(id) {
     await loadGuideContext()
     await Promise.all([connectionDiscover(), integrationsDiscover()])
     entryState.page = 'home'
-    const url = new URL(location.href); url.searchParams.set('workspace', id); history.replaceState(null, '', url)
     updateWorkspaceLocation(); success = true
   })
   return success
@@ -152,7 +153,7 @@ function workspaceTrigger() {
   button.disabled = !!entryState.busy || !!S.busy
   button.id = 'workspace-switch'; button.setAttribute('aria-haspopup', 'dialog')
   button.replaceChildren(add(el('span', 'workspace-avatar'), icon(current.kind === 'organization' ? 'conversations' : 'overview')),
-    add(el('div'), el('strong', '', current.name), el('small', '', workspaceContext.managed ? workspaceKind(current.kind) : L('Single workspace host', '单工作区宿主'))), icon('forward'))
+    add(el('div'), el('strong', '', current.name), el('small', '', workspaceContext.managed ? workspaceKind(current.kind) : L('Single workspace environment', '单工作区环境'))), icon('forward'))
   return button
 }
 function workspaceShowPicker() {
@@ -208,7 +209,7 @@ function workspaceShowPicker() {
     type.onchange = () => { workspaceContext.requestId = ''; workspaceContext.creation.kind = type.value }
     body.append(form)
   } else if (!workspaceContext.managed) body.append(el('p', 'team-help workspace-create',
-    L('This host has one workspace. Personal and organization switching requires workspace support on the host.', '此宿主只有一个工作区。后端支持工作区隔离后，即可在个人与组织间切换。')))
+    L('The current environment has one workspace. Switching between personal and organization workspaces requires workspace support.', '当前环境只有一个工作区。支持工作区隔离后，即可在个人与组织间切换。')))
   dialog.append(body)
   dialog.onclose = () => { dialog.remove(); document.getElementById('workspace-switch')?.focus({ preventScroll: true }) }
   app.querySelector('.operator-workspace').append(dialog); WorkspaceMotion.openDialog(dialog)

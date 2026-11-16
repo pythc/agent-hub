@@ -6,6 +6,7 @@ import {workspaceBlockMessage,type WorkspaceTransport} from '../web/chat/workspa
 function fixture(href='http://localhost/configure',fetcher?:(path:string,options:any)=>Promise<any>){
  const events=new Map<string,Set<()=>void>>(),calls:{path:string;options:any}[]=[]
  const location={href,replace:vi.fn()},context=createContext({URL,Map,Set,Promise,Object,JSON,AbortSignal,AbortController,crypto,console,location,
+  history:{replaceState(_state:unknown,_unused:string,url:URL){location.href=String(url)},pushState(_state:unknown,_unused:string,url:URL){location.href=String(url)}},Event,
   entryState:{account:null,operator:true,inventoryRequest:0},S:{token:'',authed:false},connectionStudioReset(){},integrationsReset(){},
   window:{addEventListener(name:string,fn:()=>void){if(!events.has(name))events.set(name,new Set());events.get(name)!.add(fn)},removeEventListener(name:string,fn:()=>void){events.get(name)?.delete(fn)}},
   fetch:async(path:string,options:any)=>{calls.push({path,options});return fetcher?fetcher(path,options):{ok:true,status:200,json:async()=>({ok:true})}},L:(en:string)=>en})
@@ -50,10 +51,10 @@ it('discovers the managed context and notifies subscribers synchronously after c
  const b=fixture('http://localhost/configure?workspace=studio',async()=>response(inventory)),seen:any[]=[];const stop=b.transport.subscribe(()=>seen.push(b.transport.context()));await b.get('workspaceDiscover()');expect(seen.at(-1)).toMatchObject({state:'pending',managed:true,activeId:'studio'});b.get('S.authed=true;workspaceTransportCommitReady()');expect(seen.at(-1)).toMatchObject({state:'ready',activeId:'studio'});stop()
  await b.transport.request('/api/example');expect(b.calls.at(-1)!.path).toBe('/workspaces/studio/api/example')
 })
-it('committed workspace switch notifies before secondary asynchronous refreshes',async()=>{
- const b=fixture(undefined,async path=>response(path.endsWith('/configuration')?{current:{revision:1,config:{}},history:[]}:path.endsWith('/entry-setup')?{entries:[],revision:1}:{tasks:[]}));b.ready(true)
+it('committed workspace switch synchronizes the explicit selector before notifying during held secondary refreshes',async()=>{
+ const b=fixture('http://localhost/configure?workspace=studio#tasks',async path=>response(path.endsWith('/configuration')?{current:{revision:1,config:{}},history:[]}:path.endsWith('/entry-setup')?{entries:[],revision:1}:{tasks:[]}));b.ready(true)
  b.get(`function dirty(){return false} function entryHasDraft(){return false} async function entryRun(label,fn){await fn()} function resetDraft(){} const operator={};const entryModel={};const teamStudio={};const executionView={};function resetGuideSession(){} async function loadGuideContext(){return new Promise(()=>{})}`)
- const seen:any[]=[];b.transport.subscribe(()=>seen.push(b.transport.context()));void b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));expect(seen.at(-1)).toMatchObject({state:'ready',activeId:'other',epoch:1})
+ const seen:any[]=[];b.transport.subscribe(()=>seen.push(b.transport.context()));void b.get("workspaceSwitch('other')");await new Promise(resolve=>setImmediate(resolve));expect(seen.at(-1)).toMatchObject({state:'ready',activeId:'other',epoch:1});expect(new URL(b.location.href).searchParams.get('workspace')).toBe('other');await expect(b.transport.ready()).resolves.toMatchObject({state:'ready',activeId:'other'});await b.transport.request('/api/example');expect(b.calls.at(-1)!.path).toBe('/workspaces/other/api/example')
 })
 it.each(['epoch','activeId','accountId','sessionIsolation'])('rejects stale bindings before sending after %s changes, even for identical IDs/revisions',async change=>{
  const b=fixture();b.ready(true);const old=b.transport.context(),bound=b.transport.bind(old)
@@ -102,4 +103,18 @@ it('cannot let an obsolete discovery failure overwrite a newer ready context',as
 
 it('rejects an aborted read even if a mocked response ignores its signal',async()=>{
  const b=fixture();b.ready();const controller=new AbortController();controller.abort();await expect(b.transport.request('/api/example',undefined,false,undefined,controller.signal)).rejects.toMatchObject({name:'AbortError'})
+})
+
+it('keeps a committed explicit workspace ready after secondary refresh failure',async()=>{
+ const b=fixture('http://localhost/configure?workspace=studio#tasks',async path=>response(path.endsWith('/configuration')?{current:{revision:1,config:{}},history:[]}:path.endsWith('/entry-setup')?{entries:[],revision:1}:{tasks:[]}));b.ready(true)
+ b.get(`function dirty(){return false} function entryHasDraft(){return false} async function entryRun(label,fn){await fn()} function resetDraft(){} const operator={};const entryModel={};const teamStudio={};const executionView={};function resetGuideSession(){} async function loadGuideContext(){throw Error('secondary unavailable')}`)
+ const seen:any[]=[];b.transport.subscribe(()=>seen.push({context:b.transport.context(),href:b.location.href}));await expect(b.get("workspaceSwitch('other')")).rejects.toThrow('secondary unavailable')
+ expect(seen.at(-1).context).toMatchObject({state:'ready',activeId:'other'});expect(new URL(seen.at(-1).href).searchParams.get('workspace')).toBe('other');await expect(b.transport.ready()).resolves.toMatchObject({state:'ready',activeId:'other'})
+})
+it.each(['?workspace=other&unrelated=remove','?workspace=&unrelated=remove','?workspace=studio&workspace=other',''])('preserves workspace selector semantics through existing embedded navigation: %s',query=>{
+ const b=fixture('http://localhost/configure'+query+'#tasks');b.ready(true);b.get(`const configurationHost={};function workspaceHash(){return 'execution'}`)
+ const source=readFileSync(new URL('../src/ui/entry-session.js',import.meta.url),'utf8');b.get(source.slice(source.indexOf('function updateWorkspaceLocation('),source.indexOf('function applyWorkspaceLocation()')))
+ b.context.window.dispatchEvent=()=>true;b.get('updateWorkspaceLocation(true)')
+ const next=new URL(b.location.href);expect(next.searchParams.has('unrelated')).toBe(false);expect(next.hash).toBe('#execution')
+ expect(next.searchParams.getAll('workspace')).toEqual(query?new URL('http://localhost/'+query).searchParams.getAll('workspace'):['studio'])
 })
