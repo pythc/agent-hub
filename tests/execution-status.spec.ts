@@ -40,7 +40,11 @@ function run(f:ReturnType<typeof fixture>,ticket:Ticket,phase:Run['phase']='idle
  if(report)f.host.engine.report(ticket.id,{state:report,summary:'SECRET_REPORT',question:null})
  return current(f,ticket)
 }
-function message(f:ReturnType<typeof fixture>,ticket:Ticket,id:string,status:string,kind:'reply'|'notice'|'acknowledgement'='reply',external=false,text='Actual result',attempts=0){
+async function message(f:ReturnType<typeof fixture>,ticket:Ticket,id:string,status:string,kind:'reply'|'notice'|'acknowledgement'='reply',external=false,text='Actual result',attempts=0){
+ // Use a genuinely later observation time for normal delivery proofs. The
+ // Engine clock can run a few milliseconds ahead of wall time.
+ const reportAt=Date.parse(current(f,ticket).assignments.at(-1)?.report?.at??'')
+ if(Number.isFinite(reportAt)&&Date.now()<=reportAt)await new Promise<void>(resolve=>setTimeout(resolve,reportAt-Date.now()+2))
  f.host.store.outbox.send({id,ticketId:ticket.id,kind,text,channel:{source:external?'external':'local',thread:'topic',address:external?{thread:'topic'}:{routerInbox:'local:topic'}}})
  f.host.store.db.prepare('UPDATE outbox SET status=?,attempts=? WHERE id=?').run(status,attempts,id)
 }
@@ -82,7 +86,7 @@ it('does not treat an idle run without a ready result as finished',async()=>{
  expect(projectTaskStatus(f.host,current(f,ticket)).execution.state).toBe('waiting_input')
 })
 it('separates a finished execution from pending delivery and missing acceptance',async()=>{
- const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready');message(f,ticket,'final','pending','reply',true)
+ const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready');await message(f,ticket,'final','pending','reply',true)
  const status=projectTaskStatus(f.host,current(f,ticket))
  expect(status.execution.state).toBe('finished');expect(status.acceptance.state).toBe('not_recorded');expect(status.delivery).toMatchObject({state:'pending',evidence:'none',scope:'external'})
 })
@@ -182,18 +186,18 @@ it('uses the applicable final round rather than promoting an older node verdict'
 })
 it('reports mixed delivery progress and gives unknown delivery priority over older sent receipts',async()=>{
  const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready')
- message(f,ticket,'local-result','sent');message(f,ticket,'external-result','pending','reply',true)
+ await message(f,ticket,'local-result','sent');await message(f,ticket,'external-result','pending','reply',true)
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'partial',evidence:'host_record',scope:'mixed',counts:{total:2,recorded:1,pending:1}})
  f.host.store.deliveryFailed('external-result',1,'SECRET_ERROR',true)
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'uncertain',evidence:'host_record',scope:'mixed',counts:{uncertain:1,recorded:1}})
 })
 it('does not turn sent progress or an old result body into current result delivery',async()=>{
  const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready')
- message(f,ticket,'notice','sent','notice',true);message(f,ticket,'ack','sent','acknowledgement',true);message(f,ticket,'old-reply','sent','reply',true,'An older result')
+ await message(f,ticket,'notice','sent','notice',true);await message(f,ticket,'ack','sent','acknowledgement',true);await message(f,ticket,'old-reply','sent','reply',true,'An older result')
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'not_recorded',evidence:'none',counts:{total:0}})
 })
 it('distinguishes retry delay, local records and host-only external records',async()=>{
- const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready');message(f,ticket,'retry','pending','reply',true,'Actual result',2)
+ const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready');await message(f,ticket,'retry','pending','reply',true,'Actual result',2)
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'retry_wait',scope:'external',evidence:'none',counts:{retry_wait:1}})
  f.host.store.delivered('retry')
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'recorded',scope:'external',evidence:'host_record'})
@@ -248,7 +252,7 @@ it('does not apply an unsynchronized revocation ledger while projecting any trac
 
 it('does not reuse a sent identical body from an older assignment as the current delivery receipt',async()=>{
  const f=fixture(),ticket=await task(f);run(f,ticket,'idle','ready')
- message(f,ticket,'identical-old','sent','reply',true)
+ await message(f,ticket,'identical-old','sent','reply',true)
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery.state).toBe('recorded')
  const old=current(f,ticket),next={id:'new-identical',state:'pending' as const,createdAt:new Date().toISOString()}
  f.host.store.put('ticket',ticket.id,{...old,ended:undefined,assignments:[...old.assignments,next]})
@@ -258,7 +262,7 @@ it('does not reuse a sent identical body from an older assignment as the current
  const before=dbState(f),status=projectTaskStatus(f.host,current(f,ticket))
  expect(status.delivery).toMatchObject({state:'not_recorded',evidence:'none',counts:{total:0,recorded:0}})
  expect(dbState(f)).toBe(before)
- message(f,ticket,'identical-new','sent','reply',true)
+ await message(f,ticket,'identical-new','sent','reply',true)
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'recorded',evidence:'host_record',counts:{total:1,recorded:1}})
 })
 
@@ -267,7 +271,7 @@ it.each([false,true])('does not confuse a sent progress reply with ready output 
  if(router){
   f.host.store.put('router-reply-owner','progress-same',{taskIds:[ticket.id]})
   f.host.store.outbox.send({id:'progress-same',kind:'reply',text:'Actual result',channel:{source:'external',thread:'topic',address:{thread:'topic'}}});f.host.store.delivered('progress-same')
- }else message(f,ticket,'progress-same','sent','reply',true)
+ }else await message(f,ticket,'progress-same','sent','reply',true)
  const first=f.host.store.db.prepare("SELECT seq,at FROM audit WHERE json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')='progress-same' ORDER BY seq LIMIT 1").get()!
  const saved=f.host.store.get<Run>('run',ticket.id)!
  f.host.store.put('run',ticket.id,{...saved,result:'Actual result'})
@@ -281,4 +285,34 @@ it.each([false,true])('does not confuse a sent progress reply with ready output 
  const before=dbState(f)
  expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'not_recorded',counts:{total:0,recorded:0}})
  expect(dbState(f)).toBe(before)
+})
+
+it('does not reuse a same-millisecond receipt after a second ready report on an open followed task',async()=>{
+ const f=fixture(),ticket=await task(f)
+ f.host.engine.bindThread(ticket.id,{source:'local',id:'followed-thread'},true)
+ run(f,ticket,'idle','ready')
+ expect(current(f,ticket).ended).toBeUndefined()
+ await message(f,ticket,'ready-one','sent','reply',true)
+ expect(projectTaskStatus(f.host,current(f,ticket)).delivery.state).toBe('recorded')
+ const first=f.host.store.db.prepare("SELECT seq,at FROM audit WHERE json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')='ready-one' ORDER BY seq LIMIT 1").get()!
+ const assignment=current(f,ticket).assignments.at(-1)!
+ const readyRows=()=>f.host.store.db.prepare("SELECT seq FROM audit WHERE json_extract(body,'$.entity')='ticket' AND json_extract(body,'$.entityId')=? AND json_extract(body,'$.assignmentId')=? AND json_extract(body,'$.state')='ready' ORDER BY seq").all(ticket.id,assignment.id)
+ const beforeReady=readyRows()
+ expect(beforeReady).toHaveLength(1)
+ expect(Number(first.seq)).toBeGreaterThan(Number(beforeReady[0]!.seq))
+ f.host.engine.report(ticket.id,{state:'ready',summary:'Second ready',question:null})
+ const second=current(f,ticket)
+ expect(second.ended).toBeUndefined();expect(second.assignments.at(-1)!.id).toBe(assignment.id)
+ // Reproduce the persisted millisecond tie without pretending a second ready
+ // audit event exists: that is precisely the legacy evidence gap under test.
+ f.host.store.put('ticket',ticket.id,{...second,assignments:second.assignments.map(a=>a.id===assignment.id?{...a,report:{...a.report!,at:String(first.at)}}:a)})
+ expect(readyRows()).toEqual(beforeReady)
+ expect(current(f,ticket).assignments.at(-1)!.report!.at).toBe(first.at)
+ const before=dbState(f)
+ expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'not_recorded',evidence:'none',counts:{total:0,recorded:0}})
+ expect(dbState(f)).toBe(before)
+ await message(f,ticket,'ready-two','sent','reply',true)
+ const later=f.host.store.db.prepare("SELECT at FROM audit WHERE json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')='ready-two' ORDER BY seq LIMIT 1").get()!
+ expect(Date.parse(String(later.at))).toBeGreaterThan(Date.parse(String(first.at)))
+ expect(projectTaskStatus(f.host,current(f,ticket)).delivery).toMatchObject({state:'recorded',evidence:'host_record',counts:{total:1,recorded:1}})
 })

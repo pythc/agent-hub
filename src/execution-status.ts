@@ -101,7 +101,9 @@ function delivery(host:Runtime,ticket:Ticket,all:Delivery[]):TaskStatusProjectio
   const first=host.store.db.prepare("SELECT seq,at,body FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.entity')='outbox' AND json_extract(body,'$.entityId')=? ORDER BY seq LIMIT 1").get(d.id)
   if(!started?.seq||!reported?.seq||!first||Number(first.seq)<=Math.max(Number(started.seq),Number(reported.seq))||JSON.parse(String(first.body)).baseline!==0)return false
   const reportAt=Date.parse(assignment.report?.at??'')
-  return Number.isFinite(reportAt)&&Date.parse(String(first.at))>=reportAt
+  // Equal millisecond timestamps cannot bind an earlier receipt to the latest
+  // report when repeated ready states produce no new projection event.
+  return Number.isFinite(reportAt)&&Date.parse(String(first.at))>reportAt
  }
  const result=(d:Delivery)=>{
   if(d.kind!=='reply'||d.id.startsWith('attention-reply:')||!ready)return false
