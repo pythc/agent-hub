@@ -4,6 +4,7 @@ import {createRequire} from 'node:module'
 import {transformSync} from 'esbuild'
 import {expect,it,vi} from 'vitest'
 import * as statusView from '../web/chat/connector-status-view.ts'
+import * as informationView from '../web/chat/credential-reference-view.ts'
 import type {WorkspaceBinding,WorkspaceTransportContext} from '../web/chat/workspace-transport.ts'
 interface WorkspacePageContext {context:WorkspaceTransportContext;binding:WorkspaceBinding;contextKey:string;readSignal:AbortSignal}
 
@@ -20,6 +21,7 @@ function fixture(component:'page'|'setup'='setup',initial?:(call:Call)=>Promise<
  const enabled=new Map<string,boolean>()
  function snapshot(workspace:string){return {revision:7,definitions,instances:[{id:'same-source',kind:'fixture-im',label:workspace+' connection',enabled:enabled.get(workspace)??true,scopeCount:1,layers:{},credentialReferences:[]}],tools:[],diagnostics:[]}}
  let handler:(call:Call)=>Promise<any>=initial??(async call=>{
+  if(call.apiPath==='/api/credential-references')return {schema:1,scope:'host',settingsRevision:7,observedAt:Date.now(),connections:[]}
   if(call.apiPath.endsWith('/validate'))return {valid:true,credentialAvailability:[{field:'token',available:true}]}
   if(call.apiPath.endsWith('/plan'))return {id:'plan-'+call.workspace,expiresAt:Date.now()+60000}
   if(call.apiPath.endsWith('/apply'))return {applied:true}
@@ -39,7 +41,7 @@ function fixture(component:'page'|'setup'='setup',initial?:(call:Call)=>Promise<
  }
  let active=newLease();lease=active.value
  const hooks={useState:(initial:any)=>{const at=cursor++;if(!initialized.has(at)){initialized.add(at);slots[at]=typeof initial==='function'?initial():initial}return [slots[at],(value:any)=>{slots[at]=typeof value==='function'?value(slots[at]):value}]},useRef:(initial:any)=>{const at=cursor++;if(!initialized.has(at)){initialized.add(at);slots[at]={current:initial}}return slots[at]},useEffect:(setup:()=>any,next:any[])=>{const at=cursor++,before=deps[at];if(!before||next.length!==before.length||next.some((v,i)=>!Object.is(v,before[i]))){deps[at]=next;effects.push(()=>{cleanups[at]?.();cleanups[at]=setup()})}}}
- const environment:any={module:{exports:{}},exports:{},AbortController,Date,crypto,document:{activeElement:{focus(){}}},location:{assign:navigate,replace:navigate},window:{addEventListener(name:string,callback:()=>void){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(callback)},removeEventListener(name:string,callback:()=>void){listeners.get(name)?.delete(callback)}},fetch:()=>{throw Error('A root fetch bypassed the workspace binding')},require:(name:string)=>name==='react'?hooks:name==='react/jsx-runtime'?require(name):name==='lucide-react'?new Proxy({},{get:()=>()=>null}):name==='./workspace-context.tsx'?{useWorkspaceTransport:()=>lease}:name==='./connector-status-view.ts'?statusView:name.endsWith('.css')?{}:(()=>{throw Error('Unexpected import '+name)})()}
+ const environment:any={module:{exports:{}},exports:{},AbortController,Date,crypto,document:{activeElement:{focus(){}}},location:{assign:navigate,replace:navigate},window:{addEventListener(name:string,callback:()=>void){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(callback)},removeEventListener(name:string,callback:()=>void){listeners.get(name)?.delete(callback)}},fetch:()=>{throw Error('A root fetch bypassed the workspace binding')},require:(name:string)=>name==='react'?hooks:name==='react/jsx-runtime'?require(name):name==='lucide-react'?new Proxy({},{get:()=>()=>null}):name==='./workspace-context.tsx'?{useWorkspaceTransport:()=>lease}:name==='./connector-status-view.ts'?statusView:name==='./credential-reference-view.ts'?informationView:name.endsWith('.css')?{}:(()=>{throw Error('Unexpected import '+name)})()}
  environment.exports=environment.module.exports;runInContext(code,createContext(environment));const exports=environment.module.exports
  const walk=(value:any):any[]=>value==null||typeof value!=='object'?[]:Array.isArray(value)?value.flatMap(walk):[value,...walk(value.props?.children)]
  const nodes=()=>walk(tree),text=()=>textOf(tree)
@@ -100,7 +102,7 @@ it.each([403,404])('shows a fixed initial inventory failure for current-context 
  const f=fixture('page',async()=>{throw {status,payload:{code:'workspace_unavailable',error:'SECRET_WORKSPACE_ERROR'}}});await f.flush();expect(f.text()).toContain('Connections are unavailable. Try refreshing.');expect(f.text()).not.toMatch(/SECRET|Loading connections/);expect(f.calls).toHaveLength(1);expect(f.calls[0]!.workspace).toBe('studio');expect(f.navigate).not.toHaveBeenCalled()
 })
 it.each(['workspace_unavailable','workspace_unsupported'])('shows current-context %s control failure without fallback or navigation',async code=>{
- const f=fixture('page');await f.flush();f.setHandler(async()=>{throw {status:403,payload:{code,error:'SECRET_WORKSPACE_ERROR'}}});f.button('Disable connection').props.onClick();await f.flush();expect(f.text()).toContain('The request could not finish. Refresh before trying again.');expect(f.text()).not.toContain('SECRET');expect(f.calls).toHaveLength(2);expect(f.calls.every(call=>call.path.startsWith('/workspaces/studio/'))).toBe(true);expect(f.navigate).not.toHaveBeenCalled()
+ const f=fixture('page');await f.flush();f.setHandler(async()=>{throw {status:403,payload:{code,error:'SECRET_WORKSPACE_ERROR'}}});f.button('Disable connection').props.onClick();await f.flush();expect(f.text()).toContain('The request could not finish. Refresh before trying again.');expect(f.text()).not.toContain('SECRET');expect(f.calls.filter(call=>call.apiPath.startsWith('/api/connectors'))).toHaveLength(2);expect(f.calls.filter(call=>call.apiPath==='/api/credential-references')).toHaveLength(1);expect(f.calls.every(call=>call.path.startsWith('/workspaces/studio/'))).toBe(true);expect(f.navigate).not.toHaveBeenCalled()
 })
 it('shows a fixed current-context workspace validation error and does not continue to plan',async()=>{
  const f=await filled();f.setHandler(async()=>{throw {status:403,payload:{code:'workspace_unsupported',error:'SECRET_WORKSPACE_ERROR'}}});await f.submit();expect(f.text()).toContain('connector_request_failed');expect(f.text()).not.toContain('SECRET');expect(f.calls.map(call=>call.apiPath)).toEqual(['/api/connectors/validate']);expect(f.navigate).not.toHaveBeenCalled()

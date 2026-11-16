@@ -4,6 +4,7 @@ import {createRequire} from 'node:module'
 import {transformSync} from 'esbuild'
 import {expect,it} from 'vitest'
 import * as checkView from '../web/chat/connector-status-view.ts'
+import * as informationView from '../web/chat/credential-reference-view.ts'
 
 // Execute the actual full TSX module, with hook storage and element refs under
 // test control. No copied submit logic, network, DOM dependency or source edits.
@@ -22,7 +23,7 @@ function fixture(component='Setup',language='en'){
  const environment:any={module:{exports:{}},exports:{},AbortController,Date:ClockDate,crypto,document:{activeElement:{focus:()=>focus.push('opener')}},window:{addEventListener(){},removeEventListener(){}},fetch:async(path:string,options:any={})=>{
   calls.push({path,body:options.body?JSON.parse(options.body):undefined,signal:options.signal})
   return handler(path,options)
- },require:(name:string)=>name==='react'?hooks:name==='react/jsx-runtime'?require(name):name==='lucide-react'?new Proxy({},{get:()=>()=>null}):name==='./connector-status-view.ts'?checkView:name==='./workspace-context.tsx'?{useWorkspaceTransport:()=>pageContext}:name.endsWith('.css')?{}:(()=>{throw Error('Unexpected import '+name)})()}
+ },require:(name:string)=>name==='react'?hooks:name==='react/jsx-runtime'?require(name):name==='lucide-react'?new Proxy({},{get:()=>()=>null}):name==='./connector-status-view.ts'?checkView:name==='./credential-reference-view.ts'?informationView:name==='./workspace-context.tsx'?{useWorkspaceTransport:()=>pageContext}:name.endsWith('.css')?{}:(()=>{throw Error('Unexpected import '+name)})()}
  // C1 bridge contract: JSON success and legacy {status,payload} errors. The
  // optional fifth signal applies only to reads, never to an issued mutation.
  pageContext.binding={context:pageContext.context,async request(path:string,body?:unknown,_publicRead=false,_scope?:string,readSignal?:AbortSignal){
@@ -32,7 +33,7 @@ function fixture(component='Setup',language='en'){
  }}
  environment.exports=environment.module.exports
  const context=createContext(environment);runInContext(code,context);const exports=environment.module.exports
- let handler:(path:string,options:any)=>Promise<Response>=async path=>path.endsWith('/validate')?json({valid:true,credentialAvailability:[{field:'token',available:true}]}):path.endsWith('/plan')?json({id:'review-1',expiresAt:clock.now+5000}):path.endsWith('/apply')?json({applied:true}):json(snapshot)
+ let handler:(path:string,options:any)=>Promise<Response>=async path=>path==='/api/credential-references'?json({schema:1,scope:'host',settingsRevision:0,observedAt:clock.now,connections:[]}):path.endsWith('/validate')?json({valid:true,credentialAvailability:[{field:'token',available:true}]}):path.endsWith('/plan')?json({id:'review-1',expiresAt:clock.now+5000}):path.endsWith('/apply')?json({applied:true}):json(snapshot)
  const walk=(value:any):any[]=>value==null||typeof value!=='object'?[]:Array.isArray(value)?value.flatMap(walk):[value,...walk(value.props?.children)]
  const nodes=()=>walk(tree)
  function render(){index=0;tree=component==='Setup'?exports.test.Setup({definitions,revision:0,L:(en:string,zh:string)=>language==='en'?en:zh,close(){},created:(people:boolean)=>created.push(people),message:(code:string)=>code==='connector_plan_expired'?'This review expired. Check the settings again.':'Check the highlighted fields.'}):exports.ConnectorManagement({language})

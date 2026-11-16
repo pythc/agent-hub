@@ -1,6 +1,6 @@
 # O18.1: existing credential references (read only)
 
-O18.1 exposes the availability of existing explicit credential references without authenticating, starting a connection or creating a credential store. Full O18, unified account/expiry handles and fixed runtime-error adapters remain open. There is no new UI in this slice and no real platform/provider acceptance claim.
+O18.1 exposes the availability of existing explicit credential references without authenticating, starting a connection or creating a credential store. Full O18, unified account/expiry handles and fixed runtime-error adapters remain open. The following UI A slice displays this read-only status in the existing connection cards and React tool summary; independent review and actual browser acceptance are still pending. No real platform/provider acceptance is claimed.
 
 ## Contract
 
@@ -41,7 +41,11 @@ npx tsc --noEmit
 
 Author verification on this slice: 22 new tests passed; together with resource-usage and connector-management, 90/90 focused tests passed. Host `tsc --noEmit` and `git diff --check` passed. These are local synthetic/API checks, not live authentication or independent final acceptance.
 
-No visible UI changed. A later UI slice must use existing connection lists and transport, ordinary labels (for example “Credentials configured; not verified”), 14px text, no raw environment names by default, and actual light/dark/narrow/keyboard/reduced-motion acceptance. Real authentication, IM receipt/permission and provider calls require separate authorization and remain unverified.
+UI A uses the existing connector card and tool disclosure only. The default old credential field-label list is replaced by “Connection information / 接入资料” with “Found in this environment / 已在当前环境找到”, “Some information is missing / 缺少部分资料”, “Cannot check here / 暂无法检查”, or “Nothing to check here / 暂无可检查项”. One 14px page note says this check does not verify service access. No model or legacy tool-management UI is added. Existing backend credential field-label DTOs remain compatible, but this consumer neither displays them nor maps slots to them. Authentication, diagnostics, grants and form submits are unchanged.
+
+The UI captures the existing C1 binding and read signal, sends only GET without query/scope/public-read overrides, validates and rebuilds the DTO, and joins only existing visible `(kind,id)` rows at the inventory settings revision. Failed presence reads remain local to that display. Current 401/403 clears retained information; other failures can show explicitly earlier information and its actual observation time. Workspace/account/session/epoch changes clear it and ignore late callbacks. Requests are single-flight within a page context; changed saved revisions recheck after the older read settles. Same-revision manual refresh re-reads environment presence rather than using the revision as a permanent cache key. No root-endpoint fallback or authentication/probe call is added.
+
+Author UI validation: 48 new view/actual-component callback cases, together with credential GET and existing connector regressions, 146/146 passed across six focused files. Chat and host type checks plus chat build passed. Two existing VM harnesses only gained the helper import, an independent credential-GET response, and exact path-based GET counts; original mutation and authorization assertions are retained. Actual light/dark/narrow/keyboard/reduced-motion browser acceptance and independent review remain pending. Real authentication, IM receipt/permission and provider calls require separate authorization and remain unverified.
 
 ## Migration and rollback
 

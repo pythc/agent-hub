@@ -2,11 +2,13 @@ import {useEffect,useRef,useState,type FormEvent} from 'react'
 import {Check,ChevronRight,ExternalLink,LoaderCircle,Plug,Plus,RefreshCw,ShieldCheck,X} from 'lucide-react'
 import type {ConnectorManagement as ConnectorService,ConnectorLayer,ConnectorFieldIssue} from '../../src/connector-management.ts'
 import {connectorCheck,connectorCheckLabel,connectorLayerNames,connectorTime} from './connector-status-view.ts'
+import {readCredentialInformation,credentialInformationLabel,type CredentialInformation} from './credential-reference-view.ts'
 import {useWorkspaceTransport,type WorkspacePageContext} from './workspace-context.tsx'
 import type {WorkspaceBinding} from './workspace-transport.ts'
 import './connector-management.css'
 type Snapshot=ReturnType<ConnectorService['snapshot']>
 type Definition=Snapshot['definitions'][number]
+type InformationView={owner:string;data:CredentialInformation|null;phase:'loading'|'ready'|'failed'|'stale'|'changed'}
 const split=(value:string)=>value.split(/[\n,]/).map(s=>s.trim()).filter(Boolean)
 const requestCodes=['connector_invalid','connector_conflict','connector_missing','connector_disabled','connector_unsupported','connector_request_conflict','connector_busy','connector_actors_required','connector_plan_expired']
 class ConnectorRequestError extends Error {constructor(readonly code:string,readonly issues:ConnectorFieldIssue[]=[]){super(code)}}
@@ -41,16 +43,37 @@ export function ConnectorManagement({language}:{language:'en'|'zh-CN'}){
  const L=(en:string,zh:string)=>language==='en'?en:zh,workspace=useWorkspaceTransport()
  const [viewContext,setViewContext]=useState(workspace.contextKey)
  const [data,setData]=useState<Snapshot|null>(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(''),[creating,setCreating]=useState(false),[needsPeople,setNeedsPeople]=useState(false)
+ const [information,setInformation]=useState<InformationView>({owner:workspace.contextKey,data:null,phase:'loading'})
+ const informationFlight=useRef<{owner:string;revision:number}|null>(null),informationWanted=useRef<{owner:string;revision:number}|null>(null)
  const alive=useRef(true),working=useRef(false),loadGeneration=useRef(0),lifetime=useRef(workspace)
  lifetime.current=workspace
  const current=(captured:WorkspacePageContext)=>alive.current&&!captured.readSignal.aborted&&lifetime.current.contextKey===captured.contextKey&&lifetime.current.binding===captured.binding
  const message=(code:string)=>code==='connector_plan_expired'?L('This review expired. Check the settings again.','本次核对已过期，请重新检查配置。'):code==='connector_actors_required'?L('Set who can request work before enabling this connection.','请先设置谁能发起工作，再启用连接。'):code==='connector_conflict'?L('Settings changed. Refresh and review the current connection.','配置已变化，请刷新并核对当前连接。'):code==='connector_disabled'?L('Enable this connection before making a remote diagnostic call.','请先启用此连接，再进行远端诊断。'):code==='connector_invalid'?L('Check the required fields, identifiers, and credential mode.','请检查必填字段、标识符与凭据模式。'):code==='connector_unsupported'?L('This plugin does not provide that setup or diagnostic capability.','此插件未提供该配置或诊断能力。'):code==='connector_busy'?L('Diagnostics are busy. Try again shortly.','诊断正在进行，请稍后重试。'):L('The request could not finish. Refresh before trying again.','请求未能完成，请刷新后再试。')
- const load=async(captured=workspace)=>{if(!current(captured))return;const generation=++loadGeneration.current,next=await api<Snapshot>(captured.binding,'',undefined,[],captured.readSignal);if(current(captured)&&generation===loadGeneration.current)setData(next)}
+ const loadInformation=async(captured:WorkspacePageContext,revision:number)=>{
+  if(!current(captured))return
+  informationWanted.current={owner:captured.contextKey,revision}
+  if(informationFlight.current?.owner===captured.contextKey)return
+  const token={owner:captured.contextKey,revision};informationFlight.current=token
+  setInformation(before=>({owner:token.owner,data:before.owner===token.owner&&before.data?.settingsRevision===revision?before.data:null,phase:'loading'}))
+  try{
+   const value=await captured.binding.request<unknown>('/api/credential-references',undefined,false,undefined,captured.readSignal)
+   if(!current(captured)||informationFlight.current!==token||informationWanted.current?.revision!==revision)return
+   const next=readCredentialInformation(value)
+   setInformation({owner:token.owner,data:next.settingsRevision===revision?next:null,phase:next.settingsRevision===revision?'ready':'changed'})
+  }catch(cause){
+   if(!current(captured)||informationFlight.current!==token||informationWanted.current?.revision!==revision)return
+   const status=(cause as {status?:number}|null)?.status,clear=status===401||status===403||contextEnded(cause)
+   setInformation(before=>{const retained=!clear&&before.owner===token.owner&&before.data?.settingsRevision===revision?before.data:null;return {owner:token.owner,data:retained,phase:retained?'stale':'failed'}})
+  }finally{
+   if(informationFlight.current===token){informationFlight.current=null;const wanted=informationWanted.current;if(current(captured)&&wanted?.owner===captured.contextKey&&wanted.revision!==revision)void loadInformation(captured,wanted.revision)}
+  }
+ }
+ const load=async(captured=workspace)=>{if(!current(captured))return;const generation=++loadGeneration.current,next=await api<Snapshot>(captured.binding,'',undefined,[],captured.readSignal);if(current(captured)&&generation===loadGeneration.current){setData(next);void loadInformation(captured,next.revision)}}
  useEffect(()=>{
-  const captured=workspace;alive.current=true;working.current=false;loadGeneration.current++;setViewContext(captured.contextKey);setData(null);setError('');setNotice('');setBusy('');setCreating(false);setNeedsPeople(false)
+  const captured=workspace;alive.current=true;working.current=false;loadGeneration.current++;informationFlight.current=null;informationWanted.current=null;setInformation({owner:captured.contextKey,data:null,phase:'loading'});setViewContext(captured.contextKey);setData(null);setError('');setNotice('');setBusy('');setCreating(false);setNeedsPeople(false)
   void load(captured).catch(cause=>{if(current(captured)&&!contextEnded(cause))setError(requestFailure(cause))})
   const update=()=>{void load(captured).catch(()=>{})};window.addEventListener('roppo:plugins-changed',update)
-  return()=>{alive.current=false;loadGeneration.current++;window.removeEventListener('roppo:plugins-changed',update)}
+  return()=>{alive.current=false;loadGeneration.current++;informationFlight.current=null;informationWanted.current=null;window.removeEventListener('roppo:plugins-changed',update)}
  },[workspace.binding,workspace.contextKey,workspace.readSignal])
  const run=async(key:string,action:(binding:WorkspaceBinding,stillCurrent:()=>boolean)=>Promise<unknown>)=>{const captured=workspace;if(working.current||!current(captured))return;working.current=true;setBusy(key);setError('');setNotice('');setNeedsPeople(false);try{await action(captured.binding,()=>current(captured));if(current(captured))await load(captured)}catch(cause){if(current(captured)&&!contextEnded(cause))setError(requestFailure(cause))}finally{if(current(captured)){working.current=false;setBusy('')}}}
  const layers=(Object.keys(connectorLayerNames) as ConnectorLayer[]).map(id=>({id,names:connectorLayerNames[id]}))
@@ -61,6 +84,12 @@ export function ConnectorManagement({language}:{language:'en'|'zh-CN'}){
   const unavailable:Record<string,[string,string]>={reachability_probe_unavailable:['This app does not provide a service check.','此应用未提供服务检查。'],identity_probe_unavailable:['This app does not provide an identity check.','此应用未提供身份检查。'],directory_probe_unavailable:['This app does not provide a directory check here.','此应用暂未提供目录检查。']}
   const value=messages[code]??unavailable[code];return value?L(...value):L('No verified result. Check again.','尚无已验证结果，请重新检查。')
  }
+ const informationRow=(kind:'source'|'tool',id:string)=>{
+  const same=information.owner===workspace.contextKey,retained=same&&information.data?.settingsRevision===data?.revision?information.data:null
+  const row=retained?.connections.find(item=>item.kind===kind&&item.id===id),phase=!same?'loading':information.data&&information.data.settingsRevision!==data?.revision?'changed':information.phase
+  const label=phase==='changed'?L('Settings changed. Refresh to check.','配置已变化，请刷新后检查。'):row?word(credentialInformationLabel(row.state)):phase==='loading'?L('Checking saved information…','正在检查已保存资料…'):L('Information check unavailable','暂时无法检查资料')
+  return <div className="connector-information" data-information-kind={kind} data-information-id={id} data-information-state={phase==='stale'?'stale':phase==='changed'?'changed':row?.state??phase}><strong>{L('Connection information','接入资料')}</strong><span>{phase==='stale'?L('Earlier record · ','先前记录 · '):''}{label}</span></div>
+ }
  if(viewContext!==workspace.contextKey)return <section className="connector-page" role="status">{L('Loading connections…','正在读取连接…')}</section>
  return <section className="connector-page" aria-labelledby="connector-title">
   <header className="connector-heading"><div><h1 id="connector-title">{L('Connections','连接器')}</h1></div><div className="connector-actions"><button disabled={!!busy} onClick={()=>void run('refresh',async()=>{})}><RefreshCw size={16} className={busy==='refresh'?'connector-spin':''}/>{L('Refresh','刷新')}</button><button className="connector-primary" disabled={!!busy} onClick={()=>{if(current(workspace))setCreating(true)}}><Plus size={16}/>{L('Add connection','添加连接')}</button></div></header>
@@ -68,22 +97,22 @@ export function ConnectorManagement({language}:{language:'en'|'zh-CN'}){
   <div role="status" aria-live="polite">{notice?<p className="connector-notice">{notice}{needsPeople?<> <a href="#connections">{L('Set people','设置人员')}</a></>:null}</p>:null}</div>{error?<p className="connector-error" role="alert">{message(error)}{error==='connector_actors_required'?<> <a href="#connections">{L('Set people','设置人员')}</a></>:null}</p>:null}
   {!data?<p className="connector-loading">{!error?<LoaderCircle className="connector-spin" size={18}/>:null}{error?L('Connections are unavailable. Try refreshing.','暂时无法读取连接，请重试刷新。'):L('Loading connections…','正在读取连接…')}</p>:<>
    {!data.instances.length?<div className="connector-empty"><Plug size={28}/><h2>{L('Connect your first app','连接第一个应用')}</h2><p>{L('Choose an installed app. More platforms are available through plugins.','选择已安装应用，其他平台可通过插件添加。')}</p><button onClick={()=>{if(current(workspace))setCreating(true)}}>{L('Choose an installed app','选择已安装应用')}<ChevronRight size={16}/></button></div>:null}
+   <div className="connector-information-note" aria-live="polite"><p>{L('Service access is not verified by this check.','此项检查不代表服务可用。')}</p>{information.owner===workspace.contextKey&&['failed','stale'].includes(information.phase)?<p role="status">{L('Information check unavailable','暂时无法检查资料')}</p>:null}{information.owner===workspace.contextKey&&information.data?.settingsRevision===data.revision?<time dateTime={new Date(information.data.observedAt).toISOString()}>{information.phase==='stale'?L('Earlier record · ','先前记录 · '):L('Read at · ','读取于 · ')}{time(information.data.observedAt)}</time>:null}</div>
    <div className="connector-grid">{data.instances.map(instance=><article className="connector-card" key={instance.id} data-source-id={instance.id}>
     <header><div>{(data.definitions.find(d=>d.kind===instance.kind)?.label??instance.kind)!==instance.label?<span className="connector-kind">{data.definitions.find(d=>d.kind===instance.kind)?.label??instance.kind}</span>:null}<h2>{instance.label}</h2></div><span className={'connector-pill '+(instance.enabled?'is-enabled':'')}>{instance.enabled?L('Enabled','已启用'):L('Disabled','已停用')}</span></header>
     {!instance.enabled?<p className="connector-detail">{L('Review access before enabling this connection.','启用连接前，请先核对访问权限。')}</p>:null}
-    {instance.credentialReferences.some(c=>!c.available)?<p className="connector-warning">{L('A credential reference is unavailable. Review the connection records.','有凭据引用不可用，请查看连接记录。')}</p>:null}
+    {informationRow('source',instance.id)}
     <ol className="connector-layers">{layers.map(layer=>{const check=connectorCheck(instance.layers[layer.id],layer.id,data.revision),passed=check.state==='passed';return <li key={layer.id} data-layer={layer.id} data-state={check.state}>
       <div><span className={'connector-dot '+(passed?'is-passed':'')} aria-hidden="true">{passed?<Check size={12}/>:null}</span><div><strong>{word(layer.names)}</strong><span className="connector-result">{word(connectorCheckLabel(check.state,layer.id))}</span></div><button disabled={!!busy||!instance.enabled&&layer.id!=='configuration'} onClick={()=>void run(instance.id+':'+layer.id,async(binding)=>{await api(binding,'/probe',{sourceId:instance.id,revision:data.revision,level:layer.id,requestId:crypto.randomUUID()})})} aria-label={L('Check '+layer.names[0]+' for '+instance.label,'检查'+instance.label+'的'+layer.names[1])}>{busy===instance.id+':'+layer.id?<LoaderCircle size={14} className="connector-spin"/>:<RefreshCw size={14}/>}<span>{L('Check','检查')}</span></button></div>
       {check.at!==null?<time className="connector-check-time" dateTime={new Date(check.at).toISOString()}>{time(check.at)}{check.fixture?' · '+L('Simulated result','模拟结果'):''}</time>:null}
       {['failed','unknown','interrupted','unsupported'].includes(check.state)?<p className="connector-evidence">{explanation(check.code)}</p>:null}
      </li>})}<li data-layer="messages" data-state="not_tested"><div><span className="connector-dot"/><div><strong>{L('Messages and channel access','消息与频道权限')}</strong><span className="connector-result">{L('Not verified','尚未验证')}</span></div></div><p className="connector-evidence">{L('Reading, receiving, sending and target-channel access are unverified.','尚未验证消息读取、收发及目标频道权限。')}</p></li></ol>
     <details className="connector-records"><summary>{L('View records','查看记录')}</summary><dl><dt>{L('Connection ID','连接编号')}</dt><dd>{instance.id}</dd><dt>{L('Settings version','配置版本')}</dt><dd>{data.revision}</dd><dt>{L('Configured scopes','已配置范围')}</dt><dd>{instance.scopeCount}</dd></dl>
-     {instance.credentialReferences.length?<div className="connector-credential-records"><h3>{L('Credentials','凭据')}</h3>{instance.credentialReferences.map((credential,index)=><p key={index}>{credential.field} · {credential.available?L('Reference available','引用可用'):L('Reference unavailable','引用不可用')}</p>)}</div>:null}
      <h3>{L('Earlier checks','先前检查')}</h3><p>{L('Earlier results may no longer apply.','先前结果可能已不适用。')}</p><ul className="connector-history">{data.diagnostics.filter(record=>record.sourceId===instance.id).slice(-5).reverse().map(record=><li key={record.id}><strong>{word(connectorLayerNames[record.level]??['Earlier check','先前检查'])}</strong><time>{time(connectorTime(record.finishedAt??record.startedAt))}{record.evidenceMode==='fixture'?' · '+L('Simulated result','模拟结果'):''}</time><p>{explanation(record.code)}</p></li>)}</ul>
     </details>
     <footer><a href="#connections">{L('Who can request work','谁能发起工作')}<ExternalLink size={14}/></a><button disabled={!!busy} onClick={()=>void run(instance.id+':control',async(binding,stillCurrent)=>{await api(binding,'/control',{sourceId:instance.id,revision:data.revision,enabled:!instance.enabled,requestId:crypto.randomUUID()});if(!stillCurrent())return;setNotice(instance.enabled?L('Connection disabled. New calls are blocked; earlier actions are not undone.','连接已停用。已阻止新调用，先前操作不会因此撤销。'):L('Connection enabled. Its checks are still separate.','连接已启用，各项检查仍需分别进行。'))})}>{instance.enabled?L('Disable connection','停用连接'):L('Enable connection','启用连接')}</button></footer>
    </article>)}</div>
-   {data.tools.length?<details className="connector-tools"><summary>{L('Tool connections','工具连接')} ({data.tools.length})</summary><p>{L('Existing Worker permissions still apply. This page does not call tools.','沿用现有 Worker 权限，本页不会调用工具。')}</p>{data.tools.map(tool=><div key={tool.id}><strong>{tool.label}</strong><span>{tool.enabled?L('Enabled','已启用'):L('Disabled','已停用')} · {L('Not tested','未测试')}</span><a href="#integrations/tools">{L('Manage','管理')}</a></div>)}</details>:null}
+   {data.tools.length?<details className="connector-tools"><summary>{L('Tool connections','工具连接')} ({data.tools.length})</summary><p>{L('Existing Worker permissions still apply. This page does not call tools.','沿用现有 Worker 权限，本页不会调用工具。')}</p>{data.tools.map(tool=><div key={tool.id}><strong>{tool.label}</strong><span>{tool.enabled?L('Enabled','已启用'):L('Disabled','已停用')} · {L('Not tested','未测试')}</span><a href="#integrations/tools">{L('Manage','管理')}</a>{informationRow('tool',tool.id)}</div>)}</details>:null}
   </>}
   {creating&&data?<Setup definitions={data.definitions.filter(d=>d.setupAvailable)} revision={data.revision} L={L} close={()=>{if(current(workspace))setCreating(false)}} created={hasPeople=>{if(!current(workspace))return;setCreating(false);setError('');setNeedsPeople(!hasPeople);setNotice(hasPeople?L('Connection saved and disabled.','连接已保存并保持停用。'):L('Connection saved and disabled. Set who can request work before enabling it.','连接已保存并保持停用。启用前请先设置谁能发起工作。'));void load(workspace).catch(cause=>{if(current(workspace)&&!contextEnded(cause))setError(requestFailure(cause))})}} message={message}/>:null}
  </section>
