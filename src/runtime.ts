@@ -1179,7 +1179,7 @@ export class Runtime {
         run.phase = 'uncertain'; run.error = String(error).slice(0, 500)
         persist()
         const humanInputs=inputs.filter((i):i is Extract<TicketInput,{kind:'trigger'}>=>i.kind==='trigger'&&!!i.human&&!i.context)
-        this.reportWork(ticket.id, { state: 'blocked', summary: run.error, question: 'Execution could not be confirmed. Inspect the native thread and workspace, then retry or take over.',...(humanInputs.length===1?{askedBy:humanInputs[0]!.triggerId}:{}) })
+        this.reportWork(ticket.id, { state: 'blocked', summary: run.error, question: 'Execution could not be confirmed. Review task records and the actual outcome before continuing.',...(humanInputs.length===1?{askedBy:humanInputs[0]!.triggerId}:{}) })
       }
     } finally {
       live.accepting=false

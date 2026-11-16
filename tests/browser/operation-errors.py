@@ -53,7 +53,7 @@ with sync_playwright() as p:
   phase='actual_task_drawers';page.goto(info['url']);expect(page.locator('#task-search')).to_be_visible()
   for index,task in enumerate(info['tasks']):
    page.locator('#work-'+task['id']).click();dialog=page.locator('#operator-task');expect(dialog).to_be_visible();expect(dialog.locator('#operator-task-title')).to_have_text(task['title'])
-   expected='Tool result is unconfirmed' if task['case']=='unknown' else 'Execution could not be confirmed. Inspect the native thread and workspace, then retry or take over.'
+   expected='Tool result is unconfirmed' if task['case']=='unknown' else 'Execution could not be confirmed. Review task records and the actual outcome before continuing.'
    expect(dialog).to_contain_text(expected);safe();shot('actual-detail-'+task['case']+'-light.png');page.get_by_role('button',name='Close details',exact=True).click();expect(dialog).to_have_count(0)
   page.reload();expect(page.locator('#task-search')).to_be_visible();page.locator('#work-'+info['tasks'][0]['id']).click();expect(page.locator('#operator-task')).to_contain_text('Execution could not be confirmed.');page.keyboard.press('Escape');expect(page.locator('#operator-task')).to_have_count(0)
   checks.append({'kind':'actual-ui','check':'existing task history and six original detail drawers show the existing fixed unconfirmed-execution guidance (specific run error is not exposed there) or safe tool-outcome summary; no raw markers; full reload retains guidance'})
