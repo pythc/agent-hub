@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 import time
 import urllib.error
@@ -60,6 +61,30 @@ def api(route, body=None, authorized=True, origin=None):
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, json.load(error)
+
+def startup_diagnostics():
+    # Capture before the finally cleanup removes the only failed container.
+    # Never dump Config/Env, credentials or application state files.
+    def safe(text):
+        text = re.sub(r'#pair=[A-Za-z0-9_-]+', '#pair=REDACTED', text)
+        text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+', r'\1REDACTED', text)
+        text = re.sub(r'(?i)(["\']?(?:password|token|secret|authorization)["\']?\s*[:=]\s*)["\']?[^\s,"\'}]+', r'\1REDACTED', text)
+        return text[-16000:]
+    try:
+        result = compose('logs', '--no-color', '--tail', '80', 'roppo', check=False)
+        logs = safe(result.stdout + result.stderr)
+        (args.output / 'runtime-failure.log').write_text(logs)
+        print('Runtime diagnostics (redacted):\n' + logs, file=sys.stderr)
+        ids = compose('ps', '--all', '--quiet', 'roppo', check=False).stdout.split()
+        for container_id in ids:
+            if not re.fullmatch(r'[a-f0-9]{12,64}', container_id):
+                continue
+            state = run(['docker', 'inspect', '--format', '{{json .State}}', container_id], check=False)
+            health = safe(state.stdout + state.stderr)
+            (args.output / ('container-state-' + container_id[:12] + '.json')).write_text(health)
+            print('Container state (redacted):\n' + health, file=sys.stderr)
+    except Exception as error:
+        print('Could not collect container diagnostics: ' + type(error).__name__, file=sys.stderr)
 
 try:
     run(['./deployment/compose.sh', 'up'], name='up')
@@ -173,6 +198,9 @@ try:
     (args.output / 'browser.json').write_text(json.dumps({'base': base, 'username': username, 'password': password, 'project': args.project}))
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'mode': 'fixture-api-real-container', 'commercialModelCalls': 0, 'project': args.project, 'image': args.image, 'checks': checks, 'doctor': capability}, indent=2))
     print(json.dumps({'passed': True, 'checks': list(checks), 'evidence': str(args.output)}))
+except Exception:
+    startup_diagnostics()
+    raise
 finally:
     if not args.keep:
         compose('down', '--volumes', check=False, name='cleanup')
