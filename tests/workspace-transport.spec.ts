@@ -20,10 +20,9 @@ function fixture(href='http://localhost/configure',fetcher?:(path:string,options
 }
 const inventory={version:1,currentId:'studio',items:[{id:'studio',name:'Studio',kind:'organization'},{id:'other',name:'Other',kind:'organization'}]}
 const response=(body:unknown,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body})
-it('exports the bridge from the existing content controller without migrating any consumers',async()=>{
+it('exports the bridge from the existing content controller',async()=>{
  const plugin=configurationContent(),load=plugin.load as (id:string)=>unknown,text=await load.call({},'\0virtual:configuration-content')
  expect(String(text)).toContain('transport:workspaceBridge()');expect(String(text)).toContain('const configurationReady=startEntrySession()')
- for(const name of ['execution-trace','worker-templates','connector-management'])expect(readFileSync(new URL('../web/chat/'+name+'.tsx',import.meta.url),'utf8')).not.toContain('workspace-transport')
 })
 it('keeps explicit pending/ready/blocked states independent of swallowed initialization promises',async()=>{
  const b=fixture();expect(b.transport.context().state).toBe('pending');await expect(b.transport.request('/api/example')).rejects.toMatchObject({payload:{code:'workspace_pending'}});expect(b.calls).toEqual([])
