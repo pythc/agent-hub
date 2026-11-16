@@ -249,3 +249,14 @@ A–D 合并后仍只可标本地代码/协议/UI 验收；O14 真实端到端�
 第三轮追加：C0 仍不冻结；补入旧 binary schema/version + disabled staging、防 Store observers 内存副作用、全部 ingress/recordNative/SourceContext/flush/resources/tools/apply gate、COMMIT 丢返回核查；close-setup 抢占取消 + 独立 cleanup deadline，环境额外禁 NODE_*/OPENSSL_*/SSL_CERT_* 与 proxy 变体。A 独立安全切片已获授权，B/C 未获冻结或实现授权。
 
 先由 root 与独立 review 线复验 B/C 设计；A 可按明确限定先行。B1/B2/C0/C1 未实现时 UI 必须如实保留认证/选人 bootstrap 限制；本提案和现有 fake tests 均不能标为已支持真实 IM。
+
+
+## 11. A 安全切片的实际 API 增量（不代表 B/C/D 已实现）
+
+A 仅修改本地 recipe/validation/control 边界，沿用现有 validate → plan → Onboarding.sourcePlan → connection/apply。`POST /api/connectors/validate` 与 `/plan` 新增可选 `intent: 'draft'`；此明确意图要求 `actors: []` 并生成 disabled、空 allowedBots、无 memberSync/custom admission/工具 grant 的草稿。不带 intent 的既有非空 actors 流程保持兼容；无 intent 的空 actors 仍按 actors.required 拒绝，intent=draft 却带 actors 也拒绝歧义。
+
+validate 成功新增 `credentialAvailability: [{field, available}]`，只表示本次材料已提供或对应宿主环境引用存在；不返回环境变量名称/值，不认证，不要求变量现在已存在才能保存 disabled 草稿。失败返回固定 `issues: [{field, code}]`，field 仅 label、actors、当前已安装插件声明的字段名，code 仅固定枚举。plan 错误通过 ConnectorError 的同一固定 envelope 返回 issues；未知/无法安全映射的异常保持表单级 code，不解析错误文案。packaged Ajv path 仅映射声明字段；native 可选 connection.validateFields 只提供本地 typed issue 元数据，现有 validate 仍是权威，metadata 不能使失败变成通过。插件校验使用冻结副本，不能把待返回 recipe 变成 enabled 或偷偷增加 actor。
+
+普通事件入口若无 allowedActors、无显式 allowedBots、也无明确 unlisted admission 放行，control(enabled=true) 在任何 settings/receipt 写入前返回 connector_actors_required；disable 沿用原行为。既有明确 bot/custom admission、events:false 的工具专用连接不受此 gate 误伤，也不增加或修改 Worker/tool grants。A 不调用认证、members/start/poll/deliver，不开诊断工厂、不接 activate，不触碰 C0 的 enabled:true 提交机制；UI actor 必填和 disabled 不能认证的现状仍待 D/B 处理，不能标 O13/O14 完成。
+
+本地回归新增显式草稿无 DB 写/无适配器调用、字段白名单与恶意错误过滤、环境引用 availability、空入口启用前拒绝、bot/custom/tool-only 兼容、实际 HTTP plan/apply disabled/replay、既有 apply 事务前写失败+同 plan 重试零 grant/run；这只验证 A 的现有流程，不证明新 C0 协议。C0 的每个 COMMIT 丢返回/observer/全入口/旧 binary 故障矩阵仍未实现、未冻结。

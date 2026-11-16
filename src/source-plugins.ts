@@ -19,7 +19,7 @@ export interface SourcePlugin {
   validate?(config:SourceConfig):void
   create(config:SourceConfig):Source
   /** Optional setup metadata shares the packaged source-plugin vocabulary. */
-  connection?:{setup:PluginManifest['setup'];credentials?:Record<string,string>;scopesPath?:string;validate?:(config:SourceConfig)=>void}
+  connection?:{setup:PluginManifest['setup'];credentials?:Record<string,string>;scopesPath?:string;validate?:(config:SourceConfig)=>void;validateFields?:(config:SourceConfig)=>{field:string;code:'required'|'invalid_format'|'invalid_environment_reference'|'credential_unavailable'|'too_many'|'unsupported_field'}[]}
   observed?(config:SourceConfig):boolean
   authorizeRead?(config:SourceConfig,ticket:Ticket,resource:string):void
   /** Platform membership facts. Host actor/tenant/mandate checks still apply. */
@@ -70,6 +70,8 @@ export class SourceRegistry {
     const pkg=this.packages.find(p=>p.manifest.kind===config.kind)
     if(pkg&&!new Ajv2020({strict:false,validateFormats:false}).compile(pkg.manifest.configSchema)(config))throw Error('Source fields do not match the plugin schema')
   }
+  /** Optional local issue metadata; validation remains authoritative. */
+  validationIssues(config:SourceConfig){return this.plugins.get(config.kind)?.connection?.validateFields?.(config)??[]}
   observed(config:SourceConfig){return config.observed??this.plugins.get(config.kind)?.observed?.(config)??true}
   authorizeRead(config:SourceConfig,ticket:Ticket,resource:string){this.plugins.get(config.kind)?.authorizeRead?.(config,ticket,resource)}
   scopes(config:SourceConfig){return this.plugins.get(config.kind)?.scopes?.(config)}
