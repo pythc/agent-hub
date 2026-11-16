@@ -17,6 +17,15 @@ export class Approvals {
       this.pending.set(id,{resolve,reject,timer})
     })
   }
+  /** Observation only: persisted metadata alone cannot restore a waiting request. */
+  hasLiveRequest(id:string,now=Date.now()):boolean{
+    try{
+      const item=this.store.get<Approval>('approval',id)
+      if(!Number.isFinite(now)||!this.pending.has(id)||item?.id!==id||item.status!=='pending')return false
+      if(!item.native||typeof item.native.id!=='string'||typeof item.native.method!=='string'||!item.native.params||typeof item.native.params!=='object'||Array.isArray(item.native.params))return false
+      return Number.isSafeInteger(item.createdAt)&&item.createdAt>=0&&Number.isSafeInteger(item.expiresAt)&&item.createdAt<=now&&item.expiresAt>now&&item.expiresAt>item.createdAt
+    }catch{return false}
+  }
   answer(id:string,value:unknown):void{
     const item=this.store.get<Approval>('approval',id),pending=this.pending.get(id)
     if(!item||item.status!=='pending'||!pending||item.expiresAt<=Date.now())throw Error('Approval is expired or no longer active')
