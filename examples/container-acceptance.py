@@ -75,6 +75,12 @@ def startup_diagnostics():
         logs = safe(result.stdout + result.stderr)
         (args.output / 'runtime-failure.log').write_text(logs)
         print('Runtime diagnostics (redacted):\n' + logs, file=sys.stderr)
+        # Fixed no-op probe under the exact Compose security policy. No app
+        # entrypoint, state mutation, external calls or credential reads.
+        probe = compose('run', '--rm', '--no-deps', '--entrypoint', 'bwrap', 'roppo', '--unshare-all', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true', check=False)
+        probe_log = safe(probe.stdout + probe.stderr)
+        (args.output / 'sandbox-startup-failure.log').write_text(probe_log)
+        print('Sandbox no-op diagnostics (redacted):\n' + probe_log, file=sys.stderr)
         ids = compose('ps', '--all', '--quiet', 'roppo', check=False).stdout.split()
         for container_id in ids:
             if not re.fullmatch(r'[a-f0-9]{12,64}', container_id):

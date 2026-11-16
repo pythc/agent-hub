@@ -57,7 +57,13 @@ it('integrates recipe, existing onboarding, explicit Worker activation and persi
  expect(trace.tasks[0].evidence).toMatchObject({commit:'unverified',tests:'unverified',deployment:'unverified'})
  const events=(await f.api('/api/execution-trace/events?ticketId='+encodeURIComponent(assigned.body.ticketId))).body
  expect(events.events.some((e:any)=>e.stage==='assignment')).toBe(true);expect(events.events.some((e:any)=>e.stage==='run')).toBe(true)
- expect((await f.api('/api/execution-trace/events?cursor='+events.cursor)).body.events).toEqual([])
+ // A result can be retained before the job/outbox finishes. Newer delivery
+ // events are valid catch-up; a cursor must exclude already observed events.
+ const catchup=(await f.api('/api/execution-trace/events?cursor='+events.cursor)).body
+ expect(catchup.cursor).toBeGreaterThanOrEqual(events.cursor)
+ expect(catchup.events.every((event:any)=>event.cursor>events.cursor)).toBe(true)
+ const seen=new Set(events.events.map((event:any)=>event.id))
+ expect(catchup.events.some((event:any)=>seen.has(event.id))).toBe(false)
  expect(JSON.stringify(events)).not.toContain(secret);expect(JSON.stringify(events)).not.toContain(manifest.instructions)
  const current=(await f.api('/api/worker-templates')).body
  expect((await f.api('/api/worker-templates/remove',{id:manifest.id,version:manifest.version,revision:current.revision,requestId:randomUUID()})).body.historyRetained).toBe(true)
