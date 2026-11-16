@@ -1,0 +1,85 @@
+import {useEffect,useRef,useState} from 'react'
+import {Activity,ArrowRight,Check,CheckCircle2,Clock3,FileCheck2,GitCommitHorizontal,History,LoaderCircle,RefreshCw,ShieldQuestion,Square,Terminal,Wrench} from 'lucide-react'
+import type {TraceEvent,TraceTask,TraceStage,TraceState} from '../../src/execution-trace.ts'
+import './execution-trace.css'
+
+type Snapshot={visibility:string;at:number;revision:number;cursor:number;total:number;offset:number;more:boolean;tasks:TraceTask[]}
+type Events={visibility:string;events:TraceEvent[];cursor:number;head:number;more:boolean;at:number}
+type Action=TraceTask['actions'][number]
+class TraceRequestError extends Error {constructor(readonly code:string){super(code)}}
+async function request<T>(path:string,signal?:AbortSignal,body?:unknown):Promise<T>{
+ const response=await fetch('/api/execution-trace'+path,{credentials:'same-origin',signal,...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{})})
+ if(response.status===401){location.assign('/chat');throw new TraceRequestError('login_required')}
+ const result=await response.json()
+ if(!response.ok)throw new TraceRequestError(typeof result.code==='string'?result.code:'trace_request_failed')
+ return result
+}
+const stageNames:Record<TraceStage,[string,string]>={task:['Task','任务'],assignment:['Dispatch','派工'],run:['Execution','执行'],approval:['Permission','授权'],tool:['Tool activity','工具动态'],result:['Result','结果'],acceptance:['Acceptance','验收'],job:['Scheduled work','调度'],delivery:['Delivery','交付'],recovery:['Recovery','恢复'],commit:['Commit evidence','提交证据'],test:['Test evidence','测试证据'],deployment:['Deployment evidence','部署证据']}
+const stateNames:Record<TraceState,[string,string]>={queued:['Queued','已排队'],running:['Running','运行中'],waiting:['Waiting','等待中'],ready:['Result ready','结果就绪'],blocked:['Needs input','需要处理'],failed:['Failed','失败'],cancelled:['Stopped','已停止'],completed:['Completed','已完成'],interrupted:['Interrupted','已中断'],uncertain:['Check outcome','核查结果'],pending:['Pending','待处理'],resolved:['Resolved','已处理'],expired:['Expired','已过期'],passed:['Passed','通过'],insufficient:['Evidence missing','证据不足'],errored:['Check failed','检查失败'],stale:['Out of date','已过时'],sent:['Sent','已送达'],held:['On hold','已挂起'],dropped:['Withdrawn','已撤回'],idle:['Idle','空闲'],starting:['Starting','启动中'],background:['Working','处理中'],human:['Human control','人工接管'],delivering:['Delivering','交付中'],merging:['Merging','合并中'],complete:['Receipt retained','回执已保留'],ended:['Ended','已结束'],observed:['Observed','已记录'],sending:['Sending','发送中'],applying:['Applying','正在应用'],applied:['Applied','已应用'],declined:['Declined','已拒绝']}
+function StageIcon({stage}:{stage:TraceStage}){const Icon=stage==='approval'?ShieldQuestion:stage==='acceptance'||stage==='test'?FileCheck2:stage==='commit'?GitCommitHorizontal:stage==='tool'?Wrench:stage==='run'?Terminal:stage==='result'?CheckCircle2:stage==='assignment'?ArrowRight:Clock3;return <Icon size={16} aria-hidden="true"/>}
+export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
+ const L=(en:string,zh:string)=>language==='en'?en:zh,word=(names:[string,string])=>names[language==='en'?0:1]
+ const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmStop,setConfirmStop]=useState(false),[truncated,setTruncated]=useState(false)
+ const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<()=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
+ const task=snapshot?.tasks.find(t=>t.id===selected),active=snapshot?.tasks.filter(t=>['running','starting','background'].includes(t.state)).length??0,waiting=snapshot?.tasks.filter(t=>['waiting','blocked'].includes(t.state)).length??0,uncertain=snapshot?.tasks.filter(t=>t.unknownEffects).length??0
+ useEffect(()=>{
+  const controller=new AbortController(),current=++generation.current;let fetching=false,hasMore=false
+  cursor.current=0;visibility.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop(false)
+  const readEvents=async()=>{
+   const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
+   const data=await request<Events>('/events?'+query,controller.signal)
+   if(generation.current!==current||controller.signal.aborted)return
+   if(visibility.current&&visibility.current!==data.visibility){visibility.current=data.visibility;cursor.current=0;setEvents([]);hasMore=false;setMore(false);return}
+   visibility.current=data.visibility;cursor.current=data.cursor;hasMore=data.more;setMore(data.more)
+   setEvents(previous=>{const seen=new Set(previous.map(e=>e.id)),all=[...previous,...data.events.filter(e=>!seen.has(e.id))];if(all.length>600)setTruncated(true);return all.slice(-600)})
+  }
+  const refresh=async()=>{
+   if(fetching)return
+   fetching=true
+   try{
+    const data=await request<Snapshot>('?limit=100',controller.signal)
+    if(generation.current!==current||controller.signal.aborted)return
+    if(visibility.current&&visibility.current!==data.visibility){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}
+    visibility.current=data.visibility;setSnapshot(data)
+    if(!hasMore)await readEvents()
+    setError('')
+   }catch(cause){if(!controller.signal.aborted&&generation.current===current){const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead'){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}}}
+   finally{if(!controller.signal.aborted&&generation.current===current){setLoading(false);fetching=false}}
+  }
+  refreshRef.current=refresh
+  eventRef.current=async()=>{if(fetching)return;fetching=true;try{await readEvents();setError('')}catch{if(!controller.signal.aborted)setError('trace_refresh_failed')}finally{fetching=false}}
+  void refresh();const timer=setInterval(()=>void refresh(),3000)
+  return()=>{controller.abort();clearInterval(timer)}
+ },[selected])
+ const failure=(code:string)=>code==='trace_changed'||code==='trace_settings_conflict'?L('This task changed. Review its current state before trying again.','任务状态已变更，请核对最新状态后重试。'):code==='trace_reconcile_required'?L('Check the external outcome before repeating any work.','请先核查外部结果，再决定是否重复执行。'):code==='trace_recovery_uncertain'?L('The action could not be confirmed. Check the current task and original session.','操作结果尚未确认，请检查当前任务和原会话。'):code==='trace_action_unavailable'?L('This action is no longer available. Review the latest task state.','此操作已不可用，请查看最新任务状态。'):code==='trace_cursor_ahead'?L('The saved history changed. Refresh to reload the timeline.','历史记录已变更，请刷新以重新加载轨迹。'):L('Updates are unavailable. Your last known state is still shown.','暂时无法更新，当前显示最近一次已知状态。')
+ async function recover(action:Action){
+  if(!task||busy)return
+  setBusy(true);setActionError('');setNotice('');setConfirmStop(false)
+  try{
+   const result=await request<{status:string}>('/recover',undefined,{ticketId:task.id,action,revision:task.revision,observed:task.observed,requestId:crypto.randomUUID()})
+   const messages:Record<string,[string,string]>={inspected:['Current task state checked.','已核对当前任务状态。'],history_verified:['The original session is readable. External outcomes still need review.','原会话可读取，外部结果仍需核查。'],history_unavailable:['The original session could not be read. No work was repeated.','暂时无法读取原会话，未重复执行任务。'],resumed:['Resuming the original task and session.','正在恢复原任务及原会话。'],cancelled:['Task stopped. Existing external effects remain.','任务已停止，已发生的外部效果仍保留。']}
+   setNotice(word(messages[result.status]??['Action completed.','操作已完成。']))
+  }catch(cause){setActionError(cause instanceof TraceRequestError?cause.code:'trace_recovery_uncertain')}
+  finally{await refreshRef.current();setBusy(false)}
+ }
+ const guidance=task?.next==='reconcile'?L('Some effects are unconfirmed. Check the destination, retained receipts and original session before repeating work.','部分效果尚未确认。请先核查目标服务、保留的回执和原会话，再决定是否重复执行。'):task?.next==='answer_approval'?L('This task is waiting for a current permission decision. Continue through the existing task approval controls.','任务正在等待有效的授权决定，请在原任务的授权控件中处理。'):task?.next==='reconnect'?L('Review the connection and verify authentication before continuing.','请先检查连接配置并验证认证状态。'):task?.next==='review_context'?L('Permissions or context changed. Review the existing task recovery requirements.','权限或上下文已变更，请核查原任务的恢复要求。'):task?.next==='follow_up'?L('The Worker needs a reply. Continue in its original Router conversation.','Worker 需要你的回复，请在原 Router 会话中继续。'):null
+ return <section className="trace-page" aria-labelledby="trace-title">
+  <header className="trace-heading"><div><p className="trace-eyebrow">{L('TEAM ACTIVITY','团队动态')}</p><h1 id="trace-title">{L('Execution trace','执行轨迹')}</h1><p>{L('Follow the work, inspect evidence, and recover with context.','查看工作进展与证据，并在原上下文中恢复任务。')}</p></div><button type="button" disabled={loading||busy} onClick={()=>{setActionError('');void refreshRef.current()}}><RefreshCw size={16} className={loading?'trace-spin':''}/>{L('Refresh','刷新')}</button></header>
+  <div className="trace-summary" aria-label={L('Shown task counts','当前所示任务统计')}><div><Activity size={17}/><strong>{active}</strong><span>{L('Working','正在执行')}</span></div><div><ShieldQuestion size={17}/><strong>{waiting}</strong><span>{L('Waiting for input','等待处理')}</span></div><div data-attention={uncertain>0}><History size={17}/><strong>{uncertain}</strong><span>{L('Outcomes to check','待核查结果')}</span></div></div>
+  {actionError||error?<p className="trace-notice trace-error" role="alert">{failure(actionError||error)}<button onClick={()=>{setActionError('');void refreshRef.current()}}>{L('Try refresh','重试刷新')}</button></p>:null}
+  {notice?<p className="trace-notice" role="status"><Check size={16}/>{notice}</p>:null}
+  <div className="trace-toolbar"><label htmlFor="trace-task">{L('Show','显示')}</label><select id="trace-task" value={selected} onChange={e=>setSelected(e.target.value)}><option value="">{L('All tasks','全部任务')}</option>{snapshot?.tasks.map(t=><option value={t.id} key={t.id}>{t.label}{t.workerId?' · '+t.workerId:''}</option>)}</select><span className="trace-updated" role="status">{snapshot?L('Updated ','更新于 ')+new Date(snapshot.at).toLocaleTimeString(language,{hour:'2-digit',minute:'2-digit',second:'2-digit'}):L('Loading activity…','正在加载动态…')}</span></div>
+  {snapshot?.more?<p className="trace-muted">{L('Showing the 100 most recently updated tasks. Earlier task history remains in the ledger.','显示最近更新的 100 项任务，更早的任务历史仍保留在记录中。')}</p>:null}
+  {task?<article className="trace-task-detail"><header><div><span className="trace-eyebrow">{task.workerId??L('WORKER TASK','WORKER 任务')}</span><h2>{task.label}</h2></div><span className="trace-state" data-state={task.state}>{word(stateNames[task.state])}</span></header><dl className="trace-facts"><div><dt>{L('Original session','原会话')}</dt><dd>{task.sessionRef??L('Not started','尚未启动')}</dd></div><div><dt>{L('Result','结果')}</dt><dd>{task.hasResult?L('Retained in task history','已保留在任务历史中'):L('No result retained','尚无结果记录')}</dd></div><div><dt>{L('Acceptance','验收')}</dt><dd>{task.acceptance?word(stateNames[task.acceptance.state]):L('No acceptance evidence','尚无验收证据')}</dd></div></dl>
+   <div className="trace-evidence" aria-label={L('Evidence checks','证据核查')}><div><GitCommitHorizontal size={16}/><span>{L('Commit','提交')}</span><strong>{task.evidence.commit==='recorded'?task.evidence.commitRef?.slice(0,12):L('Unverified','未验证')}</strong></div><div><FileCheck2 size={16}/><span>{L('Tests','测试')}</span><strong>{task.evidence.tests==='unverified'?L('Unverified','未验证'):task.evidence.tests==='passed'?L('Passed','通过'):L('Failed','失败')}</strong></div><div><CheckCircle2 size={16}/><span>{L('Deployment','部署')}</span><strong>{L('Unverified','未验证')}</strong></div></div><p className="trace-muted">{L('A completed tool call alone does not verify a commit, test run, or deployment.','工具调用完成本身不代表提交、测试或部署已经验证。')}</p>
+   {guidance?<p className="trace-guidance">{guidance}{task.next==='reconnect'?<a href="/configure#connectors">{L('Open connections','打开连接设置')}<ArrowRight size={14}/></a>:null}</p>:null}
+   {task.next!=='reconnect'&&['auth_required','configuration_invalid'].includes(task.problem)?<p className="trace-guidance">{L('Authentication or connection settings also need review.','还需核查认证或连接配置。')}<a href="/configure#connectors">{L('Open connections','打开连接设置')}<ArrowRight size={14}/></a></p>:null}
+   <footer className="trace-task-actions">{task.actions.includes('inspect')?<button disabled={busy} onClick={()=>void recover('inspect')}><RefreshCw size={15}/>{L('Check current state','核对当前状态')}</button>:null}{task.actions.includes('read_history')?<button disabled={busy} onClick={()=>void recover('read_history')}><History size={15}/>{L('Check original session','核查原会话')}</button>:null}{task.actions.includes('resume_session')?<button className="trace-primary" disabled={busy} onClick={()=>void recover('resume_session')}><ArrowRight size={15}/>{L('Resume original session','恢复原会话')}</button>:null}{task.actions.includes('cancel')?<button disabled={busy} onClick={()=>setConfirmStop(true)}><Square size={13}/>{L('Stop task','停止任务')}</button>:null}{busy?<span role="status"><LoaderCircle size={15} className="trace-spin"/>{L('Checking…','处理中…')}</span>:null}</footer>
+   {confirmStop?<div className="trace-confirm" role="group" aria-label={L('Confirm stop','确认停止')}><p>{L('Stop this task? Existing external effects will remain.','停止此任务？已发生的外部效果仍会保留。')}</p><button className="trace-primary" disabled={busy} onClick={()=>void recover('cancel')}>{L('Stop task','停止任务')}</button><button onClick={()=>setConfirmStop(false)}>{L('Keep working','继续运行')}</button></div>:null}
+  </article>:null}
+  <div className="trace-timeline-heading"><h2>{L('Recorded activity','已记录动态')}</h2><span>{L('Local timestamps','本地时间')}</span></div>
+  {loading&&!events.length?<div className="trace-empty" role="status"><LoaderCircle size={23} className="trace-spin"/><p>{L('Loading the timeline…','正在加载轨迹…')}</p></div>:events.length?<ol className="trace-timeline">{events.map(event=><li key={event.id} data-state={event.state}><div className="trace-event-icon"><StageIcon stage={event.stage}/></div><div className="trace-event-main"><div><strong>{word(stageNames[event.stage])}</strong><span className="trace-state" data-state={event.state}>{word(stateNames[event.state])}</span></div><p>{event.ticketId?snapshot?.tasks.find(t=>t.id===event.ticketId)?.label??L('Task history','任务历史'):L('Workspace activity','工作区动态')}{event.baseline?' · '+L('State at first capture','首次记录时的状态'):''}{event.hasResult?' · '+L('Result retained','结果已保留'):''}</p></div><time dateTime={event.at} title={new Date(event.at).toLocaleString(language)}>{new Date(event.at).toLocaleTimeString(language,{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time></li>)}</ol>:<div className="trace-empty"><Activity size={32} strokeWidth={1.3}/><h2>{L('Your team’s progress appears here','团队的进展会出现在这里')}</h2><p>{L('Task dispatch, execution, approvals and evidence form one timeline as work proceeds.','随着任务推进，派工、执行、授权和证据将汇集为一条轨迹。')}</p><a href="/chat">{L('Return to the Router','返回 Router')}<ArrowRight size={15}/></a></div>}
+  {more?<button className="trace-load-more" disabled={busy||loading} onClick={()=>void eventRef.current()}>{L('Load next events','继续加载动态')}</button>:null}
+  {truncated?<p className="trace-muted">{L('Showing the latest 600 loaded events. Refresh this page to read earlier retained events.','当前显示最近加载的 600 条动态，刷新页面可从较早的保留记录开始查看。')}</p>:null}
+ </section>
+}
