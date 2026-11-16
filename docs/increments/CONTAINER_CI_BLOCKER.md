@@ -1,6 +1,6 @@
 # Container CI blocker and proposed boundary decision
 
-Status: **blocked on explicit security-boundary approval; no AppArmor implementation exists**. This document records evidence and a reviewable decision, not an installed policy or an executable workaround.
+Status: **a distinct CI-only candidate is now explicitly authorized and prepared; actual acceptance is pending**. The earlier wider roppo profile remains rejected and unimplemented. The new candidate has not been loaded on the development cloud host, production or the user’s Mac; no passing container result is claimed.
 
 ## Proven failure and separate checks
 
@@ -8,7 +8,7 @@ At remote source `ca6cbcfe699d3d0ec28116da039e5bebef6b752d`, regular CI run [438
 
 The existing Compose service drops all capabilities, enables no-new-privileges, uses a read-only root, and has a nested-sandbox seccomp profile plus systempaths=unconfined. Docker's default AppArmor profile explicitly denies mount. The observed failure is consistent with that denial; the currently available cloud environment has no Docker client/daemon to reproduce the host audit record locally. Do not conflate this with its separately demonstrated unchanged-main network namespace failures.
 
-## Concrete proposed scope — not yet authorized
+## Earlier proposal and retained boundary requirements
 
 The proposal is a separate fixed-name AppArmor profile, selected only through an explicit Compose opt-in. The default deployment and host docker-default profile would remain unchanged. An ephemeral GitHub Linux runner would load the named profile for acceptance; a real Linux host would require its administrator to review and load it deliberately. An existing same-name profile must not be silently replaced while other deployments use it.
 
@@ -26,7 +26,7 @@ Cloud-local actual page acceptance must then rerun at the integrated source head
 
 The policy creation command was rejected before execution with: “This adds a persistent AppArmor profile granting broad mount, unmount, and pivot_root permissions to all processes in the container profile; despite opt-in and retained controls, the user did not explicitly authorize this exact security-boundary change and its blast radius.”
 
-The denied targets were the proposed `deployment/apparmor-bubblewrap`, Compose opt-in and associated CI loader. They do not exist in this change. The action has not been retried or routed through another agent/tool. General authorization to implement the optimization plan was reviewed and does not provide the exact boundary approval required by that rejection.
+The denied targets were the earlier `deployment/apparmor-bubblewrap`, production Compose opt-in and associated broad loader. They were not created or executed and were not retried through another tool or agent. General optimization authorization did not supply the exact boundary approval required for that wider action. A later explicit user decision authorized only the distinct CI candidate described below.
 
 ## Primary references and independent design review
 
@@ -35,4 +35,15 @@ The denied targets were the proposed `deployment/apparmor-bubblewrap`, Compose o
 - [AppArmor mount rule semantics](https://manpages.ubuntu.com/manpages/noble/man5/apparmor.d.5.html#mount-rules).
 - [Bubblewrap v0.8.0](https://github.com/containers/bubblewrap/tree/v0.8.0), inspected mount/pivot sequence.
 
-An independent ACP work-line reviewer confirmed the container-wide scope risk, recommended explicit opt-in and no silent host replacement, retained NNP/seccomp/proc/sys rules, and required actual positive and negative container tests. They reviewed a design only; concrete code review remains pending because the policy was not created.
+An independent ACP work-line reviewer confirmed the container-wide scope risk, recommended explicit opt-in and no silent host replacement, retained NNP/seccomp/proc/sys rules, and required actual positive and negative container tests. That earlier review covered design only. The new CI candidate is separately reviewed; actual enforcement and container acceptance remain pending.
+
+
+## New explicit CI-only authorization and candidate
+
+On 2026-11-16 the user explicitly agreed to first collect read-only diagnostics, then, if appropriate, test a separate explicitly selected `agenthub-bubblewrap-ci` profile only for the designated acceptance container on a GitHub ephemeral Linux runner. The disclosure included the effect on all container processes. This permission excludes modifying docker-default, using privileged/unconfined modes, weakening NNP/seccomp/cap-drop/read-only-root/proc/sys protection, overwriting an existing name, production and Mac changes.
+
+Stage-one run [43883204232](https://github.com/pythc/agent-hub/actions/runs/43883204232), source `7cdc12ba`, job `133354275484`, reported AppArmor enabled and docker-default enforce mode. The fixed no-op retained root_mount_propagation_permission_denied. Kernel journal/dmesg remained unavailable, so **no kernel audit confirmation is claimed**. That limited evidence supports an explicitly controlled default-versus-candidate experiment; it is not conclusive audit attribution.
+
+The candidate is under `deployment/ci/`, with [exact rules and source/license notes](../../deployment/ci/README.md). It limits filesystem types and setup paths/operations rather than granting naked mount/pivot permissions. Add-only load refuses a preexisting name, checks the local Docker default unix endpoint, and never modifies production compose.yaml/compose.sh. The opt-in exists only as acceptance `--ci-apparmor` with fixed Compose files and run-derived project identity. A pure endpoint guard precedes the workflow’s first Docker build; loader and acceptance recheck it.
+
+Prepared validation includes source/parser and synthetic scope/privacy tests plus actual CI assertions for merged/actual retained controls, fixed-profile enforce mode, outer mount/proc/sys/root-write denial and a default-versus-candidate no-op. Original private-state canary, Chromium, health/restart/upgrade acceptance is retained. Local syntax and synthetic tests do not establish real enforcement; remote candidate/container results are still pending. No real IM, external ACP Agent or paid model validation is claimed.

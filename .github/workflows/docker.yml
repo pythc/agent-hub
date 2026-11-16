@@ -14,6 +14,7 @@ on:
       - 'examples/container-*'
       - 'tests/container-acceptance-diagnostics.py'
       - 'tests/ci-host-diagnostics.py'
+      - 'tests/ci-apparmor.py'
   workflow_dispatch:
 
 permissions:
@@ -35,18 +36,32 @@ jobs:
         run: |
           python3 tests/container-acceptance-diagnostics.py
           python3 tests/ci-host-diagnostics.py
+          python3 tests/ci-apparmor.py
+      - name: Verify the local ephemeral runner target
+        env:
+          AGENTHUB_CI_APPARMOR: '1'
+        run: python3 deployment/ci/apparmor_control.py verify-docker
       - name: Build the runtime image
         env:
           ROPPO_IMAGE: roppo:ci
         run: docker compose build roppo
+      - name: Validate and add the explicit CI-only candidate
+        env:
+          AGENTHUB_CI_APPARMOR: '1'
+        run: |
+          python3 deployment/ci/apparmor_control.py validate
+          python3 deployment/ci/apparmor_control.py
       - name: Verify an isolated container and its private volume
         id: acceptance
+        env:
+          AGENTHUB_CI_APPARMOR: '1'
         run: >-
           python3 examples/container-acceptance.py
           .local/container-ci
           --project "roppo-acceptance-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           --image roppo:ci
           --port 14439
+          --ci-apparmor
       - name: Summarize host sandbox denial metadata
         if: failure() && steps.acceptance.outcome == 'failure' && runner.os == 'Linux'
         run: python3 deployment/ci-host-diagnostics.py
