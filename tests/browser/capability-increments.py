@@ -72,11 +72,15 @@ with sync_playwright() as p:
    data=response.json()
    item=next(task for task in data['tasks'] if task['id']==unknown['ticketId'])
    item['observed']='0'*64
-   route.fulfill(response=response,json=data)
+   route.fulfill(response=response,json=data,headers={**response.headers,'x-fixture-stale-observation':'1'})
   page.route('**/api/execution-trace?*',stale_cancel_observation)
-  trace.get_by_role('button',name='Refresh',exact=True).click()
-  expect(trace.get_by_role('button',name='Refresh',exact=True)).to_be_enabled()
+  with page.expect_response(lambda response:response.headers.get('x-fixture-stale-observation')=='1') as stale_snapshot:
+   trace.get_by_role('button',name='Refresh',exact=True).click()
+  stale_snapshot.value.finished()
+  page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   stopped=stop_from_current_view()
+  assert stopped.request.post_data_json['action']=='cancel'
+  assert stopped.request.post_data_json['observed']=='0'*64
   assert stopped.status==409,('stale_cancel_observation_not_fenced',stopped.status)
   page.unroute('**/api/execution-trace?*',stale_cancel_observation)
   if stopped.status==409:
