@@ -19,7 +19,38 @@ with sync_playwright() as p:
  def page_for(ctx):
   value=ctx.new_page();value.set_default_timeout(15000);value.on('pageerror',lambda error:errors.append(str(error)));value.on('request',lambda request:requests.append({'method':request.method,'path':urlparse(request.url).path,'level':request.post_data_json.get('level') if request.method=='POST' and '/api/connectors/probe' in request.url else None}) if '/api/credential-references' in request.url or '/api/connectors' in request.url or '/api/plugin-market/connection/apply' in request.url else None);return value
  ctx=context();page=page_for(ctx)
- def shot(name):page.wait_for_timeout(150);page.screenshot(path=str(out/name),full_page=True)
+ def shot(name,target=None):
+  target=target or page
+  if name!='failure.png':
+   target.evaluate("""async () => {
+    const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+    const frames=async()=>{await frame();await frame()};
+    await frames();await document.fonts.ready;
+    const deadline=performance.now()+5000;
+    const active=()=>document.getAnimations().filter(animation=>{
+     const timing=animation.effect?.getComputedTiming();
+     return (animation.playState==='running'||animation.pending)&&timing&&Number.isFinite(timing.endTime)&&timing.iterations!==Infinity;
+    });
+    const boxes=()=>JSON.stringify([...document.querySelectorAll('.connector-page,.connector-dialog[open],.connector-card,.connector-card header,.connector-information,.connector-tools')].map(node=>{
+     const box=node.getBoundingClientRect();return [box.x,box.y,box.width,box.height].map(value=>Math.round(value*100)/100);
+    }));
+    for(;;){
+     const finite=active();
+     if(finite.length){
+      let timer;
+      try{await Promise.race([Promise.allSettled(finite.map(animation=>animation.finished)),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Finite screenshot animation did not finish')),Math.max(0,deadline-performance.now()))})])}
+      finally{clearTimeout(timer)}
+      await frames();
+     }
+     let previous=boxes(),stable=0;
+     while(stable<3){
+      if(performance.now()>deadline)throw Error('Screenshot layout did not settle');
+      await frame();const next=boxes();stable=next===previous?stable+1:0;previous=next;
+     }
+     if(!active().length)break;
+    }
+   }""")
+  target.screenshot(path=str(out/name),full_page=True)
  def card(id):return page.locator('.connector-card[data-source-id="'+id+'"]')
  def row(kind,id):return page.locator('.connector-information[data-information-kind="'+kind+'"][data-information-id="'+id+'"]')
  def refresh():page.get_by_role('button',name='Refresh',exact=True).click()
@@ -62,7 +93,7 @@ with sync_playwright() as p:
   simulations.append('Browser-only credential GET 503 retains explicitly earlier timestamped values; 403 clears them; unsupported DTO stays local/unavailable; existing connector buttons remain enabled and real GET recovers')
   checks.append({'kind':'browser-response-simulation','result':'passed','check':simulations[-1]})
   page.get_by_role('button',name='Add connection',exact=True).click();dialog=page.get_by_role('dialog');dialog.press('Escape');expect(dialog).not_to_be_visible();expect(page.get_by_role('button',name='Add connection',exact=True)).to_be_focused();shot('actual-keyboard-focus-restored.png')
-  page.get_by_role('button',name='Switch to Chinese',exact=True).click();expect(page.locator('#connector-title')).to_have_text('连接器');expect(row('source','app-present')).to_contain_text('已在当前环境找到');expect(row('source','app-missing')).to_contain_text('缺少部分资料');expect(row('source','app-unknown')).to_contain_text('暂无法检查');expect(row('source','app-empty')).to_contain_text('暂无可检查项');card('app-present').scroll_into_view_if_needed();shot('actual-chinese-light.png')
+  page.get_by_role('button',name='Switch to Chinese',exact=True).click();expect(page.locator('#connector-title')).to_have_text('连接器');expect(row('source','app-present')).to_contain_text('已在当前环境找到');expect(row('source','app-missing')).to_contain_text('缺少部分资料');expect(row('source','app-unknown')).to_contain_text('暂无法检查');expect(row('source','app-empty')).to_contain_text('暂无可检查项');card('app-present').scroll_into_view_if_needed();expect(card('app-present').get_by_role('heading',name='应用 A · App A',exact=True)).to_be_visible();expect(card('app-present').locator('.connector-kind')).to_be_visible();expect(row('source','app-present')).to_be_visible();shot('actual-chinese-light.png')
   page.get_by_role('button',name='切换为深色模式',exact=True).click();shot('actual-chinese-dark.png')
   page.emulate_media(reduced_motion='reduce');page.set_viewport_size({'width':390,'height':1000});card('app-present').scroll_into_view_if_needed();shot('actual-chinese-dark-390-reduced.png');row('tool','tool-empty').scroll_into_view_if_needed();shot('actual-chinese-tools-390-reduced.png')
   assert page.locator('html').evaluate('(e)=>e.scrollWidth<=e.clientWidth+1')
@@ -102,7 +133,7 @@ with sync_playwright() as p:
   other.wait_for_timeout(150);expect(other.locator('.connector-information[data-information-kind="source"][data-information-id="app-present"]')).to_have_attribute('data-information-state','unknown')
   assert not any(path.startswith('/api/credential-references') or path.startswith('/api/connectors') for path in scoped)
   assert '/workspaces/other/api/credential-references' in scoped and '/workspaces/studio/api/credential-references' in scoped
-  other.screenshot(path=str(out/'browser-only-late-workspace-context.png'),full_page=True);optional.close()
+  shot('browser-only-late-workspace-context.png',other);optional.close()
   simulations.append('Browser-only optional-workspace proxy over one Runtime: A→B→A uses scoped GET paths; held old presence cannot replace the newer unknown observation. This is not real multiworkspace/account isolation.')
   checks.append({'kind':'browser-context-simulation','result':'passed','check':simulations[-1],'lateRead':late,'cancelledOldReadObserved':bool(cancelled)})
   stats=control('stats');no_effects(stats);assert not errors,errors
