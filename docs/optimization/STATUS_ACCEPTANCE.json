@@ -1,5 +1,5 @@
 {
-  "status": "open_pending_current_integrated_ci_and_separate_recovery_decision",
+  "status": "open_local_acceptance_and_integrated_ci_passed_separate_recovery_decision_pending",
   "issue": "https://github.com/pythc/agent-hub/issues/18",
   "pr": "https://github.com/pythc/agent-hub/pull/61",
   "runtimeAndUiSource": {
@@ -37,10 +37,20 @@
     "composeVersion": "5.7.1",
     "composeSha256": "af426722a8af5de812fcee30cc1c39f0639f5f723cbadefb25e5d4db054064cf",
     "kernelAudit": "unavailable; controlled default/candidate comparison recorded",
-    "currentO07IntegratedHead": "pending_new_run"
+    "currentO07IntegratedHead": "88a7c20fe408ed0b28cc7a819858b95754eef8e8"
   },
   "realIm": "not_tested",
   "realAcp": "not_tested",
   "recoveryPostChange": "approval_rejected_not_executed_pending_explicit_scope",
-  "allIssuesRemainOpen": true
+  "allIssuesRemainOpen": true,
+  "integratedCi": {
+    "head": "88a7c20fe408ed0b28cc7a819858b95754eef8e8",
+    "tree": "e02b54347ab07893a336895a46cd4d9d04f7bb4a",
+    "ordinaryRun": 43894922630,
+    "ordinaryJobsPassed": 3,
+    "containerRun": 43894922522,
+    "containerJob": 133395751094,
+    "status": "success",
+    "applicationCode": "same reviewed runtime and UI as local5356135; later CI fixes and documentation integrated with preserved history"
+  }
 }
