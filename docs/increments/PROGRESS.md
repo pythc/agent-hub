@@ -1,3 +1,43 @@
+# 当前云端进度 — 2026-11-16
+
+本节是最新检查点；下方旧日期/旧提交记录是历史证据，不覆盖本节。所有 O01–O49 与总 Issue #11 仍开放；局部通过不等于整项完成。
+
+| 工作线 | 最新代码 / 远端备份 | 已核验 | 正在做 / 未完成 |
+| --- | --- | --- | --- |
+| 集成 PR #65 | 本地 `589539c31fc93380dc01862331e119fa430509cb`；远端 `c7b34f6c8ab5a8962fd350876daa4717baf97f03` | 普通 CI **43927410104 三 job success**；容器 **43927409932 success**；本地 check **1906 passed / 75 failed / 4 skipped**，与同环境 main 的 75 个失败身份完全一致，新增失败 0、EPIPE 0 | 后续变更须核自己的 head；真实 IM/ACP/付费调用未验收 |
+| O07 / PR #61 | 远端 `fe6fc9185eefa7fd74225b811135ef9faf0130ed` | 普通 CI 43907679400、容器 43907679405 均通过；提交/测试/部署/未知外部效果分开 | 更大范围的恢复/证据闭环仍待做 |
+| O05.1 / PR #62 | 远端 `ea44e376d12ed036fe995491a320d539f9f08252` | 实际 Runtime 排队、暂停、推进与结束；普通 CI 43908129839、容器 43908129811 均通过 | 公平性、配额和完整排队原因未完成 |
+| O13/O14 / PR #63 | 远端 `b439aa5ba2c08e1f71db2d7ef1cfcbd1ec93f17f`；后续上下文绑定已入集成 | 实际插件本地 HEAD；身份/目录是模拟；飞书表单与禁用草稿实际保存；0 外发 | 真实认证、收发、频道权限保持未验证 |
+| O17 / PR #64 → #65 | 分支远端 `9712ca6bb9b9567854c97509608a02ac75d9a6b7`；完整消费者已入集成 | 旧“页面不能接 transport”断言按现契约修复；#64 普通 CI 43919571674 三 job、容器 43919571721 均通过。集成实际单 Runtime 链接 failclosed、原请求刷新恢复、隔离未归属旧数据 | 可选多 workspace 仅浏览器代理模拟，当前服务器并未新增多租户能力 |
+| O43.1 / PR #66 → #65 | 远端 `fb2098047d590ef3586563051f44242d5ec69839`，代码已集成 | 实际只读 GET、本地合成 UsageLedger、手动刷新、未知值/失败保留、窄屏/键盘/减少动画 | 父线程发现中文偏技术且灰字多；正在精简，旧截图不算新文案通过；无价格/新预算/容量承诺 |
+| O18.1 / PR #67 | 本地 `e8f4423c2d8a96af6f4698791943e7881ce3203a`；远端 `bd6842441f291ea9e491520e73f8069d80d2c409` | 只读凭据存在性 DTO，22 新测试、独立邻接 90/90 与 host types | 无 UI、无认证验证、无新 vault；旧错误边界待另审 |
+| O09.1 / PR #68 | 本地 `517d960472971d20ba4da8018dfb484bb3bf9cc0`；远端 `65b28b797e195e1333adb01307fef962f8d4672f` | 只读注意事项后端初稿，独立审查发现真实嵌套 authority 导致 route 懒写 | 正在修复并扩大实际 fixture；未独立复验、不进入 UI 验收、不标完成 |
+
+## 本次实际浏览器验收（代码 589539c）
+
+运行：`CHROMIUM_EXECUTABLE=<云端 chrome-headless-shell 路径> python3 tests/browser/run-<suite>.py <输出目录>`。每个 runner 在同一云执行会话启动实际本地 app、浏览器，结束后停止自己的 app；旧端口不是仍可访问的交付服务。
+
+| 脚本 | 当前结果 | 实际截图 / 报告 |
+| --- | --- | --- |
+| run-capability-increments.py | 6 组通过，14 图，0 页面错误 | `.local/integration/review-four/browser-report.json` 与 `screenshots/` |
+| run-connector-ux.py | 7 组通过，13 图，0 页面错误 | `.local/integration/review-connectors/browser-report.json` 与 `screenshots/` |
+| run-scheduler-status.py | 4 组通过，10 图，0 页面错误 | `.local/integration/review-scheduler/browser-report.json` 与 `screenshots/` |
+| run-workspace-capabilities.py | 6 组通过，7 图，0 页面错误 | `.local/integration/review-workspace/workspace-browser-report.json` 与 `screenshots/` |
+| run-resource-usage.py | 7 组通过，9 图，0 页面错误，0 模型调用 | `.local/integration/review-resource/browser-report.json` 与 `screenshots/`；文案另待重验 |
+
+共 53 张实际页面截图。真实 local Runtime 与浏览器代理/合成数据/模拟身份证据在各报告中明确区分。页面无报错不能替代文案、权限或业务结果验收。完整 check 日志 `.local/integration/accepted-check.log`；机器可读基线比对 `.local/integration/accepted-failure-comparison.json`。32 项 CI 策略/固定诊断回归在集成版本通过。
+
+## 最新独立审查发现与安全边界
+
+- 导航切 workspace 后二级读取早于 busy 清理，使真实页面仍停留 home。`df51d2c` 改为完整 entryRun.finally 结束后才读二级资源；实际 workspace 与 resource 浏览器曾复现失败，修复后均重跑通过。
+- HTTP unknown-effect 测试的 live fake Model 与人工持久 fixture 竞争；`589539c` 先暂停 Runtime，并断言模型 0 调用，保留原错误码/未知效果断言，独立复验通过。
+- 新发现 Trace GET 和 TaskStatus 的只读验收会经 scheduled/goal authority 为缺失内层 anchor 懒写 router-route；独立真实 fixture 确认 records 33→34 / 37→38、模型/历史/投递均 0。正在设计默认不变、仅同步只读观察作用域的修复，不能把旧 53 图当作此问题通过。
+- CI 专用窄 AppArmor 策略已按后续明确授权独立实施并真实验收；不改 docker-default，不用 privileged/unconfined，不影响生产/Mac。旧拒绝仅保留为历史，当前不再是 CI 阻塞。
+- **仍阻塞：**把 repository 未知回执纳入恢复 POST 门槛/observed digest 的独立行动被自动审批拒绝且未执行，原因是改变 POST 恢复操作语义，超出当时仅追加只读投影的约束。精确范围授权仍待确认；没有重试、间接或委派绕过。
+- 不合并 main、不公开部署、不使用用户 Mac、不真实发消息或付费调用。所有 Issues 保持 open。
+
+---
+
 # Four capability increments — implementation and acceptance evidence
 
 Branch: `feat/worker-connector-acp-trace-20261116`.
