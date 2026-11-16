@@ -1920,3 +1920,12 @@ body.operator-menu-open { overflow:hidden; }
 .attention-record-dialog .drawer-header,.attention-record-dialog .drawer-header span { font-size:14px; }
 
 .operator-workspace .attention-record-dialog .drawer-body > p { font-size:14px; }
+
+/* Task details use the existing type and status tokens at a readable size. */
+.operator-workspace #operator-task .drawer-header { font-size:14px; }
+.operator-workspace #operator-task .drawer-body > p,
+.operator-workspace #operator-task .message p,
+.operator-workspace #operator-task .task-source { font-size:14px; color:var(--ink); }
+.operator-workspace #operator-task .message > h3 { margin:0 0 10px; font-size:14px; font-weight:600; color:var(--ink); }
+.operator-workspace #operator-task .task-overview { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:20px 0; }
+.operator-workspace #operator-task .task-overview .pill { font-size:14px; }
