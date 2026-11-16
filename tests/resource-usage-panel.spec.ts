@@ -44,7 +44,7 @@ it('reconstructs a numeric display DTO and discards extra secret metadata',()=>{
 it.each(['workspace','account','session','logout'])('clears visible old data and ignores a late response after %s changes',async change=>{
  const f=fixture(),root=f.mount();await f.flush();const old=deferred();f.context.api=()=>old.promise;const pending=f.get('resourceRefresh()')
  if(change==='workspace'){f.workspaceContext.epoch++;f.workspaceContext.activeId='team-b'}else if(change==='account')f.entryState.account={authenticated:true,user:{id:'other'}};else if(change==='session')f.workspaceContext.sessionIsolation='new-page-session';else f.S.authed=false
- old.resolve({...snapshot(),usage:{...snapshot().usage,tokens:{...snapshot().usage.tokens,totalTokens:999}}});await pending;expect(f.get('resourceView.data')).toBeNull();expect(root.resourceFields.metrics.hidden).toBe(true);expect(root.resourceFields.values.tokens.textContent).toBe('—');expect(root.resourceFields.time.textContent).toBe('')
+ old.resolve({...snapshot(),usage:{...snapshot().usage,tokens:{...snapshot().usage.tokens,totalTokens:999}}});await pending;expect(f.get('resourceView.data')).toBeNull();expect(root.resourceFields.metrics.hidden).toBe(true);expect(root.resourceFields.values.tokens.textContent).toBe('—');expect(root.resourceFields.time.textContent).toBe('');expect(root.resourceFields.time.dateTime).toBe('')
 })
 it('uses existing C1 notifications when present, clearing old account content synchronously without an old response',async()=>{
  const f=fixture(true),root=f.mount();await f.flush();f.entryState.account={authenticated:true,user:{id:'other'}};f.notify();expect(root.resourceFields.metrics.hidden).toBe(true);expect(root.resourceFields.values.tokens.textContent).toBe('—');expect(f.get('resourceView.data')).toBeNull()
@@ -57,7 +57,7 @@ it('keeps normal readable type, keyboard focus and reduced-motion styles',()=>{
 })
 
 it.each([401,403])('clears prior usage on lost authorization (%i) instead of treating it as a refresh outage',async status=>{
- const f=fixture(),root=f.mount();await f.flush();f.context.api=async()=>{throw {status,payload:{code:'token_required'}}};await f.get('resourceRefresh()');expect(f.get('resourceView.data')).toBeNull();expect(root.resourceFields.metrics.hidden).toBe(true);expect(root.resourceFields.values.tokens.textContent).toBe('—');expect(root.resourceFields.time.textContent).toBe('')
+ const f=fixture(),root=f.mount();await f.flush();f.context.api=async()=>{throw {status,payload:{code:'token_required'}}};await f.get('resourceRefresh()');expect(f.get('resourceView.data')).toBeNull();expect(root.resourceFields.metrics.hidden).toBe(true);expect(root.resourceFields.values.tokens.textContent).toBe('—');expect(root.resourceFields.time.textContent).toBe('');expect(root.resourceFields.time.dateTime).toBe('')
 })
 
 it('honors C1 derived blocked readiness, including invalid explicit links, rather than trusting the raw ready phase',async()=>{

@@ -168,7 +168,7 @@ function resourcePaint(){
  fields.time.hidden=!data;if(data){fields.time.dateTime=new Date(data.observedAt).toISOString();fields.time.textContent=L('Observed at ','观测时间 ')+date(data.observedAt)}
  fields.failure.hidden=!resourceView.failed;fields.failure.textContent=data?L('Update failed. Showing the snapshot from the time above.','更新失败，显示上方时间的旧记录。'):L('Usage could not be loaded. Try refreshing.','无法读取用量，请重试刷新。')
  fields.metrics.hidden=!data;fields.details.hidden=!data;fields.coverage.hidden=!data;fields.observer.hidden=!data?.usage.watchdogUnavailable;fields.legacy.hidden=!data?.usage.legacyUntrackedCalls
- if(!data){for(const node of [...Object.values(fields.values),...Object.values(fields.extraValues)])node.textContent='—';for(const node of [fields.time,fields.coverage,fields.observer,fields.legacy,fields.contextTime])node.textContent='';return}
+ if(!data){fields.time.dateTime='';for(const node of [...Object.values(fields.values),...Object.values(fields.extraValues)])node.textContent='—';for(const node of [fields.time,fields.coverage,fields.observer,fields.legacy,fields.contextTime])node.textContent='';return}
  fields.values.tokens.textContent=data.usage.totalTokens===null?L('Not reported','未报告'):format(data.usage.totalTokens)
  fields.coverage.textContent=L('Reported calls: ','有报告的调用：')+format(data.usage.reportedCalls)+' / '+format(data.usage.calls)+L(' · Unreported: ',' · 未报告：')+format(data.usage.unknownCalls)+L(' · Partial: ',' · 部分报告：')+format(data.usage.partialCalls)
  fields.observer.textContent=L('Background monitor usage is unavailable.','后台监测用量暂不可用。');fields.legacy.textContent=L('Older calls without accounting: ','缺少用量记录的旧调用：')+format(data.usage.legacyUntrackedCalls)
