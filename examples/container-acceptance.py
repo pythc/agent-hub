@@ -142,6 +142,7 @@ try:
         (args.output / 'ci-policy-security.json').write_text(json.dumps(controls))
         assert security.returncode == 0, 'CI retained-boundary checks failed'
         outer_controls(controls)
+        print('CI retained boundaries: ' + json.dumps(controls, sort_keys=True))
         checks['ciNamedProfileAndRetainedBoundaries'] = True
     token = node("import fs from 'node:fs';process.stdout.write(fs.readFileSync('/data/state/access-token','utf8').trim())")
     assert api('/health', authorized=False)[1]['ok']

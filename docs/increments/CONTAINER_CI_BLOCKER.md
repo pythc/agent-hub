@@ -1,6 +1,6 @@
 # Container CI blocker and proposed boundary decision
 
-Status: **the distinct authorized CI-only candidate was loaded enforcing on the ephemeral runner but failed at root bind; a narrow correction awaits actual acceptance**. The earlier wider roppo profile remains rejected and unimplemented. The new candidate has not been loaded on the development cloud host, production or the user’s Mac; no passing container result is claimed.
+Status: **candidate 2 passed actual sandbox setup and reached backup; the current blocker is an older runner Compose CLI rejecting `start --wait`**. The earlier wider roppo profile remains rejected and unimplemented. The new candidate has not been loaded on the development cloud host, production or the user’s Mac; no passing container result is claimed.
 
 ## Proven failure and separate checks
 
@@ -54,3 +54,12 @@ Prepared validation includes source/parser and synthetic scope/privacy tests plu
 Source `59be30d5eacad399b04630f614e363137c133472`, run [43887447139](https://github.com/pythc/agent-hub/actions/runs/43887447139), job `133369335257`, passed the real Ubuntu parser and add-only enforce postcheck. Default-policy no-op failed at root propagation; the named candidate advanced to `root_bind_failed`. Application health, Worker/Chromium and negative retained-boundary acceptance did not run. The root-bind errno was not distinguished by that version's stage-only classifier. Kernel audit remained unavailable; neither causality nor a green container result is claimed.
 
 The next candidate adds only exact root-directory operations: `/tmp/newroot/` recursive self-bind, `/oldroot/` recursive bind to `/newroot/`, and remount of `/newroot/` itself, following Bubblewrap v0.8.0 and official AppArmor directory/glob and bind-flag semantics. It also separates fixed error enums from operation stages. [Source links, exact rule and remaining uncertainty](../../deployment/ci/README.md#first-actual-runner-candidate-and-narrow-root-bind-correction) are recorded in the CI scope documentation. It does not broaden filesystem types or descendant targets, add no-slash variants, change production settings or weaken retained controls. Another actual runner experiment remains required.
+
+
+## Candidate 2 and separate Compose CLI blocker
+
+Source `5a25804d`, run [43889314957](https://github.com/pythc/agent-hub/actions/runs/43889314957), job `133375870294`, confirmed parser/load, default-policy no-op `root_propagation_failed` / `permission_denied`, and named-policy no-op `passed` / `none`. Kernel audit remained unavailable. The application reached backup, where the runner Compose CLI rejected `start --wait` in both normal and recovery paths. This does not justify any further profile expansion.
+
+Remote source plus the backup traceback establishes by sequential control flow that the preceding strict ten-boolean outer controls, authenticated health, real Worker/private-state canary, Bubblewrap/Chromium doctor and volume-lock assertions passed. There is no uploaded artifact or separate security receipt from that run; do not claim direct retrieval of the ten booleans. The follow-up prints only their fixed-key validated dictionary for direct evidence. Backup/account preservation, crash restart and upgrade/recovery remain incomplete.
+
+The proposed compatibility correction is CI-only selection of official Compose v5.7.1 with fixed asset SHA-256, strict official HTTPS origin/size/deadline checks, exclusive user-plugin installation and actual version/start-help verification before build. [Exact source, digest, scope and validation](../../deployment/ci/README.md#candidate-2-passed-sandbox-setup-compose-compatibility-is-next) are recorded separately. The production helper, profile and all existing health/backup/restart/upgrade assertions remain unchanged. Another actual container CI run remains required.

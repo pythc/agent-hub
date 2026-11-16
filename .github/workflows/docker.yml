@@ -15,6 +15,7 @@ on:
       - 'tests/container-acceptance-diagnostics.py'
       - 'tests/ci-host-diagnostics.py'
       - 'tests/ci-apparmor.py'
+      - 'tests/ci-compose.py'
   workflow_dispatch:
 
 permissions:
@@ -37,10 +38,16 @@ jobs:
           python3 tests/container-acceptance-diagnostics.py
           python3 tests/ci-host-diagnostics.py
           python3 tests/ci-apparmor.py
+          python3 tests/ci-compose.py
       - name: Verify the local ephemeral runner target
         env:
           AGENTHUB_CI_APPARMOR: '1'
         run: python3 deployment/ci/apparmor_control.py verify-docker
+      - name: Select the hash-pinned CI Compose plugin
+        timeout-minutes: 2
+        env:
+          AGENTHUB_CI_APPARMOR: '1'
+        run: python3 deployment/ci/install_compose.py
       - name: Build the runtime image
         env:
           ROPPO_IMAGE: roppo:ci
