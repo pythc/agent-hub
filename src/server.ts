@@ -37,6 +37,7 @@ import {EntrySetup,entryIds} from './entry-setup.ts'
 import {clientIds} from './clients.ts'
 import {clientStatus} from './client-status.ts'
 import {operatorWorkspace,operatorTask} from './operator-workspace.ts'
+import {OperatorAttention} from './operator-attention.ts'
 import {PersonalAccount,AccountError,setupAccountSchema,loginAccountSchema,recoverAccountSchema,passwordSchema} from './personal-account.ts'
 import {accountPage} from './ui/account.ts'
 import {chatPage,chatAsset} from './ui/chat-page.ts'
@@ -491,6 +492,15 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(runtime.config.http?.publicOrigin??endpoint),expiresIn:600});return}
     if(req.method==='POST'&&path==='/logout'){if(account.configured)account.logout(req,res);else sessions.logout(req,res);send(res,200,{operator:false});return}
     if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
+    if(path==='/entry-workspace/attention'){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      const query=new URL(req.url!,requestOrigin).searchParams
+      if([...query].some(([key,value])=>!['offset','limit'].includes(key)||query.getAll(key).length!==1||!/^(0|[1-9][0-9]*)$/.test(value))){send(res,400,{code:'operator_attention_query_invalid'});return}
+      const input=z.object({offset:z.coerce.number().int().min(0).max(1_000_000).default(0),limit:z.coerce.number().int().min(1).max(100).default(25)}).strict().safeParse(Object.fromEntries(query))
+      if(!input.success){send(res,400,{code:'operator_attention_query_invalid'});return}
+      try{send(res,200,new OperatorAttention(()=>runtime).snapshot(input.data.offset,input.data.limit))}catch{send(res,503,{code:'operator_attention_unavailable'})};return
+    }
     if(req.method==='GET'&&path==='/entry-workspace'){
       const query=new URL(req.url!,'http://localhost').searchParams,input=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25),
         state:z.enum(['attention','running','replied','ready','closed','queued']).optional(),search:z.string().max(200).optional()}).parse(Object.fromEntries(query))
