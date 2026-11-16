@@ -64,4 +64,11 @@ No schema migration or `user_version` change. Older versions ignore additive rec
 
 ## Verification of restored artifact
 
-Pending fresh focused tests and strict service/frontend checks. Historical pre-reset results are not claimed for this restored checkout. Browser evidence and final integrated checks belong to the integration owner's acceptance report; deterministic tests do not prove live providers or external IM services.
+Fresh verification on source commit `7837b45337d75efe0d24c50edad6eb7cb6e6d13b` in the recovered cloud checkout (2026-11-16):
+
+- `npx vitest run tests/worker-templates.spec.ts tests/worker-pool.spec.ts tests/worker-backends.spec.ts`: 3 files / 18 tests passed, exit 0, duration 2.73 seconds; started at 05:01:24 UTC. This includes all 11 restored template cases plus existing Worker scheduling and backend compatibility tests.
+- `npx tsc --ignoreConfig --noEmit --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --noUncheckedIndexedAccess --allowImportingTsExtensions --skipLibCheck --types node src/worker-templates.ts tests/worker-templates.spec.ts`: passed, exit 0.
+- `npx tsc --ignoreConfig --noEmit --target ES2023 --module ESNext --moduleResolution Bundler --jsx react-jsx --strict --noUncheckedIndexedAccess --allowImportingTsExtensions --skipLibCheck --types node,vite/client web/chat/worker-templates.tsx`: passed, exit 0.
+- `git diff --check` for owned template files: passed.
+
+Historical pre-reset results are not substituted for these fresh checks. Browser evidence and final integrated checks belong to the integration owner's acceptance report; deterministic tests do not prove live providers or external IM services.
