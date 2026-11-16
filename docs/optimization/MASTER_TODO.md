@@ -177,7 +177,7 @@
 一条建议只有下列项目全部满足，才能由“待办”改为“完成”；现有映射或计划本身不满足任何实现门禁。
 
 - [ ] 明确所解决的用户场景、现有复用点、必要新增语义、范围和不可做事项；混合优先级子项分别记状态。
-- [ ] 服务端 expectedRevision、身份/受众/任务权限、幂等与 unknown fencing；异步消息含 taskId、contractRevision、runId、attempt、eventId、source、发生时间，有副作用再带 effectId/幂等键，产物带版本与摘要。
+- [ ] 服务端 expectedRevision、身份/受众/任务权限、幂等与 unknown fencing；异步消息有稳定 eventId、source、发生/观察时间及业务对象引用。taskId、runId、assignment/attempt 引用仅在相应对象实际存在时携带；契约摘要、goalRevision、planRevision、ownerEpoch、dataRevision、binding/settingsRevision 分别保留真实语义，具体字段由 G01 冻结。旧记录未捕获则明确缺省，不伪造 ID/版本或合成通用 contractRevision；有副作用再带原收据 effectRef/幂等键，产物带版本与摘要。
 - [ ] 本地事务存状态和 outbox、事务外做远端动作再落收据；没有跨系统原子性时明确 unknown 和 reconcile；不新建“执行任意动作”万能 API，不允许前端直接确认外部效果。
 - [ ] 增量兼容读模型/安全默认值，先复用既有 records/关联；migration、feature flag、升级/中断/降级和回滚步骤齐全。回滚保留效果账本/投递收据，新旧通知路径共用业务去重键。
 - [ ] 独立代码/风险评审完成并有修正证据；确定性检查先于语义验收，self-report 不作为完成证明。
@@ -241,3 +241,8 @@ P2 已全部进入总待办，而不是删除或默认永久不做；其中不�
 5. 原始 Library 文档升级时保留本次 version 0 的映射，以新版本差异更新，不静默覆盖编号或把新增建议计作已授权实现；具体授权以当时用户历史和行动边界为准。
 
 本次产出仅此文件；没有对 runtime、UI、PROGRESS 或 Library 原文执行写入，也没有新增服务、真实外发或设备操作。
+
+
+## 17. 本轮独立评审回执
+
+独立审查者完整重读原计划 version 0 的 1,467 行，逐条对照确认 49 项标题/编号和混合优先级完整。初审指出依赖循环和真实 IM 阻塞被误作全局前置；`34a08ea` 修正为硬/共/后、M1–M10 和 S1-L/E、S2.0–2.4，独立复验通过。复验另指出共同完成定义与共享契约草案的条件引用/版本措辞不一致，本轮已澄清不得伪造尚不存在的 task/run/attempt 或通用 revision。此回执是文档评审，不是任何 Oxx 功能完成或 G01 正式冻结证明。
