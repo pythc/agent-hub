@@ -335,7 +335,7 @@ function teamConfiguration() {
   section.append(opHeading(L('Agent team', 'Agent 团队'), null,
     explain,
     opButton(L('New connection', '新建模型连接'), controlNewModel, 'button', 'plus')), executionModeTabs())
-  section.append(schedulerPanel())
+  section.append(schedulerPanel(),resourcePanel())
   if (teamStudio.explain) section.append(teamExplanation())
   const layout = add(el('div', 'team-studio-layout'), teamGraph(), teamInspector())
   layout.id = 'execution-mode-panel'; layout.setAttribute('role', 'tabpanel'); layout.setAttribute('aria-labelledby', 'execution-mode-tab-configuration')
