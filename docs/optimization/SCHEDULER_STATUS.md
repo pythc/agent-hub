@@ -1,6 +1,6 @@
 # O05.1: read-only scheduler observation
 
-This first slice adds `GET /api/scheduler-status` behind the existing current-operator authorization. O05 / issue #16 remains open: default UI, independent review, and browser acceptance are separate work. No execution, effect, recovery, or admission permission is added or relaxed. The previously blocked trace POST recovery scope is untouched.
+This first slice adds `GET /api/scheduler-status` behind the existing current-operator authorization. O05 / issue #16 remains open: this first aggregate observation slice has a simple UI, independent review and cloud-local actual-page acceptance; full queue reasons, fairness and broader quotas remain future work. No execution, effect, recovery, or admission permission is added or relaxed. The previously blocked trace POST recovery scope is untouched.
 
 `Runtime.schedulerStatus(): SchedulerStatus` synchronously reads the actual `runningJobs` and `controllers` maps, configured `workerProfiles`, current `Run`/`WorkItem` records and jobs table. It never calls `dispatchWorker`, selects a Worker, updates a pool cursor, repairs a record, invokes a model or probes a provider. The response contains only the following bounded aggregate shape; no task, actor, source, worker, session or job IDs, prompts, parameters, paths, errors or model output are returned. Failures return a fixed `scheduler_status_unavailable` code (503), without underlying exception text.
 
@@ -43,3 +43,21 @@ Suggested default UI labels: “Working”, “Waiting”, “Paused”, “Back
 Focused tests cover real tick saturation, four prefix-counted routing jobs, the two preserved routing/counting exceptions, paused admission, enabled/paused/retiring profiles, stale assignment and held background work, session-dependent interactive eligibility, actual fake-model controllers and a reserved continuation, redaction, exact records/jobs/outbox/audit stability, unchanged pool cursor, protected GET and denied POST. Provider/network/effect tests are not required or claimed. The model fixture is deterministic and creates no real third-party effects.
 
 Run `npx vitest run tests/scheduler-status.spec.ts tests/worker-pool.spec.ts` and `npx tsc --noEmit --pretty false`; final integrated checks and browser acceptance belong to the integration line. No persistent schema or data migration exists. Rollback removes the endpoint/projection and restores the equivalent inline scheduler predicates. No ledger or new scheduling state needs cleanup.
+
+
+## Independently verified first-slice checkpoint
+
+Draft [PR #62](https://github.com/pythc/agent-hub/pull/62), source head `d1685363102f69d0a296e360c81d4ea477a002ff`, includes the reviewed backend, plain team panel and persisted actual Runtime/browser fixture. The runtime/UI is unchanged from native357e482, independently exercised by the integration owner. Ordinary [CI43899511531](https://github.com/pythc/agent-hub/actions/runs/43899511531) passed all three platform/Node jobs; [container43899511380](https://github.com/pythc/agent-hub/actions/runs/43899511380) passed at this exact head. No main merge, public deployment or user Mac.
+
+Root's cloud-local browser run: `.local/scheduler-root-final/browser-report.json`, ten actual screenshots under its `screenshots/`, zero page errors, scheduler endpoint GET only. The real Runtime holds one deterministic Worker while a second task is genuinely pending; protected GET and page show working1/waiting1/idle0. Actual pause retains running work; releasing the first gate dispatches the second and clears the queue; releasing the second returns occupancy0/idle1. These normal observations are not response mocks. Separate labelled browser-only injections cover active aggregate variations, 503/invalid-schema refresh retention; theme/narrow/keyboard/Chinese/reduced motion are real rendering checks. No provider calls.
+
+Reproduce in a fresh private fixture directory (set `CHROMIUM_EXECUTABLE` to a cloud-local Chromium if needed):
+
+```sh
+npm run build:chat
+python3 tests/browser/run-scheduler-status.py .local/scheduler-review
+```
+
+Cloud integrated `npm run check`: 1623 pass /75 fail /4 skip,104 files pass/8 fail. `.local/scheduler-failure-comparison.json` proves the exact75 failing cases equal unchanged main on this same kernel; sandbox network isolation is refused (`NETLINK_ROUTE`), and the one EPIPE is also seen in baseline. This is not described as a green local full suite. All32 CI-policy Python regressions also passed independently. Read-only backend focused19 and frontend40 checks passed independently. The normal CI runner's full suite and actual container checks are separately green above.
+
+The endpoint and panel are an observation only; no per-task blocked reason, new fairness algorithm, cross-project quota or SLA is promised. Issue #16 and master #11 remain open.
