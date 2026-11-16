@@ -71,7 +71,10 @@ it('integrates recipe, existing onboarding, explicit Worker activation and persi
  expect((await f.api('/api/execution-trace?ticketId='+encodeURIComponent(assigned.body.ticketId))).body.tasks).toHaveLength(1)
 },20000)
 it('retains unknown effects across refresh and rejects stale or unsafe recovery',async()=>{
- const f=await fixture(),workers=(await f.api('/workers')).body
+ const f=await fixture();f.runtime.pause(true)
+ // This test seeds a durable unknown outcome; an unrelated successful model run
+ // must not replace it or advance the observation while the HTTP fence is checked.
+ const modelRun=vi.spyOn(f.runtime.model,'run'),workers=(await f.api('/workers')).body
  const assigned=await f.api('/workers',{action:'assign',id:'existing',revision:workers.revision,requestId:randomUUID(),discussion:'unknown-fixture',text:'Inspect unknown effect fixture.'})
  expect(assigned.status).toBe(200)
  f.runtime.store.put('run',assigned.body.ticketId,{ticketId:assigned.body.ticketId,assignmentId:'fixture',cwd:f.runtime.config.sources[0]!.cwd,phase:'uncertain',threadId:'fixture-session',error:'PRIVATE_RAW_PROVIDER_ERROR'})
@@ -82,6 +85,7 @@ it('retains unknown effects across refresh and rejects stale or unsafe recovery'
  expect((await f.api('/api/execution-trace/recover',{...input,requestId:randomUUID(),action:'inspect',revision:task.revision+1})).body.code).toBe('trace_settings_conflict')
  expect(JSON.stringify((await f.api('/api/execution-trace')).body)).not.toContain('PRIVATE_RAW_PROVIDER_ERROR')
  expect((await f.api('/api/execution-trace?ticketId='+encodeURIComponent(task.id))).body.tasks[0].observed).toBe(task.observed)
+ expect(modelRun).not.toHaveBeenCalled()
 })
 
 it('rechecks the operator after a slow onboarding apply body completes',async()=>{
