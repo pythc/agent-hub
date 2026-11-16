@@ -164,3 +164,21 @@ it.each(['account','session'] as const)('discards a real api late 401 without si
  pending.resolve({ok:false,status:401,json:async()=>({code:'old_token_required'})});await reading
  expect(f.get('handled401')).toBe(0);expect(f.S.authed).toBe(true);expect(f.S.token).toBe('replacement-token');expect(f.get('workspaceBridge().context().state')).toBe('ready');expect(f.get('workspaceBridge().context().code')).toBe(null);expect(f.get('operator.drawer')).toBe(null)
 })
+
+it('hands a real current projection 401 to the original authentication error handler',async()=>{
+ const f=fixture();composeRealLegacyApi(f,async()=>({ok:false,status:401,json:async()=>({code:'token_required'})}));f.entryState.page='attention';f.get('attentionPageChanged()');await f.flush()
+ expect(f.get('handled401')).toBe(1);expect(f.S.authed).toBe(false);expect(f.S.token).toBe('');expect(f.get('operator.attentionView.snapshot')).toBe(null)
+})
+it('ignores the real projection api late 401 after a replacement session is ready',async()=>{
+ const f=fixture(),pending=deferred();composeRealLegacyApi(f,async()=>pending.promise);f.entryState.page='attention';f.get('attentionPageChanged()');f.get("workspaceContext.epoch=2;workspaceContext.sessionIsolation='replacement-session';S.token='replacement-token'");pending.resolve({ok:false,status:401,json:async()=>({code:'old_token_required'})});await f.flush()
+ expect(f.get('handled401')).toBe(0);expect(f.S.authed).toBe(true);expect(f.S.token).toBe('replacement-token');expect(f.get('workspaceBridge().context().state')).toBe('ready')
+})
+it('clears its read-only record holder before a legitimate SPA records-link navigation so returning cannot reopen it',async()=>{
+ const f=fixture();f.get('attentionPageChanged()');await f.flush();button(f.get('attentionSupplement()'),'查看记录').onclick();const link=walk(f.get('opTaskDialog()')).find(n=>n.tagName==='a');let prevented=false;link.onclick({preventDefault(){prevented=true}});expect(prevented).toBe(false);expect(f.get('operator.attentionView.drawer')).toBe(null);expect(f.get('operator.attentionView.snapshot')).toBe(null)
+ f.setActive(false);f.setActive(true);f.get('attentionPageChanged()');await f.flush();expect(f.get('opTaskDialog()')).toBe(null);expect(button(f.get('attentionSupplement()'),'查看记录')).toBeTruthy()
+})
+it('does not claim empty when legacy work is absent or its current refresh fails after successful zero metadata',async()=>{
+ const f=fixture();f.setResponse(async()=>snapshot([]));f.get('attentionPageChanged()');await f.flush();expect(text(f.get('opAttention()'))).not.toContain('暂无待处理事项')
+ f.get("operator.work={attention:[],workflowActions:[],projectReviews:[]}");expect(text(f.get('opAttention()'))).toContain('暂无待处理事项')
+ f.context.api=async()=>{throw {status:503}};await f.get('readOperatorWork()');expect(f.get('operator.error')).toBe(true);expect(f.get('operator.attentionView.snapshot.total')).toBe(0);expect(text(f.get('opAttention()'))).toContain('更新失败');expect(text(f.get('opAttention()'))).not.toContain('暂无待处理事项')
+})

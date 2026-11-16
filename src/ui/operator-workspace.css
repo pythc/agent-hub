@@ -1918,3 +1918,5 @@ body.operator-menu-open { overflow:hidden; }
 @media(prefers-reduced-motion:reduce){.attention-supplement *,.attention-record-dialog *{scroll-behavior:auto;animation:none;transition:none}}
 
 .attention-record-dialog .drawer-header,.attention-record-dialog .drawer-header span { font-size:14px; }
+
+.operator-workspace .attention-record-dialog .drawer-body > p { font-size:14px; }

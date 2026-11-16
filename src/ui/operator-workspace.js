@@ -48,6 +48,10 @@ operator.attentionView={bridge:null,unsubscribe:null,key:'',binding:null,request
 const attentionKinds=['task_question','native_question','native_approval','workflow_review','project_review','effect_unknown']
 const attentionStates=['needs_reply','waiting_permission','needs_review','outcome_unknown','expired','unavailable','stale']
 function attentionContextKey(c){return JSON.stringify([c.state,c.managed,c.activeId,c.epoch,c.accountId,c.sessionIsolation])}
+function operatorAuthenticationEnded(error,captured){
+ const now=operator.attentionView.bridge?.context()
+ return error?.status===401&&now?.state==='blocked'&&now.code==='workspace_session_ended'&&now.epoch===captured.epoch+1&&now.managed===captured.managed&&now.activeId===captured.activeId&&now.accountId===captured.accountId&&now.sessionIsolation!==captured.sessionIsolation
+}
 function attentionActive(){return S.authed&&S.surface==='entries'&&entryState.role==='operator'&&entryState.page==='attention'&&(typeof configurationHost==='undefined'||configurationHost.active())}
 function attentionReset(){
  const v=operator.attentionView;v.request++;v.controller?.abort();v.controller=null;v.snapshot=null;v.loaded=false;v.busy=false;v.failed=false;v.binding=null;v.key=''
@@ -94,7 +98,7 @@ async function readAttentionProjection(offset=0,expectedBinding=operator.attenti
   const raw=await binding.request('/entry-workspace/attention?offset='+offset+'&limit=25',undefined,false,binding.context.activeId,controller.signal)
   if(!current())return
   const snapshot=attentionDTO(raw,offset);v.snapshot=snapshot;v.failed=false
- }catch{if(current())v.failed=true}
+ }catch(error){if(operatorAuthenticationEnded(error,binding.context)){entryError(error);render()}else if(current())v.failed=true}
  finally{if(request===v.request&&v.binding===binding&&v.key===key){v.busy=false;v.controller=null;if(!attentionCurrent(binding,key))attentionReset();else if(typeof editingProjectReview==='undefined'||!editingProjectReview())render()}}
 }
 function attentionLabel(item){
@@ -152,7 +156,7 @@ function attentionRecordDialog(){
  },'button'))
  const records=el('a','button',L('Open all execution records','打开全部执行记录')),url=new URL('/configure#execution-trace',location.origin)
  if(d.binding.context.managed)url.searchParams.set('workspace',d.binding.context.activeId)
- records.href=url.href;records.onclick=event=>{if(!attentionCurrent(d.binding,d.key))event.preventDefault()};body.append(records)
+ records.href=url.href;records.onclick=event=>{if(!attentionCurrent(d.binding,d.key)){event.preventDefault();return}attentionReset()};body.append(records)
  dialog.append(add(el('div','drawer-header'),el('span','',L('Record details','记录详情')),opButton(L('Close details','关闭详情'),()=>closeAttentionRecord(d),'icon-button','close')),body)
  dialog.oncancel=event=>{event.preventDefault();closeAttentionRecord(d)}
  return dialog
@@ -162,7 +166,7 @@ function attentionSupplement(){
  const snapshot=v.snapshot
  if(!snapshot){const phase=v.bridge?.context().state,blocked=phase!=='ready'&&phase!=='pending';const text=el('p','',blocked?L('Open an available workspace or sign in again.','请打开可用工作区，或重新登录。'):v.failed?L('Request status is unavailable. Existing items below still work.','暂时无法读取逐项状态，原有事项仍可处理。'):L('Loading request status…','正在读取逐项状态…'));text.setAttribute('role',v.failed?'alert':'status');box.append(text);if(v.failed)box.append(opButton(L('Refresh status','刷新状态'),()=>void readAttentionProjection(0,binding,key),'button'));return box}
  const time=el('time','attention-observed',L('Read at: ','读取于：')+attentionTime(snapshot.observedAt));time.dateTime=new Date(snapshot.observedAt).toISOString();box.append(time)
- if(v.failed){const error=el('p','attention-update-failed',L('Update failed. Showing records from the time above.','更新失败，显示上述时间读取的记录。'));error.setAttribute('role','alert');box.append(error)}
+ if(v.failed||operator.error){const error=el('p','attention-update-failed',L('Update failed. Showing records from the time above.','更新失败，显示上述时间读取的记录。'));error.setAttribute('role','alert');box.append(error)}
  const items=snapshot.items.filter(item=>!attentionCovered(item))
  for(const [index,item] of items.entries()){
   const open=opButton(L('View record','查看记录'),()=>openAttentionRecord(item,binding,key),'button');open.id='attention-record-'+index
@@ -259,9 +263,8 @@ async function openOperatorTask(id){
   const proof=Object.freeze({context:Object.freeze({...context}),page:entryState.page}),request=operator.drawerRequest,controller=new AbortController()
   operator.drawerProof=proof;operator.drawerController=controller
   const current=()=>request===operator.drawerRequest&&operator.drawerProof===proof&&!controller.signal.aborted&&operatorTaskProofCurrent(proof)
-  const authenticationEnded=error=>{const now=operator.attentionView.bridge?.context();return error?.status===401&&now?.state==='blocked'&&now.code==='workspace_session_ended'&&now.epoch===proof.context.epoch+1&&now.managed===proof.context.managed&&now.activeId===proof.context.activeId&&now.accountId===proof.context.accountId&&now.sessionIsolation!==proof.context.sessionIsolation}
   await entryRun('work-detail',async()=>{
-   try{const task=await api('/entry-workspace/task/'+encodeURIComponent(id),undefined,false,context.activeId,controller.signal);if(current()){operator.drawer=task;operator.answers={}}}catch(error){if(current()||authenticationEnded(error))throw error}
+   try{const task=await api('/entry-workspace/task/'+encodeURIComponent(id),undefined,false,context.activeId,controller.signal);if(current()){operator.drawer=task;operator.answers={}}}catch(error){if(current()||operatorAuthenticationEnded(error,proof.context))throw error}
    finally{if(request===operator.drawerRequest){operator.drawerController=null;if(!operatorTaskProofCurrent(proof))clearOperatorTaskView()}}
   })
 }
@@ -349,7 +352,7 @@ function opAttention() {
       result.push(card)
     }
   }
-  if (!items.length && !proposals.length && !reviews.length && operator.attentionView.snapshot?.total===0&&!operator.attentionView.failed&&!operator.attentionView.busy&&attentionCurrent(operator.attentionView.binding,operator.attentionView.key)) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
+  if (operator.work&&!operator.error&&!items.length && !proposals.length && !reviews.length && operator.attentionView.snapshot?.total===0&&!operator.attentionView.failed&&!operator.attentionView.busy&&attentionCurrent(operator.attentionView.binding,operator.attentionView.key)) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
   return result
 }
 function opTasks() {

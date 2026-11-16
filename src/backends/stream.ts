@@ -1,4 +1,5 @@
 import {TransientModelError,type ModelRequest} from '../model.ts'
+import {OperationError} from '../operation-errors.ts'
 type Output=ModelRequest['onOutput']
 type Usage=(value:any)=>void
 
@@ -26,7 +27,7 @@ async function* events(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:n
   }finally{signal.removeEventListener('abort',abort);await reader.cancel().catch(()=>{})}
 }
 function parse(data:string){try{return JSON.parse(data)}catch{throw Error('Invalid backend stream event')}}
-function providerError(value:any){if(value.error||value.type==='error')throw Error('Backend stream failed: '+String(value.error?.code??value.error?.type??'provider_error').slice(0,120))}
+function providerError(value:any){if(value.error||value.type==='error')throw new OperationError('backend_stream',value.error?.code??value.error?.type)}
 
 export async function readResponsesStream(reader:ReadableStreamDefaultReader<Uint8Array>,maxBytes:number,signal:AbortSignal,onOutput?:Output,onUsage?:Usage){
   const phases=new Map<string,'answer'|'commentary'>(),started=new Set<string>()
