@@ -27,7 +27,7 @@ The minimum shared contract should standardize references and projections. It sh
 
 ### 2.1 Task basis reference
 
-Proposed `TaskBasisRefV1` carries `ticketId`, the relevant `assignmentId`, and optional `goalId`. Its contract reference uses the existing `GoalContract` digest for managed goals, or the immutable `Mandate` digest for ordinary tasks.
+Proposed `TaskBasisRefV1` identifies an existing goal or task with a discriminated subject reference. A goal can exist before dispatch, so it carries `goalId` and adds `ticketId`/`assignmentId` only when those objects exist; an ordinary task carries its existing `ticketId` and relevant assignment reference. Do not invent an assignment to represent an undispatched goal. Its contract reference uses the existing `GoalContract` digest for managed goals, or the immutable `Mandate` digest for ordinary tasks.
 
 Keep these version dimensions separate:
 
@@ -179,7 +179,7 @@ Rollback must preserve waiting work under control. Deleting the business request
 
 ## 6. Small, independently reviewable commit order
 
-These are proposed slices, not authorized implementation performed by this document save. Each slice still needs current-SHA independent review and applicable actual-page/function acceptance from MASTER_TODO.
+These are proposed implementation slices; this document save performs none of them. Implementation remains within the user’s existing authorization and relevant gates. Each slice still needs current-SHA independent review and applicable actual-page/function acceptance from MASTER_TODO.
 
 | Slice | Scope | Exit evidence |
 | --- | --- | --- |
