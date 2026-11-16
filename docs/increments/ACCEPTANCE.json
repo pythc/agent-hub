@@ -1,0 +1,61 @@
+{
+  "baseline": "cfa1c8e49c978e6b1f8b141764dae7d0bbce1ed7",
+  "testedImplementation": "b749a62266b3ba31dbe9784877da5c7a77a54e04",
+  "freshEnvironment": true,
+  "check": {
+    "passed": 1516,
+    "failed": 75,
+    "skipped": 4,
+    "filesPassed": 100,
+    "filesFailed": 8,
+    "unhandledSandboxErrors": 1
+  },
+  "baselineCheck": {
+    "passed": 1436,
+    "failed": 75,
+    "skipped": 4,
+    "filesPassed": 95,
+    "filesFailed": 8,
+    "unhandledSandboxErrors": 2
+  },
+  "sameFailureSet": true,
+  "newFailures": [],
+  "newTestsPassed": 80,
+  "browser": {
+    "result": "passed",
+    "checks": [
+      "review/install/export recipe; paused Worker and empty grants; ACP managed option disabled; reload persistence",
+      "plugin-defined Feishu help, local validation and existing onboarding apply; starts disabled; diagnostic scope and persisted reload",
+      "existing backend UI; actual sandboxed ACP initialize; auth unknown; model-call unverified; managed gate unchanged",
+      "explicit Worker activation and real scheduler fixture run; persisted dispatch/result; independent commit/test/deploy evidence; reload/failed-refresh recovery",
+      "actual typed unknown-effect failure is fenced; inspect before retry; explicit cancellation persists after reload and cannot resume",
+      "light/dark/narrow themes; reduced motion; keyboard Escape/focus restoration; Chinese translation"
+    ],
+    "pageErrors": [],
+    "mode": "deterministic cloud-local fixture",
+    "realIm": false,
+    "realAcp": false,
+    "screenshots": [
+      ".local/recovery/browser-final/screenshots/worker-templates-mobile-reduced-motion.png",
+      ".local/recovery/browser-final/screenshots/connectors-light.png",
+      ".local/recovery/browser-final/screenshots/trace-unknown-effect-dark.png",
+      ".local/recovery/browser-final/screenshots/template-library-dark.png",
+      ".local/recovery/browser-final/screenshots/trace-result-evidence-dark.png",
+      ".local/recovery/browser-final/screenshots/connectors-chinese-light.png",
+      ".local/recovery/browser-final/screenshots/execution-trace-mobile-reduced-motion.png",
+      ".local/recovery/browser-final/screenshots/templates-light.png",
+      ".local/recovery/browser-final/screenshots/template-review-light.png",
+      ".local/recovery/browser-final/screenshots/connectors-diagnostics-dark.png",
+      ".local/recovery/browser-final/screenshots/connectors-mobile-reduced-motion.png",
+      ".local/recovery/browser-final/screenshots/trace-refresh-failure-dark.png",
+      ".local/recovery/browser-final/screenshots/acp-compatibility-probe-dark.png",
+      ".local/recovery/browser-final/screenshots/connector-reviewed-plan-dark.png"
+    ]
+  },
+  "acpPackageDigest": "0bc686e833fe99daa66f691eccd322c9a09506aaeeeb92bd56750b8f32f76d76",
+  "realIm": false,
+  "realAcpService": false,
+  "paidCalls": false,
+  "publicDeployment": false,
+  "mainMerged": false
+}

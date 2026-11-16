@@ -1,34 +1,43 @@
-# Capability increments — interrupted cloud implementation
+# Four capability increments — completed implementation and acceptance
 
-Branch: `feat/worker-connector-acp-trace-20261116`
-Baseline: latest main verified 2026-11-16: `cfa1c8e49c978e6b1f8b141764dae7d0bbce1ed7`.
-Cloud checkout: `/workspace/scratch/f110c34c6b30/agent-hub-increments`.
+Branch: `feat/worker-connector-acp-trace-20261116`.
+Main baseline rechecked: `cfa1c8e49c978e6b1f8b141764dae7d0bbce1ed7`.
+Current cloud checkout: `/workspace/scratch/f110c34c6b30/agent-hub-recovery`.
+Frozen implementation tested: local `b749a62266b3ba31dbe9784877da5c7a77a54e04`.
 
-## Current blocker
-The platform marked the selected execution environment unavailable. exec-server disconnected; automatic recovery timed out after 45 seconds. No further commands were started after the unavailable signal. This remote branch contains progress/handoff documentation only: implementation commits and uncommitted files remain in the unavailable cloud checkout and have NOT been published. No draft PR is ready.
+## Current state
 
-## Work lines
-| Line | State | Evidence |
+| Work line | State | Fresh evidence |
 | --- | --- | --- |
-| Worker templates | implemented locally, committed; final browser acceptance pending | `d53fbd2c4aecc42c081ceb193f2ffd794f7c6d00`, follow-up `936c67796c720c391b4ca1fc9369974a5d862a87`; 11 template tests, 14 template+HTTP tests pass |
-| Connector management | implemented locally, committed; final browser acceptance pending | `e9be1d9c1a97f0ae125b15c3524e0743bfe6d2b6`; 19 focused tests, 42 combined connector/Slack/registry tests pass |
-| ACP outbound | implemented locally, committed; real service unverified | `52a9093`; 21 focused tests pass; actual ProcessBackend/package/bubblewrap/local ACP peer probe, two-turn resume, permission denial, reasoning filtering and managed rejection pass |
-| Execution trace/recovery | implemented locally, uncommitted | Five module files written; 21 tests plus host/frontend tsc confirmed. Final attempted 22nd test/digest update has unknown outcome after environment loss |
-| Integration | implemented locally, uncommitted; incomplete acceptance | Authenticated routes, three existing-shell workspaces, generic plugin probe, deterministic acceptance host, HTTP and browser tests, README/design docs; 3 HTTP integration tests passed; one integrated typecheck+build passed before final module refinements |
+| Worker templates | implemented, committed, remotely preserved, locally accepted | 11 new tests; existing Worker regressions included; reviewed install/create/export/reload browser flow; no grants, paused creation |
+| Connector management | implemented, committed, remotely preserved, locally accepted | 22 new tests; existing Slack/registry regressions; real Feishu wizard through existing onboarding; disabled initial state, scoped diagnostics, restart/revocation fences |
+| ACP outbound | implemented, committed, remotely preserved, locally accepted using synthetic peer | 21 new tests; actual immutable package + ProcessBackend + bubblewrap + fake ACP probe/run/same-session resume/permission denial; managed gate remains closed for standard ACP |
+| Execution trace/recovery | implemented, committed, remotely preserved, locally accepted | 22 new tests; durable audit cursor/SQLite restart/visibility/recovery; actual scheduler result, failed refresh, unknown-effect fence and cancellation persistence in browser |
+| Integration/acceptance | complete; full suite retains proven environment failures | 4 new HTTP tests including slow-body operator revocation; final host/frontend types/build pass; actual browser 6 workflow groups/14 screenshots/zero page errors; same-environment unchanged-main comparison |
 
-## Baseline and limits
-Initial npm ci installed 382 pinned dependencies. Before integration: npm run check typecheck passed; Vitest 94 files passed/9 failed, 1435 tests passed/76 failed/4 skipped, one unhandled error. Network-isolated bubblewrap operations fail in this kernel with NETLINK_ROUTE Operation not permitted; native CLI timeout passed its independent 4-test rerun. The network-enabled ACP package sandbox path separately passed. No isolation requirements were weakened.
+## Fresh required checks
 
-The actual local app started at `http://127.0.0.1:35263`, using a synthetic model, disabled Feishu source and local ACP peer. Environment availability is now lost; this address is not claimed reachable. Browser testing did not reach a rendered page: system Chromium cannot create its Unix singleton socket, cloud-browser localhost is a separate namespace, and the official headless-shell fallback was downloaded just before environment loss. No UI screenshot acceptance is complete and no screenshots are claimed.
+- Final implementation `npm run check`: typecheck and chat build pass; Vitest 1516 passed / 75 failed / 4 skipped, 100 files passed / 8 failed, one sandbox-process EPIPE.
+- Separate unchanged-main checkout in this same new environment: 1436 passed / the exact same 75 cases failed / 4 skipped, 95 files passed / 8 failed, two sandbox-process errors.
+- Exact failing-case set comparison is equal; no new failing cases. Network-isolated bubblewrap operations are refused by this kernel (`NETLINK_ROUTE socket: Operation not permitted`). Isolation/admission requirements were not weakened.
+- All 80 newly added tests pass. Final actual-browser run passed after the last source fixes; `.local/recovery/browser-final/browser-report.json`, with 14 actual-page screenshots under its `screenshots/` directory.
+- ACP fresh packaged smoke: `.local/acp-recovery-acceptance-20261116/evidence.json`; digest `0bc686e833fe99daa66f691eccd322c9a09506aaeeeb92bd56750b8f32f76d76`.
+- Logs: `.local/recovery/final-check.log`, `baseline-check.log`, `failure-comparison.json`, `final-build.log`, `integration-tests-final.log`.
 
-## Restrictions retained
-Cloud only. No main merge, public deployment, paid calls, real IM messages or real ACP inference. Template requirements do not grant permissions. Existing plugin onboarding and managed admission remain authoritative. Standard ACP is explicitly ineligible for managed Worker use. Unknown external effects are not replayed. Octop was documentation/behavior reference only; no copied code/prompts/tests or translation.
+## Local review instance
 
-See [RECOVERY_HANDOFF.md](RECOVERY_HANDOFF.md) for exact pending actions and known review issues.
+Started using `node --import tsx examples/capability-increments-acceptance.ts .local/recovery/review-instance`.
+Observed URL: `http://127.0.0.1:37169/configure#worker-templates` (within that cloud execution session's loopback namespace).
+The ignored private `browser.json` contains a synthetic review login/session. Never publish it. Separate sandboxed commands and the cloud browser do not share this listener; use the same-session browser runner for automated acceptance. The runner stops its own acceptance process; the separately started review instance is retained while its cloud session lives.
 
-## Recovery work in new environment (current)
-The original checkout, Git objects and artifacts were absent after reconnection. Fresh isolated checkout: `/workspace/scratch/f110c34c6b30/agent-hub-recovery`, based on existing remote handoff `0f626fd51a26c30714b1ad0f31636c0785ca20b0`. Latest main was rechecked and is still `cfa1c8e49c978e6b1f8b141764dae7d0bbce1ed7`. The initial remote checkout was backed up to ignored `.local/recovery/remote-handoff.bundle`; no existing remote history was overwritten.
+## Recovery and publication record
 
-All four module agents retain complete original file-write commands and are restoring those contents, rather than claiming a disk/commit recovery. Coordinator API/navigation changes were also restored from retained write records. Prior test results above are historical only. Every module is being committed and published remotely as soon as ready, with new test evidence appended below.
+The first cloud filesystem vanished. Its implementation commits were not available on disk or remote, but all four agents retained complete tool-write records. Source was restored from those records into a fresh checkout based on existing remote handoff `0f626fd51a26c30714b1ad0f31636c0785ca20b0`, rather than falsely claiming disk/commit recovery. The initial checkout was backed up to `.local/recovery/remote-handoff.bundle`. Old test results in RECOVERY_HANDOFF.md are historical only; the evidence above is newly executed.
 
-The identified stale backend-probe UI issue is fixed in the restored coordinator changes: cache validity requires both settings revision and current workspace; reset clears the cache. Actual browser acceptance and final integrated checks remain pending.
+Modules and integration were saved remotely as soon as committed through the connected GitHub Git-data API; CLI push has no installed credentials. Remote branch updates used expected-head leases and preserved prior history. Key local commits: `0f1d388` integration; `44c3ad3` ACP; `7837b45` templates; `5c6297d` connectors; `989a5ac` trace; `67dcf56` integrated fixtures; `c8e265d` revoked-operator apply fence; `64fa8a0` closed-runtime diagnostic fence; `b749a62` plugin-switch draft reset. The corresponding remote checkpoint history contains the complete source. Final publication must verify local/remote tree equality and remote HEAD; no main merge.
+
+## Scope and remaining unverified items
+
+No user Mac, public deployment, main merge, paid model call or real external message was used. IM diagnostics do not establish receiving/sending/target-channel rights. ACP handshakes report authentication unknown, and standard ACP is explicitly ineligible for managed Workers. Real Feishu/Slack/ACP services and credentialed inference remain unverified. Full-suite green status requires an environment supporting the existing network-isolated sandbox; the same 75 cases fail on unchanged main here.
+
+Design, provenance, reproducible tests and migration/rollback: [DESIGN_AND_ACCEPTANCE.md](DESIGN_AND_ACCEPTANCE.md). Machine-readable summary: [ACCEPTANCE.json](ACCEPTANCE.json). Earlier interruption details remain in [RECOVERY_HANDOFF.md](RECOVERY_HANDOFF.md) for historical recovery context.
