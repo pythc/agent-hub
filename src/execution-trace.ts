@@ -4,6 +4,7 @@ import type {Runtime} from './runtime.ts'
 import type {Run,Store} from './store.ts'
 import {canRetry,type Ticket} from './vendor/dsh-core/index.ts'
 import {stableDigest} from './sources.ts'
+import {executionProblem,projectExecutionBlocker,type ExecutionBlocker} from './execution-blocker.ts'
 import {projectTaskStatus,type TaskStatusProjection} from './execution-status.ts'
 
 const stages=['task','assignment','run','approval','tool','result','acceptance','job','delivery','recovery','commit','test','deployment'] as const
@@ -17,11 +18,12 @@ export class TraceError extends Error {
 const id=z.string().min(1).max(400)
 export const traceQuerySchema=z.object({cursor:z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),ticketId:id.optional(),limit:z.coerce.number().int().min(1).max(200).default(80)}).strict()
 export const traceSnapshotSchema=z.object({ticketId:id.optional(),offset:z.coerce.number().int().min(0).max(1000000).default(0),limit:z.coerce.number().int().min(1).max(100).default(50)}).strict()
-export const traceRecoverySchema=z.object({ticketId:id,action:z.enum(['inspect','read_history','resume_session','cancel']),revision:z.number().int().nonnegative(),requestId:z.string().min(1).max(200),observed:z.string().regex(/^[a-f0-9]{64}$/)}).strict()
+export const traceRecoverySchema=z.object({ticketId:id,action:z.enum(['inspect','read_history','resume_session','cancel']),revision:z.number().int().nonnegative(),requestId:z.string().min(1).max(200),observed:z.string().regex(/^[a-f0-9]{64}$/),repairConfirmed:z.boolean().optional()}).strict()
 type RecoveryInput=z.infer<typeof traceRecoverySchema>
 type RecoveryResult={status:'inspected'|'history_verified'|'history_unavailable'|'resumed'|'cancelled';ticketId:string;replayed:false;at:number;task?:TraceTask}
 interface RecoveryReceipt {fingerprint:string;state:'started'|'completed'|'uncertain';action:RecoveryInput['action'];ticketId:string;at:number;result?:RecoveryResult}
 export interface TraceTask {
+ blocker?:ExecutionBlocker|null
  status:TaskStatusProjection
  id:string;label:string;state:TraceState;phase?:TraceState;updatedAt:string;workerId?:string;backendId?:string;sessionRef?:string;hasResult:boolean;
  revision:number;observed:string;problem:string;unknownEffects:boolean;pendingApprovals:number;acceptance:{state:TraceState;passed:number;failed:number;insufficient:number}|null;
@@ -88,14 +90,8 @@ export function uninstallExecutionTrace(store:Store){
 }
 function visible(host:Runtime,ticketId:string){const ticket=host.store.tickets.get(ticketId);return !!ticket&&!host.memory.cleanup.blocked('ticket',ticketId,ticket)}
 function classify(run:Run|undefined,ticket:Ticket){
- const error=run?.error??''
- if(/context_permissions_changed/.test(error))return 'context_permissions_changed'
- if(/context_budget_exceeded/.test(error))return 'context_budget_exceeded'
- if(/auth_required|credentials required|authentication/i.test(error))return 'auth_required'
- if(/configuration_invalid|configuration or credentials/i.test(error))return 'configuration_invalid'
- if(/rate_limited|quota_exhausted/.test(error))return 'rate_limited'
- if(/transient/.test(error))return 'transient'
- if(run?.phase==='uncertain'||/outcome_unknown|uncertain|unconfirmed|reconciliation required/i.test(error))return 'outcome_unknown'
+ const problem=executionProblem(run?.error??'',run?.phase==='uncertain')
+ if(problem!=='none')return problem
  if(ticket.ended?.outcome==='stopped')return 'cancelled'
  if(run?.phase==='interrupted')return 'interrupted'
  return ticket.assignments.at(-1)?.report?.state==='failed'?'failed':'none'
@@ -125,7 +121,7 @@ export class ExecutionTrace {
  }
  private task(host:Runtime,ticket:Ticket):TraceTask {
   const run=host.store.get<Run>('run',ticket.id),approvals=host.store.list<any>('approval').filter(a=>a.ticketId===ticket.id&&a.status==='pending'&&a.expiresAt>Date.now())
-  const jobs=host.store.db.prepare("SELECT id,state,kind,attempts FROM jobs WHERE json_extract(payload,'$.ticketId')=? ORDER BY id").all(ticket.id)
+  const jobs=host.store.db.prepare("SELECT id,state,kind,attempts,next_at FROM jobs WHERE json_extract(payload,'$.ticketId')=? ORDER BY id").all(ticket.id)
   const deliveries=host.store.deliveries().filter(d=>d.ticketId===ticket.id||host.store.get<{taskIds?:string[]}>('router-reply-owner',d.id)?.taskIds?.includes(ticket.id)),receipts=host.toolConnections.receipts(ticket.id),work=host.work.list(ticket.id),browser=host.store.list<any>('browser-receipt').filter(r=>r.ticketId===ticket.id)
   const workflow=host.store.list<any>('workflow-action').filter(r=>r.ticketId===ticket.id),problem=classify(run,ticket)
   const unknown=run?.phase==='uncertain'||problem==='outcome_unknown'||jobs.some(j=>j.state==='uncertain')||deliveries.some(d=>d.status==='uncertain'||d.status==='sending')||receipts.some(r=>r.state==='uncertain'||r.state==='running')||work.some(w=>w.state==='interrupted')||browser.some(r=>r.state!=='complete')||workflow.some(r=>['uncertain','applying'].includes(r.state))
@@ -136,14 +132,16 @@ export class ExecutionTrace {
   const evidence:TraceTask['evidence']={commit:commitRef?'recorded':'unverified',...(commitRef?{commitRef}:{}),tests:typeof code?.test?.exit==='number'?code.test.exit===0?'passed':'failed':'unverified',deployment:'unverified',external:unknown?'uncertain':receipts.length||browser.length||deliveries.some(d=>d.status==='sent')?'receipts_present':'none'}
   const held=!!host.store.get('context-rebuild',ticket.id)||!!host.store.get('router-migration',ticket.id)||host.scopes.ownership(ticket.id)?.state==='held'
   const observed=stableDigest({ticket,run,approvals:approvals.map(({id,status,expiresAt})=>({id,status,expiresAt})),jobs,deliveries:deliveries.map(({id,status,attempts})=>({id,status,attempts})),receipts:receipts.map(({id,state})=>({id,state})),work:work.map(({id,state})=>({id,state})),browser:browser.map(({id,state})=>({id,state})),workflow:workflow.map(({id,state})=>({id,state})),held,code,ownership:host.scopes.ownership(ticket.id),routing:host.store.get('task-routing',ticket.id),context:host.store.get('task-context',ticket.id),continuation:host.store.get('task-continuation',ticket.id),round:round&&{id:round.id,state:round.state,checks:round.checks}})
+  const scheduled=jobs.filter(j=>j.kind==='execute'&&j.state==='pending'&&Number.isSafeInteger(j.next_at)&&Number(j.next_at)>Date.now()).map(j=>Number(j.next_at))
+  const blocker=projectExecutionBlocker(problem,unknown,scheduled.length?Math.min(...scheduled):undefined,jobs.some(j=>j.kind==='execute'&&j.state==='pending'))
   const actions:TraceTask['actions']=['inspect']
   const sessionReadable=!!run?.threadId&&!!host.model.history&&!host.store.get('context-session-fence',run.threadId)&&!host.store.get('backend-deleted',run.threadId)&&!host.store.get('backend-delete-pending',run.threadId)
   if(sessionReadable){try{if(this.readAllowed(host,ticket)&&host.model.describe?.(run!.threadId).resume)actions.push('read_history')}catch{/* Changed identity or revoked context cannot be probed. */}}
   if(!ticket.ended&&run?.phase!=='merging')actions.push('cancel')
-  if(!ticket.ended&&!unknown&&!held&&!approvals.length&&!ticket.attention&&run?.threadId&&['idle','interrupted'].includes(run.phase)&&canRetry(ticket)&&!host.executionActive(ticket.id)&&!jobs.some(j=>j.state==='running')&&!work.some(w=>['running','starting'].includes(w.state))&&!workflow.some(w=>!['applied','declined','stale','observed'].includes(w.state))&&!host.workflows.unsettled(ticket.id)){
+  if((!blocker||['manual','after_repair'].includes(blocker.retryPolicy.mode))&&!ticket.ended&&!unknown&&!held&&!approvals.length&&!ticket.attention&&run?.threadId&&['idle','interrupted'].includes(run.phase)&&canRetry(ticket)&&!host.executionActive(ticket.id)&&!jobs.some(j=>j.state==='running')&&!work.some(w=>['running','starting'].includes(w.state))&&!workflow.some(w=>!['applied','declined','stale','observed'].includes(w.state))&&!host.workflows.unsettled(ticket.id)){
    try{if(host.model.describe?.(run.threadId).resume&&this.authorized(host,ticket,run))actions.push('resume_session')}catch{/* Preserve backend and session identity fences. */}
   }
-  return {status:projectTaskStatus(host,ticket),id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
+  return {blocker,status:projectTaskStatus(host,ticket),id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
  }
  private readAllowed(host:Runtime,ticket:Ticket){
   const source=host.config.sources.find(s=>s.id===ticket.mandate.actor.source)
@@ -183,6 +181,7 @@ export class ExecutionTrace {
   if(input.revision!==host.settings.current().revision)throw new TraceError('trace_settings_conflict')
   if(input.observed!==current.observed)throw new TraceError('trace_changed')
   if(!current.actions.includes(input.action))throw new TraceError(current.unknownEffects&&input.action==='resume_session'?'trace_reconcile_required':'trace_action_unavailable')
+  if(input.action==='resume_session'&&current.blocker?.retryPolicy.mode==='after_repair'&&!input.repairConfirmed)throw new TraceError('trace_repair_confirmation_required')
   if(input.action==='inspect')return {status:'inspected',ticketId:input.ticketId,replayed:false,at:Date.now(),task:current}
   const started:RecoveryReceipt={fingerprint,state:'started',action:input.action,ticketId:input.ticketId,at:Date.now()}
   const complete=(status:RecoveryResult['status'])=>{
