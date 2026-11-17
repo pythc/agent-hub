@@ -102,3 +102,21 @@ it('rejects accessor-based and undeclared issue values without reading their raw
 it('keeps only one in-flight form submission even before the busy render',async()=>{
  const f=await filled(),pending=deferred();f.setHandler(()=>pending.promise);const first=f.submit(),second=f.submit();await second;expect(f.calls).toHaveLength(1);pending.resolve(f.json({valid:false,issues:[]}));await first;await f.flush();expect(f.created).toHaveLength(0)
 })
+
+it('keeps deferred people and save consequences readable without implying authentication or activation',async()=>{
+ const f=fixture('Setup','zh-CN');await f.submit();f.change('rooms','ROOM');f.change('token','TOKEN')
+ const note=f.nodes().find(node=>node.props?.id==='connector-help-actors')
+ expect(note.type).toBe('span');expect(note.props.className).toBe('connector-draft-note');expect(textOf(note)).toBe('可以稍后设置。连接会保持停用。')
+ expect(f.input('actors').props['aria-describedby']).toBe('connector-help-actors')
+ await f.submit();expect(f.text()).toContain('保存后会重新载入配置，连接可能短暂断开。');expect(f.text()).toContain('此连接保持停用，不测试消息收发，也不新增 Worker 工具权限。')
+ expect(f.text()).not.toMatch(/重启当前环境|认证成功|已接通/);expect(f.calls.map(call=>call.path)).toEqual(['/api/connectors/validate','/api/connectors/plan'])
+})
+it('keeps layer evidence separate in plain language without promoting service response or member access to messaging',async()=>{
+ const f=fixture('ConnectorManagement'),now=Date.now(),levels=['configuration','reachable','authentication','capabilities'] as const,codes=['configuration_valid','service_reachable','identity_verified','directory_read_verified']
+ const layers=Object.fromEntries(levels.map((level,index)=>[level,{id:level,sourceId:'plain',level,revision:0,current:true,status:'passed',code:codes[index],startedAt:now,finishedAt:now,realCall:false,evidenceMode:'fixture',...(level==='capabilities'?{checkedCapabilities:['member_directory'],checkedScopes:1}:{})}]))
+ f.snapshot.instances.push({id:'plain',label:'Plain connection',kind:'fixture-im',enabled:true,scopeCount:1,layers} as never)
+ f.snapshot.diagnostics.push(...Object.values(layers) as never[]);await f.flush();f.button('Refresh').props.onClick();await f.flush()
+ for(const expected of ['Local settings checked. No service call was made.','The service responded. This check does not verify account identity.','Account identity confirmed. Messaging is unverified.','Selected members are readable. Message and channel permissions are unverified.','Messages and channel access','Not verified','Simulated result'])expect(f.text()).toContain(expected)
+ expect(f.text()).not.toMatch(/adapter contract|HEAD request|adapter returned|credential mode/)
+ expect(f.calls.every(call=>call.body===undefined)).toBe(true)
+})

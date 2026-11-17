@@ -15,3 +15,5 @@
 @media(prefers-reduced-motion:reduce){.connector-dialog,.connector-spin{animation:none}.connector-page *,.connector-dialog *{transition:none!important;animation:none!important}}
 
 .connector-information{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;margin:18px 0;font-size:14px;line-height:1.7;overflow-wrap:anywhere}.connector-information strong{font-size:14px;font-weight:550}.connector-information span{font-size:14px;color:var(--c-muted)}.connector-information[data-information-state=missing] span,.connector-information[data-information-state=stale] span{color:var(--status-warning)}.connector-information-note{font-size:14px;line-height:1.7;margin-bottom:20px;color:var(--c-muted)}.connector-information-note p{font-size:14px;margin:5px 0}.connector-information-note time{font-size:14px}.connector-tools .connector-information{flex-basis:100%;margin:0}
+
+.connector-dialog .connector-draft-note,.connector-review .connector-save-note{font-size:14px;line-height:1.7;color:var(--c-text)}
