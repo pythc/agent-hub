@@ -13,7 +13,7 @@ let memoryElement: HTMLDivElement | undefined;
 let browserElement: HTMLDivElement | undefined;
 let chatElement: HTMLDivElement | undefined;
 const active = () =>
-  !['#worker-templates','#connectors','#execution-trace'].includes(location.hash) && location.hash !== '#automations' && location.hash !== '#prompts/memory' && !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
+  !location.hash.startsWith('#artifact/') && !['#worker-templates','#connectors','#execution-trace'].includes(location.hash) && location.hash !== '#automations' && location.hash !== '#prompts/memory' && !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
   location.pathname === "/configure/" ||
   location.pathname === "/");
 export async function prepareConfiguration():Promise<ConfigurationController> {
