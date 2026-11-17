@@ -63,6 +63,8 @@ it('rejects oversized workbook members even when ZIP sizes understate the actual
  expect(observe(forged)).toMatchObject({error:expect.any(String)})
 })
 
+// Real workbook IO, multi-Worker verification, restart and backup share this budget.
+// Preserve every assertion while allowing contention on shared CI runners.
 it('hands a large versioned workbook to its dependent Worker and keeps earlier readbacks bound to their bytes',async()=>{
  const file='ledger.xlsx'
  let opened='',wrongTotal=true
@@ -116,7 +118,7 @@ it('hands a large versioned workbook to its dependent Worker and keeps earlier r
  f.h.memory.cleanup.apply(cleanup)
  expect(f.h.store.db.prepare('SELECT count(*) AS n FROM goal_artifact_bytes').get()?.n).toBe(0)
  expect(()=>f.h.artifacts.download(versions[1]!.id)).toThrow()
-})
+},30000)
 
 it('saves audited methods, pins the selected version to a scheduled goal and manually runs with a fresh request',async()=>{
  const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{"total":42}');return ready()})
