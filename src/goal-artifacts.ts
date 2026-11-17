@@ -13,6 +13,23 @@ import {atomicPrivateFile} from './managed-config.ts'
 
 const mimeTypes:Record<string,string>={'.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pdf':'application/pdf','.mp4':'video/mp4','.png':'image/png'}
 export interface ArtifactVersion {id:string;goalId:string;ticketId:string;nodeId:string;path:string;version:number;sha256:string;size:number;mime:string}
+/** Metadata only: a retained local version is not proof of acceptance or publication. */
+export interface ArtifactReference {
+ schema:1
+ kind:'goal-artifact'
+ id:string
+ version:number
+ sha256:string
+ name:string
+ mediaType:string
+ bytes:number
+ category:'spreadsheet'|'document'|'image'|'video'|'file'
+ visibility:'operator_workspace'
+ retention:'subject_to_history_cleanup'
+ availability:'retained'|'unavailable'
+ publication:'not_tracked'
+ downloadPath:string|null
+}
 type CellCheck=Extract<NonNullable<GoalCriterion['check']>,{kind:'xlsx_cell_equals'}>
 
 /** Read the same file descriptor used to check the workspace boundary and size. */
@@ -95,11 +112,23 @@ export class GoalArtifacts {
     if(!row)throw Error('Artifact version unavailable')
     return Buffer.from(row.bytes as Uint8Array)
   }
-  download(id:string){
+  private operatorVersion(id:string){
     const artifact=this.host.store.get<ArtifactVersion>('goal-artifact',id)
     const goal=artifact?.goalId&&this.host.goals.get(artifact.goalId)
     if(!artifact?.mime||!goal||this.host.scopes.binding(goal.entryId).privateActor)throw Error('Artifact is outside the operator workspace')
     this.host.goals.context(goal)
+    return artifact
+  }
+  describe(id:string):ArtifactReference{
+    return this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>{
+      const artifact=this.operatorVersion(id)
+      const retained=!!this.host.store.db.prepare('SELECT 1 FROM goal_artifact_bytes WHERE id=?').get(id)
+      const category:ArtifactReference['category']=artifact.mime===mimeTypes['.xlsx']?'spreadsheet':artifact.mime==='application/pdf'?'document':artifact.mime.startsWith('image/')?'image':artifact.mime.startsWith('video/')?'video':'file'
+      return {schema:1,kind:'goal-artifact',id:artifact.id,version:artifact.version,sha256:artifact.sha256,name:basename(artifact.path),mediaType:artifact.mime,bytes:artifact.size,category,visibility:'operator_workspace',retention:'subject_to_history_cleanup',availability:retained?'retained':'unavailable',publication:'not_tracked',downloadPath:retained?'/goal-artifacts/'+encodeURIComponent(artifact.id):null}
+    }))
+  }
+  download(id:string){
+    const artifact=this.operatorVersion(id)
     return {artifact,bytes:this.bytes(id)}
   }
   open(owner:WorkOwner,id:string){
