@@ -1,5 +1,5 @@
 import {useEffect,useState} from 'react'
-import type {ArtifactReference} from '../../src/goal-artifacts.ts'
+import type {ArtifactReference} from '../../src/artifact-reference.ts'
 import {useWorkspaceTransport} from './workspace-context.tsx'
 import {artifactReference,artifactIdValid,artifactDownload} from './artifact-result-model.ts'
 import './worker-templates.css'

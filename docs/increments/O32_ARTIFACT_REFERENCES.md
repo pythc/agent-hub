@@ -45,3 +45,29 @@ Workspace Views. It adds no rename/delete/share/publish controls. The broader
 references, workspace URL isolation, late replies and StrictMode replay; these
 are not browser visual or keyboard acceptance. No real IM/provider calls or
 public deployment were performed.
+
+## Conversation attachment identity (third slice)
+
+The browser-safe `artifact-reference.ts` contract now distinguishes goal-artifact
+versions from conversation attachment versions. New ready uploads expose an
+optional additive `reference` with a content-qualified ID derived from the upload ID and digest, version 1,
+and a SHA-256 recorded over the original upload stream. Replacing a same-named
+file creates another ID; the digest is evidence of the uploaded bytes, not a
+promise of current filesystem availability, acceptance or delivery. Legacy
+uploads retain their upload ID with `version: null` and `sha256: null`; metadata reads do not backfill or hash disk files.
+Existing persisted messages without a reference remain supported.
+A removed draft upload ID can be reused by a client; different bytes produce a
+different content-qualified reference ID. Existing URLs still resolve uploads
+under current authorization, not a pinned reference: this metadata does not add a
+fixed-version download resolver for chat uploads.
+
+Chat references retain conversation visibility and cleanup limitations. They are
+not goal-artifact URLs or global registry entries: current conversation ownership,
+ready-state and cleanup checks remain authoritative on each download/resolve.
+No path, owner, credentials or conversation text is added to the reference. Failed
+or revoked uploads discard partial records and never return a reference. No new
+endpoint, download capability, sharing or automatic publication is introduced.
+
+Workspace View packages and cross-kind enumeration are not integrated in this
+slice. #43 remains open. No browser visual/keyboard, real provider/IM or public
+deployment validation is claimed.

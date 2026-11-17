@@ -1,4 +1,4 @@
-import type {ArtifactReference} from '../../src/goal-artifacts.ts'
+import type {ArtifactReference} from '../../src/artifact-reference.ts'
 import type {WorkspaceTransportContext} from './workspace-transport.ts'
 export const artifactIdValid=(id:string)=>/^[a-f0-9]{64}$/.test(id)
 /** Fail closed on stale/mismatched or future descriptor shapes. Never trust a supplied URL. */

@@ -13,23 +13,8 @@ import {atomicPrivateFile} from './managed-config.ts'
 
 const mimeTypes:Record<string,string>={'.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pdf':'application/pdf','.mp4':'video/mp4','.png':'image/png'}
 export interface ArtifactVersion {id:string;goalId:string;ticketId:string;nodeId:string;path:string;version:number;sha256:string;size:number;mime:string}
-/** Metadata only: a retained local version is not proof of acceptance or publication. */
-export interface ArtifactReference {
- schema:1
- kind:'goal-artifact'
- id:string
- version:number
- sha256:string
- name:string
- mediaType:string
- bytes:number
- category:'spreadsheet'|'document'|'image'|'video'|'file'
- visibility:'operator_workspace'
- retention:'subject_to_history_cleanup'
- availability:'retained'|'unavailable'
- publication:'not_tracked'
- downloadPath:string|null
-}
+import type {ArtifactReference} from './artifact-reference.ts'
+export type {ArtifactReference} from './artifact-reference.ts'
 type CellCheck=Extract<NonNullable<GoalCriterion['check']>,{kind:'xlsx_cell_equals'}>
 
 /** Read the same file descriptor used to check the workspace boundary and size. */
