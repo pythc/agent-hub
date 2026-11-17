@@ -1,0 +1,9 @@
+.artifact-reference-details{font-size:12px;color:var(--c-muted);padding:8px 12px;border:1px solid var(--c-line);border-radius:6px;max-width:100%;min-width:0;overflow-wrap:anywhere}
+.artifact-reference-details summary{cursor:pointer;color:var(--c-text)}
+.artifact-reference-details dl{margin:10px 0;display:grid;gap:6px}
+.artifact-reference-details dl>div{display:grid;grid-template-columns:minmax(65px,1fr) minmax(0,3fr);gap:12px}
+.artifact-reference-details dd{margin:0;white-space:normal}
+.artifact-reference-details p{margin:8px 0;line-height:1.5}
+.message-attachment-result{min-width:0;max-width:100%}
+.workspace-view-outlet{flex-direction:column}
+.workspace-view-outlet>.artifact-reference-details{flex:none;margin:6px 10px;max-height:35%;overflow:auto}

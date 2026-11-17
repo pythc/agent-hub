@@ -1,3 +1,4 @@
+import {ArtifactReferenceDetails} from './artifact-reference-details.tsx'
 import {useEffect,useRef,useState} from 'react'
 import type {HostViewMessage,ViewCatalogItem,ViewQuery,ViewSnapshot} from '../../src/workspace-view-contract.ts'
 import {parseViewCommand,viewDestination,viewDocument} from './workspace-view-bridge.ts'
@@ -87,6 +88,7 @@ export function WorkspaceView({id,view,dark,language}:{id:string;view?:ViewCatal
   },[id,view?.digest,view?.available,attempt])
   useEffect(()=>{port.current?.postMessage({type:'environment',dark,language,compactTypography})},[dark,language,compactTypography])
   return <section className="workspace-view-outlet" aria-label={view?.label[language]??id}>
+    <ArtifactReferenceDetails reference={view?.reference} current={error?'unavailable':documentText?'available':'unchecked'} L={(en,zh)=>language==='en'?en:zh}/>
     {error?<div className="workspace-view-placeholder" role="alert"><p>{language==='en'?'This workspace view is unavailable. Check its installation and permissions.':'此看板暂不可用，请检查插件安装及权限。'}</p><button onClick={()=>setAttempt(n=>n+1)}>{language==='en'?'Try again':'重试'}</button></div>:documentText?<iframe ref={frame} title={view?.label[language]??id} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={documentText} onLoad={()=>boot.current()}/>:<div className="workspace-view-placeholder" role="status">{language==='en'?'Loading workspace view…':'正在加载看板…'}</div>}
   </section>
 }
