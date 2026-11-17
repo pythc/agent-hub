@@ -143,3 +143,5 @@ The repository and CLI retain the name `agent-hub`.
 ### Worker recipes, connector diagnostics and execution history
 
 Review versioned recipes at **Worker templates**, configure installed IM source plugins at **Connectors**, and inspect durable task evidence at **Execution trace**. New recipe Workers and connections start paused or disabled. ACP outbound uses an opt-in execution plugin; standard ACP agents remain ineligible for managed Workers when they cannot meet every existing admission requirement. See [design, local acceptance and rollback](docs/increments/DESIGN_AND_ACCEPTANCE.md).
+
+Slack deliveries retain a platform acknowledgement in Connectors. An acknowledgement is not read-back or end-to-end verification; uncertain sends are held for reconciliation instead of automatically replayed.

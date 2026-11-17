@@ -143,3 +143,5 @@ Roppo 基于 [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagen
 ### Worker 配方、连接诊断与执行记录
 
 在 **Worker 模板** 中审阅版本化配方，在 **连接器** 中配置已安装的 IM 来源插件，在 **执行轨迹** 中检查持久任务证据。配方创建的 Worker 默认暂停，新连接默认停用。ACP 出站通过可选执行插件接入；标准 ACP Agent 不满足现有全部准入要求时不能担任受管 Worker。参见[设计、本地验收与回滚说明](docs/increments/DESIGN_AND_ACCEPTANCE.md)。
+
+Slack 投递的平台接收回执可在连接器中查看。平台接收不等于消息回读或端到端验证；结果不确定的发送保留待核对，不会自动重发。

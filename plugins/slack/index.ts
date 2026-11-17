@@ -1,6 +1,6 @@
 import {record,recordPages} from '../records.ts'
 import {createHash} from 'node:crypto'
-import {MessageSource,UncertainDelivery,bodyDigest,type SourceContext} from '../../src/sources.ts'
+import {MessageSource,UncertainDelivery,bodyDigest,type SourceContext,type DeliveryReceipt} from '../../src/sources.ts'
 import type {SourceConfig} from '../../src/config.ts'
 import type {Trigger,OutboundMessage} from '../../src/vendor/dsh-core/index.ts'
 
@@ -208,13 +208,13 @@ export class SlackSource extends MessageSource {
     throw Error('Unknown Slack resource')
   }
   async context(thread:string){if(!this.validThread(thread))throw Error('Thread is outside connection');const i=thread.indexOf(':');return this.thread(thread.slice(0,i),thread.slice(i+1),50)}
-  async deliver(message:OutboundMessage){
+  async deliver(message:OutboundMessage):Promise<DeliveryReceipt>{
     const {chat,root}=message.channel.address
     if(!chat||!this.allowed(chat)||!timestamp(root)||message.channel.source!==this.config.id||message.channel.thread!==chat+':'+root)throw Error('Slack reply is outside connection')
     await this.identity()
     // client_msg_id aids reconciliation; it does not promise exactly-once delivery.
     const h=createHash('sha256').update(message.id).digest('hex'),client_msg_id=h.slice(0,8)+'-'+h.slice(8,12)+'-4'+h.slice(13,16)+'-a'+h.slice(17,20)+'-'+h.slice(20,32)
-    try{const sent=await this.api('POST','chat.postMessage',{channel:chat,thread_ts:root,text:message.text,client_msg_id,unfurl_links:false,unfurl_media:false});if(sent.channel!==chat||!timestamp(sent.ts))throw Error('Invalid Slack delivery receipt')}
+    try{const sent=await this.api('POST','chat.postMessage',{channel:chat,thread_ts:root,text:message.text,client_msg_id,unfurl_links:false,unfurl_media:false});if(sent.channel!==chat||!timestamp(sent.ts))throw Error('Invalid Slack delivery receipt');return {providerAccepted:true,messageId:message.id,remoteMessageId:sent.ts,thread:message.channel.thread,contentDigest:bodyDigest(message.text)}}
     catch{throw new UncertainDelivery('Slack reply outcome unknown; reconcile destination before retry')}
   }
 }
