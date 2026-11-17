@@ -7,6 +7,7 @@ import {stableDigest} from './sources.ts'
 const id=z.string().min(1).max(300),at=z.number().int().nonnegative().max(8640000000000000),choice=z.object({id,name:id}).strict()
 const action=z.object({id,ticketId:id,originTriggerId:id,notificationTriggerId:id,sourceId:id,
  target:z.object({key:id,entryId:id,teamId:id,issueId:id}).strict(),entryRevision:z.number().int().nonnegative(),ownerEpoch:z.number().int().nonnegative(),dataRevision:z.number().int().positive(),
+ planDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),
  view:z.object({account:id,issue:id,label:id,revision:id,current:choice,states:z.array(choice).max(1000)}).strict(),next:choice,
  state:z.enum(['pending','applying','applied','declined','stale','uncertain','observed']),at,finishedAt:at.optional(),
  receipt:z.object({issue:id,state:id,revision:id}).strict().optional(),
