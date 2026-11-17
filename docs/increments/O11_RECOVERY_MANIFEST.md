@@ -32,3 +32,9 @@ Validation: trace projection/no-write and redaction tests, unknown retained
 side effects, pending and sending delivery, and real Runtime restart. Browser
 visual/keyboard, real IM/provider effects, and crash injection at every external
 boundary have not been performed; this slice is not full O11 acceptance.
+
+Checkpoint queries use a valid-JSON partial expression index, installed once
+when opening existing or new stores. Its equality prefix and descending sequence
+support the latest per-ticket/stage lookup without scanning unrelated history.
+A 100,000-row legacy database regression verifies index search (no table scan or
+sort), missing stages, latest/baseline selection, deletion and reopen behavior.

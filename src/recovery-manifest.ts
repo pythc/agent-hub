@@ -1,6 +1,8 @@
 import type {Store} from './store.ts'
 import type {TraceTask} from './execution-trace.ts'
 
+export const checkpointQuery = "SELECT seq, json_extract(body,'$.baseline') AS baseline FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.schema')=1 AND json_extract(body,'$.ticketId')=? AND json_extract(body,'$.stage')=? ORDER BY seq DESC LIMIT 1"
+
 export interface RecoveryManifest {
  schema:1
  ticketId:string
@@ -26,7 +28,7 @@ export function recoveryManifest(store:Store,task:TraceTask):RecoveryManifest {
   :task.actions.includes('read_history')?'inspect_original_session':'inspect_state'
  const checkpoints:RecoveryManifest['checkpoints']=[]
  for(const stage of ['tool','acceptance','delivery'] as const){
-  const row=store.db.prepare("SELECT seq, json_extract(body,'$.baseline') AS baseline FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.schema')=1 AND json_extract(body,'$.ticketId')=? AND json_extract(body,'$.stage')=? ORDER BY seq DESC LIMIT 1").get(task.id,stage)
+  const row=store.db.prepare(checkpointQuery).get(task.id,stage)
   if(row)checkpoints.push({stage,cursor:Number(row.seq),origin:row.baseline===1?'baseline':'transition'})
  }
  return {schema:1,ticketId:task.id,settingsRevision:task.revision,observation:task.observed,session:task.actions.includes('read_history')?'original_inspectable':'unavailable',nextSafeAction,replayAllowed:false,checkpoints,checkpointScope:'retained_ticket_history'}

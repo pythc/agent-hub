@@ -50,6 +50,12 @@ export class Store implements Repositories {
       CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
         attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT);
       CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, at TEXT NOT NULL, body TEXT NOT NULL);
+      -- Valid-JSON partial index also upgrades existing databases on open. The
+      -- equality prefix plus seq avoids per-task full audit scans and sorting.
+      CREATE INDEX IF NOT EXISTS audit_trace_checkpoint ON audit (
+        json_extract(body,'$.type'), json_extract(body,'$.schema'),
+        json_extract(body,'$.ticketId'), json_extract(body,'$.stage'), seq DESC
+      ) WHERE json_valid(body);
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(id UNINDEXED, body, tokenize='trigram');
       PRAGMA user_version=${Math.max(version,6)};
     `)
