@@ -23,7 +23,7 @@ async function fixture(options:{preview?:boolean;failRestart?:boolean}={}){
  const token=readFileSync(host.tokenPath,'utf8').trim(),headers={authorization:'Bearer '+token,'content-type':'application/json'}
  const post=async(path:string,value:unknown)=>{const response=await fetch(host.url+path,{method:'POST',headers,body:JSON.stringify(value)});return {status:response.status,body:await response.json()}}
  const get=async(path:string,auth=true)=>{const response=await fetch(host.url+path,{headers:auth?headers:{}});return {status:response.status,body:await response.json()}}
- return {root,config,runtime,host,headers,post,get,token}
+ return {root,config,runtime,host,headers,post,get,token,failNextRestart:()=>{failures=1}}
 }
 async function provider(response?:{status:number;body:unknown}){
  const requests:{authorization?:string;key?:string;body:any}[]=[]
@@ -38,6 +38,106 @@ async function provider(response?:{status:number;body:unknown}){
  });await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))})
  return {url:'http://127.0.0.1:'+(server.address() as any).port+'/v1',requests}
 }
+it('creates a checked CLI profile in the library without changing component assignments',async()=>{
+ const f=await fixture(),binary=join(f.root,'library-cli'),log=join(f.root,'cli-args.jsonl')
+ writeFileSync(binary,'#!'+process.execPath+'\n'+`require('node:fs').appendFileSync(${JSON.stringify(log)},JSON.stringify(process.argv.slice(2))+'\\n');console.log('ready')`,{mode:0o700})
+ const original=structuredClone(f.runtime.config.execution)
+ const plan=await f.post('/entry-setup/model/plan',{revision:0,select:false,name:'Work profile',connection:{kind:'codex',command:binary,args:['--profile','work'],model:'chosen-model'}})
+ expect(plan.status).toBe(200)
+ expect((await f.post('/entry-setup/model/check',{id:plan.body.id})).body).toMatchObject({ok:true,remoteVerified:false})
+ expect(readFileSync(log,'utf8').trim().split('\n').map(s=>JSON.parse(s))).toEqual([['--profile','work','--version'],['--profile','work','login','status']])
+ const applied=await f.post('/entry-setup/model/apply',{id:plan.body.id})
+ expect(applied.status).toBe(200);expect(f.host.runtime.config.execution).toEqual(original)
+ expect(f.host.runtime.config.backends[applied.body.connection.id]).toMatchObject({kind:'codex',command:binary,args:['--profile','work'],model:'chosen-model'})
+ expect((await f.get('/configuration')).body.connectionChecks[applied.body.connection.id]).toMatchObject({ok:true,remoteVerified:false})
+})
+it('retains test records across display renames but invalidates model and credential changes',async()=>{
+ const api=await provider(),f=await fixture(),key='LIBRARY_TEST_CREDENTIAL';envKeys.push(key);process.env[key]='synthetic-onboarding-key'
+ f.runtime.updateSettings(0,{backends:{library:{kind:'openai-chat',baseUrl:api.url,model:'fixture',apiKeyEnv:key}}})
+ expect((await f.post('/model-connections/check',{id:'library',revision:1})).body).toMatchObject({ok:true,remoteVerified:true})
+ const snap=await f.get('/configuration');expect(snap.body.connectionChecks.library).toMatchObject({ok:true,remoteVerified:true});expect(JSON.stringify(snap.body.connectionChecks)).not.toContain('synthetic-onboarding-key')
+ f.runtime.updateSettings(1,{backends:{library:{...f.runtime.config.backends.library!,label:'Renamed'}}})
+ expect((await f.get('/configuration')).body.connectionChecks.library.ok).toBe(true)
+ process.env[key]='rotated-key';expect((await f.get('/configuration')).body.connectionChecks.library).toBeUndefined()
+ expect((await f.post('/model-connections/check',{id:'library',revision:2})).body).toMatchObject({ok:false,remoteVerified:false,checks:[{code:'api_key_rejected'}]})
+ f.runtime.updateSettings(2,{backends:{library:{...f.runtime.config.backends.library!,model:'another'}}})
+ expect((await f.get('/configuration')).body.connectionChecks.library).toBeUndefined()
+ expect((await f.post('/model-connections/check',{id:'library',revision:1})).status).toBe(409)
+})
+it('replaces a tested API credential without changing the connection ID or component selections',async()=>{
+ const api=await provider(),f=await fixture();f.runtime.updateSettings(0,{backends:{library:{kind:'openai-chat',baseUrl:api.url,model:'fixture',label:'Saved API'}},execution:{...f.runtime.config.execution,router:{backend:'library'}}})
+ f.runtime.store.db.prepare("DELETE FROM records WHERE kind='settings-backends' AND id='managed'").run()
+ const startup=configSchema.parse(f.runtime.config)
+ const selection=structuredClone(f.runtime.config.execution)
+ const plan=await f.post('/entry-setup/model/plan',{revision:1,select:false,connection:{kind:'existing',id:'library',apiKey:'synthetic-onboarding-key'}})
+ expect(plan.body.connection.id).toBe('library');expect(JSON.stringify(plan.body)).not.toContain('synthetic-onboarding-key')
+ expect((await f.post('/entry-setup/model/check',{id:plan.body.id})).body.ok).toBe(true)
+ expect((await f.post('/entry-setup/model/apply',{id:plan.body.id})).status).toBe(200)
+ expect(Object.keys(f.host.runtime.config.backends)).toEqual(['library']);expect(f.host.runtime.config.execution).toEqual(selection)
+ const definition=f.host.runtime.config.backends.library!;expect(definition).toMatchObject({label:'Saved API'})
+ if('apiKeyEnv'in definition)envKeys.push(definition.apiKeyEnv!)
+ expect((await f.get('/configuration')).body.connectionChecks.library).toMatchObject({ok:true,remoteVerified:true})
+ await f.host.closeRuntime();const restarted=new Runtime(startup)
+ try{expect(restarted.config.backends.library).toEqual(definition);expect(restarted.config.execution).toEqual(selection)}finally{await restarted.close()}
+})
+it('does not exhaust the draft limit when repeatedly testing saved connections',async()=>{
+ const f=await fixture();for(let i=0;i<22;i++)expect((await f.post('/model-connections/check',{id:'codex',revision:0})).status).toBe(200)
+})
+it('keeps live library edits and deletions when another connection restarts the host',async()=>{
+ const f=await fixture(),binary=join(f.root,'library-cli');writeFileSync(binary,'#!'+process.execPath+'\nconsole.log("ready")',{mode:0o700})
+ const create=async(revision:number)=>{const plan=await f.post('/entry-setup/model/plan',{revision,select:false,connection:{kind:'codex',command:binary}});return f.post('/entry-setup/model/apply',{id:plan.body.id})}
+ const first=await create(0);expect(first.status).toBe(200);const id=first.body.connection.id
+ f.host.runtime.updateSettings(1,{backends:{[id]:{...f.host.runtime.config.backends[id]!,label:'Renamed profile',model:'chosen'}}})
+ f.failNextRestart();expect((await create(2)).body.code).toBe('setup_apply_failed')
+ expect(f.host.runtime.config.backends[id]).toMatchObject({label:'Renamed profile',model:'chosen'})
+ const second=await create(2);expect(second.status).toBe(200)
+ expect(f.host.runtime.config.backends[id]).toMatchObject({label:'Renamed profile',model:'chosen'})
+ const remaining={...f.host.runtime.config.backends};delete remaining[id];f.host.runtime.updateSettings(3,{backends:remaining})
+ expect((await create(4)).status).toBe(200)
+ expect(f.host.runtime.config.backends[id]).toBeUndefined();expect(managedConnections(f.config.stateDir).backends[id]).toBeUndefined()
+ await f.host.closeRuntime();const restarted=new Runtime(configSchema.parse(f.config))
+ try{expect(restarted.config.backends[id]).toBeUndefined();expect(Object.keys(restarted.config.backends)).toHaveLength(2)}finally{await restarted.close()}
+})
+it('rejects an in-flight test when another session changes the connection',async()=>{
+ let received!:()=>void,respond!:()=>void
+ const started=new Promise<void>(r=>{received=r}),provider=createServer((req,res)=>{received();respond=()=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({choices:[{message:{content:'{"ok":true}'}}]}))}})
+ await new Promise<void>(r=>provider.listen(0,'127.0.0.1',r));cleanup.push(async()=>{provider.closeAllConnections();await new Promise<void>(r=>provider.close(()=>r()))})
+ const f=await fixture();f.runtime.updateSettings(0,{backends:{library:{kind:'openai-chat',baseUrl:'http://127.0.0.1:'+(provider.address() as any).port+'/v1',model:'before'}}})
+ const checking=f.post('/model-connections/check',{revision:1,id:'library'});await started
+ f.runtime.updateSettings(1,{backends:{library:{...f.runtime.config.backends.library!,model:'after'}}});respond()
+ expect((await checking).status).toBe(409)
+ expect((await f.get('/configuration')).body.connectionChecks.library).toBeUndefined()
+})
+it('restores the original API credential and selections if replacement cannot restart',async()=>{
+ const f=await fixture({failRestart:true}),api=await provider(),key='LIBRARY_ROLLBACK_CREDENTIAL';envKeys.push(key);process.env[key]='original-key'
+ f.runtime.updateSettings(0,{backends:{library:{kind:'openai-chat',baseUrl:api.url,model:'fixture',apiKeyEnv:key}},execution:{...f.runtime.config.execution,router:{backend:'library'}}})
+ const previous=structuredClone(f.runtime.config),plan=await f.post('/entry-setup/model/plan',{revision:1,select:false,connection:{kind:'existing',id:'library',apiKey:'synthetic-onboarding-key'}})
+ expect((await f.post('/entry-setup/model/check',{id:plan.body.id})).body.ok).toBe(true)
+ expect((await f.post('/entry-setup/model/apply',{id:plan.body.id})).body.code).toBe('setup_apply_failed')
+ expect(f.host.runtime.config.backends).toEqual(previous.backends);expect(f.host.runtime.config.execution).toEqual(previous.execution)
+ expect(process.env[key]).toBe('original-key');expect(existsSync(managedFiles(f.config.stateDir).secrets)).toBe(false)
+ const current=await f.get('/configuration');expect(current.body.current.revision).toBe(1);expect(current.body.connectionChecks.library).toBeUndefined()
+})
+it('automatically binds only an unambiguous local subscription identity and still requires consent',async()=>{
+ const f=await fixture();f.runtime.subscriptions.list=()=>[{id:'signed-in',signedIn:true,subject:'fixture',email:'fixture@example.test',usage:'unknown',expiresAt:undefined}]
+ expect((await f.get('/configuration')).body.subscriptionOwners.defaultOwner).toEqual({source:'local',actor:'operator'})
+ const connection={kind:'subscription',account:'signed-in',model:'fixture',backgroundAuthorized:true}
+ expect((await f.post('/entry-setup/model/plan',{revision:0,connection,select:false})).status).toBe(200)
+ expect((await f.post('/entry-setup/model/plan',{revision:0,connection:{...connection,backgroundAuthorized:false},select:false})).status).toBe(400)
+ f.runtime.updateSettings(0,{sources:f.runtime.config.sources.map(s=>({...s,allowedActors:['operator','another']}))})
+ expect((await f.get('/configuration')).body.subscriptionOwners.defaultOwner).toBeUndefined()
+ expect((await f.post('/entry-setup/model/plan',{revision:1,connection,select:false})).body.code).toBe('subscription_owner_required')
+ expect((await f.post('/entry-setup/model/plan',{revision:1,connection:{...connection,owner:{source:'local',actor:'another'}},select:false})).status).toBe(200)
+ expect((await f.post('/entry-setup/model/plan',{revision:1,connection:{...connection,owner:{source:'local',actor:'unknown'}},select:false})).body.code).toBe('subscription_owner_required')
+})
+it('reads API model catalogs with the chosen credentials and keeps errors safe',async()=>{
+ const requests:any[]=[],provider=createServer((req,res)=>{requests.push(req.headers);res.writeHead(req.headers.authorization==='Bearer catalog-key'?200:401,{'content-type':'application/json'});res.end(req.headers.authorization==='Bearer catalog-key'?JSON.stringify({data:[{id:'one'},{id:'two'},{id:'one'}]}):JSON.stringify({error:'echo-secret'}))})
+ await new Promise<void>(r=>provider.listen(0,'127.0.0.1',r));cleanup.push(async()=>{provider.closeAllConnections();await new Promise<void>(r=>provider.close(()=>r()))})
+ const f=await fixture(),connection={kind:'api',protocol:'openai-chat',baseUrl:'http://127.0.0.1:'+(provider.address() as any).port+'/v1',model:'_catalog',apiKey:'catalog-key'}
+ expect((await f.post('/model-connections/models',connection)).body.models).toEqual(['one','two']);expect(requests[0].authorization).toBe('Bearer catalog-key')
+ const failed=await f.post('/model-connections/models',{...connection,apiKey:'bad-key'});expect(failed.body.code).toBe('model_catalog_unavailable');expect(JSON.stringify(failed.body)).not.toContain('echo-secret')
+ expect((await f.post('/model-connections/models',{...connection,baseUrl:'https://user:password@example.org'})).status).toBe(400)
+})
 it('checks the actual CLI profile and environment for independently configured Workers',async()=>{
  const f=await fixture(),binary=join(f.root,'profile-cli'),log=join(f.root,'profile-checks.jsonl'),key='AGENTHUB_TEST_CLI_PROFILE'
  envKeys.push(key);process.env[key]='fixture-profile'

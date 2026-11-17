@@ -24,6 +24,8 @@ export const configurationScripts = [
   "workspaces.js",
   "connection-studio.js",
   "connection-native.js",
+  "connection-create.js",
+  "connection-library.js",
   "integrations.js",
   "workspace-motion.js",
   "workflow-story.js",

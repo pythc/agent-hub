@@ -22,7 +22,9 @@ function entryModelEdit(key, value, redraw = false) {
   entryModel.plan = null
   entryModel.check = null
   entryModel.saved = false
+  if (typeof connectionStudio !== 'undefined') { connectionStudio.check = null; connectionStudio.plan = null; if (['provider', 'endpoint', 'protocol', 'credential'].includes(key)) connectionStudio.models = [] }
   document.getElementById('entry-model-result')?.remove()
+  document.getElementById('connection-status')?.remove()
   const checkButton = document.querySelector('.model-connection-form button[type="submit"]')
   if (checkButton) { checkButton.textContent = L('Check connection', '检查连接'); checkButton.classList.add('primary') }
   if (redraw) { render(); animateModelConfiguration('.connection-editor') }
@@ -154,7 +156,7 @@ function entryModelConnection() {
   if (entryModel.mode === 'codex') return { kind: 'codex' }
   if (entryModel.mode === 'existing') return { kind: 'existing', id: entryModel.existingId }
   const preset = providerDefaults[entryModel.provider]
-  const baseUrl = preset?.endpoint || entryModel.endpoint.trim()
+  const baseUrl = entryModel.endpoint.trim() || preset?.endpoint
   let valid = false
   try {
     const u = new URL(baseUrl)

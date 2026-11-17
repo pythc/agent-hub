@@ -3,13 +3,15 @@ import {isApiBackend} from './backend-config.ts'
 import type {Runtime} from './runtime.ts'
 import {patchSchema} from './settings.ts'
 import type {BackendDefinition} from './backend-config.ts'
+import {connectionChecks,subscriptionOwners} from './connection-library.ts'
 
-/** Local configuration inventory. This never queries a model or reads secret values. */
+/** Local configuration inventory. Never queries a model or exposes secret values. */
 export function configurationSnapshot(runtime:Runtime){
  const config=runtime.config,packages=backendPackages(config)
  const definitions:Record<string,BackendDefinition>={codex:{kind:'codex'},...config.backends}
  return {
   decisionCalls:runtime.decision.records(),
+  connectionChecks:connectionChecks(runtime),subscriptionOwners:subscriptionOwners(runtime),
   current:runtime.settings.current(),history:runtime.settings.history(),
   editableKeys:Object.keys(patchSchema.shape),
   retiredWorkerIds:runtime.store.list<{profile:{id:string}}>('retired-worker').map(w=>w.profile.id),

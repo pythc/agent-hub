@@ -89,3 +89,4 @@
 
 .management-content .operator-workspace .memory-settings .memory-provenance{margin:8px 0 0;font-size:14px;font-weight:500;line-height:1.6;color:var(--c-text);overflow-wrap:anywhere}
 .management-content .operator-workspace .memory-settings .memory-context{font-size:14px;color:var(--c-text);white-space:normal;overflow:visible}
+.management-content .operator-workspace .memory-settings .memory-list .memory-learned-heading{margin:20px 16px 4px;font-size:var(--roppo-font-body);color:var(--c-muted)}

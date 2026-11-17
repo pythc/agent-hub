@@ -42,6 +42,7 @@ export function memoryWorkspace(host:Runtime,owner:string){
   skills:host.skills.list(c.route.scopeId,c),
   goals:host.goals.list(c).filter(g=>g.state==='completed'&&g.nodes?.every(n=>n.workerId)).sort((a,b)=>b.at-a.at).map(g=>({id:g.id,title:g.title})),
   cooperation:host.agentMemory.cooperation(c),
+  reflection:host.agentMemory.reflection(c),
   learning:host.agentMemory.manage(c,{action:'inspect'}).adaptation,
  }))}
 }
@@ -85,7 +86,11 @@ export async function changeMemoryWorkspace(host:Runtime,owner:string,value:unkn
  if(x.action==='skill')return host.skills.command(x.skill,c)
  if(x.action==='export'){
   const facts=host.agentMemory.applicable(c).filter(f=>f.entryId===entry.id)
-  const selected=x.file==='USER.md'?facts.filter(f=>f.kind==='profile'||f.kind==='preference'):x.file==='AGENTS.md'?facts.filter(f=>f.origin==='experience'):x.file==='ALIGNMENT_SYNTHESIS.md'?facts.filter(f=>host.agentMemory.cooperation(c).some(ref=>ref.id===f.id&&ref.revision===f.revision)):facts
+  if(x.file==='ALIGNMENT_SYNTHESIS.md'){
+   const points=host.agentMemory.reflection(c)?.points??[]
+   return {file:x.file,text:'# ALIGNMENT_SYNTHESIS.md\n\n'+points.map(p=>'## '+p.section+'\n\n'+p.content+(p.condition?'\n\nApplies when: '+p.condition:'')+'\n\n<!-- sources: '+p.refs.map(r=>r.id+'@'+r.revision).join(', ')+' -->').join('\n\n')}
+  }
+  const selected=x.file==='USER.md'?facts.filter(f=>f.kind==='profile'||f.kind==='preference'):x.file==='AGENTS.md'?facts.filter(f=>f.origin==='experience'):facts
   return {file:x.file??'MEMORY.md',text:'# '+(x.file??'MEMORY.md')+'\n\n'+selected.map(f=>'- '+f.content+(f.learning?.condition?'（'+f.learning.condition+'）':'')+'\n  <!-- memory:'+f.id+'@'+f.revision+' -->').join('\n')}
  }
  if(x.action==='inspect')return host.agentMemory.manage(c,{action:'inspect',id:x.id})
@@ -104,6 +109,6 @@ export async function changeMemoryWorkspace(host:Runtime,owner:string,value:unkn
 }
 function editMemory(f:MemoryFact,content:string,condition?:string){return {action:'remember',id:f.id,operationId:randomUUID(),expectedRevision:f.revision,
  subject:f.subject,content,kind:f.kind,importance:f.importance,sourceIds:f.sources.map(s=>s.id),derivedFrom:f.dependencies?.map(d=>d.id),relation:f.relation,
- candidate:false,visibility:f.visibility,ticketId:f.ticketId,expiresAt:f.expiresAt,origin:'manual',topicAliases:f.topicAliases,
+ candidate:false,visibility:f.visibility,ticketId:f.ticketId,expiresAt:f.expiresAt,origin:f.origin==='experience'?'experience':'manual',topicAliases:f.topicAliases,
  learning:{inferred:false,condition:condition??f.learning?.condition??'',...(f.learning?.discussion?{discussion:f.learning.discussion}:{})},
 }}

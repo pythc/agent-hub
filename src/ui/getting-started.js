@@ -481,6 +481,7 @@ function renderGuide() {
 }
 
 const providerDefaults = {
+  deepseek: { label: 'DeepSeek', endpoint: 'https://api.deepseek.com', protocol: 'openai-chat' },
   openai: { label: 'OpenAI', endpoint: 'https://api.openai.com/v1', protocol: 'openai-responses' },
   anthropic: { label: 'Anthropic', endpoint: 'https://api.anthropic.com/v1', protocol: 'anthropic' }
 }

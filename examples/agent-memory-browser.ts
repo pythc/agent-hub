@@ -37,11 +37,12 @@ const chatPreference=note('报告顺序','技术报告先给结论，再给验�
 const chatTentative=note('日常沟通','日常进度更新可以简短一些',{candidate:true,origin:'extracted',learning:{inferred:true,condition:'日常更新',quote:'日常更新简短一些'}})
 h.memory.acceptLearning(chatContext,chatTentative)
 const chatCandidate=note('待核对的工作约定','验收时保留测试结果的原始输出',{candidate:true,kind:'fact'})
+const chatConvention=note('Verify generated files','Read generated files back before reporting completion.',{kind:'fact',origin:'experience',learning:{inferred:true,condition:'File generation',quote:'再给验证证据'}})
 // Synthetic completed goal for browser-only method editing. Unit tests execute
 // the real Worker and independent verification path separately.
 const accepted=h.goals.command({action:'start',operationId:'browser-method',expectedRevision:0,title:'演示报告方法',objective:'生成 report.md',authorizationQuote:chatTitle,criteria:[{id:'report',description:'报告文件存在',files:['report.md'],check:{kind:'file_exists',path:'report.md'}}],nodes:[{id:'write',title:'生成报告',instruction:'生成 report.md',workerId:'one',criterionIds:['report']}]},chatContext)
 h.store.put('goal-verification','browser-acceptance',{id:'browser-acceptance',goalId:accepted.id,state:'passed',at:Date.now(),checks:[],snapshot:{evidence:[]}})
 h.store.put('router-goal',accepted.id,{...accepted,state:'completed',finalRoundId:'browser-acceptance'})
-writeFileSync(join(root,'fixture.json'),JSON.stringify({url:host.url,cookie,triggerId:c.trigger.id,other:other.trigger.id,old:old.id,pending:pending.id,rejected:rejected.id,deletion:deletion.id,forgetTarget:forgetTarget.id,chat:chat.id,otherChat:otherChat.id,chatTitle,chatTrigger:chatRun.runId,chatPreference:chatPreference.id,chatTentative:chatTentative.id,chatCandidate:chatCandidate.id}),{mode:0o600})
+writeFileSync(join(root,'fixture.json'),JSON.stringify({url:host.url,cookie,triggerId:c.trigger.id,other:other.trigger.id,old:old.id,pending:pending.id,rejected:rejected.id,deletion:deletion.id,forgetTarget:forgetTarget.id,chat:chat.id,otherChat:otherChat.id,chatTitle,chatTrigger:chatRun.runId,chatPreference:chatPreference.id,chatTentative:chatTentative.id,chatCandidate:chatCandidate.id,chatConvention:chatConvention.id}),{mode:0o600})
 console.log(host.url)
 const stop=async()=>{await new Promise<void>(r=>host.server.close(()=>r()));await host.closeRuntime();process.exit(0)};process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop())

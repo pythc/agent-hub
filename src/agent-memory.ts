@@ -12,6 +12,7 @@ import {observeExperience,extractExperience} from './memory-experience.ts'
 import type {RouterGoal} from './router-goals.ts'
 import type {VerificationRound} from './goal-verification.ts'
 import {verifyMemoryRelevance} from './memory-relevance.ts'
+import {reflectMemories,reflectionContext,reflectionView,pruneReflections} from './memory-reflection.ts'
 
 export interface MemoryObservation {id:string;kind?:'experience';parentSourceId?:string;space:string;triggerId:string;discussion:string;scopeId:string;entryId:string;actor:string;session:string;sourceId:string;start?:number;end?:number;generation:number;epoch:number;policyRevision:number;sequence:number;state:'pending'|'running'|'done'|'held'|'stale';attempts:number;nextAt:number;lease?:string;error?:string}
 interface Vector {id:string;factId:string;revision:number;generation:number;scopeId:string;model:string;vector:number[]}
@@ -31,6 +32,7 @@ export class AgentMemory {
   host.store.atomic(()=>{for(const f of host.store.list<MemoryFact>('memory-fact'))if(!f.kind)host.store.put('memory-fact',f.id,{...f,kind:'fact',importance:3,protected:f.state==='active'});host.store.put('memory-schema','current',3);host.store.db.exec('PRAGMA user_version='+Math.max(7,Number(host.store.db.prepare('PRAGMA user_version').get()!.user_version)))})
   host.memory.recall=(c,q)=>this.recall(c,q)
   host.memory.learning=c=>this.learning(c)
+  host.memory.personalization=(c,facts)=>reflectionContext(this,c,facts)
   host.memory.validateUse=(c,refs)=>{if(!refs.length)return;if(!this.enabled(c))throw Error('Memory use disabled');const allowed=this.applicable(c);if(refs.some(ref=>!allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))throw Error('Memory audience changed')}
   host.memory.onMutation=()=>{this.queries.clear();this.reconcile()}
   for(const row of this.observations())if(row.state==='running')this.saveObservation({...row,state:'pending',lease:undefined,nextAt:this.now()})
@@ -92,6 +94,7 @@ export class AgentMemory {
    .map(f=>({id:f.id,revision:f.revision,content:f.content,condition:f.learning?.condition??'',kind:f.origin==='experience'?'method':'preference'}))
  }
  learning(c:ScopeContext){return {mode:this.policy(c).writeMode,enabled:this.enabled(c),coldStart:!this.applicable(c).some(f=>f.kind==='preference'||f.kind==='profile')}}
+ reflection(c:ScopeContext){return reflectionView(this,c)}
  /** Automatically apply supported notes; guesses cannot replace a human-edited fact. */
  acceptNote(c:ScopeContext,fact:MemoryFact){
   return this.host.store.atomic(()=>{
@@ -116,7 +119,7 @@ export class AgentMemory {
  }
  private rankings(c:ScopeContext,query:string,items:MemoryProjection[],vector?:number[]){
   const model=this.vectorModel(c)
-  const lexical=items.map(f=>({f,score:lexicalScore(query,f.subject+' '+f.content)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.f.id.localeCompare(b.f.id))
+  const lexical=items.map(f=>({f,score:lexicalScore(query,f.subject+' '+f.content+' '+(f.learning?.quote??''))})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.f.id.localeCompare(b.f.id))
   const dense=vector?items.flatMap(f=>{const v=this.host.store.get<Vector>('memory-vector',stableDigest([f.id,model]));return v&&v.revision===f.revision&&v.generation===f.generation&&v.vector.length===vector.length?[{f,score:cosine(vector,v.vector)}]:[]}).sort((a,b)=>b.score-a.score||a.f.id.localeCompare(b.f.id)):[]
   return {lexical,dense}
  }
@@ -184,6 +187,11 @@ export class AgentMemory {
   const ranked=this.rank(c,query,all),selected:MemoryProjection[]=[]
   let standingBytes=0,relatedBytes=0
   for(const f of resident){const bytes=Buffer.byteLength(f.content);if(standingBytes+bytes<=3600){standingBytes+=bytes;selected.push(f)}}
+  // A few sourced conventions stay available even when the task vocabulary changes.
+  for(const f of all.filter(f=>f.origin==='experience'&&!f.learning?.discussion).sort((a,b)=>b.createdAt-a.createdAt).slice(0,3)){
+   if(selected.some(s=>s.id===f.id))continue
+   const bytes=Buffer.byteLength(f.content);if(relatedBytes+bytes<=1200){relatedBytes+=bytes;selected.push(f)}
+  }
   for(const f of ranked.items){if(selected.some(s=>s.id===f.id))continue;const bytes=Buffer.byteLength(f.content);if(relatedBytes+bytes>2400)continue;relatedBytes+=bytes;selected.push(f);if(selected.length>=resident.filter(f=>selected.includes(f)).length+5)break}
   return {items:selected,status:memoryRetrievalComplete(ranked.mode)?'complete':'partial',reason:memoryRetrievalComplete(ranked.mode)?undefined:ranked.mode}
  }
@@ -235,6 +243,7 @@ export class AgentMemory {
    const ranked=group.sort((a,b)=>Number(!!b.protected)-Number(!!a.protected)||(b.importance??3)-(a.importance??3)||(b.lastUsedAt??b.createdAt)-(a.lastUsedAt??a.createdAt))
    for(const f of ranked.slice(p.maxItems))if(!f.protected){store.put('memory-version',f.id+':'+f.revision,f);store.put('memory-fact',f.id,{...f,archived:true,revision:f.revision+1})}
   }
+  pruneReflections(this)
  }
  charge(c:ScopeContext){
   const key=stableDigest([c.route.scopeId,new Date(this.now()).toISOString().slice(0,10)]),used=this.host.store.get<number>('memory-call-count',key)??0
@@ -271,6 +280,7 @@ export class AgentMemory {
      for(const f of this.authorized(c))if(f.owner===c.actor&&f.kind==='task'&&!f.protected&&(f.lastUsedAt??f.createdAt)<this.now()-45*86400000&&(f.importance??3)>1)this.host.store.put('memory-fact',f.id,{...f,importance:1})
      const review=this.host.store.get<any>('memory-consolidation',space)
      if(this.policy(c).writeMode!=='explicit_only'&&(review?.status==='interrupted'||this.now()-(review?.at??0)>=86400000)&&this.authorized(c).filter(f=>f.owner===c.actor).length>=6)await consolidateMemories(this,c,signal)
+     await reflectMemories(this,c,signal)
     })().catch(()=>{}).finally(()=>{this.active=undefined;this.controller=undefined})
     return
    }catch{}

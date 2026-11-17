@@ -74,12 +74,24 @@ it('settles legacy personal notes without crossing owners and keeps refresh idem
 })
 it('keeps Router defaults concise and warm, respects custom personality and leaves Workers unchanged',async()=>{
  const f=fixture(),files=personaFiles(f.h,{}),router=previewInstructions(f.h.config,{role:'router'}),worker=previewInstructions(f.h.config,{role:'worker'})
- expect(files.files['SOUL.md']).toContain('默认简短');expect(files.files['SOUL.md']).toContain('自然措辞')
- expect(router.text).toContain('默认简短');expect(router.text).toContain('只在复杂问题');expect(router.text).toContain('略带俏皮')
- expect(worker.text).not.toContain('略带俏皮');expect(router.text).not.toContain('Name: Muse')
+ expect(files.files['SOUL.md']).toContain('Default to concise replies');expect(files.files['SOUL.md']).toContain('plain, natural language')
+ expect(router.text).toContain('Default to concise replies');expect(router.text).toContain('Expand for a complex decision');expect(router.text).toContain('a little playful')
+ expect(worker.text).not.toContain('a little playful');expect(router.text).not.toContain('Name: Muse')
  f.chat('alice');for(let i=0;i<100&&!f.calls.length;i++){await f.h.tick();await new Promise(r=>setTimeout(r,3))}
- expect(f.calls[0]!.instructions).toContain('默认简短')
+ expect(f.calls[0]!.instructions).toContain('Default to concise replies')
  importPersonaFile(f.h,{agentId:'router',file:'SOUL.md',text:'保持严肃的科学报告风格',revision:files.revision})
  const customized=previewInstructions(f.h.config,{role:'router'}).text
- expect(customized).toContain('保持严肃的科学报告风格');expect(customized).not.toContain('略带俏皮')
+ expect(customized).toContain('保持严肃的科学报告风格');expect(customized).not.toContain('a little playful')
+})
+it('uses English defaults and internal notes without changing the reply language contract',()=>{
+ const f=fixture(),files=personaFiles(f.h,{})
+ for(const text of Object.values(files.files))expect(text).not.toMatch(/[\p{Script=Han}]/u)
+ for(const role of ['router','worker'] as const){
+  const preview=previewInstructions(f.h.config,{role})
+  expect(preview.text).toContain('internal handoff explanations in English')
+  expect(preview.text).toContain('explicitly requested language first')
+  expect(preview.text).toContain('Do not infer the reply language from system instructions')
+ }
+ importPersonaFile(f.h,{file:'SOUL.md',revision:files.revision,text:files.files['SOUL.md']})
+ expect(personaFiles(f.h,{}).files['SOUL.md']).toBe(files.files['SOUL.md'])
 })

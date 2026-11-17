@@ -47,8 +47,16 @@ export function recoverManagedFiles(state:string){
 export function loadManagedConfig(config:Config){
  recoverManagedFiles(config.stateDir)
  const overlay=managedConnections(config.stateDir),next=configSchema.parse(config)
+ // Settings.save makes the persisted backend inventory authoritative. A managed
+ // file may still contain its previous revision after a live edit or deletion.
+ let revisioned=false
+ const database=join(config.stateDir,'state.sqlite')
+ if(Object.keys(overlay.backends).length&&existsSync(database)){
+  const db=new DatabaseSync(database,{readOnly:true})
+  try{revisioned=!!db.prepare("SELECT id FROM records WHERE kind='settings-backends' AND id='managed'").get()}finally{db.close()}
+ }
  for(const [id,backend] of Object.entries(overlay.backends)){
-  if(next.backends[id]&&!same(next.backends[id],backend))throw Error('Managed connection conflicts with startup backend: '+id)
+  if(next.backends[id]&&!same(next.backends[id],backend)&&(!revisioned||backend.kind==='plugin'||next.backends[id]!.kind==='plugin'))throw Error('Managed connection conflicts with startup backend: '+id)
   next.backends[id]=backend
  }
  for(const source of overlay.sources){

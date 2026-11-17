@@ -17,6 +17,13 @@ Added 2026-11-09, unchanged assets from official sites:
 The light/dark GitHub variants retain the supplied colors. These marks identify
 available integrations and do not imply vendor endorsement.
 
-Other entries reuse the application's existing icon set. In particular, Codex
-keeps the existing terminal icon rather than presenting the ChatGPT mark as a
-separate Codex product logo.
+Model connection assets added 2026-11-17:
+
+- `codex.png`, `codex-dark.png`: the official `icon-codex-light.png` and `icon-codex-dark-color.png` from OpenAI's installed desktop distribution, bundle `com.openai.codex`, version `26.1111.21308`. Original files in `/Applications/ChatGPT.app/Contents/Resources/`; reduced proportionally to 128px with macOS `sips`. These are the Codex product icons, separate from the ChatGPT icon.
+- `openai.png`: the official OpenAI/ChatGPT icon from `electron.icns` in the same signed application distribution, rasterized at 128px.
+- `deepseek.png`: https://www.deepseek.com/favicon.ico, converted proportionally to 128px PNG.
+- `anthropic.ico`: https://www.anthropic.com/favicon.ico.
+- `gemini.png`: https://geminicli.com/icon.png (linked by the official Gemini CLI website).
+- `opencode.png`: https://opencode.ai/favicon-96x96-v3.png (linked by the official OpenCode website).
+
+Only file format/size was adapted; brand artwork and supplied light/dark colors are retained. Unknown/custom providers use the neutral connection glyph. No provider image is fetched at runtime.

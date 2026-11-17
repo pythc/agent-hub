@@ -8,7 +8,8 @@ export const DELEGATION_DB_SCHEMA=10
 export const DELEGATED_GOALS_DB_SCHEMA=11
 export const WORKFLOW_DB_SCHEMA=12
 export const EVOLUTION_DB_SCHEMA=14
-export const MAX_DB_SCHEMA=EVOLUTION_DB_SCHEMA
+export const REFLECTION_DB_SCHEMA=15
+export const MAX_DB_SCHEMA=REFLECTION_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
@@ -75,7 +76,9 @@ export class Store implements Repositories {
   /** An older verifier would ignore an unknown check and could release a waiting goal. */
   requireWorkflowSchema(){this.db.exec('PRAGMA user_version='+Math.max(WORKFLOW_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireCodeProjectSchema(){this.db.exec('PRAGMA user_version='+Math.max(13,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
-  requireEvolutionSchema(){this.db.exec('PRAGMA user_version='+EVOLUTION_DB_SCHEMA)}
+  requireEvolutionSchema(){this.db.exec('PRAGMA user_version='+Math.max(EVOLUTION_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
+  /** Older releases cannot invalidate or erase the new derived memory copies. */
+  requireReflectionSchema(){this.db.exec('PRAGMA user_version='+Math.max(REFLECTION_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   prunePages(){this.db.prepare("DELETE FROM records WHERE kind='resource-page' AND id IN (SELECT id FROM records WHERE kind='resource-page' AND CAST(json_extract(body,'$.expires') AS INTEGER)<? LIMIT 1000)").run(Date.now())}
   put(kind: string, id: string, value: unknown): void {
     const observe=this.recordObservers.get(kind)

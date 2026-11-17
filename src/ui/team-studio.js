@@ -208,9 +208,9 @@ function teamBasics(current) {
     return fields
   }
 
-  fields.append(teamField('team-backend', L('Model connection', '模型连接'), backend, value => {
+  fields.append(connectionPickerField('team-backend', backend, value => {
     teamWrite('backend', value); teamWrite('model', undefined); render()
-  }, { values: controlConnections().map(service => [service.id, service.label]) }))
+  }))
   const model = current.router ? route.routerModel : current.value.model
   fields.append(teamField('team-model', L('Model', '模型'), model || '', value => teamWrite('model', value.trim() || undefined), {
     placeholder: controlConnections().find(service => service.id === backend)?.model || L('Connection default', '使用连接默认模型')
@@ -358,11 +358,12 @@ function teamInspector() {
   const title = el('h2', '', current.name); title.id = 'team-inspector-title'; title.tabIndex = -1
   pane.append(add(el('div', 'team-inspector-heading'), add(el('span', 'team-avatar'), icon(current.router ? 'execution' : 'cpu')),
     add(el('div'), title, el('span', 'team-help', current.router ? 'Router' : 'Worker'))))
+  if (teamStudio.tab === 'decision' && !current.router) teamStudio.tab = 'essentials'
   const tabs = affectSegmented({ id: 'team-tabs', label: L('Agent settings', 'Agent 设置'), value: teamStudio.tab,
-    options: [['essentials', L('Essentials', '基本配置')], ['tools', L('Tools & control', '工具与管理')], ['advanced', L('Advanced', '高级参数')]].map(([value, label]) => ({ value, label, controls: 'team-tab-panel' })),
+    options: [['essentials', L('Essentials', '基本配置')], ['tools', L('Tools & control', '工具与管理')], ['advanced', L('Advanced', '高级参数')], ...(current.router ? [['decision', L('Decision layer', '决策层')]] : [])].map(([value, label]) => ({ value, label, controls: 'team-tab-panel' })),
     onChange: value => { teamStudio.tab = value; render() } })
   const panel = el('div', 'team-tab-panel'); panel.id = 'team-tab-panel'; panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', 'team-tabs-' + teamStudio.tab)
-  panel.append(({ essentials: teamBasics, tools: teamTools, advanced: teamAdvanced })[teamStudio.tab](current))
+  panel.append(teamStudio.tab === 'decision' ? decisionSettings() : ({ essentials: teamBasics, tools: teamTools, advanced: teamAdvanced })[teamStudio.tab](current))
   panel.addEventListener('input', teamUpdatePreview)
   pane.append(tabs, panel)
   if (current.router) pane.append(el('p', 'team-help', L('One Router is required. You can rename it or replace its model connection and instructions.', '保留一个 Router。可修改名称，或更换模型连接与指令。')))

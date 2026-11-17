@@ -185,7 +185,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(changing||unavailable){send(res,503,{error:'The host is applying configuration. Please try again shortly.',code:unavailable?'setup_recovery_required':'configuration_restarting'});return}
     const operator=authorized(req)||browserOperator
     if(['POST','PATCH','DELETE'].includes(req.method??'')&&!authorized(req)&&browserOperator&&req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
-    if(options.configurationPreview&&req.method==='POST'&&!['/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply','/entry-setup/probe','/entry-setup/plan','/entry-setup/apply','/entry-setup/model/plan','/entry-setup/model/check','/entry-setup/model/apply','/entry-setup/verification','/operator-link','/logout'].includes(path)){
+    if(options.configurationPreview&&req.method==='POST'&&!['/model-connections/check','/model-connections/models','/settings','/prompt-preview','/setup-check','/onboarding/plan','/onboarding/check','/onboarding/apply','/entry-setup/probe','/entry-setup/plan','/entry-setup/apply','/entry-setup/model/plan','/entry-setup/model/check','/entry-setup/model/apply','/entry-setup/verification','/operator-link','/logout'].includes(path)){
       if(!operator){send(res,401,{error:'Access token required',code:'token_required'});return}
       send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
     }
@@ -499,7 +499,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/workers'){send(res,200,await runtime.manager.call(await body(req)));return}
     if(req.method==='GET'&&path==='/workers'){send(res,200,runtime.manager.list());return}
     if(req.method==='GET'&&path==='/subscription/accounts'){send(res,200,runtime.subscriptions.list());return}
-    if(req.method==='POST'&&path==='/subscription/login'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.begin(input.account));return}
+    if(req.method==='POST'&&path==='/subscription/login'){const input=z.object({account:z.string().optional()}).strict().parse(await body(req)),id=input.account??'account-'+randomUUID();send(res,200,{...await runtime.subscriptions.begin(id),account:id});return}
     if(req.method==='POST'&&path==='/subscription/status'){const input=z.object({attempt:z.string()}).strict().parse(await body(req));send(res,200,runtime.subscriptions.status(input.attempt));return}
     if(req.method==='POST'&&path==='/subscription/logout'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.logout(input.account));return}
     if(req.method==='POST'&&path==='/subscription/models'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.models(input.account));return}
@@ -528,6 +528,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/entry-setup/plan'){send(res,200,entries.plan(await body(req)));return}
     if(req.method==='POST'&&path==='/entry-setup/model/plan'){send(res,200,onboarding.connectionPlan(await body(req)));return}
     if(req.method==='POST'&&path==='/entry-setup/model/check'){const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));send(res,200,await onboarding.check(input.id));return}
+    if(req.method==='POST'&&path==='/model-connections/check'){send(res,200,await onboarding.checkConnection(await body(req)));return}
+    if(req.method==='POST'&&path==='/model-connections/models'){send(res,200,await onboarding.models(await body(req)));return}
     if(req.method==='POST'&&(path==='/entry-setup/apply'||path==='/entry-setup/model/apply')){
       const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));changing=true
       try{send(res,200,await entries.apply(input.id,rebuild))}finally{changing=false}return

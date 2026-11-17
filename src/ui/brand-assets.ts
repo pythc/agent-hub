@@ -3,6 +3,8 @@ import {readFileSync} from 'node:fs'
 // Shared by the standalone guide and the compiled workspace. Bundled assets
 // keep private workspaces independent of third-party image requests.
 const files:Record<string,[string,string]>={
+ gemini:['gemini.png','image/png'],opencode:['opencode.png','image/png'],
+ codex:['codex.png','image/png'],codexDark:['codex-dark.png','image/png'],openai:['openai.png','image/png'],deepseek:['deepseek.png','image/png'],anthropic:['anthropic.ico','image/x-icon'],
  feishu:['feishu.ico','image/x-icon'],wecom:['wecom.ico','image/x-icon'],
  slack:['slack.png','image/png'],linear:['linear.svg','image/svg+xml'],
  github:['github-black.svg','image/svg+xml'],githubDark:['github-white.svg','image/svg+xml'],

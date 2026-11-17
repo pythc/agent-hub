@@ -13,11 +13,13 @@ import {apiCheckFailure} from './backends/api-errors.ts'
 import {managedConnections,managedSecrets,prepareManagedConfig} from './managed-config.ts'
 import {Store} from './store.ts'
 import {cliEnvironment} from './codex.ts'
+import {recordConnectionCheck,subscriptionOwners} from './connection-library.ts'
 
 const exec=promisify(execFile)
 export const onboardingPlanSchema=z.object({revision:z.number().int().min(0),connection:z.discriminatedUnion('kind',[
- z.object({kind:z.literal('existing'),id:z.string().min(1).max(64)}).strict(),
- z.object({kind:z.literal('codex')}).strict(),
+ z.object({kind:z.literal('existing'),id:z.string().min(1).max(64),apiKey:z.string().trim().min(1).max(16000).regex(/^[^\x00-\x1f\x7f]+$/).optional()}).strict(),
+ z.object({kind:z.literal('codex'),command:z.string().trim().min(1).optional(),args:z.array(z.string()).max(100).optional(),model:z.string().trim().min(1).max(300).optional()}).strict(),
+ z.object({kind:z.literal('subscription'),account:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),model:z.string().trim().min(1).max(300),owner:z.object({source:z.string(),actor:z.string()}).strict().optional(),backgroundAuthorized:z.literal(true)}).strict(),
  z.object({kind:z.literal('api'),protocol:z.enum(['openai-responses','openai-chat','anthropic']),baseUrl:z.string().url(),model:z.string().trim().min(1).max(300),apiKey:z.string().trim().min(1).max(16000).regex(/^[^\x00-\x1f\x7f]+$/).optional()}).strict(),
 ]),name:z.string().trim().min(1).max(100).optional(),workspace:z.string().min(1).max(4000).optional(),channel:z.enum(['browser','feishu','wecom']).default('browser')}).strict()
 type Check={id:string;status:'ok'|'required'|'pending';code:string;detail?:string}
@@ -49,7 +51,7 @@ export class Onboarding {
   if(!input.select){
    plan.next.execution=structuredClone(this.host().config.execution);plan.next.models=structuredClone(this.host().config.models)
    if(input.connection.kind==='codex'){
-    const id='service-'+plan.id.slice(0,12),backend:BackendDefinition={kind:'codex',...(input.name?{label:input.name}:{})}
+    const id='service-'+plan.id.slice(0,12),backend:BackendDefinition={...input.connection,...(input.name?{label:input.name}:{})}
     plan.next.backends[id]=backend;plan.backend=backend;plan.connection={id,kind:'codex',label:input.name??'Codex'}
    }
   }
@@ -76,9 +78,24 @@ export class Onboarding {
   if(input.connection.kind==='api'){
    backendId='assistant-'+id.slice(0,12);key=input.connection.apiKey;keyName=key?'AGENTHUB_SETUP_'+id.replaceAll('-','').toUpperCase():undefined
    backend=backendDefinition.parse({kind:input.connection.protocol,...(input.name?{label:input.name}:{}),baseUrl:input.connection.baseUrl,model:input.connection.model,...(keyName?{apiKeyEnv:keyName}:{})});next.backends[backendId]=backend
+  }else if(input.connection.kind==='subscription'){
+   const choices=subscriptionOwners(host),owner=input.connection.owner??choices.defaultOwner
+   if(!owner||!choices.choices.some(c=>c.source===owner.source&&c.actor===owner.actor))throw new OnboardingError('subscription_owner_required','Choose the identity allowed to use this subscription.')
+   const account=input.connection.account
+   if(!host.subscriptions.list().some(a=>a.id===account&&a.signedIn))throw new OnboardingError('subscription_sign_in_required','Sign in to the selected subscription first.')
+   backendId='subscription-'+id.slice(0,12)
+   backend=backendDefinition.parse({kind:'openai-responses',label:input.name??'ChatGPT',baseUrl:'https://api.openai.com/v1',model:input.connection.model,
+    subscription:{provider:'chatgpt',account:input.connection.account,owner,backgroundAuthorized:true}})
+   next.backends[backendId]=backend
   }else{
    backendId=input.connection.kind==='codex'?'codex':input.connection.id
    if(backendId!=='codex'&&!next.backends[backendId])throw new OnboardingError('connection_missing','Choose an available connection.')
+   if(input.connection.kind==='existing'&&input.connection.apiKey){
+    const previous=next.backends[backendId]
+    if(!previous||previous.kind==='codex'||previous.kind==='plugin'||previous.subscription)throw new OnboardingError('credential_not_supported','This connection manages its own sign-in.')
+    key=input.connection.apiKey;keyName='AGENTHUB_SETUP_'+id.replaceAll('-','').toUpperCase()
+    backend={...previous,apiKeyEnv:keyName};next.backends[backendId]=backend
+   }
   }
   const definition=next.backends[backendId]??{kind:'codex'}
   next.execution={backend:backendId,roles:{}};next.models={}
@@ -103,18 +120,48 @@ export class Onboarding {
     remoteVerified=true;checks.push({id:'connection',status:'ok',code:'model_replied'})
    }catch(error){checks.push({id:'connection',status:'required',...apiCheckFailure(error)})}
   }
-  plan.lastCheck={ok:checks.every(c=>c.status==='ok'),checks,remoteVerified,preview:false};return plan.lastCheck
+  this.current(id) // Reject results from a configuration superseded during I/O.
+  plan.lastCheck={ok:checks.every(c=>c.status==='ok'),checks,remoteVerified,preview:false}
+  if(!plan.backend)recordConnectionCheck(host,plan.connection.id,definition,plan.lastCheck)
+  return plan.lastCheck
+ }
+ async checkConnection(value:unknown){
+  const input=z.object({revision:z.number().int().min(0),id:z.string().min(1).max(64)}).strict().parse(value)
+  const plan=this.connectionPlan({revision:input.revision,connection:{kind:'existing',id:input.id},select:false})
+  try{return await this.check(plan.id)}finally{this.plans.delete(plan.id)}
+ }
+ async models(value:unknown){
+  const input=onboardingPlanSchema.shape.connection.parse(value)
+  if(input.kind!=='api')throw new OnboardingError('model_catalog_unsupported','Use the account model catalog for subscriptions.')
+  backendDefinition.parse({kind:input.protocol,baseUrl:input.baseUrl,model:input.model})
+  const headers:Record<string,string>=input.protocol==='anthropic'?{'anthropic-version':'2023-06-01',...(input.apiKey?{'x-api-key':input.apiKey}:{})}:input.apiKey?{authorization:'Bearer '+input.apiKey}:{}
+  if(this.preview)return {models:[],preview:true}
+  try{
+   const response=await fetch(input.baseUrl.replace(/\/+$/,'')+'/models',{headers,redirect:'error',signal:AbortSignal.timeout(15000)})
+   if(!response.ok)throw new OnboardingError('model_catalog_unavailable','Model list could not be read (HTTP '+response.status+'). Enter a model ID manually.')
+   const text=await response.text();if(text.length>2000000)throw Error('Catalog too large')
+   const body=JSON.parse(text),models=body.data??body.models
+   if(!Array.isArray(models))throw Error('Invalid model catalog')
+   return {models:[...new Set(models.map(m=>typeof m==='string'?m:m?.id).filter((id):id is string=>typeof id==='string'&&id.length>0&&id.length<=300))].slice(0,1000)}
+  }catch(error){if(error instanceof OnboardingError)throw error;throw new OnboardingError('model_catalog_unavailable','Model list could not be read. Enter a model ID manually.')}
  }
  async apply(id:string,rebuild:(config:Config)=>Promise<void>){
   const replay=this.host().store.get<any>('onboarding-deployment',id)?.receipt
   if(replay)return {...replay,replayed:true,paused:this.host().status().paused,ready:replay.ready&&this.host().sources.get(replay.sourceId)?.config.enabled===true}
   const plan=this.current(id),host=this.host(),previous=host.settings.current(),previousSetup=host.store.get('onboarding','current'),connections=managedConnections(host.config.stateDir),secrets=managedSecrets(host.config.stateDir)
+  const previousBackendManagement=host.store.get('settings-backends','managed')
   let paused:boolean
   try{paused=await host.pauseForConfiguration()}catch{throw new OnboardingError('configuration_busy','Work is still running. Finish or stop it before applying setup.',409)}
   const additions={...plan.credentials,...(plan.keyName&&plan.key?{[plan.keyName]:plan.key}:{})},env=Object.fromEntries(Object.keys(additions).map(key=>[key,process.env[key]]))
   const receipt={applied:true,revision:previous.revision+1,sourceId:plan.sourceId,workspace:plan.workspace,connection:plan.connection,preview:this.preview,ready:!this.preview&&plan.lastCheck?.ok===true,paused,checks:plan.lastCheck?.checks??[]}
   let files:ReturnType<typeof prepareManagedConfig>|undefined,committed=false
   try{
+   // Live edits/deletions may have superseded previously managed definitions.
+   // Carry the current revision into the restart overlay instead of reviving it.
+   for(const backendId of Object.keys(connections.backends)){
+    if(plan.next.backends[backendId])connections.backends[backendId]=plan.next.backends[backendId]!
+    else delete connections.backends[backendId]
+   }
    if(plan.backend)connections.backends[plan.connection.id]=plan.backend
    if(!connections.sources.some(s=>s.id===plan.sourceId))connections.sources.push(plan.next.sources.find(s=>s.id===plan.sourceId)!)
    Object.assign(secrets,additions)
@@ -124,16 +171,20 @@ export class Onboarding {
     if(host.settings.current().revision!==plan.revision)throw new OnboardingError('settings_conflict','Settings changed while applying setup. Review them again.',409)
     host.store.put('settings-history',String(previous.revision),previous)
     host.store.put('settings','current',{revision:previous.revision+1,at:new Date().toISOString(),config:plan.next})
+    if(plan.backend)host.store.put('settings-backends','managed',true)
     host.store.put('onboarding-deployment',plan.id,{revision:previous.revision+1,receipt})
     if(!plan.entry)host.store.put('onboarding','current',{at:Date.now(),sourceId:plan.sourceId,workspace:plan.workspace,connection:plan.connection,channel:plan.channel,checked:plan.lastCheck?.ok===true,remoteVerified:plan.lastCheck?.remoteVerified===true})
    });committed=true
-   await rebuild(plan.next);this.host().pause(paused);files.finish();this.plans.delete(id);plan.key=undefined;plan.credentials=undefined
+   await rebuild(plan.next);this.host().pause(paused)
+   if(plan.lastCheck)recordConnectionCheck(this.host(),plan.connection.id,this.host().config.backends[plan.connection.id]??{kind:'codex'},plan.lastCheck)
+   files.finish()
+   this.plans.delete(id);plan.key=undefined;plan.credentials=undefined
    return receipt
   }catch(error){
    files?.rollback();for(const [key,value]of Object.entries(env)){if(value===undefined)delete process.env[key];else process.env[key]=value}
    if(committed){
     const store=new Store(join(host.config.stateDir,'state.sqlite'))
-    try{store.atomic(()=>{store.put('settings','current',previous);store.db.prepare("DELETE FROM records WHERE kind='settings-history' AND id=?").run(String(previous.revision));store.db.prepare("DELETE FROM records WHERE kind='onboarding-deployment' AND id=?").run(plan.id);if(previousSetup)store.put('onboarding','current',previousSetup);else store.db.prepare("DELETE FROM records WHERE kind='onboarding' AND id='current'").run()})}finally{store.close()}
+    try{store.atomic(()=>{store.put('settings','current',previous);store.db.prepare("DELETE FROM records WHERE kind='settings-history' AND id=?").run(String(previous.revision));store.db.prepare("DELETE FROM records WHERE kind='onboarding-deployment' AND id=?").run(plan.id);if(previousSetup)store.put('onboarding','current',previousSetup);else store.db.prepare("DELETE FROM records WHERE kind='onboarding' AND id='current'").run();if(previousBackendManagement)store.put('settings-backends','managed',previousBackendManagement);else store.db.prepare("DELETE FROM records WHERE kind='settings-backends' AND id='managed'").run()})}finally{store.close()}
     try{await rebuild(previous.config);this.host().pause(paused)}catch{throw new OnboardingError('setup_recovery_required','Setup was restored, but the host could not restart. Restart it before continuing.',503)}
    }else host.pause(paused)
    if(error instanceof OnboardingError)throw error

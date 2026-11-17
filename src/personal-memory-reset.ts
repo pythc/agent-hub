@@ -5,8 +5,8 @@ import {stableDigest} from './sources.ts'
 import {memoryPolicySchema} from './memory-policy.ts'
 
 export interface PersonalReset {settingsKey:string;scopeId:string;entries:string[];spaces:string[];factIds:string[]}
-const bySpace=new Set(['memory-personal','memory-last-extract','memory-maintenance','memory-consolidation','memory-sequence'])
-const learning=new Set(['memory-observation','memory-extraction-session','memory-document-use','memory-use','memory-topic','memory-vector'])
+const bySpace=new Set(['memory-personal','memory-last-extract','memory-maintenance','memory-consolidation','memory-sequence','memory-reflection','memory-reflection-run','memory-reflection-revision'])
+const learning=new Set(['memory-observation','memory-extraction-session','memory-document-use','memory-use','memory-topic','memory-vector','memory-reflection-history'])
 export function addPersonalReset(store:Store,plan:HistoryPlan,owner:string,conversationIds:string[]):HistoryPlan{
  const conversations=conversationIds.flatMap(id=>{const c=store.get<{sourceId:string;actor:string;nativeId?:string}>('chat-conversation',id);return c?[{...c,id}]:[]})
  const bindings=store.list<EntryBinding>('entry-binding').filter(b=>conversations.some(c=>c.sourceId===b.sourceId&&(c.nativeId??'chat:'+c.id)===b.nativeId))

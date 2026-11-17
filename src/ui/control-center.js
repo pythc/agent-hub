@@ -3,7 +3,7 @@ function controlConnections() {
     let endpoint = ''
     try { endpoint = new URL(backend.baseUrl).hostname } catch {}
     const capabilities = S.snap?.backendCatalog?.find(item => item.id === id)
-    return { id, kind: backend.kind, managedEligible: capabilities?.managedEligible, managedMissing: capabilities?.managedMissing || [], model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
+    return { id, definition: backend, endpoint, managedEligible: capabilities?.managedEligible, managedMissing: capabilities?.managedMissing || [], kind: backend.kind, model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
       label: backend.label || (backend.kind === 'codex' ? 'Codex' : [endpoint, backend.model].filter(Boolean).join(' · ') || id),
       connectionType: backend.subscription ? 'subscription' : backend.kind === 'codex' || backend.kind === 'plugin' ? 'cli' : 'api' }
   })
@@ -337,62 +337,12 @@ function resetNewModel() {
 function controlNewModel() {
   if (!connectionStudio.touched && !entryModel.touched) {
     resetNewModel()
-    Object.assign(connectionStudio, { kind: 'api', provider: '', name: '', command: '', args: '[]', model: '', auth: null, check: null, requestId: '', definitionId: '', editing: '',
+    Object.assign(connectionStudio, { kind: 'api', provider: '', name: '', command: '', args: '', model: '', auth: null, check: null, requestId: '', definitionId: '', editing: '', drafts: {}, plan: null,
       account: '', ownerSource: '', ownerActor: '', background: false, models: [] })
   }
   opNavigate('model-new')
 }
-function controlModels() {
-  if (entryState.page === 'model-new') return connectionCreation()
-  if (connectionStudio.editing && S.snap?.editableKeys?.includes('backends')) return connectionDefinitionEditor()
-  const architecture = operator.work?.architecture
-  const services = controlConnections()
-  const rows = services.map(service => {
-    const check = opButton(service.kind === 'plugin' ? L('Probe protocol', '探测协议') : L('Check connection', '检查连接'), () => {
-      if (service.kind === 'plugin') {
-        void entryRun('backend-probe', async () => {
-          const result = await api('/api/execution-backends/probe', {id:service.id,revision:S.snap.current.revision})
-          connectionStudio.backendProbes ||= {}
-          connectionStudio.backendProbes[service.id] = {...result,workspaceId:workspaceContext.activeId}
-        })
-        return
-      }
-      if (entryModel.touched && !confirm(L('Discard the unsaved service draft?', '放弃未保存的模型服务草稿？'))) return
-      Object.assign(entryModel, {
-        creating: false, name: '', mode: 'existing', existingId: service.id, open: true,
-        plan: null, check: null, saved: false, touched: false, credential: ''
-      })
-      void checkEntryModel()
-    }, 'button')
-    const cachedProbe = connectionStudio.backendProbes?.[service.id]
-    const probe = cachedProbe?.revision === S.snap?.current?.revision && cachedProbe?.workspaceId === workspaceContext.activeId ? cachedProbe : null
-    const roles = []
-    if (S.base.config.decision?.provider?.kind === 'backend' && S.base.config.decision.provider.id === service.id) roles.push(L('Decision layer', '决策层'))
-    if (architecture?.router?.backend === service.id) roles.push('Router')
-    for (const [index, worker] of (architecture?.workers || []).entries())
-      if (worker.backend === service.id) roles.push('Worker ' + (index + 1))
-    if (S.base.config.execution.roles.subagent === service.id) roles.push(L('Subagent', '子代理'))
-    const protocol = ({codex: 'Codex CLI', 'openai-responses': 'OpenAI Responses',
-      'openai-chat': 'OpenAI Chat Completions', anthropic: 'Anthropic Messages'})[service.kind] || service.kind
-    const actions = add(el('div', 'actions'), check)
-    if (S.snap?.editableKeys?.includes('backends') && S.draft.backends?.[service.id]) actions.append(opButton(L('Edit', '编辑'), () => {
-      connectionStudio.editing = service.id; render()
-    }, 'button'))
-    const type = ({api: L('API service', 'API 服务'), cli: L('CLI backend', 'CLI 后端'), subscription: L('Subscription', '订阅账号')})[service.connectionType]
-    const mark = add(el('span', 'model-service-mark'), icon(service.connectionType === 'cli' ? 'terminal' : 'cpu'))
-    return add(el('li', 'model-service-row'),
-      add(el('div', 'model-service-identity'), mark, add(el('div'), el('h3', '', service.label), el('span', 'model-service-meta', type + ' · ' + protocol), service.managedEligible === false ? el('small', 'hint', L('Cannot serve as a managed Worker. Missing: ', '无法担任受管 Worker，缺少：') + service.managedMissing.join(', ')) : null, probe ? el('small', 'hint', L('Protocol: ', '协议：') + (probe.available ? L('reachable', '可达') : L('unavailable', '不可用')) + ' · ' + L('Authentication: ', '认证：') + (probe.authenticated === true ? L('verified', '已验证') : probe.authenticated === false ? L('required', '待认证') : L('unknown', '未知')) + ' · ' + new Date(probe.checkedAt).toLocaleTimeString() + ' · ' + L('Model call unverified', '模型调用未验证')) : null)),
-      add(el('div', 'model-service-assignment'), el('span', 'model-service-model', service.model || L('Service default', '服务默认模型')),
-        add(el('div', 'model-service-roles'), ...roles.map(role => el('span', '', role)), roles.length ? null : el('span', '', L('Unassigned', '未分配')))), actions)
-  })
-  const page = el('div', 'models-page')
-  page.append(opHeading(L('Model connections', '模型连接'), null,
-    opButton(L('New model connection', '新建模型连接'), controlNewModel, 'button primary', 'plus')),
-    add(el('ul', 'model-service-list'), ...rows))
-  if (entryModel.check || entryModel.saved) page.append(entryModelResult())
-  if (S.snap?.editableKeys?.includes('decision')) page.append(decisionSettings())
-  return [page]
-}
+function controlModels() { return connectionLibrary() }
 
 async function controlTaskAction(action,id){
  if(action==='retry'&&!confirm(L('Have you checked the original conversation and files for uncertain effects?','是否已核对原会话和文件，确认没有不确定的副作用？')))return
