@@ -3,7 +3,7 @@ function controlConnections() {
     let endpoint = ''
     try { endpoint = new URL(backend.baseUrl).hostname } catch {}
     const capabilities = S.snap?.backendCatalog?.find(item => item.id === id)
-    return { id, definition: backend, endpoint, managedEligible: capabilities?.managedEligible, managedMissing: capabilities?.managedMissing || [], kind: backend.kind, model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
+    return { id, admission: capabilities?.admission, definition: backend, endpoint, managedEligible: capabilities?.managedEligible, managedMissing: capabilities?.managedMissing || [], kind: backend.kind, model: backend.model || (backend.kind === 'codex' ? S.base?.config.model : ''),
       label: backend.label || (backend.kind === 'codex' ? 'Codex' : [endpoint, backend.model].filter(Boolean).join(' · ') || id),
       connectionType: backend.subscription ? 'subscription' : backend.kind === 'codex' || backend.kind === 'plugin' ? 'cli' : 'api' }
   })

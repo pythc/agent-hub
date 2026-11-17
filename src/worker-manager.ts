@@ -1,3 +1,4 @@
+import {checkWorkerAdmission} from './backend-admission.ts'
 import {z} from 'zod'
 import {taskView,allowNewTaskInputs,type TaskContinuation} from './task-context.ts'
 import type {ScopeContext} from './router-scope.ts'
@@ -127,6 +128,7 @@ export class WorkerManager {
   if(input.action==='assign')return host.store.atomic(()=>{
    if(!worker||worker.state&&worker.state!=='enabled')throw Error('Select an enabled Worker')
    verifyBackend(worker.backend)
+   checkWorkerAdmission(host.config,worker.backend,worker)
    if(!input.text)throw Error('Task text required')
    const discussion=context?.discussion??input.discussion;if(!discussion)throw Error('Router discussion required')
    const source=context?.trigger?host.sources.get(context.trigger.source)?.config:host.config.sources.find(s=>s.kind==='local'&&s.enabled)
