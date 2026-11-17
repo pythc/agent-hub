@@ -1,6 +1,7 @@
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
 import {ConnectorManagement,ConnectorError} from './connector-management.ts'
 import {ExecutionTrace,TraceError} from './execution-trace.ts'
+import {ResourceUsage} from './resource-usage.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {BackendPluginError} from './backends/plugin-contract.ts'
 import {deploymentMaintenance,DeploymentError} from './deployment-maintenance.ts'
@@ -209,6 +210,12 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/api/resource-usage'){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      if(new URL(req.url!,requestOrigin).search!==''){send(res,400,{code:'resource_usage_query_invalid'});return}
+      try{send(res,200,new ResourceUsage(()=>runtime).snapshot())}catch{send(res,503,{code:'resource_usage_unavailable'})};return
+    }
     if(path==='/api/scheduler-status'){
       requireCurrentOperator(req)
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
