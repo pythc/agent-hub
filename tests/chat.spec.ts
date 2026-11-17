@@ -8,7 +8,7 @@ import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import {serve} from '../src/server.ts'
 import type {ModelRequest} from '../src/model.ts'
-import type {Server} from 'node:http'
+import {createServer,type Server} from 'node:http'
 import {chatUploadLimits} from '../src/chat-attachments.ts'
 const roots:string[]=[],hosts:Runtime[]=[],servers:Server[]=[]
 afterEach(async()=>{for(const s of servers.splice(0)){s.closeAllConnections();await new Promise<void>(r=>s.close(()=>r()))}for(const h of hosts.splice(0))await h.close();for(const p of roots.splice(0))rmSync(p,{recursive:true,force:true})})
@@ -380,13 +380,13 @@ it('receives a browser message exactly once and rejects conflicting identity reu
   expect(h.store.jobs().filter(j=>j.kind==='router')).toHaveLength(1)
   expect(()=>send(h,c.id,'Parallel')).toThrow('Wait')
 })
-it('keeps conversations and owners isolated and binds new sessions to their original Router options',async()=>{
+it('keeps conversation owners isolated while following current Router options',async()=>{
   const {h,calls,config}=fixture(),a=h.chat.create('owner'),b=h.chat.create('other')
   send(h,a.id,'A');h.chat.send(b.id,'other',{text:'B',clientMessageId:randomUUID()})
   config.execution.router!.model='router-two';config.execution.router!.effort='high'
   await settle(h,()=>h.chat.view(a.id,'owner').run?.state==='completed'&&h.chat.view(b.id,'other').run?.state==='completed')
-  expect(calls.map(r=>r.model)).toEqual(['router-one','router-one'])
-  expect(calls.map(r=>r.options?.effort)).toEqual(['medium','medium'])
+  expect(calls.map(r=>r.model)).toEqual(['router-two','router-two'])
+  expect(calls.map(r=>r.options?.effort)).toEqual(['high','high'])
   expect(h.chat.view(a.id,'owner').messages.at(-1)?.text).toContain('A')
   expect(h.chat.list('owner')).toHaveLength(1)
   expect(()=>h.chat.view(a.id,'other')).toThrow('not found')
@@ -504,7 +504,7 @@ it('does not truncate long replies, paginates history and keeps stable state rev
   expect(h.chat.revision(c.id,'owner')).toBe(revision)
   h.chat.update(c.id,'owner',{title:'Updated'});expect(h.chat.revision(c.id,'owner')).toBeGreaterThan(revision)
 })
-it('requires an explicit new conversation when a bound backend definition changes',async()=>{
+it('accepts updated backend definitions without clearing the existing conversation',async()=>{
   const f=fixture();hosts.splice(hosts.indexOf(f.h),1);await f.h.close()
   const config=configSchema.parse({...f.config,stateDir:join(f.root,'api-state'),backends:{api:{kind:'openai-responses',baseUrl:'http://127.0.0.1:9',model:'original',parameters:{temperature:0.2},defaults:{maxOutputTokens:1000}}},execution:{...f.config.execution,router:{mode:'host',backend:'api'}}})
   const h=new Runtime(config);hosts.push(h)
@@ -513,7 +513,8 @@ it('requires an explicit new conversation when a bound backend definition change
   const first=send(h,c.id)
   await h.chat.cancel(c.id,'owner',first.runId)
   ;(config.backends.api as any).parameters.temperature=0.7
-  expect(()=>send(h,c.id,'New parameters')).toThrow('backend changed')
+  expect(()=>send(h,c.id,'New parameters')).not.toThrow()
+  expect(h.chat.view(c.id,'owner').messages.map(m=>m.text)).toEqual(['Hello Router','New parameters'])
   expect(h.chat.create('owner').backend).toBe('api')
 })
 it('exposes real failure state rather than claiming a completed reply',async()=>{
@@ -757,4 +758,84 @@ it('projects renamed agents into existing messages and previews without changing
  send(h,c.id,'What is your name?')
  await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
  expect(calls.at(-1)!.instructions).toContain('"agentName":"Rory"')
+})
+
+it('rebuilds an unscoped Chat on model changes with its transcript and no old provider thread',async()=>{
+ const {h,calls}=fixture(),c=h.chat.create('owner')
+ send(h,c.id,'My project is called Maple.');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ const oldThread=h.store.list<any>('router-session')[0].threadId
+ send(h,c.id,'Continue');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(calls[1]!.threadId).toBe(oldThread)
+ h.updateSettings(0,{execution:{...h.config.execution,router:{...h.config.execution.router,model:'router-two',effort:'high'}}})
+ send(h,c.id,'What is my project called?');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(calls[2]).toMatchObject({model:'router-two',options:{effort:'high'}});expect(calls[2]!.threadId).toBeUndefined()
+ expect(JSON.parse(calls[2]!.input).conversation.history).toEqual(expect.arrayContaining([expect.objectContaining({role:'user',text:'My project is called Maple.'}),expect.objectContaining({role:'assistant',text:'Router reply: My project is called Maple.'})]))
+ expect(h.chat.view(c.id,'owner').messages).toHaveLength(6)
+})
+
+it('switches the same scoped Chat between real API adapters and retains its memory, journal and old protocol records',async()=>{
+ const requests:any[]=[],server=createServer(async(req,res)=>{
+  const chunks=[];for await(const chunk of req)chunks.push(chunk)
+  const body=JSON.parse(Buffer.concat(chunks).toString());requests.push(body)
+  res.writeHead(200,{'content-type':'application/json'})
+  res.end(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify({reply:'Reply from '+body.model})}}]}))
+ });servers.push(server);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
+ const f=fixture();hosts.splice(hosts.indexOf(f.h),1);await f.h.close()
+ const baseUrl='http://127.0.0.1:'+(server.address() as any).port
+ const h=new Runtime(configSchema.parse({...f.config,stateDir:join(f.root,'switch-state'),backends:{one:{kind:'openai-chat',baseUrl,model:'first'},two:{kind:'openai-chat',baseUrl,model:'second'}},execution:{...f.config.execution,router:{backend:'one',mode:'host'}}}));hosts.push(h)
+ h.scopes.command({action:'scope.put',operationId:'external',expectedRevision:0,scope:{id:'external',tenantId:'external',name:'External',managers:['external'],sourceIds:['local'],workerIds:[],backendIds:['one']}})
+ const c=h.chat.create('owner'),sent=send(h,c.id,'Remember that my project is Maple.')
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ const context=h.scopes.context(h.store.triggers.get(sent.runId)!,'local:chat:'+c.id)!,evidence=h.memory.ingest(context)
+ const fact=h.memory.command(context,{action:'remember',operationId:'project-memory',expectedRevision:0,subject:'project',content:'My project is Maple.',sourceIds:[evidence.id],candidate:false},true) as any
+ const oldThread=h.store.list<any>('backend-thread')[0],oldJournal=h.continuity.events(context)
+ // An already saved pre-upgrade binding must not pin this conversation to the old provider.
+ h.store.put('chat-conversation',c.id,{...h.store.get<any>('chat-conversation',c.id),backendId:'one',backendFingerprint:'legacy',model:'first',options:{}})
+ h.updateSettings(0,{execution:{...h.config.execution,router:{mode:'host',backend:'two'}}})
+ expect(h.chat.view(c.id,'owner').conversation).toMatchObject({id:c.id,backend:'two',model:'second'})
+ send(h,c.id,'Which project are we discussing?');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(requests.map(r=>r.model)).toEqual(['first','second'])
+ expect(JSON.stringify(requests[1])).toContain('My project is Maple.')
+ expect(JSON.stringify(requests[1])).toContain('Reply from first')
+ expect(h.store.get('backend-thread',oldThread.id)).toEqual(oldThread)
+ expect(h.store.list('backend-thread')).toHaveLength(2)
+ expect(h.store.get<any>('memory-fact',fact.id)).toMatchObject({content:'My project is Maple.',state:'active'})
+ expect(h.continuity.events(context).map(e=>e.id)).toEqual(expect.arrayContaining(oldJournal.map(e=>e.id)))
+ expect(h.scopes.scope(context.route.scopeId).backendIds).toContain('two')
+ expect(h.scopes.scope('external').backendIds).toEqual(['one'])
+ expect(h.chat.view(c.id,'owner').messages).toHaveLength(4)
+ h.updateSettings(1,{backends:{two:{...h.config.backends.two!,model:'third'}}})
+ send(h,c.id,'Continue after updating this connection.');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(requests.map(r=>r.model)).toEqual(['first','second','third'])
+ expect(JSON.stringify(requests[2])).toContain('Reply from second')
+ expect(h.chat.view(c.id,'owner').messages).toHaveLength(6)
+ expect(h.store.get<any>('memory-fact',fact.id)).toMatchObject({content:'My project is Maple.',state:'active'})
+})
+
+it('streams model-authored task status through the current chat activity without changing run state',async()=>{
+ let request:ModelRequest|undefined, observed:any
+ const {h}=fixture(async r=>{
+  request=r
+  expect(r.tools?.some(t=>t.name==='superagent_status')).toBe(true)
+  const result=await r.onTool!('superagent_status',{phase:'reviewing',label:'正在审查输入组件'},'status-1')
+  expect(result.success).toBe(true)
+  observed=h.chat.view(c.id,'owner')
+  await expect(r.onTool!('superagent_status',{phase:'completed',label:'完成'},'invalid-status')).rejects.toThrow()
+  return {reply:'Checked the input component.'}
+ }),c=h.chat.create('owner')
+ send(h,c.id)
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(observed.run.state).toBe('running')
+ expect(observed.calls.find((call:any)=>call.kind==='router').status).toMatchObject({phase:'reviewing',label:'正在审查输入组件'})
+ const before=h.chat.view(c.id,'owner').calls.find(call=>call.kind==='router')!.status
+ expect((await request!.onTool!('superagent_status',{phase:'working',label:'迟到进度'},'late-status')).success).toBe(false)
+ expect(h.chat.view(c.id,'owner').calls.find(call=>call.kind==='router')!.status).toEqual(before)
+})
+
+it('keeps explicit Agent tool selection when offering the Chat status tool',async()=>{
+ const {h,calls}=fixture();h.config.execution.router!.tools=['worker_manage']
+ const c=h.chat.create('owner');send(h,c.id)
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(calls[0]!.tools?.some(t=>t.name==='superagent_status')).toBe(false)
+ expect(calls[0]!.instructions).not.toContain('use superagent_status')
 })

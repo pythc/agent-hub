@@ -1,0 +1,78 @@
+/* A single high-resolution body with continuous, independent motion layers. */
+.chat-companion{display:flex;align-items:center;gap:9px;min-width:0;max-width:240px;padding:0 8px 0 0;border-radius:12px;text-align:left}
+.chat-companion:hover{background:var(--c-soft)}
+.companion-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.companion-copy strong{font-size:13px;font-weight:600;line-height:1.3}
+.companion-label{font-size:12px;line-height:1.4;color:var(--c-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.roppo-character{position:relative;display:block;width:64px;height:58px;flex:none;isolation:isolate}
+.roppo-pose{position:absolute;inset:0;transform-origin:50% 88%;transition:transform 220ms ease-out}
+.roppo-body{position:absolute;inset:0 3px;width:58px;height:58px;transform-origin:50% 88%;animation:roppo-breathe 4.8s ease-in-out infinite}
+.roppo-body>img{display:block;width:100%;height:100%;filter:drop-shadow(0 1px 1px #00000016)}
+:root[data-theme=dark] .roppo-body>img{filter:invert(1) drop-shadow(0 1px 1px #0002)}
+:root[data-theme=dark] .roppo-eyes{color:#272623}
+:root[data-theme=dark] .roppo-eyes i{box-shadow:none}
+:root[data-theme=dark] .roppo-arm{background:radial-gradient(ellipse at 35% 20%,#dedee0,#aeb0b4 75%)}
+.roppo-eyes{position:absolute;left:48%;top:32%;width:20%;height:12%;color:#f5f1df;transform-origin:50% 50%;transition:transform 240ms ease-out}
+.roppo-eye-layer{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:center;transition:opacity 220ms ease-out,transform 240ms ease-out}
+.roppo-eyes i{display:block;width:32%;height:100%;background:currentColor;border-radius:60%;box-shadow:inset 0 1px 1px #fff6;animation:roppo-blink 5.8s ease-in-out infinite}
+.roppo-eyes-happy,.roppo-eyes-spiral{opacity:0;transform:scale(.85)}
+.roppo-eyes-happy{inset:0 -15%}
+.roppo-eyes-spiral{inset:0 -35%}
+.roppo-eye-layer svg{display:block;flex:none;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;overflow:visible}
+.roppo-eyes-happy svg{width:45%;height:auto;stroke-width:3}
+.roppo-eyes-spiral svg{width:47%;height:auto}
+.roppo-spiral{animation:roppo-dizzy 2.6s linear infinite paused;transform-origin:center}
+.roppo-spiral:nth-child(2){animation-direction:reverse}
+.roppo-arm{position:absolute;top:61%;width:20%;height:18%;border-radius:50%;background:radial-gradient(ellipse at 35% 20%,#505154,#2a2b2d 75%);box-shadow:inset 0 1px 1px #ffffff14,0 1px 1px #0002;opacity:0;transform-origin:50% 30%;transition:opacity 180ms,transform 200ms}
+.roppo-arm-left{left:20%}.roppo-arm-right{left:69%}
+.roppo-laptop{position:absolute;right:0;bottom:3px;width:39px;height:26px;opacity:0;transform:translateY(4px);transition:opacity 180ms,transform 220ms}
+.roppo-laptop-screen{position:absolute;inset:0 0 3px 7px;border-radius:3px;background:linear-gradient(135deg,#eeeeef,#b8babf 70%,#989ba2);border:1px solid #999ca2;transform:skewX(-9deg);box-shadow:inset 1px 1px 1px #ffffffb3}
+.roppo-laptop-screen i{position:absolute;left:47%;top:40%;width:4px;height:4px;border-radius:50%;background:#f7f7f7}
+.roppo-laptop-base{position:absolute;left:-2px;right:0;bottom:0;height:4px;border-radius:1px 1px 5px 5px;background:linear-gradient(#e7e8eb,#858992);transform:skewX(-9deg)}
+.roppo-review{position:absolute;right:2px;bottom:5px;width:24px;height:31px;padding:8px 4px;background:linear-gradient(120deg,#fffdf7,#dfdfd9);border:1px solid #a5a59d;border-radius:3px;box-shadow:0 1px 2px #0002;opacity:0;transform:translateY(4px) rotate(-9deg);transition:opacity 180ms,transform 220ms}
+.roppo-review>span{display:block;height:1px;background:#8c908c;margin-bottom:4px}
+.roppo-review>i{position:absolute;width:10px;height:10px;border:2px solid #686b68;border-radius:50%;right:-4px;top:9px;box-shadow:inset 0 0 3px #fff;background:#ffffff80}
+.roppo-review>i:after{content:"";position:absolute;width:2px;height:7px;top:6px;left:6px;background:#686b68;transform:rotate(-35deg)}
+.roppo-signal{position:absolute;right:0;top:6px;display:flex;gap:2px;opacity:0;transition:opacity 220ms ease-out}
+.roppo-signal i{width:3px;height:3px;border-radius:50%;background:var(--c-muted)}
+.roppo-character[data-phase=thinking] .roppo-body{animation:roppo-think 4s ease-in-out infinite}
+.roppo-character[data-phase=thinking] .roppo-eyes{animation:roppo-look 4s ease-in-out infinite}
+.roppo-character[data-phase=thinking] .roppo-signal{opacity:1}
+.roppo-character[data-phase=thinking] .roppo-signal i{animation:roppo-dot 1.8s ease-in-out infinite}
+.roppo-character[data-phase=thinking] .roppo-signal i:nth-child(2){animation-delay:150ms}
+.roppo-character[data-phase=thinking] .roppo-signal i:nth-child(3){animation-delay:300ms}
+.roppo-character[data-phase=working] .roppo-pose{transform:translate(-5px,1px) scale(.94)}
+.roppo-character[data-phase=working] .roppo-body{animation:roppo-work 1.3s ease-in-out infinite}
+.roppo-character[data-phase=working] .roppo-laptop{opacity:1;transform:none}
+.roppo-character[data-phase=working] .roppo-arm{opacity:1;animation:roppo-type 480ms ease-in-out infinite}
+.roppo-character[data-phase=working] .roppo-arm-right{animation-delay:240ms}
+.roppo-character[data-phase=working] .roppo-eyes{transform:translateY(1px)}
+.roppo-character[data-phase=reviewing] .roppo-pose{transform:translateX(-3px)}
+.roppo-character[data-phase=reviewing] .roppo-body{animation:roppo-read 3.6s ease-in-out infinite}
+.roppo-character[data-phase=reviewing] .roppo-review{opacity:1;transform:rotate(-9deg)}
+.roppo-character[data-phase=reviewing] .roppo-review>i{animation:roppo-scan 2.8s ease-in-out infinite}
+.roppo-character[data-phase=reviewing] .roppo-arm-right{opacity:1;transform:translateY(6px)}
+.roppo-character[data-phase=waiting] .roppo-pose{transform:translateY(-1px)}
+.roppo-character[data-phase=waiting] .roppo-body{animation:roppo-attend 900ms ease-out 1}
+.roppo-character[data-phase=waiting] .roppo-eyes{transform:translateY(-.7px)}
+.roppo-character[data-phase=completed] .roppo-body{animation:roppo-sway 2.2s ease-in-out 1}
+.roppo-character:is([data-phase=completed],[data-phase=failed]) .roppo-eyes-open{opacity:0;transform:scale(.85)}
+.roppo-character[data-phase=completed] .roppo-eyes-happy,.roppo-character[data-phase=failed] .roppo-eyes-spiral{opacity:1;transform:scale(1)}
+.roppo-character[data-phase=failed] .roppo-spiral{animation-play-state:running}
+.roppo-character[data-phase=offline] .roppo-body,.roppo-character[data-phase=offline] .roppo-eyes i{animation:none}
+.roppo-character[data-phase=offline] .roppo-eyes{transform:scaleY(.3)}
+.roppo-character[data-phase=stopped] .roppo-eyes{transform:scaleY(.8)}
+.roppo-character[data-paused] *,.roppo-character[data-paused] *:after{animation-play-state:paused!important}
+@keyframes roppo-breathe{0%,100%{transform:translateY(0) scaleY(1)}50%{transform:translateY(-.6px) scaleY(1.013)}}
+@keyframes roppo-blink{0%,42%,46%,100%{transform:scaleY(1)}44%{transform:scaleY(.12)}}
+@keyframes roppo-think{0%,100%{transform:rotate(0)}35%,65%{transform:rotate(-7deg) translateY(-1px)}}
+@keyframes roppo-dot{0%,70%,100%{opacity:.3;transform:translateY(0)}35%{opacity:1;transform:translateY(-2px)}}
+@keyframes roppo-work{0%,100%{transform:translateY(0)}50%{transform:translateY(.6px)}}
+@keyframes roppo-type{0%,100%{transform:translateY(-1px) rotate(-7deg)}50%{transform:translateY(2px) rotate(6deg)}}
+@keyframes roppo-read{0%,100%{transform:rotate(0)}50%{transform:rotate(5deg)}}
+@keyframes roppo-scan{0%,100%{transform:translateY(-2px)}50%{transform:translateY(6px)}}
+@keyframes roppo-look{0%,100%{transform:translate(0,0)}35%,65%{transform:translate(.8px,-.5px)}}
+@keyframes roppo-attend{from{transform:translateY(1px) rotate(3deg)}to{transform:none}}
+@keyframes roppo-sway{0%,100%{transform:translateX(0) rotate(0)}25%{transform:translateX(-1px) rotate(-7deg)}70%{transform:translateX(1px) rotate(7deg)}}
+@keyframes roppo-dizzy{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.roppo-character *,.roppo-character *:after{animation:none!important;transition:none!important}}

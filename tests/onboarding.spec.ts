@@ -25,11 +25,12 @@ async function fixture(options:{preview?:boolean;failRestart?:boolean}={}){
  const get=async(path:string,auth=true)=>{const response=await fetch(host.url+path,{headers:auth?headers:{}});return {status:response.status,body:await response.json()}}
  return {root,config,runtime,host,headers,post,get,token}
 }
-async function provider(){
- const requests:{authorization?:string;key?:string}[]=[]
+async function provider(response?:{status:number;body:unknown}){
+ const requests:{authorization?:string;key?:string;body:any}[]=[]
  const server=createServer(async(req,res)=>{
   const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString()),all=JSON.stringify(body)
-  requests.push({authorization:req.headers.authorization,key:req.headers['x-api-key'] as string|undefined})
+  requests.push({authorization:req.headers.authorization,key:req.headers['x-api-key'] as string|undefined,body})
+  if(response){res.writeHead(response.status,{'content-type':'application/json'});res.end(JSON.stringify(response.body));return}
   if(req.headers.authorization!=='Bearer synthetic-onboarding-key'&&req.headers['x-api-key']!=='synthetic-onboarding-key'){res.writeHead(401);res.end('{}');return}
   const answer=all.includes('targetTicketId')?{action:'accept',title:'First request',scope:'Say hello',reason:'Explicit local request',rules:[],ruleAssessments:[],targetTicketId:null}:all.includes('handbacks')?{state:'ready',summary:'Hello',reply:'Hello from your assistant.',question:null,askedBy:null,handbacks:[]}:{ok:true}
   const text=JSON.stringify(answer),value=req.url==='/v1/responses'?{status:'completed',output:[{type:'message',content:[{type:'output_text',text}]}]}:req.url==='/v1/messages'?{stop_reason:'end_turn',content:[{type:'text',text}]}:{choices:[{message:{content:text}}]}
@@ -66,6 +67,7 @@ it.each(['openai-responses','openai-chat','anthropic'] as const)('takes a beginn
  const plan=await f.post('/onboarding/plan',{revision:0,connection:{kind:'api',protocol,baseUrl:api.url,model:'fixture',apiKey:'synthetic-onboarding-key'}})
  expect(plan.status).toBe(200);expect(JSON.stringify(plan.body)).not.toContain('synthetic-onboarding-key')
  const checked=await f.post('/onboarding/check',{id:plan.body.id});expect(checked.body).toMatchObject({ok:true,remoteVerified:true,preview:false})
+ expect(api.requests[0]!.body[protocol==='openai-responses'?'max_output_tokens':protocol==='openai-chat'?'max_completion_tokens':'max_tokens']).toBe(4096)
  const applied=await f.post('/onboarding/apply',{id:plan.body.id});expect(applied.status).toBe(200);expect(applied.body).toMatchObject({applied:true,ready:true,revision:1})
  const config=f.host.runtime.config,env=Object.values(config.backends).find(d=>'apiKeyEnv'in d&&d.apiKeyEnv)?.kind;expect(env).toBe(protocol)
  for(const d of Object.values(config.backends))if('apiKeyEnv'in d&&d.apiKeyEnv)envKeys.push(d.apiKeyEnv)
@@ -155,4 +157,25 @@ it.each([false,true])('recovers interrupted offline restore files from the datab
  prepareManagedFiles(raw.stateDir,'restore-fixture',{connections:JSON.stringify({format:1,backends:{restored:{kind:'codex'}},sources:[]}),secrets:JSON.stringify({AGENTHUB_SETUP_RESTORE:'synthetic-restored'}),restore:true});envKeys.push('AGENTHUB_SETUP_RESTORE')
  const store=new Store(join(raw.stateDir,'state.sqlite'));store.put('sample','retained',{value:2});if(committed)store.put('restore-commit','restore-fixture',{});store.close()
  const recovered=new Runtime(configSchema.parse(raw));try{expect(!!recovered.config.backends.restored).toBe(committed);expect(recovered.store.get('sample','retained')).toEqual({value:2});expect(existsSync(managedFiles(raw.stateDir).journal)).toBe(false)}finally{await recovered.close()}
+})
+
+it.each([
+ [401,'invalid_api_key','api_key_rejected'],[403,'permission_denied','model_access_denied'],
+ [404,'model_not_found','model_not_found'],[400,'unsupported_parameter','api_request_invalid'],
+ [402,'insufficient_balance','api_quota_exhausted'],[429,'insufficient_quota','api_quota_exhausted'],[429,'rate_limit_exceeded','api_rate_limited'],[503,'overloaded_error','provider_unavailable'],
+] as const)('reports HTTP %s / %s without exposing provider error messages or credentials',async(status,code,expected)=>{
+ const secret='synthetic-sensitive-key',api=await provider({status,body:{error:{code,param:'max_completion_tokens',message:'Credential '+secret+' was rejected'}}}),f=await fixture()
+ const plan=await f.post('/entry-setup/model/plan',{revision:0,select:false,connection:{kind:'api',protocol:'openai-chat',baseUrl:api.url,model:'fixture',apiKey:secret}})
+ const checked=await f.post('/entry-setup/model/check',{id:plan.body.id})
+ expect(checked.body).toMatchObject({ok:false,checks:[{code:expected,detail:'HTTP '+status+' · '+code+' · max_completion_tokens'}]})
+ expect(JSON.stringify(checked.body)).not.toContain(secret);expect(f.host.runtime.settings.current().revision).toBe(0)
+})
+it('reports exhausted reasoning output separately from authentication and hides reflected credentials in identifiers',async()=>{
+ const api=await provider({status:200,body:{choices:[{finish_reason:'length',message:{content:''}}]}}),f=await fixture()
+ const plan=await f.post('/entry-setup/model/plan',{revision:0,select:false,connection:{kind:'api',protocol:'openai-chat',baseUrl:api.url,model:'fixture'}})
+ expect((await f.post('/entry-setup/model/check',{id:plan.body.id})).body).toMatchObject({ok:false,checks:[{code:'model_output_limit'}]})
+ const secret='synthetic-sensitive-key',rejected=await provider({status:401,body:{error:{code:secret,param:secret}}})
+ const draft=await f.post('/entry-setup/model/plan',{revision:0,select:false,connection:{kind:'api',protocol:'openai-chat',baseUrl:rejected.url,model:'fixture',apiKey:secret}})
+ const result=await f.post('/entry-setup/model/check',{id:draft.body.id})
+ expect(result.body.checks[0]).toEqual({id:'connection',status:'required',code:'api_key_rejected',detail:'HTTP 401'})
 })

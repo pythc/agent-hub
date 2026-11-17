@@ -1,8 +1,75 @@
+import { RoppoEnglish } from "./en/Composition";
+import { DemoScene as EnglishScene } from "./en/Scenes";
 import { Composition, Folder } from "remotion";
 import { RoppoConcept, DecisionWalkthrough } from "./Composition";
 import { DemoScene } from "./Scenes";
 export const RemotionRoot = () => (
   <>
+    <Composition
+      id="Roppo-English"
+      component={RoppoEnglish}
+      width={1920}
+      height={1080}
+      fps={30}
+      durationInFrames={5310}
+    />
+    <Folder name="English-scenes">
+      <Composition
+        id="Slack-Intake-EN"
+        component={EnglishScene}
+        width={1920}
+        height={1080}
+        fps={30}
+        durationInFrames={330}
+        defaultProps={{
+          kind: "inbox",
+          title: "A problem surfaces in Slack. Roppo picks it up.",
+          caption: "Within the approved channel scope, no @mention is needed.",
+        }}
+      />
+      <Composition
+        id="Linear-Intake-EN"
+        component={EnglishScene}
+        width={1920}
+        height={1080}
+        fps={30}
+        durationInFrames={270}
+        defaultProps={{
+          kind: "linear-intake",
+          title: "Turn the conversation into tracked work",
+          caption:
+            "A linked Linear issue keeps scope, ownership and progress in one place.",
+        }}
+      />
+      <Composition
+        id="Linear-Review-EN"
+        component={EnglishScene}
+        width={1920}
+        height={1080}
+        fps={30}
+        durationInFrames={270}
+        defaultProps={{
+          kind: "linear-review",
+          title: "Progress returns to Linear, with evidence",
+          caption:
+            "Move the issue to In Review. Keep the human review explicit.",
+        }}
+      />
+      <Composition
+        id="Slack-Delivery-EN"
+        component={EnglishScene}
+        width={1920}
+        height={1080}
+        fps={30}
+        durationInFrames={270}
+        defaultProps={{
+          kind: "delivery",
+          title: "Results return to the original Slack conversation",
+          caption:
+            "One clear update, a linked issue, and the evidence to review.",
+        }}
+      />
+    </Folder>
     <Composition
       id="Roppo-Concept"
       component={RoppoConcept}

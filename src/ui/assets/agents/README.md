@@ -15,3 +15,7 @@ Five separate transparent images were produced with the built-in ImageGen edit t
 Appearance follows stable Worker identity, not task profession or model provider. The four Worker variants can repeat; labels remain the primary identity. Router is inverted in dark mode; Worker colors remain stable.
 
 All five files were visually checked after browser compositing at small sizes on light and dark surfaces. They have no text, white background panel, or sprite-sheet neighbors. Static portraits only; existing runtime state labels and indicators remain authoritative.
+
+## Animated Chat companion
+
+`roppo-body.webp` is a 512 × 512 transparent body layer, generated with the built-in ImageGen edit tool from `router.webp`. Its exact prompt is in `roppo-body.prompt.txt`. FFmpeg resized the selected RGBA PNG and encoded WebP at quality 95. Eyes, hands, laptop and review sheet are independent UI layers in `web/chat/companion.tsx` / `companion.css`; continuous CSS motion keeps the body outline stable between frames. Dark mode follows the existing Router inversion convention, with dark eyes and light hands. The original portraits remain unchanged.

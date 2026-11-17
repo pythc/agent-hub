@@ -110,6 +110,7 @@ Each session pins its creation digest. Updating the configured version affects n
 
 ## Reference adapters and validation boundaries
 
+- **Claude Code, Gemini CLI and OpenCode:** separate native CLI packages with host MCP tools, native resume, full request budget checks and retry-safe local purge. See [configuration and validation boundaries](NATIVE_CLI_PLUGINS.md). Real CLI protocol tests and real provider acceptance are reported separately; these packages are not automatically installed into a running Roppo.
 - **Codex:** full managed reference. Uses official app-server APIs, independent host tools and native persisted history. Both legacy and external package paths exist.
 - **ZCode:** experimental single-prompt reference using the official `--prompt --json --mode plan` path. No managed role, tool forwarding, history, resume, budget, model/effort override or native takeover is advertised. Version probing reports authentication as unknown. Its CLI has no `--model` switch; settings belong to the official CLI profile. A desktop-hosted success does not prove independent CLI access. HTTP 405/business 3012 is `provider_rejected`, HTTP 429/business 1113 is `quota_exhausted`; neither is retried as a transient error.
 - **Independent test adapter:** `tests/fixtures/execution-backend.ts` demonstrates adding a provider without editing core. It exercises actual sandboxed IPC with synthetic model output; this is not real-provider acceptance.

@@ -18,8 +18,8 @@ export const agentOptionsSchema=z.object({
  effort:effortSchema.optional(),parameters:parametersSchema.optional(),prompt:z.string().max(64000).optional(),
  maxOutputTokens:z.number().int().min(64).max(200000).optional(),maxSteps:z.number().int().min(1).max(256).optional(),
  maxToolCalls:z.number().int().min(1).max(10000).optional(),timeoutMs:z.number().int().min(1000).max(3600000).optional(),
- tools:z.array(z.string().min(1)).optional(),
- toolConnections:z.array(name).optional(),
+ tools:z.array(z.string().min(1)).optional().describe('Host tool names from worker_manage list. Omit to inherit connection defaults; with no default, all available host tools are enabled. An empty array disables tools.'),
+ toolConnections:z.array(name).optional().describe('Existing MCP/tool connection IDs from worker_manage list. This selects connections; it does not create credentials or new connections.'),
  browser:browserOptionsSchema.optional(),
 }).strict()
 export type AgentOptions=z.infer<typeof agentOptionsSchema>

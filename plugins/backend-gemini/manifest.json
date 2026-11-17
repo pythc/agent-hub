@@ -1,0 +1,69 @@
+{
+  "id": "gemini-cli",
+  "label": "Gemini CLI",
+  "version": "1.0.0",
+  "stateVersion": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "cliVersion": {
+        "const": "0.67.0"
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1
+      },
+      "authDirectory": {
+        "type": "string",
+        "minLength": 1
+      },
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "command",
+      "cliVersion"
+    ],
+    "additionalProperties": false
+  },
+  "parametersSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "capabilities": {
+    "resume": true,
+    "tools": true,
+    "managed": true,
+    "contextBudget": true,
+    "steering": false,
+    "promptRefresh": false,
+    "images": false,
+    "nativeTakeover": false,
+    "history": true,
+    "purge": true,
+    "modelCatalog": false
+  },
+  "network": true,
+  "environment": [
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS"
+  ]
+}

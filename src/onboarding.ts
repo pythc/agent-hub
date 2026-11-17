@@ -8,7 +8,8 @@ import {z} from 'zod'
 import {configSchema,type Config} from './config.ts'
 import {backendDefinition,type BackendDefinition} from './backend-config.ts'
 import type {Runtime} from './runtime.ts'
-import {ApiFailure,ApiNetworkFailure,ApiModel} from './backends/api.ts'
+import {ApiModel} from './backends/api.ts'
+import {apiCheckFailure} from './backends/api-errors.ts'
 import {managedConnections,managedSecrets,prepareManagedConfig} from './managed-config.ts'
 import {Store} from './store.ts'
 import {cliEnvironment} from './codex.ts'
@@ -97,10 +98,10 @@ export class Onboarding {
   }else{
    try{
     const records=new Map<string,unknown>(),memory={get:<T>(kind:string,key:string)=>records.get(kind+':'+key) as T|undefined,put:(kind:string,key:string,value:unknown)=>{records.set(kind+':'+key,value)}}
-    const model=new ApiModel(plan.connection.id,{...definition,maxSteps:1,maxToolCalls:1,maxOutputTokens:1024,requestTimeoutMs:30000},memory,35000,()=>definition.subscription?host.subscriptions.credential(definition.subscription.account):plan.key??(definition.apiKeyEnv?process.env[definition.apiKeyEnv]:undefined))
+    const model=new ApiModel(plan.connection.id,{...definition,maxSteps:2,maxToolCalls:1,maxOutputTokens:4096,requestTimeoutMs:45000},memory,60000,()=>definition.subscription?host.subscriptions.credential(definition.subscription.account):plan.key??(definition.apiKeyEnv?process.env[definition.apiKeyEnv]:undefined))
     await model.run({cwd:host.config.stateDir,instructions:'Check this text connection. Do not use tools. Return {"ok":true}.',input:'Return {"ok":true}.',schema:{type:'object',properties:{ok:{const:true}},required:['ok'],additionalProperties:false},ephemeral:true,tools:[]})
     remoteVerified=true;checks.push({id:'connection',status:'ok',code:'model_replied'})
-   }catch(error){const text=String(error);checks.push({id:'connection',status:'required',code:error instanceof ApiFailure||error instanceof ApiNetworkFailure?error.code:/Subscription sign-in/.test(text)?'subscription_sign_in_required':/401|403/.test(text)?'api_key_rejected':/environment variable/.test(text)?'api_key_required':/schema|budget|output/.test(text)?'model_reply_invalid':'connection_failed'})}
+   }catch(error){checks.push({id:'connection',status:'required',...apiCheckFailure(error)})}
   }
   plan.lastCheck={ok:checks.every(c=>c.status==='ok'),checks,remoteVerified,preview:false};return plan.lastCheck
  }

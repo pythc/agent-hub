@@ -1,0 +1,86 @@
+{
+  "id": "opencode-cli",
+  "label": "OpenCode",
+  "version": "1.0.0",
+  "stateVersion": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "cliVersion": {
+        "const": "1.19.5"
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1
+      },
+      "authDirectory": {
+        "type": "string",
+        "minLength": 1
+      },
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1
+      },
+      "provider": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]+$"
+      },
+      "authMode": {
+        "enum": [
+          "credentials",
+          "anonymous"
+        ]
+      }
+    },
+    "required": [
+      "command",
+      "cliVersion"
+    ],
+    "additionalProperties": false
+  },
+  "parametersSchema": {
+    "type": "object",
+    "properties": {
+      "variant": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "capabilities": {
+    "resume": true,
+    "tools": true,
+    "managed": true,
+    "contextBudget": true,
+    "steering": false,
+    "promptRefresh": false,
+    "images": false,
+    "nativeTakeover": false,
+    "history": true,
+    "purge": true,
+    "modelCatalog": false
+  },
+  "network": true,
+  "environment": [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENCODE_API_KEY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS"
+  ]
+}

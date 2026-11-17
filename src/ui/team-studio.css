@@ -68,11 +68,6 @@
 .operator-workspace .workspace-choice-text { display: grid; gap: 4px; flex: 1; }
 .operator-workspace .workspace-type-title { font-size: var(--roppo-font-body); color: var(--text-secondary); margin: 20px 0 8px; }
 .operator-workspace .workspace-create { display: grid; gap: 16px; padding-top: 20px; margin-top: 20px; border-top: 1px solid var(--line); }
-.operator-workspace .connection-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 26px; }
-.operator-workspace .connection-kind { display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; text-align: left; }
-.operator-workspace .connection-kind[aria-pressed=true] { border-color: var(--green); background: var(--green-soft); }
-.operator-workspace .connection-kind strong { display: block; margin-bottom: 5px; font-size: 14px; }
-.operator-workspace .connection-kind small { display: block; color: var(--text-secondary); font-size: 12px; }
 .operator-workspace .connection-editor { max-width: 680px; }
 .operator-workspace .connection-editor .entry-form { width: 100%; max-width: none; }
 .operator-workspace .connection-form { display: grid; gap: 20px; margin: 24px 0; }
@@ -87,7 +82,6 @@
 @media (max-width: 1180px) {
   .operator-workspace .team-studio-layout { gap: 20px; grid-template-columns: minmax(250px, 1fr) minmax(290px, 360px); }
   .operator-workspace .team-map, .operator-workspace .team-inspector { padding: 20px; }
-  .operator-workspace .connection-kind { flex-direction: column; align-items: flex-start; padding: 14px; }
 }
 @media (max-width: 960px) {
   .operator-workspace .team-studio-layout { grid-template-columns: 1fr; }
@@ -102,11 +96,50 @@
   .operator-workspace .team-worker-list { grid-template-columns: 1fr; }
   .operator-workspace .team-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .operator-workspace .team-node-model { margin-left: 0; }
-  .operator-workspace .connection-kinds { grid-template-columns: 1fr; gap: 8px; }
-  .operator-workspace .connection-kind { flex-direction: row; align-items: center; padding: 12px; }
-  .operator-workspace .connection-kind strong { margin-bottom: 2px; }
   .operator-workspace .team-pool-heading { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) {
   .operator-workspace .team-node, .operator-workspace .team-step { transition: none; }
+}
+
+/* Model connection setup shares the workspace's compact controls and neutral states. */
+.operator-workspace .connection-studio { max-width: 920px; margin-inline: auto; }
+.operator-workspace .connection-kinds { display: flex; gap: 4px; padding: 4px; max-width: 680px; background: var(--soft); border-radius: 10px; margin: 24px 0 28px; }
+.operator-workspace .connection-kind { display: flex; align-items: center; gap: 12px; text-align: left; flex: 1; min-height: 42px; justify-content: center; flex-direction: row; padding: 10px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); font-size: var(--roppo-font-control); transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease; }
+.operator-workspace .connection-kind[aria-pressed=true] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px var(--shadow-dialog); }
+.operator-workspace .connection-kind .icon { width: 16px; height: 16px; flex-shrink: 0; }
+.operator-workspace .model-connection-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 20px; margin: 0; }
+.operator-workspace .model-connection-form .entry-field { margin: 0; gap: 8px; }
+.operator-workspace .model-connection-form .entry-field label { font-weight: 550; }
+.operator-workspace .model-connection-form input,
+.operator-workspace .model-connection-form select { font-family: inherit; font-size: var(--roppo-font-input); min-height: 44px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--ink); transition: border-color 160ms ease, background-color 160ms ease; }
+.operator-workspace .model-connection-form input:disabled,
+.operator-workspace .model-connection-form select:disabled { background: var(--soft); color: var(--text-secondary); }
+.operator-workspace .model-connection-form .entry-field-credential,
+.operator-workspace .model-connection-form .entry-field-endpoint,
+.operator-workspace .model-connection-actions { grid-column: 1 / -1; }
+.operator-workspace .model-connection-actions { display: flex; justify-content: flex-end; padding-top: 4px; }
+.operator-workspace .model-connection-actions .button { min-width: 112px; }
+.operator-workspace .model-check-result { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.operator-workspace .model-check-result .entry-check-list { margin: 0; padding: 0; }
+.operator-workspace .model-check-result .entry-check-list li,
+.operator-workspace .model-check-line { display: flex; align-items: flex-start; gap: 10px; padding: 0; }
+.operator-workspace .model-check-result .icon { width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; }
+.operator-workspace .model-check-result[data-state=ready] .icon { color: var(--status-success); }
+.operator-workspace .model-check-result[data-state=error] .icon { color: var(--danger); }
+.operator-workspace .model-check-hint { margin: 5px 0 0; color: var(--text-secondary); font-size: var(--roppo-font-body); line-height: 1.5; }
+.operator-workspace .model-check-result details { margin-top: 10px; }
+.operator-workspace .model-check-result > .button { display: flex; margin: 20px 0 0 auto; }
+.operator-workspace .model-check-result[data-state=pending] .icon { animation: model-check-turn 1s linear infinite; }
+@keyframes model-check-turn { to { transform: rotate(360deg); } }
+@media (max-width: 560px) {
+  .operator-workspace .connection-kinds { gap: 2px; }
+  .operator-workspace .connection-kind { gap: 6px; padding: 10px 6px; }
+  .operator-workspace .model-connection-form { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .operator-workspace .connection-kind,
+  .operator-workspace .model-connection-form input,
+  .operator-workspace .model-connection-form select { transition: none; }
+  .operator-workspace .model-check-result[data-state=pending] .icon { animation: none; }
 }

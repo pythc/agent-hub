@@ -492,6 +492,7 @@ function opUsage() {
       configured.length ? opButton(L('Prepare usage instructions', '生成使用说明'),
         () => shareEntries(configured.map(entry => entry.id)), 'button primary') : null),
     add(el('div', 'settings-with-aside guide-layout'), list, connections),
+    entryLink(L('Feishu API statistics', '飞书接口统计'), '/api-usage/view', 'button'),
     entryState.share ? entryShareResult() : null
   ]
 }

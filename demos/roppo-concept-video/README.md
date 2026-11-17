@@ -1,5 +1,7 @@
 # Roppo — Concept Demo
 
+**English edition:** [Slack + Linear storyboard and preview instructions](ENGLISH-STORYBOARD.md). The English composition is `Roppo-English` (177 seconds); the original Chinese composition remains `Roppo-Concept` (159 seconds).
+
 A **159-second, 1080p, 30 fps** editable product demonstration built with Remotion. It follows Roppo’s existing white/dark workspace, with authored mouse movement, click feedback, camera focus, typed messages and simulated team activity.
 
 [Watch the 1080p MP4](../../docs/media/roppo-concept-1080p.mp4) · [Storyboard](STORYBOARD.md)

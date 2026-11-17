@@ -156,6 +156,22 @@ it.each(kinds)('%s returns scoped tool errors for unknown tools or invalid argum
  await expect(model.run(request({onTool:async()=>{executed++;throw Error('Must not execute')}}))).resolves.toMatchObject({text:'{"answer":"blocked"}'})
  expect(executed).toBe(0)
 })
+it.each(kinds)('%s explains malformed JSON and schema errors without replaying completed tools',async kind=>{
+ let step=0,effects=0
+ const f=await server(b=>{
+  step++
+  if(step===1)return output(kind,'',[{id:'read-once',name:'read_marker',args:{path:'marker.txt'}}])
+  if(step===2)return output(kind,'{"answer":"line one\nline two"}')
+  const messages=kind==='openai-responses'?b.input:b.messages,feedback=messages.at(-1).content
+  expect(feedback).toContain('do not repeat completed tools')
+  if(step===3){expect(feedback).toMatch(/control character/);expect(feedback).toContain('escape line breaks as \\n');return output(kind,'{"answer":42}')}
+  expect(feedback).toContain('data/answer must be string')
+  return output(kind,JSON.stringify({answer:'line one\nline two'}))
+ })
+ const model=new ApiModel('test',definition(kind,f.url),memory(),10000)
+ const result=await model.run(request({onTool:async()=>{effects++;return {success:true,contentItems:[{type:'inputText',text:'marker'}]}}}))
+ expect(JSON.parse(result.text)).toEqual({answer:'line one\nline two'});expect(effects).toBe(1);expect(f.requests).toHaveLength(4)
+})
 it.each(kinds)('%s bounds malformed final-output repair instead of accepting an invalid report',async kind=>{
  const f=await server(()=>output(kind,'{"wrong":true}')),model=new ApiModel('test',definition(kind,f.url),memory(),10000)
  await expect(model.run(request())).rejects.toThrow('JSON schema');expect(f.requests).toHaveLength(3)

@@ -1,0 +1,48 @@
+/* Shared reading axis. Keep all existing typography sizes. */
+.chat-main{container:chat-main / inline-size}
+.thread{--chat-measure:800px;--chat-gutter:60px;container:chat-thread / inline-size}
+.transcript{padding:28px var(--chat-gutter) 14px;scrollbar-gutter:stable both-edges}
+.transcript-inner{max-width:var(--chat-measure);width:100%}
+.assistant-body{padding-left:0}
+.assistant-identity{position:relative;min-height:32px}
+.assistant-identity>.agent-portrait{position:absolute;left:-44px;top:0}
+.message-tool-activity,.run-activity{margin-left:0}
+.composer-area{padding:14px calc(var(--chat-gutter) + var(--chat-scrollbar-gutter,0px)) 22px}
+.composer,.notice,.connection-state{max-width:var(--chat-measure)}
+.composer{padding:13px 14px 10px;border-radius:18px;box-shadow:0 2px 8px #00000006;transition:border-color 150ms,box-shadow 150ms}
+.composer:focus-within{box-shadow:0 2px 12px #0000000a;border-color:var(--c-muted)}
+.composer-input{min-height:52px;transition:height 180ms cubic-bezier(.2,.7,.3,1)}
+.composer-attachments:empty{display:none}
+.composer-toolbar{gap:5px}
+.model-link{min-width:0;max-width:60%;padding-inline:6px}
+.team-chip{white-space:nowrap;margin-left:auto}
+.send-actions{flex-shrink:0;margin-left:auto}
+.team-chip+.send-actions{margin-left:5px}
+.send-button{transition:background 150ms,opacity 150ms,transform 150ms}
+.send-button>svg{animation:composer-action-in 160ms ease-out}
+.composer .draft-attachment{animation:composer-action-in 160ms ease-out}
+.chat-header[data-chat=true]{position:relative}
+.chat-header[data-chat=true]>.chat-companion{position:absolute;left:calc(var(--chat-lane-width,100%) / 2);transform:translateX(-50%)}
+.chat-header[data-chat=true] .chat-breadcrumb{max-width:210px}
+.chat-header[data-chat=true] .header-actions{margin-left:auto}
+@keyframes composer-action-in{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+@container chat-main (max-width:1100px){.chat-header[data-chat=true] .chat-breadcrumb{visibility:hidden;max-width:1px;overflow:hidden}}
+@container chat-main (max-width:650px){
+ .chat-header[data-chat=true]{padding-inline:12px;gap:4px}
+ .chat-header[data-chat=true] .chat-breadcrumb{display:none}
+ .chat-header[data-chat=true]>.chat-companion{position:static;transform:none;margin-right:auto;max-width:calc(100% - 112px);gap:3px}
+ .chat-header[data-chat=true]>.mobile-menu{margin-right:2px}
+ .roppo-character{width:50px;height:50px}
+ .roppo-body{width:50px;height:50px;inset:0}
+ .roppo-laptop{width:33px;height:23px}
+ .companion-copy{gap:2px}
+}
+@container chat-thread (max-width:680px){
+ .transcript{padding-inline:18px}
+ .composer-area{padding:12px calc(18px + var(--chat-scrollbar-gutter,0px)) max(12px,env(safe-area-inset-bottom))}
+ .assistant-identity>.agent-portrait{position:static}
+ .team-chip{display:none}
+ .model-link{max-width:calc(100% - 82px)}
+ .team-chip+.send-actions{margin-left:auto}
+}
+@media(prefers-reduced-motion:reduce){.composer,.composer-input,.send-button{transition:none}.send-button>svg,.composer .draft-attachment{animation:none}}

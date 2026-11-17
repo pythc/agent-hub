@@ -1,14 +1,15 @@
 import {randomUUID} from 'node:crypto'
 import type {Store} from './store.ts'
+import {chatStatusSchema,type ChatStatus} from './chat-status.ts'
 
 export interface ExecutionContext {ticketId?:string;workerId?:string;agentId?:string;sourceId?:string;triggerId?:string}
 export interface ExecutionCall extends ExecutionContext {
  id:string;kind:'router'|'worker'|'subagent'|'tool';name:string;parentId?:string
  backend?:string;model?:string;startedAt:number;endedAt?:number
  state:'running'|'completed'|'failed'|'interrupted'
- action?:string;target?:string
+ action?:string;target?:string;status?:ChatStatus
 }
-/** Metadata only: never copy prompts, tool arguments, output or provider errors. */
+/** Execution metadata and explicit public status only; never copy prompts, arbitrary arguments, output or provider errors. */
 export class ExecutionActivity {
  private listeners=new Set<(call:ExecutionCall)=>void>()
  subscribe(listener:(call:ExecutionCall)=>void){this.listeners.add(listener);return()=>{this.listeners.delete(listener)}}
@@ -35,6 +36,13 @@ export class ExecutionActivity {
   const call=this.store.get<ExecutionCall>('execution-call',id);if(!call)return
   const next={...call,...(values.backend?{backend:values.backend.slice(0,200)}:{}),...(values.model?{model:values.model.slice(0,200)}:{})}
   this.store.put('execution-call',id,next);this.changed(next)
+ }
+ status(id:string,value:unknown){
+  const parsed=chatStatusSchema.parse(value),call=this.store.get<ExecutionCall>('execution-call',id)
+  if(!call||call.state!=='running')return false
+  if(call.status?.phase===parsed.phase&&call.status.label===parsed.label)return true
+  const next={...call,status:{...parsed,updatedAt:Date.now()}}
+  this.store.put('execution-call',id,next);this.changed(next);return true
  }
  finish(id:string,state:Exclude<ExecutionCall['state'],'running'>){
   const call=this.store.get<ExecutionCall>('execution-call',id);if(!call||call.state!=='running')return

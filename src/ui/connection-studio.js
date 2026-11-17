@@ -47,17 +47,18 @@ function connectionSelect(kind) {
   connectionStudio.definitionId = ''
   resetNewModel(); entryModel.mode = kind === 'cli' ? 'codex' : 'api'
   render()
+  animateModelConfiguration('.connection-editor')
 }
 function connectionKindTabs() {
   const row = el('div', 'connection-kinds'); row.setAttribute('role', 'group'); row.setAttribute('aria-label', L('Connection type', '连接方式'))
-  for (const [kind, title, description, glyph] of [
-    ['api', L('API service', 'API 服务'), L('Provider or your own endpoint', '服务商或自定义地址'), 'sources'],
-    ['subscription', L('Subscription account', '订阅账号'), L('Official account authorization', '厂商官方账号授权'), 'key'],
-    ['cli', L('CLI backend', 'CLI 后端'), L('Use an installed agent client', '复用已安装的 Agent 客户端'), 'terminal']
+  for (const [kind, title, glyph] of [
+    ['api', L('API service', 'API 服务'), 'sources'],
+    ['subscription', L('Subscription account', '订阅账号'), 'key'],
+    ['cli', L('CLI backend', 'CLI 后端'), 'terminal']
   ]) {
     const button = opButton('', () => connectionSelect(kind), 'connection-kind')
     button.setAttribute('aria-pressed', String(connectionStudio.kind === kind))
-    button.replaceChildren(icon(glyph), add(el('span'), el('strong', '', title), el('small', '', description)))
+    button.replaceChildren(icon(glyph), el('span', '', title))
     row.append(button)
   }
   return row

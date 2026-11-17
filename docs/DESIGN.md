@@ -358,3 +358,17 @@ The composer has one paperclip action, file drop support and image paste. Draft 
 New messages and tool rows enter once with a 240ms, 6px vertical reveal. The arrival baseline belongs to the persistent Chat space, including first-send creation. History loads, reloads and Agent switches do not replay arrivals. Native disclosures animate their contents over 200ms where supported; reduced motion makes both arrivals and disclosures immediate. Tool actors, times and role labels reuse compact metadata typography, with 11px as the Chat metadata size.
 
 Names are edited in Agent team → Essentials using the existing revisioned save flow. Router and Worker retain their roles and stable IDs; labels update in the transcript, Agents list, tool rows, composer, team view and runtime prompt. Historic message bodies remain evidence, while their speaker labels reflect current configuration. Language follows the explicit request or current human message; browser locale is a fallback for language-neutral input, separate from interface language.
+
+## Model configuration and Chat selection — 2026-11-17
+
+The connection editor keeps the neutral workspace palette and compact typography. API, subscription and CLI choices share a compact selection strip. Related fields use two columns on desktop and one column on narrow screens; inputs follow the shared 16px compact-window role. Permanent explanatory small print is removed. Pending, success and actionable error states sit beside the form's actions, with provider error identifiers behind a disclosure. Editing a field invalidates the previous result and restores the check action.
+
+The Chat composer opens a native popover for the Router connection and reasoning effort. Applying a selection uses the revisioned settings API, refreshes the displayed model, and keeps the message draft. The popover is rendered outside the composer form, supports keyboard opening and Escape, and exposes a link to manage connections. Anthropic's provider-specific thinking controls stay in team configuration. The Worker button opens actual team activity and its settings link.
+
+Motion is limited to short form/result transitions, popover opening and a pending-request indicator. Reduced motion removes these animations. Model switches start compatible backend context for subsequent turns, retaining the Chat transcript and durable memory; no clear-context action is involved.
+
+## Chat status companion and reading column — 2026-11-17
+
+Chat retains its existing font sizes and gains a small Roppo in the header. Its model-written short status comes from the current execution call; host lifecycle, reconnect and selected participant determine the visible state. The fixed high-resolution body uses separate eyes, hands and props for continuous motion. Background tabs pause it and reduced-motion users receive static poses.
+
+Messages and the composer share an 800px reading column. Desktop avatars sit outside the text measure; narrow conversation lanes move them into the speaker row. Resource panels, feature navigation and scrollbar gutters preserve alignment. The composer retains its existing attachment, draft, IME and send/cancel behavior with tighter spacing and short focus/height/icon transitions. Tool groups initially collapse. See `ui/CHAT_COMPANION.md` for implementation and acceptance details.

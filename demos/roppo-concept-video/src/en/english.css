@@ -1,0 +1,194 @@
+.english-video .scene-caption {
+  font-size: 25px;
+  letter-spacing: 0;
+  bottom: 14px;
+}
+.english-video .scene-label {
+  font-size: 26px;
+  letter-spacing: -0.4px;
+}
+.english-video .settings-title h1 {
+  font-size: 29px;
+}
+.english-video .history-current,
+.english-video .history-item {
+  font-size: 12px;
+}
+.english-video .history-rail {
+  width: 240px;
+}
+.english-video .history-title {
+  font-size: 16px;
+}
+.english-video .new-chat {
+  font-size: 12px;
+  gap: 7px;
+}
+.english-video .positioning-scene h1 {
+  font-size: 45px;
+}
+.english-video .audience-grid h2 {
+  font-size: 30px;
+}
+.english-video .audience-grid p {
+  font-size: 16px;
+}
+.english-video .audience-footer {
+  font-size: 12px;
+}
+.english-video .org-node {
+  font-size: 10px;
+  min-width: 75px;
+}
+.english-video .runtime-cards h2 {
+  font-size: 27px;
+}
+.english-video .runtime-cards p {
+  font-size: 14px;
+}
+.english-video .runtime-choice {
+  font-size: 12px;
+}
+.english-video .runtime-detail p {
+  font-size: 14px;
+}
+.english-video .role-independent {
+  font-size: 12px;
+}
+.english-video .prompt-editor {
+  font-size: 14px;
+}
+.english-video .tool-permissions {
+  font-size: 12px;
+}
+.english-video .role-note {
+  font-size: 12px;
+}
+.english-video .scope-row {
+  font-size: 13px;
+}
+.english-video .ecosystem-router p {
+  font-size: 13px;
+}
+.english-video .scope-policy {
+  font-size: 12px;
+}
+.english-video .product-summary {
+  font-size: 14px;
+}
+.english-video .decision-modes p {
+  font-size: 13px;
+}
+.english-video .decision-providers h2 {
+  font-size: 24px;
+}
+.english-video .decision-providers p {
+  font-size: 13px;
+}
+.english-video .decision-step h2 {
+  font-size: 21px;
+}
+.english-video .decision-chat-label {
+  font-size: 10px;
+}
+.english-video .decision-flow-page .settings-title h1 {
+  font-size: 29px;
+}
+.english-video .decision-batch strong {
+  font-size: 12px;
+}
+.english-video .decision-batch p {
+  font-size: 12px;
+}
+.english-video .decision-batch span {
+  font-size: 10px;
+}
+.english-video .decision-rule {
+  font-size: 12px;
+}
+.english-video .decision-rule-heading {
+  font-size: 12px;
+}
+.english-video .decision-pipeline footer {
+  font-size: 10px;
+}
+.english-video .decision-pass {
+  font-size: 12px;
+}
+.english-video .decision-result strong {
+  font-size: 20px;
+}
+.english-video .decision-live-status {
+  font-size: 12px;
+}
+.english-video .decision-pipeline .decision-router-result {
+  font-size: 12px;
+}
+.english-video .decision-settings-footer {
+  font-size: 13px;
+}
+.english-video .decision-other-providers {
+  font-size: 10px;
+}
+.english-video .message-copy {
+  font-size: 14px;
+}
+.english-video .message-copy p {
+  line-height: 1.65;
+}
+.english-video .user-bubble {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.english-video .entry-tag {
+  font-size: 10px;
+}
+.english-video .worker-card p {
+  font-size: 11px;
+}
+.english-video .activity-row {
+  font-size: 10px;
+  gap: 8px;
+}
+.english-video .router-node > div:last-child {
+  font-size: 11px;
+}
+.english-video .browser-owner {
+  font-size: 10px;
+}
+.english-video .browser-owner .ui-button {
+  font-size: 10px;
+  padding: 8px 10px;
+}
+.english-video .worker-label {
+  font-size: 10px;
+}
+.english-video .resource-tabs > div {
+  gap: 6px;
+  padding: 14px 8px;
+  font-size: 11px;
+}
+.english-video .browser-notice {
+  font-size: 11px;
+}
+.english-video .connection-form .ui-field {
+  font-size: 14px;
+}
+.english-video .team-inspector .tabs {
+  font-size: 12px;
+}
+.english-video .team-inspector .input {
+  font-size: 13px;
+}
+.english-video .team-inspector h2 {
+  font-size: 21px;
+}
+.english-video .team-inspector .ui-button {
+  font-size: 13px;
+}
+.english-video .team-inspector .ui-field label {
+  font-size: 11px;
+}
+.english-video .team-inspector .tabs span {
+  padding: 12px 10px;
+}

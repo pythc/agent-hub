@@ -1,0 +1,79 @@
+{
+  "id": "claude-code",
+  "label": "Claude Code",
+  "version": "1.0.0",
+  "stateVersion": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "cliVersion": {
+        "const": "2.1.319"
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1
+      },
+      "authDirectory": {
+        "type": "string",
+        "minLength": 1
+      },
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "command",
+      "cliVersion"
+    ],
+    "additionalProperties": false
+  },
+  "parametersSchema": {
+    "type": "object",
+    "properties": {
+      "effort": {
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "capabilities": {
+    "resume": true,
+    "tools": true,
+    "managed": true,
+    "contextBudget": true,
+    "steering": false,
+    "promptRefresh": false,
+    "images": false,
+    "nativeTakeover": false,
+    "history": true,
+    "purge": true,
+    "modelCatalog": false
+  },
+  "network": true,
+  "environment": [
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS"
+  ]
+}

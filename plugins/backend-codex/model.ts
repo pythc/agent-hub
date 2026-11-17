@@ -11,6 +11,7 @@ import {codexToolBridge} from '../../src/codex-tools.ts'
 import {BackendAdapterError} from '../backend-sdk.ts'
 import {NativeContext} from './context.ts'
 import {workerInputTransport} from './worker-input.ts'
+import {codexParameterNames} from './options.ts'
 export {nativeProtocolHistory} from './context.ts'
 
 import type {Model,ModelRequest,ModelResult,ToolContent} from '../../src/model.ts'
@@ -142,13 +143,12 @@ export class CodexModel implements Model {
       for(const key of ['maxOutputTokens','maxSteps','maxToolCalls'] as const)if(options[key]!==undefined)throw Error('Codex does not expose the host API limit '+key)
       for(const part of ['thread','turn','config'])if(custom[part]!==undefined&&(!custom[part]||typeof custom[part]!=='object'||Array.isArray(custom[part])))throw Error('Codex '+part+' parameters must be an object')
       const threadOptions=(custom.thread??{}) as Record<string,unknown>,turnOptions=(custom.turn??{}) as Record<string,unknown>,configOptions=(custom.config??{}) as Record<string,unknown>
-      const allowedThread=['allowProviderModelFallback','experimentalRawEvents','historyMode','modelProvider','personality','projectId','serviceName','serviceTier','sessionStartSource','threadSource']
-      const allowedTurn=['additionalContext','clientUserMessageId','personality','responsesapiClientMetadata','responsesapiClientMetadataPatch','serviceTier','serviceTierForTurn','summary']
+      const allowedThread=codexParameterNames.thread,allowedTurn=codexParameterNames.turn
       for(const key of Object.keys(threadOptions))if(!allowedThread.includes(key))throw Error('Unsupported or host-owned Codex thread parameter: '+key)
       for(const key of Object.keys(turnOptions))if(!allowedTurn.includes(key))throw Error('Unsupported or host-owned Codex turn parameter: '+key)
       const owned=['threadId','input','outputSchema','developerInstructions','baseInstructions','dynamicTools','cwd','approvalPolicy','permissions','sandbox','config','model','ephemeral','excludeTurns','disabledPluginIds','effort']
       for(const key of [...Object.keys(threadOptions),...Object.keys(turnOptions)])if(owned.includes(key))throw Error('Codex parameter is managed by the host: '+key)
-      for(const key of Object.keys(configOptions))if(!['model_reasoning_summary','model_verbosity','model_context_window','model_auto_compact_token_limit','service_tier','personality'].includes(key))throw Error('Unsupported or host-owned Codex config parameter: '+key)
+      for(const key of Object.keys(configOptions))if(!codexParameterNames.config.includes(key))throw Error('Unsupported or host-owned Codex config parameter: '+key)
       for(const key of Object.keys(configOptions))if(/^(mcp_servers|plugins|features|permissions|approval_policy|sandbox|model|developer_instructions|base_instructions)(\.|$)/.test(key))throw Error('Codex configuration is managed by the host: '+key)
       const effort=options.effort??this.config.effort
       if(options.effort==='none'||options.effort==='minimal'){

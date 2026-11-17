@@ -36,6 +36,7 @@ export interface SourceContext {
   closed(thread: string, outcome: 'merged'|'closed', at: string): void
 }
 export interface Source {
+  observeApi?(observer:(sample:import('./api-usage.ts').ApiSample)=>void):void
   workflowState?(target:import('./workflow-actions.ts').StatusTarget):Promise<import('./workflow-actions.ts').TransitionView>
   applyWorkflowState?(target:import('./workflow-actions.ts').StatusTarget,expected:import('./workflow-actions.ts').TransitionView,stateId:string,mayAct?:()=>boolean):Promise<'updated'|'changed'>
   readonly code?:import('./repository-source.ts').RepositoryAccess

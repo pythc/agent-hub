@@ -6,13 +6,15 @@ import type {Runtime} from './runtime.ts'
 import {canContinueRepositoryTask} from './repository-source.ts'
 import {workerProfiles} from './worker-pool.ts'
 import {workerProfileSchema} from './backend-config.ts'
+import {configuredWorkerBackends,workerConnectionCatalog} from './worker-catalog.ts'
 import type {Run} from './store.ts'
 import type {Trigger} from './vendor/dsh-core/index.ts'
 import {bodyDigest} from './sources.ts'
 import type {ToolSpec} from './model.ts'
 const actions=['list','inspect','create','clone','configure','set_prompt','assign','send','pause','resume','cancel','retire','destroy','result','migrate','rebuild'] as const
-export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional(),patch:z.record(z.string(),z.unknown()).optional(),unset:z.array(z.string()).optional(),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),questionId:z.string().min(1).max(1000).optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
-export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers within the configured policy. Read list for the current revision; mutations require revision and a stable requestId. assign delegates a task; inspect/result return actual state. When send answers a pending business question, pass its current attention.id as questionId. This binds the human follow-up once to that question, not an execution permission. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. New backend/model applies to new tasks; migrate explicitly hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a current scope manager, fresh task text and workspaceReviewed=true only after reviewing retained artifacts under current permissions. It quarantines old text and starts a new session on the same task/backend/workspace. It never runs until a new authorized follow-up.',inputSchema:{type:'object',properties:{action:{type:'string',enum:actions},requestId:{type:'string'},revision:{type:'integer'},id:{type:'string'},from:{type:'string'},profile:{type:'object'},patch:{type:'object'},unset:{type:'array',items:{type:'string'}},prompt:{type:'string'},text:{type:'string'},discussion:{type:'string'},ticketId:{type:'string'},questionId:{type:'string'},acceptance:{type:'string'},cancelRunning:{type:'boolean'},workspaceReviewed:{type:'boolean'},waitMs:{type:'integer',minimum:0,maximum:5000}},required:['action'],additionalProperties:false}}]
+export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional().describe('Full Worker profile for create; backend is a connection ID returned by list.'),patch:workerProfileSchema.partial().optional().describe('Fields to change for configure, or overrides for clone. Omitted fields are retained.'),unset:z.array(z.string()).optional().describe('Optional profile fields to remove so connection defaults apply. Cannot remove id or backend.'),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),questionId:z.string().min(1).max(1000).optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
+export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers for the authorized task autonomously. Read list for the current revision, allowed connections, options, tools and per-Worker permissions. Do not ask for separate approval to create or configure a Worker within this task and policy. Prefer one Worker owning the task end to end. Mutations require the latest revision and a stable requestId. create uses profile. clone uses from, a new id and optional patch; clone a shared Worker before changing its configuration. configure uses id and patch. When send answers a pending business question, pass its current attention.id as questionId. This binds the human follow-up once to that question, not an execution permission. assign delegates a task; inspect/result return actual state. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. Backend/model changes apply to new tasks; migrate hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a scope manager, fresh text and workspaceReviewed=true after reviewing retained artifacts. It quarantines old text and starts a new session on the same task/backend/workspace; it runs only after a new authorized follow-up.',inputSchema:z.toJSONSchema(workerCommandSchema,{target:'draft-7',io:'input'})}]
+
 export interface RouterContext {discussion:string;trigger?:Trigger;scoped?:ScopeContext;manifest?:ContextManifest}
 interface Delegation {ticketId:string;workerId:string;discussion:string;source:string;actor:string;parentTrigger?:string;mode:'client'|'host'}
 export class WorkerManager {
@@ -34,11 +36,29 @@ export class WorkerManager {
  private runs(id:string){return this.host.store.list<Run>('run').filter(r=>r.workerId===id)}
  private tasks(id:string){return this.host.store.list<Delegation>('worker-assignment').filter(a=>a.workerId===id&& !this.host.store.tickets.get(a.ticketId)?.ended)}
  private active(id:string){return this.runs(id).filter(r=>['starting','running','background','human','delivering','merging'].includes(r.phase))}
- list(context?:RouterContext){
-  const c=context?.scoped,allowed=(ticketId:string)=>{try{if(c)this.host.scopes.checkTask(ticketId,c);else if(context)this.checkContext(this.host.store.get<Delegation>('worker-assignment',ticketId),context);return true}catch{return false}}
-  const workers=workerProfiles(this.host.config).filter(w=>!c||this.host.scopes.scope(c.route.scopeId).workerIds.includes(w.id)).map(w=>({...w,status:this.active(w.id).some(r=>allowed(r.ticketId))?'running':w.state??'idle',active:this.active(w.id).filter(r=>allowed(r.ticketId)).map(r=>r.ticketId),tasks:this.tasks(w.id).filter(t=>allowed(t.ticketId)).map(t=>t.ticketId)}))
-  return {revision:this.host.settings.current().revision,policy:this.host.config.execution.management??{enabled:false},workers}
+ private policy(context?:RouterContext){
+  const declared=this.host.config.execution.management,personal=this.host.chat.personalManagement(context),scope=context?.scoped&&this.host.scopes.scope(context.scoped.route.scopeId)
+  const backends=Object.keys(configuredWorkerBackends(this.host.config)).filter(id=>(personal||!declared?.backends||declared.backends.includes(id))&&(!scope||scope.backendIds.includes(id)))
+  return {enabled:declared?.enabled??false,maxWorkers:declared?.maxWorkers??10,backends,connectionScope:personal?'personal_chat':'configured_policy'}
  }
+ private shared(id:string,context?:RouterContext){return !!context?.scoped&&this.host.store.list<any>('management-scope').some(s=>s.id!==context.scoped!.route.scopeId&&s.workerIds.includes(id))}
+ list(context?:RouterContext){
+  const c=context?.scoped,policy=this.policy(context),canManage=policy.enabled&&(!c||this.host.scopes.canManage(c))
+  const allowed=(ticketId:string)=>{try{if(c)this.host.scopes.checkTask(ticketId,c);else if(context)this.checkContext(this.host.store.get<Delegation>('worker-assignment',ticketId),context);return true}catch{return false}}
+  const workers=workerProfiles(this.host.config).filter(w=>!c||this.host.scopes.scope(c.route.scopeId).workerIds.includes(w.id)).map(w=>{
+   const shared=this.shared(w.id,context),connectionAllowed=policy.backends.includes(w.backend)
+   return {...w,status:this.active(w.id).some(r=>allowed(r.ticketId))?'running':w.state??'idle',active:this.active(w.id).filter(r=>allowed(r.ticketId)).map(r=>r.ticketId),tasks:this.tasks(w.id).filter(t=>allowed(t.ticketId)).map(t=>t.ticketId),
+    canConfigure:canManage&&!shared,canAssign:policy.enabled&&connectionAllowed&&(!w.state||w.state==='enabled'),shared,
+    ...(shared?{configurationNote:'Clone this Worker with a new id before configuring it; other scopes share the original.'}:{}),
+    ...(!connectionAllowed?{assignmentBlocker:'connection_not_allowed'}:{})}
+  })
+  return {revision:this.host.settings.current().revision,policy,workers,canCreate:canManage&&workerProfiles(this.host.config).length<policy.maxWorkers,
+   connections:workerConnectionCatalog(this.host.config,policy.backends),
+   tools:this.host.availableWorkerSpecs().filter(t=>t.name!=='superagent_artifact').map(t=>t.name),
+   toolConnections:this.host.toolConnections.configured().filter(t=>t.enabled&&(!c||this.host.chat.personalManagement(context)||workers.some(w=>(w.toolConnections??this.host.config.backends[w.backend]?.defaults?.toolConnections)?.includes(t.id)))),
+   environment:{sandboxDriver:this.host.config.work.sandboxDriver,network:this.host.config.work.network,browserEnabled:this.host.config.browser.enabled}}
+ }
+
  validateSettings(patch:unknown){
   const next=(patch as any)?.execution?.workers
   if(next)for(const w of workerProfiles(this.host.config))if(!next.some((n:any)=>n.id===w.id)&&this.tasks(w.id).length)throw Error('Worker '+w.id+' still owns tasks; retire or cancel before removing it')
@@ -68,24 +88,24 @@ export class WorkerManager {
    const w=this.list(context).workers.find(w=>w.id===input.id);if(!w)throw Error('Unknown Worker');return w
   }
   if(context?.scoped&&!['assign','send'].includes(input.action)&&!host.scopes.canManage(context.scoped))throw Error('Worker configuration requires a scope manager')
-  const policy=host.config.execution.management
-  if(!policy?.enabled)throw Error('Router Worker management is disabled in execution.management')
+  const policy=this.policy(context)
+  if(!policy.enabled)throw Error('Router Worker management is disabled in execution.management')
   if(input.revision===undefined||!input.requestId)throw Error('Mutation requires revision and requestId')
   const key=bodyDigest([context?.discussion??'operator',input.requestId]),fingerprint=bodyDigest(input),receipt=host.store.get<any>('worker-command',key)
   if(receipt){if(receipt.fingerprint!==fingerprint)throw Error('requestId reused with different content');if(receipt.status==='completed'){if(context?.scoped){if(receipt.result?.ticketId)this.checkContext(host.store.get<Delegation>('worker-assignment',receipt.result.ticketId),context, false,input.action==='rebuild'&&host.scopes.ownership(receipt.result.ticketId)?.state==='held');if(input.id&&!host.scopes.scope(context.scoped.route.scopeId).workerIds.includes(input.id))throw Error('Worker receipt is outside this scope')}return receipt.result};if(this.inFlight.has(key))throw Error('Operation is still running');if(!['cancel','destroy'].includes(input.action))throw Error('Previous operation outcome requires reconciliation')}
   if(!receipt&&input.revision!==host.settings.current().revision)throw Error('Settings conflict; read current revision')
   let profiles=workerProfiles(host.config).map(w=>structuredClone(w))
   const worker=profiles.find(w=>w.id===input.id)
-  if(context?.scoped){const scope=host.scopes.scope(context.scoped.route.scopeId);if(input.id&&!scope.workerIds.includes(input.id))throw Error('Worker is outside this scope');if(input.id&&!['assign','send','cancel','migrate'].includes(input.action)&&host.store.list<any>('management-scope').some(s=>s.id!==scope.id&&s.workerIds.includes(input.id)))throw Error('Shared Worker configuration requires the platform operator')}
+  if(context?.scoped&&!['create','clone'].includes(input.action)){const scope=host.scopes.scope(context.scoped.route.scopeId);if(input.id&&!scope.workerIds.includes(input.id))throw Error('Worker is outside this scope');if(input.id&&!['assign','send','cancel','migrate'].includes(input.action)&&this.shared(input.id,context))throw Error('Shared Worker configuration requires the platform operator; clone it before configuring a private Worker')}
   if(receipt?.expected&&JSON.stringify(worker)!==JSON.stringify(receipt.expected))throw Error('Worker changed after this operation began; inspect it and use a new request')
   const save=()=>host.updateSettings(host.settings.current().revision,{execution:{...host.config.execution,workers:profiles}})
-  const verifyBackend=(backend:string)=>{if(policy.backends&&!policy.backends.includes(backend)||context?.scoped&&!host.scopes.scope(context.scoped.route.scopeId).backendIds.includes(backend))throw Error('Backend is outside Router management policy')}
+  const verifyBackend=(backend:string)=>{if(!policy.backends.includes(backend))throw Error('Backend is outside Router management policy')}
   const complete=(result:any)=>{host.store.put('worker-command',key,{fingerprint,status:'completed',result});return result}
   if(['create','clone','configure','set_prompt','pause','resume','retire'].includes(input.action))return host.store.atomic(()=>{
    if(input.action==='create'||input.action==='clone'){
     const base=input.action==='clone'?profiles.find(w=>w.id===input.from):undefined
     if(input.action==='clone'&&(!base||context?.scoped&&!host.scopes.scope(context.scoped.route.scopeId).workerIds.includes(base.id)))throw Error('Unknown Worker template')
-    const candidate=workerProfileSchema.parse(input.profile??{...base,...input.patch,id:input.id})
+    const candidate=workerProfileSchema.parse(input.profile??{...base,...(base?{state:'enabled'}:{}),...input.patch,id:input.id})
     if(profiles.some(w=>w.id===candidate.id))throw Error('Duplicate Worker id')
     if(profiles.length>=policy.maxWorkers)throw Error('Worker limit reached')
     if(host.store.get('retired-worker',candidate.id))throw Error('Retired Worker identity cannot be reused')

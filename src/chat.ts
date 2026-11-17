@@ -1,14 +1,15 @@
 import {isApiBackend} from './backend-config.ts'
 import {createHash, randomUUID} from 'node:crypto'
 import type {Runtime} from './runtime.ts'
-import type {AgentOptions} from './backend-config.ts'
 import {agentOptionsSchema} from './backend-config.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {mergeOptions} from './agent-options.ts'
 import {workerProfiles} from './worker-pool.ts'
+import {configuredWorkerBackends} from './worker-catalog.ts'
+import type {RouterContext} from './worker-manager.ts'
 import type {Run} from './store.ts'
 import type {ModelOutput} from './model.ts'
-import type {ExecutionCall} from './execution-activity.ts'
+import type {ExecutionCall,ExecutionContext} from './execution-activity.ts'
 import {stableDigest} from './sources.ts'
 import {partialReply} from './partial-reply.ts'
 import type {MessageBatch} from './router-proactive.ts'
@@ -20,7 +21,6 @@ export {ChatError} from './chat-errors.ts'
 interface Conversation {
   id:string; owner:string; title:string; createdAt:number; updatedAt:number; archived:boolean
   sourceId:string; actor:string; discussion:string; sequence:number
-  backendId?:string; backendFingerprint?:string; model?:string; options:AgentOptions
   nativeId?:string
 }
 interface Speaker {id:string;label:string;kind:'router'|'worker'}
@@ -57,6 +57,19 @@ export class ChatSessions {
   }
   subscribe(id:string,owner:string,listener:()=>void){this.get(id,owner);const set=this.listeners.get(id)??new Set();set.add(listener);this.listeners.set(id,set);return()=>{set.delete(listener);if(!set.size)this.listeners.delete(id)}}
   private changed(id:string){if(this.notifications.has(id))return;this.notifications.add(id);queueMicrotask(()=>{this.notifications.delete(id);for(const listener of this.listeners.get(id)??[])listener()})}
+  hasContext(context:ExecutionContext){
+    const assignment=context.ticketId?this.host.store.get<Delegation>('worker-assignment',context.ticketId):undefined
+    const triggerId=assignment?.parentTrigger??context.triggerId
+    return !!triggerId&&!!this.host.store.get<ChatRun>('chat-run',triggerId)
+  }
+  personalManagement(context?:RouterContext){
+    const trigger=context?.trigger,run=trigger&&this.host.store.get<ChatRun>('chat-run',trigger.id)
+    const conversation=run&&this.host.store.get<Conversation>('chat-conversation',run.conversationId)
+    if(!trigger||!conversation||conversation.sourceId!==trigger.source||conversation.actor!==trigger.actor.id||conversation.discussion!==context?.discussion)return false
+    if(!context.scoped)return !this.host.scopes.enabled()
+    const entry=this.host.scopes.binding(context.scoped.route.entryId)
+    return context.scoped.route.scopeId==='@chat:'+stableDigest(conversation.owner)&&entry.privateActor===JSON.stringify([conversation.sourceId,conversation.actor])&&entry.nativeId===(conversation.nativeId??'chat:'+conversation.id)
+  }
   private recordCall(call:ExecutionCall){
     const assignment=call.ticketId?this.host.store.get<Delegation>('worker-assignment',call.ticketId):undefined
     const triggerId=assignment?.parentTrigger??call.triggerId,run=triggerId?this.host.store.get<ChatRun>('chat-run',triggerId):undefined
@@ -136,22 +149,31 @@ export class ChatSessions {
     else if(h.store.get<boolean>('settings','paused'))code='host_paused'
     return {uploads:chatUploadLimits,routerLabel:h.config.execution.router?.label??'Router',workers:workerProfiles(h.config).map(w=>({id:w.id,label:w.label??w.id,model:w.model,state:w.state??'enabled',tasks:[] as {id:string;workerId:string;title:string;state:string;question:string|undefined;summary:string|undefined}[]})),ready:code==='ready',code,backend,model,mode:h.config.execution.router?.mode??'assessment',configurationUrl:'/configure#execution/configuration'}
   }
-  private publicConversation(c:Conversation){return {id:c.id,title:c.title,createdAt:c.createdAt,updatedAt:c.updatedAt,archived:c.archived,backend:c.backendId,model:c.model}}
-  private fingerprint(id?:string){
-    if(!id||!(this.host.model instanceof BackendRegistry))return
-    const {label,...definition}=this.host.model.definition(id)
-    return createHash('sha256').update(JSON.stringify(definition)).digest('hex')
+  private publicConversation(c:Conversation){const {backend,model}=this.readiness();return {id:c.id,title:c.title,createdAt:c.createdAt,updatedAt:c.updatedAt,archived:c.archived,backend,model}}
+  private routerBinding(){
+    const ready=this.readiness(),router=this.host.config.execution.router??{}
+    const definition=this.host.model instanceof BackendRegistry?this.host.model.definition(ready.backend!):undefined
+    const options=mergeOptions(definition?.defaults,agentOptionsSchema.parse(Object.fromEntries(Object.entries(router).filter(([k])=>k in agentOptionsSchema.shape))))
+    if(definition?.kind==='codex'&&options.effort===undefined)options.effort=this.host.config.effort
+    return {backendId:ready.backend,model:ready.model,options}
   }
   private bindEntry(c:Conversation){
     const h=this.host,nativeId=c.nativeId??'chat:'+c.id
     // An authenticated Chat owns its local context. Existing external scopes
     // must neither block it nor become its default data/permission scope.
-    if(!h.scopes.enabled()||h.scopes.bindings().some(b=>b.sourceId===c.sourceId&&b.nativeId===nativeId))return
+    if(!h.scopes.enabled())return
     const scopeId='@chat:'+stableDigest(c.owner),actor=JSON.stringify([c.sourceId,c.actor])
+    const bound=h.scopes.bindings().find(b=>b.sourceId===c.sourceId&&b.nativeId===nativeId)
+    if(bound&&bound.scopeId!==scopeId)return
+    const workers=workerProfiles(h.config),backendIds=Object.keys(configuredWorkerBackends(h.config))
     if(!h.store.get('management-scope',scopeId)){
-      const workers=workerProfiles(h.config),backend=c.backendId??h.config.execution.router?.backend??h.config.execution.roles.router??h.config.execution.backend
-      h.scopes.command({action:'scope.put',operationId:'chat-scope:'+stableDigest(c.owner),expectedRevision:0,scope:{id:scopeId,tenantId:scopeId,name:'Chat',managers:[actor],sourceIds:[c.sourceId],workerIds:workers.map(w=>w.id),backendIds:[...new Set([backend,...workers.map(w=>w.backend),...(h.config.execution.management?.backends??[])])]}})
+      h.scopes.command({action:'scope.put',operationId:'chat-scope:'+stableDigest(c.owner),expectedRevision:0,scope:{id:scopeId,tenantId:scopeId,name:'Chat',managers:[actor],sourceIds:[c.sourceId],workerIds:workers.map(w=>w.id),backendIds}})
+    }else{
+      const scope=h.scopes.scope(scopeId),added=backendIds.filter(id=>!scope.backendIds.includes(id)),workerIds=[...new Set([...scope.workerIds,...workers.map(w=>w.id)])]
+      // This personal scope follows host-selected models; existing task grants and memory stay valid.
+      if(added.length||workerIds.length!==scope.workerIds.length)h.store.put('management-scope',scopeId,{...scope,workerIds,backendIds:[...scope.backendIds,...added],revision:scope.revision+1})
     }
+    if(bound)return
     const accountNamespace=h.scopes.bindings().find(b=>b.sourceId===c.sourceId)?.accountNamespace??'local'
     h.scopes.command({action:'entry.bind',operationId:'chat-entry:'+stableDigest([c.owner,c.sourceId,nativeId]),expectedRevision:0,scopeId,sourceId:c.sourceId,accountNamespace,nativeId,privateActor:actor,history:'group'})
   }
@@ -179,11 +201,7 @@ export class ChatSessions {
   create(owner:string){
     const ready=this.readiness();if(!ready.ready)throw new ChatError(ready.code,'Configure an available host Router before starting a conversation.')
     const {source,actor}=this.source()!,id=randomUUID(),at=Date.now()
-    const router=this.host.config.execution.router??{}
-    const definition=this.host.model instanceof BackendRegistry?this.host.model.definition(ready.backend!):undefined
-    const options=mergeOptions(definition?.defaults,agentOptionsSchema.parse(Object.fromEntries(Object.entries(router).filter(([k])=>k in agentOptionsSchema.shape))))
-    if(definition?.kind==='codex'&&options.effort===undefined)options.effort=this.host.config.effort
-    const c:Conversation={id,owner,title:'',createdAt:at,updatedAt:at,archived:false,sourceId:source.id,actor,discussion:source.id+':chat:'+id,sequence:0,backendId:ready.backend,backendFingerprint:this.fingerprint(ready.backend),model:ready.model,options}
+    const c:Conversation={id,owner,title:'',createdAt:at,updatedAt:at,archived:false,sourceId:source.id,actor,discussion:source.id+':chat:'+id,sequence:0}
     this.host.store.put('chat-conversation',id,c)
     return this.publicConversation(c)
   }
@@ -240,8 +258,13 @@ export class ChatSessions {
   binding(triggerId:string){
     const run=this.host.store.get<ChatRun>('chat-run',triggerId)
     if(!run)return
-    const c=this.host.store.get<Conversation>('chat-conversation',run.conversationId)!
-    return {backendId:c.backendId,model:c.model,options:c.options}
+    return this.routerBinding()
+  }
+  history(triggerId:string){
+    const run=this.host.store.get<ChatRun>('chat-run',triggerId)!
+    return this.rows<Message>('chat-message','conversationId',run.conversationId)
+      .filter(m=>!m.recipient&&(!m.speaker||m.speaker.kind==='router'))
+      .sort((a,b)=>a.sequence-b.sequence).map(({role,text,status,attachments})=>({role,text,status,attachments}))
   }
   reply(jobId:string,triggerId:string,text:string){
     const stream=this.streams.get(jobId);if(stream?.timer)clearTimeout(stream.timer);this.streams.delete(jobId)
@@ -273,7 +296,6 @@ export class ChatSessions {
       if(!text&&!attachments.length)throw new ChatError('message_empty','Add a message or file.',400)
       if(c.archived)throw new ChatError('conversation_archived','Restore this conversation before sending.')
       const ready=this.readiness();if(!ready.ready)throw new ChatError(ready.code,'The Router is not ready to receive a message.')
-      try{if(c.backendFingerprint&&this.fingerprint(c.backendId)!==c.backendFingerprint)throw Error()}catch{throw new ChatError('backend_changed','This backend changed. Clear the chat context in Settings to use its new configuration.')}
       const active=this.view(id,owner).run
       if(active&&['queued','running','cancel_requested'].includes(active.state))throw new ChatError('conversation_busy','Wait for the current run or stop it first.')
       const source=this.host.sources.get(c.sourceId)?.config

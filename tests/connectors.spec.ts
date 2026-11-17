@@ -1,7 +1,7 @@
 import { mkdtempSync,rmSync,writeFileSync,chmodSync } from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {afterEach,it,expect} from 'vitest'
+import {afterEach,it,expect,vi} from 'vitest'
 import {configSchema} from '../src/config.ts'
 import {Store} from '../src/store.ts'
 import {GithubSource,type GithubApi} from '../src/connectors/github.ts'
@@ -353,4 +353,65 @@ it('resumes Feishu history from its durable page and fixed time window after res
   return {items:[],has_more:false}
  })
  await second.poll(ctx);expect(ctx.store.get('plugin-state','f:history:oc_test')).toBeNull();expect(ctx.store.get<any>('source-cursor','f:oc_test').since).toBe(String(Number(window.boundary)-2))
+})
+
+it('caches only verified Feishu identities, coalesces checks and invalidates changed credentials',async()=>{
+ const {ctx}=context();ctx.store.put('source-identity','f',{principal:'ou_bot'})
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'fixture',chats:['oc_test'],mentionId:'ou_bot'}}]}).sources[0]!
+ let version='one',identityCalls=0,bot='ou_bot',fail=false
+ const source=new FeishuSource(config,async(_method,path)=>{
+  if(path==='bot/v3/info'){identityCalls++;await new Promise(r=>setTimeout(r,5));if(fail)throw Error('offline');return {bot:{open_id:bot}}}return {items:[]}
+ },()=>version)
+ await Promise.all([source.poll(ctx),source.poll(ctx)]);expect(identityCalls).toBe(1)
+ await source.poll(ctx);expect(identityCalls).toBe(1)
+ await source.identity();expect(identityCalls).toBe(2) // Operator verification is always online.
+ version='two';bot='ou_other';await expect(source.poll(ctx)).rejects.toThrow('account changed');expect(identityCalls).toBe(3)
+ bot='ou_bot';fail=true;await expect(source.poll(ctx)).rejects.toThrow('offline');expect(identityCalls).toBe(4)
+ fail=false;await source.poll(ctx);expect(identityCalls).toBe(5)
+})
+it('idles old Feishu work while retaining pushed messages and fallback topic checks',async()=>{
+ const {ctx,events}=context(),paths:string[]=[],samples:any[]=[]
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'fixture',chats:['oc_test'],liveEvents:true}}]}).sources[0]!
+ const old='2020-01-01T00:00:00.000Z',message={message_id:'om_old',chat_id:'oc_test',create_time:String(Date.parse(old)),body:{content:'{"text":"hello"}'},sender:{id:'ou_person',sender_type:'user'}}
+ const source=new FeishuSource(config,async(_method,path)=>{paths.push(path);return {items:path==='im/v1/messages/om_old'?[message]:[]}})
+ source.observeApi(s=>samples.push(s));ctx.change=()=>{}
+ ctx.store.threads.save({key:'f:oc_test:om_old',ref:{source:'f',id:'oc_test:om_old'},subscriptions:['finished'],correlated:[],pending:[],createdAt:old,meta:{}})
+ ctx.store.put('ticket','finished',{ended:{at:old}})
+ const trigger=source.trigger({id:'known',thread:'oc_test:om_old',text:'hello',at:old,addressed:false},'ou_person',true);trigger.meta={chat:'oc_test',messageId:'om_old',root:'om_old'};ctx.store.put('trigger',trigger.id,trigger)
+ ctx.store.put('source-live','f',{status:'ready'})
+ await source.poll(ctx);paths.length=0;samples.length=0
+ await source.poll(ctx);expect(paths).toHaveLength(1);expect(paths[0]).toContain('container_id_type=chat');expect(samples).toHaveLength(1)
+ ctx.store.put('source-live','f',{status:'disconnected'});paths.length=0
+ await source.poll(ctx);expect(paths).toContain('im/v1/messages/om_old')
+ paths.length=0;await source.receiveEvent({type:'im.message.receive_v1',chat_id:'oc_test',message_id:'om_old',chat_type:'group'},ctx)
+ expect(paths).toContain('im/v1/messages/om_old');expect(events.length).toBeGreaterThan(0)
+})
+it('keeps a successful Feishu request successful even if its metrics sink fails',async()=>{
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'fixture',chats:['oc_test']}}]}).sources[0]!
+ const source=new FeishuSource(config,async()=>({bot:{open_id:'ou_bot'}}));source.observeApi(()=>{throw Error('metrics disk full')})
+ expect(await source.identity()).toMatchObject({id:'ou_bot',verified:true})
+})
+it('renews Feishu background identity online after five minutes',async()=>{
+ const {ctx}=context();ctx.store.put('source-identity','f',{principal:'ou_bot'})
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{cli:'fixture',chats:['oc_test']}}]}).sources[0]!
+ let calls=0,now=Date.now();const clock=vi.spyOn(Date,'now').mockImplementation(()=>now)
+ const source=new FeishuSource(config,async(_method,path)=>{if(path==='bot/v3/info'){calls++;return {bot:{open_id:'ou_bot'}}}return {items:[]}},()=> 'profile')
+ try{await source.poll(ctx);now+=299_999;await source.poll(ctx);expect(calls).toBe(1);now+=2;await source.poll(ctx);expect(calls).toBe(2)}finally{clock.mockRestore()}
+})
+it('refreshes native tenant credentials on rotation and records actual HTTP failures separately',async()=>{
+ const config=configSchema.parse({sources:[{id:'f',kind:'feishu',cwd:'.',feishu:{chats:['oc_test'],appIdEnv:'FEISHU_TEST_ID',appSecretEnv:'FEISHU_TEST_SECRET'}}]}).sources[0]!
+ const calls:any[]=[],samples:any[]=[];let fail=false
+ vi.stubEnv('FEISHU_TEST_ID','first');vi.stubEnv('FEISHU_TEST_SECRET','secret')
+ vi.stubGlobal('fetch',async(url:string,options:any)=>{
+  calls.push({url,authorization:options.headers.authorization})
+  if(url.includes('tenant_access_token'))return new Response(JSON.stringify({code:0,tenant_access_token:JSON.parse(options.body).app_id,expire:7200}))
+  if(fail)return new Response(JSON.stringify({code:99991663}),{status:401})
+  return new Response(JSON.stringify({code:0,bot:{open_id:'ou_'+options.headers.authorization.split(' ')[1]}}))
+ })
+ try{
+  const source=new FeishuSource(config);source.observeApi(s=>samples.push(s))
+  expect((await source.identity()).id).toBe('ou_first');vi.stubEnv('FEISHU_TEST_ID','second');expect((await source.identity()).id).toBe('ou_second')
+  expect(calls.filter(c=>c.url.includes('tenant_access_token'))).toHaveLength(2)
+  fail=true;await expect(source.identity()).rejects.toThrow('Feishu API failed');expect(samples).toHaveLength(5);expect(samples.at(-1)).toMatchObject({ok:false,measurement:'http-request',path:'bot/v3/info'})
+ }finally{vi.unstubAllGlobals();vi.unstubAllEnvs()}
 })

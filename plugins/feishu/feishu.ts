@@ -4,6 +4,10 @@ import {createInterface} from 'node:readline'
 import {imageResource} from '../../src/resources.ts'
 import { larkRequest } from './lark-cli.ts'
 import { createHash } from 'node:crypto'
+import {readFileSync,statSync} from 'node:fs'
+import {homedir} from 'node:os'
+import {join} from 'node:path'
+import type {ApiSample} from '../../src/api-usage.ts'
 import { MessageSource, UncertainDelivery, bodyDigest, type SourceContext } from '../../src/sources.ts'
 import type { SourceConfig } from '../../src/config.ts'
 import type { Trigger, OutboundMessage } from '../../src/vendor/dsh-core/index.ts'
@@ -20,39 +24,74 @@ export class FeishuSource extends MessageSource {
   private discovered=new Set<string>()
   private accessToken=''
   private expiresAt=0
+  private tokenCredentialKey=''
+  private apiObserver?:(sample:ApiSample)=>void
+  private identityCache?:{key:string;until:number;value:{id:string;type:string;verified:boolean}}
+  private identityPending?:{key:string;value:Promise<{id:string;type:string;verified:boolean}>}
   private readonly api:FeishuRequest
-  constructor(config:SourceConfig,api?:FeishuRequest){super(config);if(!config.feishu)throw Error('Feishu configuration required');this.api=api??(config.feishu.cli?larkRequest(config.feishu.cli):this.request.bind(this))}
+  constructor(config:SourceConfig,api?:FeishuRequest,private credentialFingerprint?:()=>string){
+    super(config);if(!config.feishu)throw Error('Feishu configuration required')
+    if(!api&&!credentialFingerprint)this.credentialFingerprint=()=>{
+      const hash=createHash('sha256').update(JSON.stringify(this.config.feishu))
+      if(this.config.feishu!.cli){
+        // Never persist credential material. Invalidate a cached identity when the CLI profile changes.
+        try{hash.update(readFileSync(join(homedir(),'.lark-cli','config.json')));hash.update(String(statSync(this.config.feishu!.cli).mtimeMs))}catch{return ''}
+      }else hash.update(JSON.stringify([process.env[this.config.feishu!.appIdEnv??''],process.env[this.config.feishu!.appSecretEnv??'']]))
+      return hash.digest('hex')
+    }
+    const request=api??(config.feishu.cli?larkRequest(config.feishu.cli):this.request.bind(this))
+    this.api=api||config.feishu.cli?async(method,path,body,signal)=>this.measured(method,path,config.feishu!.cli?'cli-operation':'http-request',()=>request(method,path,body,signal)):request
+  }
+  observeApi(observer:(sample:ApiSample)=>void){this.apiObserver=observer}
+  private report(sample:ApiSample){try{this.apiObserver?.(sample)}catch{/* Telemetry must never turn a completed reply into a retry. */}}
+  private async measured<T>(method:string,path:string,measurement:ApiSample['measurement'],work:()=>Promise<T>){const started=performance.now();let ok=false;try{const result=await work();ok=true;return result}finally{this.report({method,path,measurement,ok,durationMs:performance.now()-started})}}
   private async request(method:string,path:string,body?:unknown,signal?:AbortSignal){
     signal?.throwIfAborted()
     const deadline=()=>signal?AbortSignal.any([signal,AbortSignal.timeout(15000)]):AbortSignal.timeout(15000)
+    const appId=process.env[this.config.feishu!.appIdEnv??""],secret=process.env[this.config.feishu!.appSecretEnv??""]
+    const tokenKey=createHash('sha256').update(JSON.stringify([appId,secret])).digest('hex')
+    if(tokenKey!==this.tokenCredentialKey){this.expiresAt=0;this.tokenCredentialKey=tokenKey}
     if(Date.now()>=this.expiresAt){
-      const appId=process.env[this.config.feishu!.appIdEnv??""],secret=process.env[this.config.feishu!.appSecretEnv??""]
       if(!appId||!secret)throw Error('Feishu app credentials are not configured')
-      const response=await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({app_id:appId,app_secret:secret}),signal:deadline()})
-      const token=await response.json() as any
-      if(token.code!==0||!token.tenant_access_token)throw Error('Feishu tenant authentication failed')
+      const started=performance.now();let ok=false,token:any
+      try{const response=await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({app_id:appId,app_secret:secret}),signal:deadline()});token=await response.json();if(!response.ok||token.code!==0||!token.tenant_access_token)throw Error('Feishu tenant authentication failed');ok=true}
+      finally{this.report({method:'POST',path:'auth/v3/tenant_access_token/internal',measurement:'http-request',ok,durationMs:performance.now()-started})}
       this.accessToken=token.tenant_access_token;this.expiresAt=Date.now()+Math.max(1,token.expire-60)*1000
     }
+    return this.measured(method,path,'http-request',async()=>{
     const response=await fetch('https://open.feishu.cn/open-apis/'+path,{method,headers:{authorization:'Bearer '+this.accessToken,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:deadline()})
     if(path.includes('/resources/')&&response.ok){if(Number(response.headers.get('content-length')??0)>8000000)throw Error('Resource exceeds 8 MB');const data=Buffer.from(await response.arrayBuffer());if(data.length>8000000)throw Error('Resource exceeds 8 MB');return {binary:data.toString('base64'),mimeType:response.headers.get('content-type')}}
     const result=await response.json() as any
     if(!response.ok||result.code!==0){if(result.code===99991663)this.expiresAt=0;throw Error('Feishu API failed: '+result.code)}
     if(path==='bot/v3/info')return {bot:result.bot??result.data?.bot}
     return result.data
+    })
   }
   private permitted(chat:string){return this.config.feishu!.chats.includes(chat)||this.discovered.has(chat)}
   validThread(thread:string){const i=thread.indexOf(':');return i>0&&this.permitted(thread.slice(0,i))&&/^om_[A-Za-z0-9_-]+$/.test(thread.slice(i+1))}
-  async identity(){
-    const bot=await this.api('GET','bot/v3/info'),id=bot.bot?.open_id??bot.open_id
-    if(this.config.feishu!.mentionId&&id!==this.config.feishu!.mentionId)throw Error('Bot identity does not match mentionId')
-    if(typeof id!=='string'||!/^ou_[A-Za-z0-9_-]+$/.test(id))throw Error('Bot identity readback is unavailable')
-    return {id,type:'bot',verified:true}
+  async identity(){return this.resolveIdentity(true)}
+  private async resolveIdentity(fresh=false){
+    const key=this.credentialFingerprint?.() // Unversioned transports are always verified online.
+    if(!fresh&&key&&this.identityCache?.key===key&&this.identityCache.until>Date.now())return this.identityCache.value
+    if(key&&this.identityPending?.key===key)return this.identityPending.value
+    const value=(async()=>{
+      try{
+        const bot=await this.api('GET','bot/v3/info'),id=bot.bot?.open_id??bot.open_id
+        if(this.config.feishu!.mentionId&&id!==this.config.feishu!.mentionId)throw Error('Bot identity does not match mentionId')
+        if(typeof id!=='string'||!/^ou_[A-Za-z0-9_-]+$/.test(id))throw Error('Bot identity readback is unavailable')
+        const identity={id,type:'bot',verified:true}
+        if(key){if(this.credentialFingerprint?.()!==key)throw Error('Feishu credentials changed during identity verification');this.identityCache={key,until:Date.now()+300_000,value:identity}}
+        return identity
+      }catch(error){this.identityCache=undefined;throw error}
+    })()
+    this.identityPending={key:key??'',value}
+    try{return await value}finally{if(this.identityPending?.value===value)this.identityPending=undefined}
   }
-  private async verifiedAccount(ctx?:SourceContext){
+  private async verifiedAccount(ctx?:SourceContext,fresh=false){
     const expected=ctx?.store.get<any>('source-identity',this.config.id)
     if(!expected)return
     let identity:{id:string;type:string;verified:boolean}
-    try{identity=await this.identity()}catch(error){if(!String(error).includes('Bot identity does not match mentionId'))throw error;identity={id:'configured-mention-mismatch',type:'bot',verified:false}}
+    try{identity=await this.resolveIdentity(fresh)}catch(error){if(!String(error).includes('Bot identity does not match mentionId'))throw error;identity={id:'configured-mention-mismatch',type:'bot',verified:false}}
     if(identity.id!==expected.principal){
       for(const chat of this.config.feishu!.chats){const key=this.config.id+':account-mismatch:'+expected.principal+':'+identity.id+':'+chat;const at=ctx!.store.get<number>('source-identity-mismatch',key)??Date.now();ctx!.store.put('source-identity-mismatch',key,at);ctx!.change?.({id:key,kind:'entry.unavailable',scope:chat,at})}
       throw Error('Verified connection account changed; use a separately bound source')
@@ -73,13 +112,13 @@ export class FeishuSource extends MessageSource {
   }
   async receiveEvent(event:any,ctx:SourceContext){
     this.sourceContext=ctx
-    if(event.header?.event_type){await this.verifiedAccount(ctx);this.lifecycleEvent(event,ctx);return}
+    if(event.header?.event_type){await this.verifiedAccount(ctx,true);this.lifecycleEvent(event,ctx);return}
     if(event.type!=='im.message.receive_v1'||!/^oc_[A-Za-z0-9_-]+$/.test(event.chat_id??'')||!/^om_[A-Za-z0-9_-]+$/.test(event.message_id??''))return
     const configured=this.config.feishu!.chats.includes(event.chat_id),mentioned=(event.mentions??[]).some((m:any)=>m.id===this.config.feishu!.mentionId)
     if(!configured&&!(this.config.feishu!.otherChats==='mentions'&&mentioned)&&!(this.config.feishu!.directMessages&&event.chat_type==='p2p'))return
     // Read the original for identical ids/content across live events and polling.
     if(!configured)this.discovered.add(event.chat_id)
-    try{const item=await this.one(event.message_id);if(item.chat_id!==event.chat_id)throw Error('Event chat mismatch');const trigger=await this.acceptItem(item,event.chat_id,ctx);if(trigger){trigger.meta.chatType=event.chat_type;if(event.chat_type==='p2p'&&this.config.feishu!.directMessages)trigger.addressed='direct';ctx.receive(trigger)}}
+    try{await this.verifiedAccount(ctx,true);const item=await this.one(event.message_id);if(item.chat_id!==event.chat_id)throw Error('Event chat mismatch');const trigger=await this.acceptItem(item,event.chat_id,ctx);if(trigger){trigger.meta.chatType=event.chat_type;if(event.chat_type==='p2p'&&this.config.feishu!.directMessages)trigger.addressed='direct';ctx.receive(trigger)}}
     catch(error){if(!configured)this.discovered.delete(event.chat_id);throw error}
   }
   private lifecycleEvent(value:any,ctx:SourceContext){
@@ -145,10 +184,12 @@ export class FeishuSource extends MessageSource {
     return revised
   }
   private async acceptItem(item:any,chat:string,ctx:SourceContext){return await record(ctx,'source-message-state',bodyDigest([this.config.id,chat,item.message_id]))||await this.observe(item,chat,ctx)?undefined:this.fromMessage(item,chat)}
-  private async refreshKnown(ctx:SourceContext){
+  private async refreshKnown(ctx:SourceContext,activeRoots:Set<string>){
     if(!ctx.change||this.config.feishu!.lifecycleEvents===false)return
     const cursor=ctx.store.get<string>('plugin-state',this.config.id+':historyCursor'),page=await records<Trigger>(ctx,'trigger',{sourceId:this.config.id,cursor,limit:this.config.feishu!.historyCheckLimit??20})
     for(const t of page.items.map(r=>r.value).filter(t=>t.source===this.config.id&&typeof t.meta.messageId==='string'&&this.config.feishu!.chats.includes(String(t.meta.chat)))){
+      // Completed historical work is checked on an explicit read, rather than forever in the background.
+      if(!activeRoots.has(String(t.meta.chat)+':'+String(t.meta.root??t.meta.messageId))&&Date.now()-Date.parse(t.at)>900_000)continue
       const observation=await record<any>(ctx,'source-message-observation',this.config.id+':'+t.meta.messageId)
       if(Date.now()-(observation?.checkedAt??0)<(this.config.feishu!.historyCheckSeconds??60)*1000)continue
       const key=this.config.id+':'+t.meta.messageId
@@ -201,10 +242,18 @@ export class FeishuSource extends MessageSource {
       ctx.store.put('thread-health',healthKey,{source:this.config.id,chat,at:Date.now(),consecutiveFailures:0})
       }catch(error){const previous=await record<any>(ctx,'thread-health',healthKey);ctx.store.put('thread-health',healthKey,{source:this.config.id,chat,at:Date.now(),consecutiveFailures:(previous?.consecutiveFailures??0)+1,error:String(error).slice(0,300)})}
     }
+    const activeRoots=new Set<string>()
     {
       for await(const threads of recordPages(ctx,'thread',{sourceId:this.config.id,subscribed:true}))for(const thread of threads.filter(t=>t.ref.source===this.config.id)){
         const separator=thread.ref.id.indexOf(':'),chat=thread.ref.id.slice(0,separator),root=thread.ref.id.slice(separator+1)
         if(!this.permitted(chat))continue
+        const activeSubscription=thread.activeSubscription??(thread.subscriptions??[]).some((id:string)=>{const ticket=ctx.store.get<any>('ticket',id);return !ticket||!ticket.ended})
+        const active=activeSubscription||thread.pending?.length||thread.evaluating||Date.now()-Date.parse(thread.lastAt??thread.createdAt)<900_000
+        if(active)activeRoots.add(thread.ref.id)
+        const live=ctx.store.get<any>('source-live',this.config.id)?.status==='ready'
+        // With a live stream, reconcile idle topics hourly. During an outage poll all topics.
+        const idleKey=this.config.id+':idle-thread:'+thread.ref.id,lastIdle=ctx.store.get<number>('plugin-state',idleKey)??0
+        if(!active&&this.config.feishu!.liveEvents&&live&&Date.now()-lastIdle<3600_000)continue
         const healthKey=this.config.id+':'+thread.ref.id
         try{
         const progressKey=this.config.id+':thread:'+thread.ref.id
@@ -220,10 +269,11 @@ export class FeishuSource extends MessageSource {
           ctx.store.put('plugin-state',progressKey,next);await ctx.checkpoint?.();page=next;if(!page)break
         }
         ctx.store.put('thread-health',healthKey,{source:this.config.id,thread:thread.key,at:Date.now(),consecutiveFailures:0})
+        if(!active&&this.config.feishu!.liveEvents&&live)ctx.store.put('plugin-state',idleKey,Date.now())
         }catch(error){const previous=await record<any>(ctx,'thread-health',healthKey);ctx.store.put('thread-health',healthKey,{source:this.config.id,thread:thread.key,at:Date.now(),consecutiveFailures:(previous?.consecutiveFailures??0)+1,error:String(error).slice(0,300)})}
       }
     }
-    await this.refreshKnown(ctx)
+    await this.refreshKnown(ctx,activeRoots)
   }
   private async one(messageId:string){
     if(!/^om_[A-Za-z0-9_-]+$/.test(messageId))throw Error('Invalid Feishu message id')
@@ -246,6 +296,7 @@ export class FeishuSource extends MessageSource {
   async read(request:{resource:string;trigger?:Trigger;pageSize:number}){
     const trigger=request.trigger
     if(!trigger||trigger.source!==this.config.id||typeof trigger.meta.messageId!=='string')throw Error('An anchored Feishu trigger is required')
+    await this.verifiedAccount(this.sourceContext,true)
     const source=await this.one(trigger.meta.messageId)
     if(source.chat_id!==trigger.meta.chat)throw Error('Source chat changed')
     const [section,cursor]=request.resource.split('/')
@@ -288,6 +339,7 @@ export class FeishuSource extends MessageSource {
   async deliver(message:OutboundMessage):Promise<void>{
     const id=message.channel.address.messageId
     if(!id||!this.permitted(message.channel.address.chat!))throw Error('Feishu reply is outside configured chats')
+    await this.verifiedAccount(this.sourceContext,true)
     const original=await this.one(id),chat=message.channel.address.chat,root=original.root_id??original.message_id
     if(original.chat_id!==chat||message.channel.source!==this.config.id||message.channel.thread!==chat+':'+root)throw Error('Feishu reply destination does not match its authorized thread')
     const uuid=createHash('sha256').update(message.id).digest('hex').slice(0,32)

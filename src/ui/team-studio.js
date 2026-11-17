@@ -295,7 +295,7 @@ function teamTools(current) {
         if (!Number.isInteger(count) || count < 1 || count > 10) { S.errors.set('execution.management.maxWorkers', ['Enter a whole number from 1 to 10.', '请输入 1 到 10 的整数。']); updateBar(); return }
         clearRelated('execution.management.maxWorkers'); set(S.draft, 'execution.management.maxWorkers', count); updateBar()
       }, { values: Array.from({ length: 10 }, (_, index) => [String(index + 1), String(index + 1)]) }),
-      teamJson('execution.management.backends', L('Allowed connection IDs (JSON array)', '可用连接 ID（JSON 数组）'), 'array'))
+      teamJson('execution.management.backends', L('External Router connection IDs (JSON array)', '外部 Router 可用连接 ID（JSON 数组）'), 'array'))
   }
   if (integrations.data || S.snap?.toolConnections) fields.append(integrationGrants(current))
   fields.append(el('h3', '', L('Host tool catalog', '宿主工具目录')))

@@ -414,6 +414,15 @@ function checkCopy(c) {
       ['Run codex login on the host, then check again.', '请在宿主电脑运行 codex login，再重新检查。']
     ],
     model_replied: [['The AI service replied', 'AI 服务已回应']],
+    connection_timeout: [['Connection timed out', '连接超时'], ['Check the host network and service address, then retry.', '请检查宿主网络和服务地址后重试。']],
+    connection_unreachable: [['Cannot reach the service', '无法连接服务'], ['Check the host network and service address.', '请检查宿主网络和服务地址。']],
+    model_access_denied: [['Access denied', '没有访问权限'], ['Check model access and project permissions for this key.', '请检查此密钥的模型权限和项目权限。']],
+    model_not_found: [['Model or endpoint not found', '未找到模型或接口'], ['Check the model ID, service address and API format.', '请核对模型名称、服务地址和 API 格式。']],
+    api_quota_exhausted: [['API quota exhausted', 'API 额度不足'], ['Check the provider balance or project spending limit.', '请检查服务商余额或项目额度。']],
+    api_rate_limited: [['Too many requests', '请求过于频繁'], ['Wait briefly, then check again.', '请稍后重新检查。']],
+    provider_unavailable: [['Service temporarily unavailable', '服务暂时不可用'], ['Try again after the provider recovers.', '请稍后重试。']],
+    api_request_invalid: [['Request rejected', '请求参数不被支持'], ['Check the model and API format. The provider error code is available below.', '请核对模型和 API 格式，可展开查看服务商错误代码。']],
+    model_output_limit: [['Reply exceeded the check budget', '模型回复超出检查预算'], ['The service responded. Try a lower reasoning effort or another model.', '服务已响应，可降低推理强度或更换模型后重试。']],
     api_key_rejected: [
       ['The service rejected the key', '服务拒绝了此密钥'],
       [
