@@ -1,8 +1,9 @@
+import {boundedBackendOptions} from '../backend-admission.ts'
 import {ProcessBackend,pluginIdentity} from './plugin-process.ts'
 import {backendPackages} from './plugin-package.ts'
 import type {Config} from '../config.ts'
 import {validateBackendSelection,type BackendDefinition,type AgentOptions} from '../backend-config.ts'
-import {mergeOptions,apiOptions} from '../agent-options.ts'
+import {apiOptions} from '../agent-options.ts'
 import {appendAgentPrompt} from '../managed-instructions.ts'
 import {SubscriptionAccounts} from './subscription.ts'
 import {CodexModel,nativeContextProfile} from '../../plugins/backend-codex/model.ts'
@@ -40,7 +41,7 @@ export class BackendRegistry implements Model {
  async run(r:ModelRequest):Promise<ModelResult>{
   const id=r.threadId?this.forThread(r.threadId):r.backendId??this.selected(r.role??(r.ephemeral?'router':'worker'))
   const definition=structuredClone(this.definition(id)),role=r.role??(r.ephemeral?'router':'worker')
-  const options=mergeOptions(definition.defaults,r.options??(role==='router'?this.config.execution.router:undefined))
+  const options=boundedBackendOptions(id,definition,r.options??(role==='router'?this.config.execution.router:undefined),this.config.turnTimeoutMs)
   if(definition.kind!=='codex'&&definition.kind!=='plugin'&&definition.subscription){
    const sub=definition.subscription
    if(!sub.backgroundAuthorized||!r.principal||r.principal.source!==sub.owner.source||r.principal.actor!==sub.owner.actor)throw Error('Subscription requires its owner and authorized background activity')

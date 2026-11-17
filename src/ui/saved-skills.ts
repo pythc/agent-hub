@@ -51,7 +51,7 @@ async function previewSkill(s){
     const version=await readVersion(s)
     if(generation!==skillRequest)return
     $('#skill-preview-status').textContent='v'+version.version+' · 只读检查，不授予权限；实际执行会重新检查。'
-    const reasons={worker_unavailable:'所需 Worker 不在当前项目权限内或已移除，请由管理员选择可用 Worker 并另存新版本。',worker_paused:'所需 Worker 已暂停；请检查角色状态，预览不会启用它。',backend_not_allowed:'当前项目不允许该后端，请检查项目后端权限。',backend_unavailable:'所需后端配置不存在，请检查连接设置。',backend_not_managed:'后端缺少受管执行必需能力，不可用普通 ACP 冒充。'}
+    const reasons={worker_unavailable:'所需 Worker 不在当前项目权限内或已移除，请由管理员选择可用 Worker 并另存新版本。',worker_paused:'所需 Worker 已暂停；请检查角色状态，预览不会启用它。',backend_not_allowed:'当前项目不允许该后端，请检查项目后端权限。',backend_unavailable:'所需后端配置不存在，请检查连接设置。',backend_not_managed:'后端缺少受管执行必需能力，不可用普通 ACP 冒充。',backend_resource_limit:'当前 Worker 设置超过后端资源上限，请调整配置后重新检查。',backend_policy_unsupported:'当前后端无法执行所配置的资源限制，请检查后端能力和限制配置。'}
     const checks=version.inspection.dependencies.map(d=>d.nodeId+'：'+(d.reason?reasons[d.reason]:'配置存在，实际权限和连接仍在执行时核验。')+(d.connections||[]).map(c=>'\n  '+c.id+'：'+(c.state==='blocked'?'连接未启用或已移除，请在连接设置中检查；此处不会启用。':'已配置，未验证真实调用或账号权限。')).join('')).join('\n')
     $('#skill-preview-content').textContent='依赖检查（不授予权限；仅检查已声明的 Worker 和所选连接，不推断正文中的隐含要求）\n'+checks+'\n\n完整固定版本内容\n'+JSON.stringify(version,null,2)
   }catch(error){if(generation===skillRequest)$('#skill-preview-status').textContent=error.message}

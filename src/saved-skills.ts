@@ -5,7 +5,8 @@ import type {ScopeContext} from './router-scope.ts'
 import {skillRefSchema,validateGraph} from './goal-contract.ts'
 import {automationTemplateSchema} from './webhooks.ts'
 import {stableDigest} from './sources.ts'
-import {backendPackages} from './backends/plugin-package.ts'
+import {backendAdmission,checkWorkerAdmission} from './backend-admission.ts'
+import {BackendPluginError} from './backends/plugin-contract.ts'
 import {workerProfiles} from './worker-pool.ts'
 import type {ToolSpec} from './model.ts'
 
@@ -67,7 +68,7 @@ export class SavedSkills {
   inspect(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
     if(context)this.host.scopes.assertCurrent(context)
     const item=this.resolve(ref,scopeId,entryId,context),scope=this.host.scopes.scope(scopeId)
-    const profiles=workerProfiles(this.host.config),packages=backendPackages(this.host.config)
+    const profiles=workerProfiles(this.host.config)
     const dependencies=(item.template.nodes??[]).map(node=>{
       const profile=profiles.find(p=>p.id===node.workerId)
       let reason:string|undefined
@@ -77,9 +78,12 @@ export class SavedSkills {
       else {
         const definition=this.host.config.backends[profile.backend]??(profile.backend==='codex'?{kind:'codex' as const}:undefined)
         if(!definition)reason='backend_unavailable'
-        else if(definition.kind==='plugin'){
-          const capabilities=packages.get(definition.plugin)?.manifest.capabilities
-          if(!capabilities||!['managed','tools','resume','history','contextBudget'].every(key=>(capabilities as unknown as Record<string,boolean>)[key]))reason='backend_not_managed'
+        else {
+          const admission=backendAdmission(this.host.config,profile.backend)
+          if(admission.managedMissing.length)reason='backend_not_managed'
+          else try{checkWorkerAdmission(this.host.config,profile.backend,profile)}catch(error){
+            reason=error instanceof BackendPluginError&&error.code==='quota_exhausted'?'backend_resource_limit':'backend_policy_unsupported'
+          }
         }
       }
       const definition=profile&&this.host.config.backends[profile.backend]

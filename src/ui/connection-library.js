@@ -97,6 +97,13 @@ function connectionDetails(service) {
   dialog.append(add(el('div', 'connection-sheet-head'), heading, opButton(L('Close', '关闭'), close, 'icon-button', 'close')))
   const body = el('div', 'connection-sheet-body'), status = connectionCheckStatus(service), busy = entryState.busy === 'connection-check', uses = connectionUses(service.id)
   body.append(connectionIdentity(service), add(el('div', 'connection-key-value'), el('span', '', L('Default model', '默认模型')), el('span', '', service.model || L('Tool default', '工具默认模型'))))
+  if (service.admission) {
+    const a = service.admission
+    if (a.continuation === 'new_task_only') body.append(el('p', 'team-help', L('No resume capability: use an explicit new task, not a continuation.', '不具备续接能力：只能显式新建任务，不能冒充继续原任务。')))
+    if (a.unsupportedLimits) body.append(el('p', 'team-help', L('This backend cannot enforce the configured resource limits; execution is blocked.', '此后端无法执行所配置的资源限制，运行已阻止。')))
+    if (Object.keys(a.limits || {}).length) body.append(el('p', 'team-help', L('Host resource ceilings: ', '宿主资源上限：') + Object.entries(a.limits).map(([k,v]) => k + '=' + v).join(' · ')))
+    body.append(el('p', 'team-help', L('Resource limits are not a price estimate or permission grant.', '资源上限不是费用估算，也不授予权限。')))
+  }
   if (service.managedEligible === false) body.append(el('p', 'team-help', L('Cannot serve as a managed Worker. Missing: ', '无法担任受管 Worker，缺少：') + service.managedMissing.join(', ')))
   const probe = connectionProtocolProbe(service)
   const test = el('section', 'connection-test-section')

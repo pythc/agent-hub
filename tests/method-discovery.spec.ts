@@ -118,3 +118,18 @@ it('execution rechecks paused workers after a successful preview',()=>{
  expect(()=>f.host.skills.execute({id:item.id,version:item.version},f.original.context,'new-run','Continuously inspect')).toThrow('Worker is unavailable')
  expect(f.model).not.toHaveBeenCalled()
 })
+
+it.each(['unsupported','worker_excess','default_excess'] as const)('previews current backend resource admission: %s',kind=>{
+ const f=fixture(),item=seed(f),profile=f.host.config.execution.workers![0]!
+ f.host.config.backends.codex={kind:'codex',limits:kind==='unsupported'?{maxSteps:2}:{timeoutMs:1000}}
+ if(kind==='worker_excess')profile.timeoutMs=2000
+ if(kind==='default_excess')f.host.config.backends.codex.defaults={timeoutMs:2000}
+ profile.toolConnections=['private-connection']
+ const before=f.host.store.db.prepare('SELECT total_changes() AS n').get()!.n
+ const d=f.host.skills.read(ref(item)).inspection.dependencies[0]!
+ expect(d).toEqual({nodeId:'review',state:'blocked',reason:kind==='unsupported'?'backend_policy_unsupported':'backend_resource_limit',authorization:'not_granted',connections:[]})
+ expect(f.host.store.db.prepare('SELECT total_changes() AS n').get()!.n).toBe(before)
+ delete f.host.config.backends.codex.limits
+ expect(f.host.skills.read(ref(item)).inspection.dependencies[0]!.state).toBe('configured')
+ expect(f.model).not.toHaveBeenCalled();expect(f.deliver).not.toHaveBeenCalled()
+})
