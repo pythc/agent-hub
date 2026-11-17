@@ -432,6 +432,15 @@ function checkCopy(c) {
         '请核对服务商提供的模型 ID 和连接格式。'
       ]
     ],
+    api_quota_exhausted: [['The API quota is exhausted', 'API 额度已用尽'], ['Check billing or quota with your provider before retrying.', '请先在服务商处核对账单或额度，再重试。']],
+    api_rate_limited: [['The service is limiting requests', '服务暂时限制请求'], ['Wait before retrying; check provider limits if this continues.', '请稍后重试；若持续出现，请核对服务商的用量限制。']],
+    api_request_rejected: [['The service rejected the request format', '服务拒绝了请求格式'], ['Check the model and API format with your provider.', '请核对模型与 API 格式是否匹配。']],
+    api_model_or_endpoint_missing: [['The model or endpoint was not found', '未找到模型或接口'], ['Check the base URL, model ID and model access.', '请核对基础地址、模型 ID 和访问权限。']],
+    api_service_unavailable: [['The AI service is temporarily unavailable', 'AI 服务暂时不可用'], ['Try again later.', '请稍后重试。']],
+    api_http_error: [['The AI service returned an HTTP error', 'AI 服务返回 HTTP 错误'], ['Check the provider’s service status and connection settings.', '请核对服务商状态与连接设置。']],
+    connection_timeout: [['The connection check timed out', '连接检查超时'], ['The check stops after a bounded wait. Check connectivity before retrying.', '检查已在限定时间内停止。请核对网络连接后重试。']],
+    connection_network_failed: [['The AI service could not be reached', '无法连接 AI 服务'], ['Check the host’s network and service address.', '请核对宿主网络与服务地址。']],
+    model_output_truncated: [['The service replied, but the check output was truncated', '服务已回应，但检查输出被截断'], ['The check uses a limited token budget; this does not mean the key is invalid.', '检查设有 token 预算上限，这不代表密钥无效。']],
     connection_failed: [
       ['The selected AI service could not be used', '未能使用所选 AI 服务'],
       ['Check the service address, model and key, then try again.', '请核对地址、模型和密钥，再重试。']

@@ -13,14 +13,15 @@ export function workspaceViewData(host:Runtime,input:unknown,user='local-operato
   if(query.source&&!sources.some(s=>s.id===query.source))throw Error('Unknown workspace source')
   const tickets=host.store.tickets.list(),workspace=operatorWorkspace(host,0,tickets.length),runs=host.store.list<Run>('run')
   const ticketById=new Map(tickets.map(t=>[t.id,t])),runById=new Map(runs.map(r=>[r.ticketId,r]))
+  const originalTitles=new Map(workspace.tasks.map(t=>[t.id,t.title]))
   const sourceById=new Map(sources.map(s=>[s.id,s]))
   const sourceFor=(id:string)=>host.store.triggers.get(id)?.source??''
   const selected=(source:string|undefined)=>!query.source||query.source===source
   const all:ViewTask[]=workspace.tasks.map(t=>{
     const ticket=ticketById.get(t.id)!,sourceId=sourceFor(ticket.origin.triggerId)
-    return {id:t.id,title:t.title,state:t.state as TaskState,sourceId,sourceLabel:clip(sourceById.get(sourceId)?.label??sourceId),updatedAt:t.updatedAt,summary:t.summary,workerId:runById.get(t.id)?.workerId,replySent:t.replySent,replyRead:t.replyRead,deliveryUncertain:t.deliveryUncertain,approvals:t.approvalIds.length}
+    return {id:t.id,title:t.displayTitle||t.title,state:t.state as TaskState,sourceId,sourceLabel:clip(sourceById.get(sourceId)?.label??sourceId),updatedAt:t.updatedAt,summary:t.summary,workerId:runById.get(t.id)?.workerId,replySent:t.replySent,replyRead:t.replyRead,deliveryUncertain:t.deliveryUncertain,approvals:t.approvalIds.length}
   }).filter(t=>selected(t.sourceId))
-  const search=query.search?.trim().toLowerCase(),filtered=all.filter(t=>(!query.state||query.state===t.state)&&(!search||[t.title,t.summary,t.sourceLabel].some(v=>v.toLowerCase().includes(search))))
+  const search=query.search?.trim().toLowerCase(),filtered=all.filter(t=>(!query.state||query.state===t.state)&&(!search||[t.title,originalTitles.get(t.id)??'',t.summary,t.sourceLabel].some(v=>v.toLowerCase().includes(search))))
   const counts:ViewSnapshot['counts']={queued:0,running:0,attention:0,ready:0,replied:0,closed:0}
   for(const task of all)counts[task.state]++
   const activity=host.activity.list().filter(c=>selected(c.sourceId??(c.triggerId?sourceFor(c.triggerId):c.ticketId?all.find(t=>t.id===c.ticketId)?.sourceId:undefined))).sort((a,b)=>b.startedAt-a.startedAt)

@@ -4,6 +4,7 @@ import type {Runtime} from './runtime.ts'
 import type {Run,Store} from './store.ts'
 import {canRetry,type Ticket} from './vendor/dsh-core/index.ts'
 import {stableDigest} from './sources.ts'
+import {projectTaskStatus,type TaskStatusProjection} from './execution-status.ts'
 
 const stages=['task','assignment','run','approval','tool','result','acceptance','job','delivery','recovery','commit','test','deployment'] as const
 const states=['queued','running','waiting','ready','blocked','failed','cancelled','completed','interrupted','uncertain','pending','resolved','expired','passed','insufficient','errored','stale','sent','held','dropped','idle','starting','background','human','delivering','merging','complete','ended','observed','sending','applying','applied','declined'] as const
@@ -21,6 +22,7 @@ type RecoveryInput=z.infer<typeof traceRecoverySchema>
 type RecoveryResult={status:'inspected'|'history_verified'|'history_unavailable'|'resumed'|'cancelled';ticketId:string;replayed:false;at:number;task?:TraceTask}
 interface RecoveryReceipt {fingerprint:string;state:'started'|'completed'|'uncertain';action:RecoveryInput['action'];ticketId:string;at:number;result?:RecoveryResult}
 export interface TraceTask {
+ status:TaskStatusProjection
  id:string;label:string;state:TraceState;phase?:TraceState;updatedAt:string;workerId?:string;backendId?:string;sessionRef?:string;hasResult:boolean;
  revision:number;observed:string;problem:string;unknownEffects:boolean;pendingApprovals:number;acceptance:{state:TraceState;passed:number;failed:number;insufficient:number}|null;
  evidence:{commit:'recorded'|'unverified';commitRef?:string;tests:'passed'|'failed'|'unverified';deployment:'unverified';external:'uncertain'|'receipts_present'|'none'};
@@ -141,24 +143,26 @@ export class ExecutionTrace {
   if(!ticket.ended&&!unknown&&!held&&!approvals.length&&!ticket.attention&&run?.threadId&&['idle','interrupted'].includes(run.phase)&&canRetry(ticket)&&!host.executionActive(ticket.id)&&!jobs.some(j=>j.state==='running')&&!work.some(w=>['running','starting'].includes(w.state))&&!workflow.some(w=>!['applied','declined','stale','observed'].includes(w.state))&&!host.workflows.unsettled(ticket.id)){
    try{if(host.model.describe?.(run.threadId).resume&&this.authorized(host,ticket,run))actions.push('resume_session')}catch{/* Preserve backend and session identity fences. */}
   }
-  return {id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
+  return {status:projectTaskStatus(host,ticket),id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
  }
  private readAllowed(host:Runtime,ticket:Ticket){
   const source=host.config.sources.find(s=>s.id===ticket.mandate.actor.source)
   if(!source?.enabled||!source.allowedActors.includes(ticket.mandate.actor.id)||!host.scopes.taskRunnable(ticket.id))return false
   const saved=host.store.get<{manifest:import('./router-memory.ts').ContextManifest}>('task-context',ticket.id)
-  try{if(saved)host.memory.validate(saved.manifest);const authority=host.taskAuthority(ticket.id);if(authority?.parentTrigger)host.routerIngress.authority(authority.parentTrigger,authority.discussion);return true}catch{return false}
+  try{return host.memory.readOnly(()=>{if(saved)host.memory.validate(saved.manifest);const authority=host.taskAuthority(ticket.id);if(authority?.parentTrigger){if(host.scopes.enabled()&&!host.store.get('router-route',authority.parentTrigger))return false;host.routerIngress.authority(authority.parentTrigger,authority.discussion)}return true})}catch{return false}
  }
  private authorized(host:Runtime,ticket:Ticket,run:Run){
   const source=host.config.sources.find(s=>s.id===ticket.mandate.actor.source)
   if(!source?.enabled||!source.allowedActors.includes(ticket.mandate.actor.id))return false
-  return host.validWork({ticketId:ticket.id,assignmentId:run.assignmentId,cwd:run.cwd,sandbox:source.sandbox,depth:0})
+  return host.memory.readOnly(()=>host.validWork({ticketId:ticket.id,assignmentId:run.assignmentId,cwd:run.cwd,sandbox:source.sandbox,depth:0}))
  }
  snapshot(value:unknown={}){
   const query=traceSnapshotSchema.parse(value),host=this.current()
   if(query.ticketId&&!visible(host,query.ticketId))throw new TraceError('trace_task_missing',404)
   const all=host.store.tickets.list().filter(t=>visible(host,t.id)&&(!query.ticketId||t.id===query.ticketId)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))
-  return {at:Date.now(),revision:host.settings.current().revision,visibility:this.visibility(host),cursor:this.head(host),total:all.length,offset:query.offset,more:query.offset+query.limit<all.length,tasks:all.slice(query.offset,query.offset+query.limit).map(t=>this.task(host,t))}
+  // GET observation must not materialize missing routes through nested authority checks.
+  // Recovery calls task() directly and retains its existing execution semantics.
+  return host.scopes.readOnly(()=>({at:Date.now(),revision:host.settings.current().revision,visibility:this.visibility(host),cursor:this.head(host),total:all.length,offset:query.offset,more:query.offset+query.limit<all.length,tasks:all.slice(query.offset,query.offset+query.limit).map(t=>this.task(host,t))}))
  }
  async recover(value:unknown):Promise<RecoveryResult>{
   const input=traceRecoverySchema.parse(value),host=this.current(),key=stableDigest(['execution-trace',input.requestId]),fingerprint=stableDigest(input)

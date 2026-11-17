@@ -32,14 +32,14 @@ with sync_playwright() as p:
 
   page.goto(info['base']+'/configure#connectors');connections=page.locator('.connector-page');expect(connections.get_by_role('heading',name='Connections',exact=True)).to_be_visible()
   card=connections.locator('.connector-card').filter(has_text='Feishu setup preview')
-  card.get_by_role('button',name='Check Configuration for Feishu setup preview',exact=True).click();expect(card).to_contain_text('Local fields match the adapter contract')
-  expect(connections).to_contain_text('Read, receive, send and target-channel permissions remain unverified');shot('connectors-diagnostics-dark.png')
+  card.get_by_role('button',name='Check Local settings for Feishu setup preview',exact=True).click();expect(card).to_contain_text('Fields valid')
+  expect(connections).to_contain_text('Reading, receiving, sending and target-channel access are unverified.');shot('connectors-diagnostics-dark.png')
   connections.get_by_role('button',name='Add connection',exact=True).click();dialog=page.get_by_role('dialog');expect(dialog).to_be_visible()
   dialog.get_by_label('Installed app').select_option('feishu');dialog.get_by_role('button',name='Continue',exact=True).click()
-  dialog.get_by_label('Connection name',exact=True).fill('Browser Feishu fixture');dialog.get_by_label('Allowed actor IDs',exact=False).fill('operator');dialog.get_by_label('Use existing host environment references',exact=True).check()
+  dialog.get_by_label('Connection name',exact=True).fill('Browser Feishu fixture');dialog.get_by_label('Who can request work (optional)',exact=False).fill('operator');dialog.get_by_text('Advanced settings',exact=True).click();dialog.get_by_label('Use credentials from environment variables',exact=True).check()
   dialog.get_by_label('App ID *',exact=False).fill('FIXTURE_FEISHU_APP_ID');dialog.get_by_label('App secret *',exact=False).fill('FIXTURE_FEISHU_APP_SECRET');dialog.get_by_label('Chat IDs *',exact=False).fill('oc_browser_fixture')
-  dialog.get_by_role('button',name='Review connection',exact=True).click();expect(dialog).to_contain_text('Ready to apply');expect(dialog).to_contain_text('It does not authenticate, send a message or grant Worker tools');shot('connector-reviewed-plan-dark.png')
-  dialog.get_by_role('button',name='Apply connection',exact=True).click();expect(dialog).not_to_be_visible(timeout=15000)
+  dialog.get_by_role('button',name='Review settings',exact=True).click();expect(dialog).to_contain_text('Review settings');expect(dialog).to_contain_text('No message test or Worker tools.');shot('connector-reviewed-plan-dark.png')
+  dialog.get_by_role('button',name='Save connection',exact=True).click();expect(dialog).not_to_be_visible(timeout=15000)
   expect(connections.locator('.connector-card').filter(has_text='Browser Feishu fixture')).to_contain_text('Disabled');page.reload();expect(connections.locator('.connector-card').filter(has_text='Browser Feishu fixture')).to_contain_text('Disabled')
   checks.append('plugin-defined Feishu help, local validation and existing onboarding apply; starts disabled; diagnostic scope and persisted reload')
 
@@ -49,9 +49,9 @@ with sync_playwright() as p:
 
   workers=api('/workers');api('/workers',{'action':'resume','id':'browser-review','revision':workers['revision'],'requestId':str(uuid.uuid4())});workers=api('/workers')
   assigned=api('/workers',{'action':'assign','id':'browser-review','revision':workers['revision'],'requestId':str(uuid.uuid4()),'discussion':'browser-acceptance','text':'Complete the deterministic local acceptance task.'})
-  page.goto(info['base']+'/configure#execution-trace');trace=page.locator('.trace-page');expect(trace.get_by_role('heading',name='Execution trace',exact=True)).to_be_visible();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId'])
-  expect(trace.locator('.trace-task-detail')).to_contain_text('Retained in task history',timeout=15000);expect(trace.locator('.trace-task-detail')).to_contain_text('A completed tool call alone does not verify a commit');expect(trace.locator('.trace-evidence')).to_contain_text('Unverified');shot('trace-result-evidence-dark.png')
-  page.reload();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId']);expect(trace.locator('.trace-timeline li').first).to_be_visible();event_count=trace.locator('.trace-timeline li').count();assert event_count>0
+  page.goto(info['base']+'/configure#execution-trace');trace=page.locator('.trace-page');expect(trace.get_by_role('heading',name='Task progress',exact=True)).to_be_visible();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId'])
+  expect(trace.locator('[data-facet=execution]')).to_have_attribute('data-state','finished',timeout=15000);trace.locator('.trace-records summary').click();expect(trace.locator('.trace-evidence')).to_contain_text('Unverified');assert trace.locator('.trace-evidence strong').all_text_contents()==['Unverified','Unverified','Unverified'];shot('trace-result-evidence-dark.png')
+  page.reload();trace.get_by_label('Show',exact=True).select_option(assigned['ticketId']);trace.locator('.trace-records summary').click();expect(trace.locator('.trace-timeline li').first).to_be_visible();event_count=trace.locator('.trace-timeline li').count();assert event_count>0
   def fail_refresh(route):route.fulfill(status=503,json={'code':'fixture_temporarily_unavailable'})
   page.route('**/api/execution-trace?*',fail_refresh);trace.get_by_role('button',name='Refresh',exact=True).click();expect(trace.get_by_role('alert')).to_contain_text('Updates are unavailable');assert trace.locator('.trace-timeline li').count()>=event_count;shot('trace-refresh-failure-dark.png')
   page.unroute('**/api/execution-trace?*',fail_refresh);trace.get_by_role('button',name='Try refresh',exact=True).click();expect(trace.get_by_role('alert')).not_to_be_visible()
@@ -59,10 +59,44 @@ with sync_playwright() as p:
 
   workers=api('/workers');unknown=api('/workers',{'action':'assign','id':'research','revision':workers['revision'],'requestId':str(uuid.uuid4()),'discussion':'browser-unknown','text':'fixture-unknown-effect: exercise reconciliation fence.'})
   trace.get_by_role('button',name='Refresh',exact=True).click();expect(trace.get_by_label('Show',exact=True).locator('option[value="'+unknown['ticketId']+'"]').first).to_be_attached(timeout=15000);trace.get_by_label('Show',exact=True).select_option(unknown['ticketId'])
-  expect(trace.locator('.trace-task-detail')).to_contain_text('Some effects are unconfirmed',timeout=15000);expect(trace.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible();shot('trace-unknown-effect-dark.png')
-  trace.get_by_role('button',name='Stop task',exact=True).click();trace.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped',timeout=15000)
-  page.reload();trace.get_by_label('Show',exact=True).select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Resume original session',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
-  checks.append('actual typed unknown-effect failure is fenced; inspect before retry; explicit cancellation persists after reload and cannot resume')
+  expect(trace.locator('[data-facet=effects]')).to_have_attribute('data-state','unknown',timeout=15000);expect(trace.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible();shot('trace-unknown-effect-dark.png')
+  def stop_from_current_view():
+   trace.get_by_role('button',name='Stop task',exact=True).click()
+   with page.expect_response(lambda response:response.url==info['base']+'/api/execution-trace/recover' and response.request.method=='POST') as stopped:
+    trace.locator('.trace-confirm').get_by_role('button',name='Stop task',exact=True).click()
+   return stopped.value
+  # Separate, labelled browser-only stale-observation injection: the actual
+  # Runtime must reject this cancellation before recording/executing it.
+  def stale_cancel_observation(route):
+   response=route.fetch();assert response.ok
+   data=response.json()
+   item=next(task for task in data['tasks'] if task['id']==unknown['ticketId'])
+   item['observed']='0'*64
+   route.fulfill(response=response,json=data,headers={**response.headers,'x-fixture-stale-observation':'1'})
+  page.route('**/api/execution-trace?*',stale_cancel_observation)
+  with page.expect_response(lambda response:response.headers.get('x-fixture-stale-observation')=='1') as stale_snapshot:
+   trace.get_by_role('button',name='Refresh',exact=True).click()
+  stale_snapshot.value.finished()
+  page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+  stopped=stop_from_current_view()
+  assert stopped.request.post_data_json['action']=='cancel'
+  assert stopped.request.post_data_json['observed']=='0'*64
+  assert stopped.status==409,('stale_cancel_observation_not_fenced',stopped.status)
+  page.unroute('**/api/execution-trace?*',stale_cancel_observation)
+  if stopped.status==409:
+   # An outbox transition may legitimately invalidate the first observation.
+   # Verify the existing fence, then explicitly inspect and confirm once again.
+   # Never retry an uncertain/started command or weaken its production gate.
+   assert stopped.json().get('code')=='trace_changed'
+   expect(trace.get_by_role('alert')).to_contain_text('This task changed')
+   shot('trace-browser-injected-stale-cancel-dark.png')
+   trace.get_by_role('button',name='Try refresh',exact=True).click();expect(trace.get_by_role('alert')).not_to_be_visible()
+   expect(trace.locator('[data-facet=effects]')).to_have_attribute('data-state','unknown')
+   stopped=stop_from_current_view()
+  assert stopped.ok,('cancel_failed',stopped.status)
+  expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped',timeout=15000)
+  page.reload();trace.get_by_label('Show',exact=True).select_option(unknown['ticketId']);expect(trace.get_by_role('button',name='Continue task',exact=True)).not_to_be_visible();expect(trace.locator('.trace-task-detail')).to_contain_text('Stopped')
+  checks.append('actual typed unknown-effect failure is fenced; separately labelled browser-only stale observation is rejected before cancellation; explicit UI refresh and renewed confirmation stops the task and persists after reload without resume')
 
   page.emulate_media(reduced_motion='reduce');page.set_viewport_size({'width':390,'height':844})
   for route,selector in [('worker-templates','.templates-page'),('connectors','.connector-page'),('execution-trace','.trace-page')]:

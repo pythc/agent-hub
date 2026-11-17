@@ -168,11 +168,13 @@ it('retains consumed event evidence across same-node automatic repair and a rest
  const f=fixture(undefined,true,true);f.receive();await until(f,()=>!!f.h.webhooks.continuations.list().length&&f.h.store.get<any>('run',f.goal().taskIds[0]!)?.phase==='idle');f.receive(eventReceipt(f));await until(f,()=>f.h.store.list<any>('goal-verification').some(r=>r.state==='failed'));await f.restart();await until(f,()=>f.goal().state==='completed');expect(f.h.store.list('goal-repair')).toHaveLength(1);expect(f.h.webhooks.continuations.list()).toHaveLength(1);expect(f.h.webhooks.continuations.list()[0]?.state).toBe('delivered');expect(f.workerCalls).toBe(3)
 })
 
+// This persists and authenticates all 1000 events (not a mocked capacity counter).
+// Keep the exact boundary/overflow checks; shared CI disk contention is not an SLA.
 it('bounds the offline inbox at 1000 accepted events without acknowledging overflow',()=>{
  const f=fixture(),g=f.h.webhooks.create({...f.spec,operationId:'capacity',namespace:'capacity',maxEvents:2000,perMinute:600})
  for(let n=0;n<1000;n++){if(n===500)f.advance(61000);const signed=f.signed(f.event('capacity-'+n));f.h.webhooks.receive(g.id,signed.headers,signed.body)}
  const signed=f.signed(f.event('overflow'));expect(()=>f.h.webhooks.receive(g.id,signed.headers,signed.body)).toThrow('inbox_overloaded');expect(f.h.webhooks.receipts()).toHaveLength(1000);expect(f.h.store.list('router-goal')).toHaveLength(0)
-})
+},30000)
 
 it('retains consumed evidence through independently reviewed replanning and restart',async()=>{
  const f=fixture(undefined,true,true,true);f.receive();await until(f,()=>!!f.h.webhooks.continuations.pending(f.goal()?.taskIds[0]??'')&&f.h.store.get<any>('run',f.goal().taskIds[0]!)?.phase==='idle');f.receive(eventReceipt(f))

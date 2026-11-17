@@ -57,6 +57,8 @@ const ConnectorManagement=lazy(()=>import("./connector-management.tsx").then(m=>
 const ExecutionTrace=lazy(()=>import("./execution-trace.tsx").then(m=>({default:m.ExecutionTrace})));
 import {spaceRequest,clearChatDrafts,type ChatSpace} from './chat-settings.tsx';
 import { Configuration } from "./configuration.tsx";
+import {WorkspaceTransportOwner} from "./workspace-context.tsx";
+import {preserveWorkspaceLink} from "./workspace-transport.ts";
 import {WorkspaceView,useWorkspaceViews} from './workspace-view.tsx';
 import { FilesPanel } from "./files.tsx";
 import { BrowserPanel } from "./browser.tsx";
@@ -707,7 +709,7 @@ function App() {
         anchor.getAttribute("href")?.startsWith("#")
       )
         return;
-      const url = new URL(anchor.href);
+      const url = preserveWorkspaceLink(new URL(anchor.href),new URL(location.href));
       if (
         url.origin !== location.origin ||
         !["/configure", "/configure/", "/chat"].includes(url.pathname)
@@ -889,7 +891,7 @@ function Chat(p: ChatProps) {
     automations: L("Event automations", "事件自动化"),
     "worker-templates": L("Worker templates", "Worker 模板"),
     connectors: L("Connectors", "连接器"),
-    "execution-trace": L("Execution trace", "执行轨迹"),
+    "execution-trace": L("Task progress", "任务进展"),
     execution: L("Agent team", "Agent 团队"),
     deployments: L("Deployments", "部署"),
     models: L("Model connections", "模型连接"),
@@ -1318,7 +1320,7 @@ function Chat(p: ChatProps) {
             mobile={narrow}
             menuOpen={menu}
             closeMenu={closeNavigation}
-            openWorkspaces={() => {if(automationRoute||pluginId||marketRoute&&!marketTools){history.pushState(null,"","/configure#tasks");window.dispatchEvent(new Event('roppo:navigation'))}setPickerRequest((value) => value + 1)}}
+            openWorkspaces={() => {if(capabilityRoute||automationRoute||pluginId||marketRoute&&!marketTools){history.pushState(null,"",preserveWorkspaceLink(new URL("/configure#tasks",location.origin),new URL(location.href)));window.dispatchEvent(new Event('roppo:navigation'))}setPickerRequest((value) => value + 1)}}
             user={boot?.user}
             views={views.map(view=>({id:view.id,label:view.label[lang]}))}
           />
@@ -1404,7 +1406,7 @@ function Chat(p: ChatProps) {
             </header>
             {marketRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading plugins…","正在加载插件…")}</div>}><PluginMarketplace route={hash} language={lang}/></Suspense>:null}
             {automationRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading automations…","正在加载自动化…")}</div>}><AutomationWorkspace language={lang}/></Suspense>:null}
-            {capabilityRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading workspace…","正在加载工作区…")}</div>}>{templatesRoute?<WorkerTemplates language={lang}/>:connectorsRoute?<ConnectorManagement language={lang}/>:<ExecutionTrace language={lang}/>}</Suspense>:null}
+            {capabilityRoute?<WorkspaceTransportOwner language={lang}><Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading workspace…","正在加载工作区…")}</div>}>{templatesRoute?<WorkerTemplates language={lang}/>:connectorsRoute?<ConnectorManagement language={lang}/>:<ExecutionTrace language={lang}/>}</Suspense></WorkspaceTransportOwner>:null}
             <Configuration
               visible={configuring&&!capabilityRoute&&!automationRoute&&!pluginId&&(!marketRoute||marketTools)}
               route={route}

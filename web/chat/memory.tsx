@@ -2,6 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 import {Pencil, Trash2} from 'lucide-react';
 import type {MemoryProjection} from '../../src/router-memory.ts';
 import './memory.css';
+import {memoryProvenance} from './memory-provenance.ts';
 
 type Labels = (en:string,zh:string)=>string;
 type Entry = {id:string;entryId:string};
@@ -26,7 +27,8 @@ function MemoryRow({fact:f,entry,L,changed}:{fact:MemoryProjection;entry:Entry;L
       setEdit(null);setDeleting(false);changed();
     }catch{setError(true);}finally{setBusy(false);}
   };
-  const context=[f.learning?.condition,f.learning?.inferred?L('Tentative','暂定'):undefined,f.learning?.discussion?L('One conversation only','仅对应会话'):undefined].filter(Boolean).join(' · ');
+  const context=[f.learning?.condition,f.learning?.discussion?L('One conversation only','仅对应会话'):undefined].filter(Boolean).join(' · ');
+  const provenance=memoryProvenance(f,L);
   return <article className="memory-note" data-memory-id={f.id}>
     {edit?<form className="memory-edit" onSubmit={e=>{e.preventDefault();void mutate({action:'remember',expectedRevision:edit.revision,subject:f.subject,content:edit.content,kind:f.kind,importance:f.importance,sourceIds:f.sources.map(s=>s.id),derivedFrom:f.dependencies?.map(d=>d.id),relation:f.relation,candidate:false,visibility:f.visibility,ticketId:f.ticketId,expiresAt:f.expiresAt,origin:'manual',topicAliases:f.topicAliases,learning:{inferred:false,condition:f.learning?.condition??'',...(f.learning?.discussion?{discussion:f.learning.discussion}:{})}});}}>
       <label>{L('Memory content','记忆内容')}<textarea autoFocus value={edit.content} required maxLength={16000} onChange={e=>setEdit({...edit,content:e.target.value})}/></label>
@@ -34,6 +36,7 @@ function MemoryRow({fact:f,entry,L,changed}:{fact:MemoryProjection;entry:Entry;L
     </form>:<>
       <p className="memory-content">{f.content}</p>
       {context?<p className="memory-context">{context}</p>:null}
+      {provenance.length?<p className="memory-provenance">{provenance.map(detail=>detail.value).join(' · ')}</p>:null}
       {deleting?<div className="memory-delete"><span>{L('Delete this memory?','删除这条记忆？')}</span><div className="memory-actions"><button className="text-button" disabled={busy} onClick={()=>void mutate({action:'forget'})}>{L('Delete','删除')}</button><button className="text-button" disabled={busy} onClick={()=>cancel('delete')}>{L('Cancel','取消')}</button></div></div>:
         <div className="memory-actions"><button className="text-button" ref={editButton} disabled={busy} onClick={()=>{setEdit({content:f.content,revision:f.revision});setError(false);}}><Pencil size={14}/>{L('Edit','修改')}</button><button className="text-button" ref={deleteButton} disabled={busy} onClick={()=>{setDeleting(true);setError(false);}}><Trash2 size={14}/>{L('Delete','删除')}</button></div>}
     </>}

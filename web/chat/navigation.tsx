@@ -61,7 +61,7 @@ export function FeatureNavigation({
         Icon: History,
         current: configuring && ["tasks/active", "tasks/history"].includes(hash),
       },
-      {href:"/configure#execution-trace",label:L("Execution trace", "执行轨迹"),Icon:Activity,current:configuring&&hash==='execution-trace'},
+      {href:"/configure#execution-trace",label:L("Task progress", "任务进展"),Icon:Activity,current:configuring&&hash==='execution-trace'},
       {
         href: "/configure#attention",
         label: L("Needs attention", "待处理"),
