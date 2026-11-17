@@ -91,3 +91,22 @@ package bytes remain installed; rollback can restore it. Package removal can
 invalidate references. Thus historical result opening, cross-kind result UI and
 browser acceptance remain unfinished, and #43 stays open. No browser, real
 provider/IM or public deployment validation is claimed for this slice.
+
+## Shared version information (fifth slice)
+
+The task-file result page, conversation attachments and Workspace View outlet now
+share a collapsed, bilingual, read-only version information panel. It displays
+kind, ID, version, digest, scope, current-entry state and retention/history caveats.
+Existing download links and the current enabled view remain the only access paths;
+the panel creates no URL, resolver, enumeration, authorization or execution path.
+Attachment availability is explicitly unchecked, since message metadata cannot
+prove retained bytes still exist. Legacy/missing references show unknown identity.
+Task-file state comes from its existing authenticated descriptor and scoped entry;
+view state comes from its existing bundle load, not reference metadata.
+
+This is shared presentation, not a global registry or historical-result resolver.
+Attachment version opening and historical Workspace View execution remain
+unsupported. Package identity is not a runtime snapshot, and no panel claims
+acceptance, sending or publication. #43 remains open. Automated SSR and wiring
+checks cover all three surfaces and legacy identities. Browser visual, mobile,
+keyboard and real IM acceptance remain deferred, not claimed as passed.

@@ -1,3 +1,4 @@
+import {ArtifactReferenceDetails} from './artifact-reference-details.tsx'
 import {useState} from 'react'
 import {useAui,useAuiState,type AttachmentAdapter,type CompleteAttachment,type PendingAttachment} from '@assistant-ui/react'
 import {Download,FileText,LoaderCircle,X} from 'lucide-react'
@@ -49,10 +50,10 @@ export function createAttachmentAdapter(conversation:()=>Promise<string>,maxByte
 }
 export function MessageAttachments({files,L}:{files:ChatAttachment[];L:Localize}){
   if(!files.length)return null
-  return <div className="message-attachments">{files.map(file=><a key={file.id} className={'chat-attachment'+(file.previewUrl?' image-attachment':'')} href={file.url} download={file.name} title={L('Download ','下载 ')+file.name}>
+  return <div className="message-attachments">{files.map(file=><div key={file.id} className="message-attachment-result"><a className={'chat-attachment'+(file.previewUrl?' image-attachment':'')} href={file.url} download={file.name} title={L('Download ','下载 ')+file.name}>
     {file.previewUrl?<img src={file.previewUrl} alt={file.name} loading="lazy"/>:<FileText size={22}/>}
     <span className="attachment-info"><strong>{file.name}</strong><span>{file.bytes<1024?file.bytes+' B':file.bytes<1048576?Math.ceil(file.bytes/1024)+' KB':(file.bytes/1048576).toFixed(1)+' MB'}</span></span><Download size={15}/>
-  </a>)}</div>
+  </a><ArtifactReferenceDetails reference={file.reference} L={L}/></div>)}</div>
 }
 export function DraftAttachment({L}:{L:Localize}){
   const aui=useAui(),attachment=useAuiState(s=>s.attachment),[removing,setRemoving]=useState(false),[error,setError]=useState('')
