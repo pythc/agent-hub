@@ -1,3 +1,4 @@
+import {decisionTermsSchema} from './business-decisions.ts'
 import { z } from 'zod'
 export const direction = z.object({
   implementation_requested:z.boolean(),
@@ -35,6 +36,7 @@ export const report = z.object({
   state: z.enum(['ready', 'waiting', 'blocked', 'failed', 'dropped']),
   summary: z.string(), reply: z.string(), question: z.string().nullable(),
   askedBy: z.string().nullable().optional(),
+  decision:decisionTermsSchema.nullable().optional(),
   handbacks: z.array(z.object({ triggerId: z.string(), reason: z.string() }).strict()),
 }).strict()
 export const reportSchema = {
@@ -42,6 +44,7 @@ export const reportSchema = {
   properties: {
     state: { type: 'string', enum: ['ready', 'waiting', 'blocked', 'failed', 'dropped'] },
     summary: { type: 'string' }, reply: { type: 'string' }, question: { type: ['string', 'null'] }, askedBy: { type: ['string', 'null'] },
+    decision:z.toJSONSchema(decisionTermsSchema.nullable(),{target:'draft-7'}),
     handbacks: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { triggerId: { type: 'string' }, reason: { type: 'string' } }, required: ['triggerId', 'reason'] } },
-  }, required: ['state', 'summary', 'reply', 'question', 'askedBy', 'handbacks'],
+  }, required: ['state', 'summary', 'reply', 'question', 'askedBy', 'handbacks', 'decision'],
 }

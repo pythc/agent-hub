@@ -86,7 +86,7 @@ it.each(kinds)('%s recovers a reset connection in the same session without repea
   const b=JSON.parse(raw);bodies.push(b)
   if(bodies.length===3){req.socket.destroy();return}
   const answer=bodies.length===1?output(kind,JSON.stringify({action:'accept',title:'Read marker',scope:'Read marker.txt',reason:'Requested',rules:[],ruleAssessments:[],targetTicketId:null})):
-   bodies.length===2?output(kind,'',[{id:'read-once',name:'superagent_read',args:{resource:'files/marker.txt'}}]):output(kind,JSON.stringify({state:'ready',summary:'Read',reply:'retained-tool-result',question:null,askedBy:null,handbacks:[]}))
+   bodies.length===2?output(kind,'',[{id:'read-once',name:'superagent_read',args:{resource:'files/marker.txt'}}]):output(kind,JSON.stringify({state:'ready',summary:'Read',reply:'retained-tool-result',question:null,askedBy:null,handbacks:[],decision:null}))
   res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(answer))
  });servers.push(fixture);await new Promise<void>(r=>fixture.listen(0,'127.0.0.1',r))
  const url='http://127.0.0.1:'+(fixture.address() as any).port
@@ -236,7 +236,7 @@ it.each(kinds.flatMap(kind=>[{kind,separate:false},{kind,separate:true}]))('$kin
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
   if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Delegate',scope:'Delegate reading input.txt',rules:[],ruleAssessments:[],reason:'Synthetic request',targetTicketId:null}))
   const values=results(kind,b).map((r:any)=>{const text=kind==='openai-chat'?r.content:JSON.stringify(kind==='anthropic'?r.content:r.output);try{return JSON.parse(kind==='openai-chat'?text:(kind==='anthropic'?r.content[0].text:r.output[0].text))}catch{return {raw:text}}})
-  const ready={state:'ready',summary:'Delegation complete',reply:'delegated-file-marker',question:null,askedBy:null,handbacks:[]}
+  const ready={state:'ready',summary:'Delegation complete',reply:'delegated-file-marker',question:null,askedBy:null,handbacks:[],decision:null}
   if(instructions.includes('You are a managed subagent')){childRequests++;expect(b.model).toBe(separate?'child-model':'parent-model');expect(b.parent_option).toBe(separate?undefined:true);return JSON.stringify(values).includes('delegated-file-marker')?output(kind,JSON.stringify(ready)):output(kind,'',[{id:'child-read',name:'superagent_read',args:{resource:'files/input.txt'}}])}
   const job=values.find((v:any)=>v.id&&v.kind==='agent')
   if(!job)return output(kind,'',[{id:'spawn',name:'superagent_spawn',args:{prompt:'Read input.txt using resources, report its contents.',requestId:'child-one'}}])
@@ -255,7 +255,7 @@ it.each(kinds)('%s runs the actual Runtime routing/file/result/follow-up path wi
  const f=await server(b=>{
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
   if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Read',scope:'Read input.txt',rules:[],ruleAssessments:[],reason:'Synthetic human request',targetTicketId:null}))
-  if(JSON.stringify(results(kind,b)).includes('api-backend-file-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Read actual file',reply:'api-backend-file-marker',question:null,askedBy:null,handbacks:[]}))
+  if(JSON.stringify(results(kind,b)).includes('api-backend-file-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Read actual file',reply:'api-backend-file-marker',question:null,askedBy:null,handbacks:[],decision:null}))
   return output(kind,'',[{id:'read-'+Math.random(),name:'superagent_read',args:{resource:'files/input.txt'}}])
  })
  const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd,allowedActors:['operator']}]})
@@ -277,7 +277,7 @@ it.skipIf(!['darwin','linux'].includes(process.platform)).each(kinds)('%s execut
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
   if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Command',scope:'Write and read result.txt with a sandboxed command',rules:[],ruleAssessments:[],reason:'Synthetic request',targetTicketId:null}))
   const receipts=JSON.stringify(results(kind,b))
-  if(receipts.includes('shell-api-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Command verified',reply:'shell-api-marker',question:null,askedBy:null,handbacks:[]}))
+  if(receipts.includes('shell-api-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Command verified',reply:'shell-api-marker',question:null,askedBy:null,handbacks:[],decision:null}))
   return output(kind,'',[{id:'shell',name:'superagent_shell',args:{command:'printf shell-api-marker > result.txt; cat result.txt',requestId:'one',yieldMs:1000}}])
  })
  const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:process.platform==='linux'?'bubblewrap':'seatbelt',network:false},sources:[{id:'local',kind:'local',cwd,sandbox:'workspace-write',allowedActors:['operator']}]})
@@ -293,7 +293,7 @@ it.each(kinds)('%s assesses proactive messages, delegates and receives results i
  const decision={action:'accept',title:'Correct label',scope:'Correct the agreed typo',reason:'Agreed correction',rules:['typo'],targetTicketId:null,ruleAssessments:[{id:'typo',matched:true,reason:'Existing copy standard'}],direction:{implementation_requested:true,target_basis:'existing-standard',requires_design_decision:false,evidence:'Match the agreed existing label'},intent_evidence:'Correct the typo on the settings page to the agreed existing label'}
  const wire=await server(body=>{
   const instructions=body.instructions??body.system??body.messages?.[0]?.content??''
-  if(!instructions.startsWith('You are the persistent Router'))return output(kind,JSON.stringify({state:'ready',summary:'Fixture checked',reply:'Worker fixture evidence',question:null,askedBy:null,handbacks:[]}))
+  if(!instructions.startsWith('You are the persistent Router'))return output(kind,JSON.stringify({state:'ready',summary:'Fixture checked',reply:'Worker fixture evidence',question:null,askedBy:null,handbacks:[],decision:null}))
   const turns=body.input??body.messages,latest=turns.findLast((m:any)=>m.role==='user'&&typeof m.content==='string')
   if(latest?.content.includes('"kind":"worker_result"'))return output(kind,JSON.stringify({reply:'Router verified fixture evidence'}))
   const actions=[{id:'context',name:'orchestrator_eval',args:{}},{id:'decision',name:'orchestrator_eval_decide',args:decision},{id:'assign',name:'worker_manage',args:{action:'assign',id:'one',revision:0,requestId:'once',text:decision.scope}}]
@@ -316,4 +316,19 @@ it.each(kinds)('%s keeps ephemeral memory runs tool-free and does not retain the
  expect(store.get('backend-thread',result.threadId)).toBeUndefined()
  expect(JSON.stringify(f.requests[0].body.tools??[])).not.toContain('backend_recall')
  await expect(model.run(request({ephemeral:true,threadId:result.threadId}))).rejects.toThrow('cannot resume')
+})
+it.each(kinds)('%s preserves structured business terms through the actual Runtime report path',async kind=>{
+ const root=mkdtempSync(join(tmpdir(),'api-decision-'));roots.push(root)
+ const decision={target:{label:'Local report proposal',version:'v2'},amount:{value:'12.50',currency:'USD'},recipient:{id:'local-reviewer',label:'Local reviewer'},validForSeconds:7200}
+ const f=await server(b=>{
+  const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
+  if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Review report',scope:'Ask a local question only',rules:[],ruleAssessments:[],reason:'Synthetic human request',targetTicketId:null}))
+  return output(kind,JSON.stringify({state:'blocked',summary:'Choose a local proposal.',reply:'Choose a local proposal.',question:'Use this report?',askedBy:null,handbacks:[],decision}))
+ })
+ const host=new Runtime(configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]}));hosts.push(host)
+ host.receive('local','operator',{id:'one',thread:'topic',addressed:true,text:'Ask me which local proposal to use.'})
+ for(let i=0;i<200&&!host.store.list('business-decision').length;i++){await host.tick();await host.flush();await new Promise(r=>setTimeout(r,5))}
+ const records=host.store.list<any>('business-decision');expect(records).toHaveLength(1)
+ expect(records[0]).toMatchObject({status:'pending',actor:{source:'local',id:'operator'},target:{...decision.target,amount:decision.amount,recipient:decision.recipient}})
+ expect(records[0].expiresAt-records[0].createdAt).toBe(7200000);expect(host.store.list('approval')).toEqual([])
 })

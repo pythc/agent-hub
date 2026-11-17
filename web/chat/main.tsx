@@ -69,6 +69,7 @@ import type {ChatAttachment} from '../../src/chat-attachments.ts';
 const RichMarkdown=lazy(()=>import("./markdown.tsx"));
 import "../../src/ui/theme.css";
 import "../../src/ui/typography.css";
+import {BusinessDecisions} from "./business-decisions.tsx";
 import "./style.css";
 import "./rich-content.css";
 import "./navigation.css";
@@ -1447,6 +1448,7 @@ function Chat(p: ChatProps) {
                     <ThreadPrimitive.Messages
                       components={{ UserMessage, AssistantMessage }}
                     />
+                    {!readonly && !loading && snapshot?.conversation.id===id ? <BusinessDecisions conversationId={id} items={snapshot.decisions} disabled={disabled || !connected || configuring} language={lang} request={api} refresh={refresh}/> : null}
                     {(snapshot?.browsers??[]).filter(b=>b.runId===run?.id&&(!readonly||b.workerId===selected.id)).map(b=><div className="chat-browser" key={b.id}>
                       <Globe size={20}/><div><strong>{b.title||L('Browser','浏览器')}</strong><span>{b.handoffReason|| (b.ended?L('Task ended','任务已结束'):b.control==='worker'?L('Agent is browsing','Agent 正在浏览'):L('Waiting for you','等待你操作'))}</span></div>
                       <button onClick={()=>{setBrowserRequest({id:b.id,takeover:!b.ended&&b.control==='paused',key:Date.now()});void choosePanel('browser')}}>{!b.ended&&b.control==='paused'?<Hand size={15}/>:null}{!b.ended&&b.control==='paused'?L('Take control','接管'):L('View page','查看网页')}</button>

@@ -439,9 +439,13 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
           res.end(req.method==='HEAD'?undefined:readFileSync(file.path));return
         }
       }
-      const match=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})(?:\/(messages|events|cancel|files|memory))?$/)
+      const match=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})(?:\/(messages|events|cancel|files|memory|decisions))?$/)
       if(match){
         const id=match[1]!,action=match[2]
+        if(action==='decisions'&&req.method==='POST'){
+          const input=z.object({action:z.enum(['answer','renew']),id:z.string().min(1).max(1000),version:z.string().regex(/^[a-f0-9]{64}$/),requestId:z.string().uuid(),text:z.string().trim().min(1).max(10000).optional()}).strict().parse(await body(req))
+          send(res,200,runtime.chat.decide(id,owner,input));return
+        }
         if(action==='memory'&&req.method==='GET'){send(res,200,runtime.chat.memory(id,owner));return}
         if(action==='memory'&&req.method==='POST'){
           const input=z.object({kind:z.enum(['manage','memory']),command:z.unknown()}).strict().parse(await body(req))

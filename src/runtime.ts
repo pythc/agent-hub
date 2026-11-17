@@ -1,3 +1,4 @@
+import {captureBusinessDecision,migrateBusinessDecisions,decisionTerms,type DecisionTerms} from './business-decisions.ts'
 import {activateBackendPackages} from './backends/plugin-package.ts'
 import {HostWatchdog} from './watchdog-host.ts'
 import {recordMaintenanceReplay} from './maintenance-replay.ts'
@@ -261,6 +262,7 @@ export class Runtime {
     this.merger=new Merger(this)
     this.setup=new Setup(this)
     this.reviews=new Reviews(this)
+    migrateBusinessDecisions(this)
     this.manager.restoreSubscriptions()
     this.store.recoverJobs()
     this.store.recoverDeliveries()
@@ -320,14 +322,15 @@ export class Runtime {
     try{await live.delivery}finally{live.delivery=undefined}
   }
   /** Keep reports and the messages requiring a person's attention in one durable transaction. */
-  private reportWork(ticketId:string,value:WorkerReport,reply?:string,accepted=false):void {
+  private reportWork(ticketId:string,value:WorkerReport & {decision?:DecisionTerms|null},reply?:string,accepted=false):void {
     this.store.atomic(()=>{
       if(value.state==='ready')this.delegation.captureExecution(ticketId)
       if(!accepted&&this.verification.capture(ticketId,value,reply))return
       const previous=this.store.tickets.get(ticketId)?.attention
       // The core keeps an unchanged question; a different asker needs a fresh routed attention.
       if(value.question&&previous?.question===value.question&&previous.triggerId!==value.askedBy)this.engine.report(ticketId,{state:value.state,summary:value.summary,question:null})
-      const ticket=this.engine.report(ticketId,value)
+      const {decision:decisionDetails,...coreReport}=value
+      const ticket=this.engine.report(ticketId,coreReport)
       if(value.question)this.engine.reply({purpose:'attention',ticketId,question:value.question,text:value.question})
       else if(reply&&value.state==='ready')this.engine.reply({purpose:value.answers?'answer':'result',ticketId,...(value.answers?{triggerId:value.answers}:{}),text:reply})
       else if(reply&&(value.state==='failed'||value.state==='blocked')){
@@ -337,12 +340,23 @@ export class Runtime {
           if(channel)this.store.outbox.send({id:'failure:'+bodyDigest([ticketId,latestAssignment(ticket)?.id,value.state,reply]),ticketId,channel,kind:'reply',text:reply})
         }
       }
+      captureBusinessDecision(this,ticket,value.decision)
       if(ticket.attention&&ticket.attention.id!==previous?.id){
         // Durable ordering fence for explicit business replies. Unlike optional
         // provenance, this is committed atomically with the question and reply.
         const admissionSeq=Number(this.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM audit').get()!.seq)
         this.store.put('question-answer-boundary',bodyDigest([ticketId,ticket.attention.id]),{ticketId,questionId:ticket.attention.id,questionDigest:bodyDigest(ticket.attention.question),createdAt:Date.now(),admissionSeq})
       }
+    })
+  }
+  renewBusinessQuestion(ticketId:string){
+    return this.store.atomic(()=>{
+      const ticket=this.store.tickets.get(ticketId),report=ticket?.assignments.at(-1)?.report
+      if(!ticket?.attention||ticket.ended||!report)throw Error('decision_unavailable')
+      const question=ticket.attention,terms=decisionTerms(this,ticketId)
+      this.engine.report(ticketId,{state:report.state,summary:report.summary,question:null})
+      this.reportWork(ticketId,{state:report.state,summary:report.summary,question:question.question,...(question.triggerId?{askedBy:question.triggerId}:{}),decision:terms})
+      return this.store.tickets.get(ticketId)!.attention!.id
     })
   }
   previewPrompt(input:import('./execution-prompts.ts').PromptPreviewInput,config=this.config){return previewInstructions(config,input,this.scopes.enabled())}
@@ -1172,7 +1186,7 @@ export class Runtime {
         const askedBy=output.askedBy===undefined&&humanInputs.length===1?humanInputs[0]!.triggerId:output.askedBy??undefined
         const question=pending&&!handoff?null:output.question
         const failed=['blocked','failed'].includes(output.state)
-        this.reportWork(ticket.id, { state:background?'progress':pending&&!handoff?'waiting':output.state, summary: background?'Managed background work is running. '+output.summary:output.summary, question,...(question&&askedBy?{askedBy}:{}), ...(!pending && answerId ? { answers: answerId } : {}) },!pending||failed?(output.reply||(failed?output.summary:undefined)):undefined)
+        this.reportWork(ticket.id, { state:background?'progress':pending&&!handoff?'waiting':output.state, summary: background?'Managed background work is running. '+output.summary:output.summary, question,...(output.decision!==undefined?{decision:output.decision}:{}),...(question&&askedBy?{askedBy}:{}), ...(!pending && answerId ? { answers: answerId } : {}) },!pending||failed?(output.reply||(failed?output.summary:undefined)):undefined)
         run.phase = background?'background':'idle'; run.threadId = result.threadId; run.result = output.reply; persist()
         const updated = this.store.tickets.get(ticket.id)!
         if (pending&&(!handoff||superseded)) this.queueInputs(updated, latestAssignment(updated)!)

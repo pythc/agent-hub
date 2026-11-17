@@ -1,3 +1,4 @@
+import {businessDecision,answerBusinessDecision} from './business-decisions.ts'
 import {z} from 'zod'
 import {taskView,allowNewTaskInputs,type TaskContinuation} from './task-context.ts'
 import type {ScopeContext} from './router-scope.ts'
@@ -11,8 +12,8 @@ import type {Trigger} from './vendor/dsh-core/index.ts'
 import {bodyDigest} from './sources.ts'
 import type {ToolSpec} from './model.ts'
 const actions=['list','inspect','create','clone','configure','set_prompt','assign','send','pause','resume','cancel','retire','destroy','result','migrate','rebuild'] as const
-export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional(),patch:z.record(z.string(),z.unknown()).optional(),unset:z.array(z.string()).optional(),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),questionId:z.string().min(1).max(1000).optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
-export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers within the configured policy. Read list for the current revision; mutations require revision and a stable requestId. assign delegates a task; inspect/result return actual state. When send answers a pending business question, pass its current attention.id as questionId. This binds the human follow-up once to that question, not an execution permission. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. New backend/model applies to new tasks; migrate explicitly hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a current scope manager, fresh task text and workspaceReviewed=true only after reviewing retained artifacts under current permissions. It quarantines old text and starts a new session on the same task/backend/workspace. It never runs until a new authorized follow-up.',inputSchema:{type:'object',properties:{action:{type:'string',enum:actions},requestId:{type:'string'},revision:{type:'integer'},id:{type:'string'},from:{type:'string'},profile:{type:'object'},patch:{type:'object'},unset:{type:'array',items:{type:'string'}},prompt:{type:'string'},text:{type:'string'},discussion:{type:'string'},ticketId:{type:'string'},questionId:{type:'string'},acceptance:{type:'string'},cancelRunning:{type:'boolean'},workspaceReviewed:{type:'boolean'},waitMs:{type:'integer',minimum:0,maximum:5000}},required:['action'],additionalProperties:false}}]
+export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional(),patch:z.record(z.string(),z.unknown()).optional(),unset:z.array(z.string()).optional(),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),questionId:z.string().min(1).max(1000).optional(),decisionVersion:z.string().regex(/^[a-f0-9]{64}$/).optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
+export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers within the configured policy. Read list for the current revision; mutations require revision and a stable requestId. assign delegates a task; inspect/result return actual state. When send answers a pending business question, inspect its businessDecision and pass its id as questionId and version as decisionVersion. This binds the human follow-up once to that question, not an execution permission. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. New backend/model applies to new tasks; migrate explicitly hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a current scope manager, fresh task text and workspaceReviewed=true only after reviewing retained artifacts under current permissions. It quarantines old text and starts a new session on the same task/backend/workspace. It never runs until a new authorized follow-up.',inputSchema:{type:'object',properties:{action:{type:'string',enum:actions},requestId:{type:'string'},revision:{type:'integer'},id:{type:'string'},from:{type:'string'},profile:{type:'object'},patch:{type:'object'},unset:{type:'array',items:{type:'string'}},prompt:{type:'string'},text:{type:'string'},discussion:{type:'string'},ticketId:{type:'string'},questionId:{type:'string'},decisionVersion:{type:'string'},acceptance:{type:'string'},cancelRunning:{type:'boolean'},workspaceReviewed:{type:'boolean'},waitMs:{type:'integer',minimum:0,maximum:5000}},required:['action'],additionalProperties:false}}]
 export interface RouterContext {discussion:string;trigger?:Trigger;scoped?:ScopeContext;manifest?:ContextManifest}
 interface Delegation {ticketId:string;workerId:string;discussion:string;source:string;actor:string;parentTrigger?:string;mode:'client'|'host'}
 export class WorkerManager {
@@ -48,8 +49,14 @@ export class WorkerManager {
   if(c&&(!a||a.discussion!==c.discussion||c.trigger&&(a.source!==c.trigger.source||a.actor!==c.trigger.actor.id)))throw Error('Task is outside this Router discussion')
   if(c&&a?.mode==='host'&&a.parentTrigger)this.host.routerIngress.authority(a.parentTrigger,a.discussion)
  }
- async call(value:unknown,context?:RouterContext):Promise<any>{
+ async call(value:unknown,context?:RouterContext):Promise<any>{return this.callNow(value,context)}
+ sendImmediate(value:unknown,context:RouterContext):any {
+  if(workerCommandSchema.parse(value).action!=='send')throw Error('Only synchronous follow-ups are allowed')
+  return this.callNow(value,context)
+ }
+ private callNow(value:unknown,context?:RouterContext):any{
   const input=workerCommandSchema.parse(value),host=this.host
+  if(input.decisionVersion&&!input.questionId)throw Error('decisionVersion requires questionId')
   if(input.questionId!==undefined){
    if(input.action!=='send')throw Error('questionId is only valid for send')
    if(!context?.trigger?.human||context.trigger.meta.delegatedBy)throw Error('Question answer requires a human follow-up')
@@ -63,10 +70,10 @@ export class WorkerManager {
   if(continuation?.action==='attach'&&(input.action==='assign'||input.action==='send'&&input.ticketId!==continuation.targetTicketId))throw Error('The admitted continuation must use its existing target task')
   if(mandate?.strength==='inferred'&&!['list','inspect','result','assign','send'].includes(input.action))throw Error('Inferred work cannot change Worker configuration or stop tasks')
   if(input.action==='list')return this.list(context)
-  if(input.action==='inspect'||input.action==='result'){
-   if(input.ticketId){const a=host.store.get<Delegation>('worker-assignment',input.ticketId);this.checkContext(a,context);const until=Date.now()+(input.waitMs??0);while(Date.now()<until&&!host.store.tickets.get(input.ticketId)?.ended&&!['blocked','failed'].includes(host.store.tickets.get(input.ticketId)?.assignments.at(-1)?.report?.state??''))await new Promise(r=>setTimeout(r,Math.min(100,until-Date.now())));this.checkContext(a,context);const raw=host.store.tickets.get(input.ticketId);if(!raw)throw Error('Unknown task');const ticket=taskView(host.store,raw);return {assignment:a,run:host.store.get('run',input.ticketId),report:ticket.assignments.at(-1)?.report,attention:ticket.attention,ended:ticket.ended}}
+  if(input.action==='inspect'||input.action==='result')return (async()=>{
+   if(input.ticketId){const a=host.store.get<Delegation>('worker-assignment',input.ticketId);this.checkContext(a,context);const until=Date.now()+(input.waitMs??0);while(Date.now()<until&&!host.store.tickets.get(input.ticketId)?.ended&&!['blocked','failed'].includes(host.store.tickets.get(input.ticketId)?.assignments.at(-1)?.report?.state??''))await new Promise(r=>setTimeout(r,Math.min(100,until-Date.now())));this.checkContext(a,context);const raw=host.store.tickets.get(input.ticketId);if(!raw)throw Error('Unknown task');const ticket=taskView(host.store,raw);return {assignment:a,run:host.store.get('run',input.ticketId),report:ticket.assignments.at(-1)?.report,attention:ticket.attention,businessDecision:ticket.attention?businessDecision(host,ticket.attention.id):undefined,ended:ticket.ended}}
    const w=this.list(context).workers.find(w=>w.id===input.id);if(!w)throw Error('Unknown Worker');return w
-  }
+  })()
   if(context?.scoped&&!['assign','send'].includes(input.action)&&!host.scopes.canManage(context.scoped))throw Error('Worker configuration requires a scope manager')
   const policy=host.config.execution.management
   if(!policy?.enabled)throw Error('Router Worker management is disabled in execution.management')
@@ -143,6 +150,7 @@ export class WorkerManager {
     if(!boundary||boundary.ticketId!==ticket.id||boundary.questionId!==input.questionId||boundary.questionDigest!==bodyDigest(ticket.attention.question)||!Number.isSafeInteger(boundary.admissionSeq)||!Number.isSafeInteger(boundary.createdAt)||firstAdmission==null||Number(firstAdmission)<=boundary.admissionSeq||!Number.isFinite(sourceTime)||sourceTime<=boundary.createdAt)throw Error('Question answer must follow question creation; send a new reply')
     // Persist in the same transaction as attach and the command receipt. This records
     // a business reply only; native approvals and execution authority are unchanged.
+    answerBusinessDecision(host,input.questionId,input.decisionVersion,context!.trigger!,input.text)
     host.store.put('question-answer',answerKey,{ticketId:ticket.id,questionId:input.questionId,assignmentId:ticket.assignments.at(-1)?.id,triggerId:context!.trigger!.id,actor:context!.trigger!.actor,requestId:input.requestId,answerDigest:bodyDigest(input.text),at:Date.now()})
    }
    if(context?.scoped){
@@ -217,7 +225,7 @@ export class WorkerManager {
    // The next explicit follow-up reopens the existing logical task. Never silently rerun it.
    return complete({ticketId:input.ticketId,migration:key,status:'awaiting_followup',previousThread:threadId})
   })
-  if(input.action==='cancel'||input.action==='destroy'){
+  if(input.action==='cancel'||input.action==='destroy')return (async()=>{
    const ids=input.action==='cancel'?(input.ticketId?[input.ticketId]:[]):[...new Set([...this.tasks(input.id??'').map(t=>t.ticketId),...this.active(input.id??'').map(r=>r.ticketId)])]
    if(input.action==='destroy'){if(!worker){if(receipt&&host.store.get('retired-worker',input.id!))return complete({status:'destroyed',revision:host.settings.current().revision,tasks:[]});throw Error('Unknown Worker')};if(profiles.length===1)throw Error('Keep at least one Worker');if(ids.length&&!input.cancelRunning)throw Error('Worker still owns tasks; cancelRunning required')}
    if(!ids.length&&input.action==='cancel')throw Error('Task required')
@@ -240,7 +248,7 @@ export class WorkerManager {
      return complete({status:input.action==='destroy'?'destroyed':'cancelled',revision:host.settings.current().revision,tasks:ids})
     })
    }finally{this.inFlight.delete(key)}
-  }
+  })()
   throw Error('Unsupported Worker action')
  }
 }

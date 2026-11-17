@@ -13,7 +13,7 @@ const server=createServer(async(req,res)=>{
   if(!tools.length)call={id:'shell-read',type:'function',function:{name:'superagent_shell',arguments:JSON.stringify({command:'cat input.txt; if test -r /data/state/private-canary; then exit 91; fi; if test -r /data/state/config.json; then exit 92; fi',requestId:'read-container-file'})}}
   else{
    if(!tools.some(t=>String(t.content).includes('2')))throw Error('Actual shell result missing')
-   content=JSON.stringify({state:'ready',summary:'Read actual input.txt through the managed shell',reply:'2',question:null,askedBy:null,handbacks:[]})
+   content=JSON.stringify({state:'ready',summary:'Read actual input.txt through the managed shell',reply:'2',question:null,askedBy:null,decision:null,handbacks:[]})
   }
  }else if(text.includes('worker_result'))content=JSON.stringify({reply:'CONTAINER_API_VERIFIED_2'})
  else if(tools.length)content=JSON.stringify({reply:''})
