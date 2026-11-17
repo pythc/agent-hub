@@ -91,3 +91,18 @@ it('uses producer authority instead of misclassifying a legitimate scheduled pro
  f.h.routerIngress.scheduledAuthority=()=>undefined
  expect(f.h.routerIngress.explain(t.id,f.initial.context.route.discussion)).toBe('member_not_admitted')
 })
+
+it.each(['current','disabled','revoked','missing'])('omits private or unknown current follow-up audience before %s reasons',async mode=>{
+ const f=await fixture(),entry=f.h.scopes.bindings().find(b=>b.nativeId==='other')!
+ f.h.store.put('entry-binding',entry.id,{...entry,privateActor:'alice'})
+ f.h.scopes.command({action:'task.channel',operationId:'private-share',ticketId:f.id,entryId:entry.id,expectedRevision:0,context:true,request:true,result:true,active:true})
+ const input=f.receive('Private follow-up','alice','other')
+ f.h.scopes.noteInput(f.id,input.context)
+ expect(f.h.taskAuthority(f.id)?.parentTrigger).toBe(input.trigger.id)
+ if(mode==='disabled')f.h.config.execution.management!.enabled=false
+ if(mode==='revoked')f.h.config.sources[0]!.allowedActors=[]
+ if(mode==='missing')f.h.store.db.prepare("DELETE FROM records WHERE kind='entry-binding' AND id=?").run(entry.id)
+ const before=db(f.h)
+ expect(taskPermissionsView(f.h,f.id)).toBeUndefined()
+ expect(db(f.h)).toBe(before)
+})

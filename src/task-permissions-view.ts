@@ -15,6 +15,10 @@ export function taskPermissionsView(h:Runtime,id:string,now=Date.now()):TaskPerm
   }
   const authority=h.taskAuthority(id),parent=authority?.parentTrigger??ticket.origin.triggerId,trigger=h.store.triggers.get(parent)
   if(!trigger||trigger.id!==parent||h.memory.cleanup.blocked('trigger',parent,trigger))return
+  if(h.scopes.enabled()){
+   const currentEntry=h.scopes.entry(trigger)
+   if(!currentEntry||currentEntry.privateActor)return
+  }
   const discussion=authority?.discussion??trigger.source+':'+trigger.threads[0]?.id
   const result=(reason:PermissionReason):TaskPermissionsView=>({schema:1,readOnly:true,authorization:false,observedAt:now,subject:{kind:'task',id},reason,action:'task_followup',execution:'not_assessed'})
   if(ticket.ended)return result('task_unavailable')
