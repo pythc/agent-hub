@@ -1,3 +1,4 @@
+import {retainDeliveryReceipt} from './delivery-evidence.ts'
 import {captureBusinessDecision,migrateBusinessDecisions,decisionTerms,type DecisionTerms} from './business-decisions.ts'
 import {activateBackendPackages} from './backends/plugin-package.ts'
 import {HostWatchdog} from './watchdog-host.ts'
@@ -1253,14 +1254,16 @@ export class Runtime {
       const row=event?.meta.scope??'default'
       if(source.config.listenScopes&&!source.config.listenScopes.includes(String(row))){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
       if(!this.store.deliveryStarted(message.id))continue
+      const deliveryRevision=this.settings.current().revision,deliveryFingerprint=stableDigest(source.config)
+      let receipt:unknown,externalDelivered=false
       try {
         if(message.channel.address.routerInbox){
           this.store.put('router-inbox',message.id,message)
           const delegated=message.ticketId&&(this.store.get<any>('task-routing',message.ticketId)??this.store.get<any>('worker-assignment',message.ticketId))
           if(delegated?.mode==='host'&&delegated.parentTrigger&&!this.store.get('router-cancelled',delegated.parentTrigger)&&this.store.get<any>('router-report-read',delegated.discussion+':'+message.ticketId)?.at!==(ticket||undefined)?.assignments.at(-1)?.report?.at)this.store.enqueue('router:result:'+message.id,'router',{discussion:delegated.discussion,triggerId:delegated.parentTrigger,messageId:message.id})
-        }else if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
-        this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
-      catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
+        }else if(source.config.kind==='delegation')await this.delegation.deliver(message);else {receipt=await source.deliver(message);externalDelivered=true}
+        this.store.atomic(()=>{retainDeliveryReceipt(this.store,message,receipt,deliveryRevision,deliveryFingerprint);this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
+      catch (error) { const uncertain=externalDelivered||error instanceof UncertainDelivery;this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), uncertain);if(!uncertain&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
     }
   }
   private holdLegacyTask(ticketId:string){

@@ -35,13 +35,16 @@ export interface SourceContext {
   bind(ticketId: string, thread: string, own: boolean): void
   closed(thread: string, outcome: 'merged'|'closed', at: string): void
 }
+/** Optional provider acknowledgement, not proof of observation or reading. */
+export const deliveryReceiptSchema=z.object({providerAccepted:z.literal(true),messageId:z.string().min(1).max(300),remoteMessageId:z.string().min(1).max(300),thread:z.string().min(1).max(300),contentDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict()
+export type DeliveryReceipt=z.infer<typeof deliveryReceiptSchema>
 export interface Source {
   workflowState?(target:import('./workflow-actions.ts').StatusTarget):Promise<import('./workflow-actions.ts').TransitionView>
   applyWorkflowState?(target:import('./workflow-actions.ts').StatusTarget,expected:import('./workflow-actions.ts').TransitionView,stateId:string,mayAct?:()=>boolean):Promise<'updated'|'changed'>
   readonly code?:import('./repository-source.ts').RepositoryAccess
   config: SourceConfig
   trigger(input: Incoming, actor: string, human?: boolean): Trigger
-  deliver(message: OutboundMessage): Promise<void>
+  deliver(message: OutboundMessage): Promise<void|DeliveryReceipt>
   idempotencyKey?(trigger:Trigger):string
   poll?(context: SourceContext): Promise<void>
   validThread?(thread:string):boolean
@@ -76,7 +79,7 @@ export class MessageSource implements Source {
       channel: { source: this.config.id, thread: input.thread, address: { thread: input.thread,...(input.message?{messageId:input.message.id}:{}),...(input.message?.url?{url:input.message.url}:{}) } },
     }
   }
-  async deliver(message: OutboundMessage): Promise<void> {
+  async deliver(message: OutboundMessage): Promise<void|DeliveryReceipt> {
     // Local deliveries are durably readable through status, CLI and MCP.
     if (this.config.kind === 'local') return
     if (!this.config.replyUrl) throw new Error('External delivery is disabled until replyUrl is configured')

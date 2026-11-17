@@ -293,7 +293,7 @@ export class ProcessSource extends MessageSource {
   async context(thread:string){if(!this.validThread(thread)||!this.active().capabilities.resources)throw Error('Thread is unavailable');const result=await this.invoke('context',thread);if(!this.validThread(thread)||!this.active().capabilities.resources)throw Error('Thread access revoked');return result}
   async deliver(message:OutboundMessage){
     if(!this.active().capabilities.replies||message.channel.source!==this.config.id||!this.validThread(message.channel.thread))throw Error('Reply is outside plugin source')
-    try{await this.invoke('deliver',message)}catch{throw new UncertainDelivery('Plugin reply outcome unknown; reconcile destination before retry')}
+    try{return await this.invoke('deliver',message)}catch{throw new UncertainDelivery('Plugin reply outcome unknown; reconcile destination before retry')}
   }
   async close(){
     try{if(this.child&&this.pkg.manifest.methods.includes('close'))await this.invoke('close')}finally{this.stopped=true;this.fail(Error('Plugin closed'));if(this.scratch)rmSync(this.scratch,{recursive:true,force:true})}
