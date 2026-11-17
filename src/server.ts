@@ -190,8 +190,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
     }
     if(req.method==='POST'&&path==='/worker'){
-      const owner=runtime.workerTools.authenticate(req.headers.authorization)
       const input=z.object({name:z.string(),args:z.unknown()}).strict().parse(await body(req))
+      const owner=runtime.workerTools.authenticate(req.headers.authorization,input.name,input.args)
       send(res,200,await runtime.workerTools.call(owner,input.name,input.args));return
     }
     // Connector identities may only submit to their configured source.

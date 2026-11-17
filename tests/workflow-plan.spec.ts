@@ -143,3 +143,23 @@ it('does not reconcile memory through WorkerTools when planning; ordinary tool a
  await expect(f.h.workerTools.call(f.work,'superagent_workflow',{action:'plan',sourceId:'local',target:'local-issue',stateId:'done'})).rejects.toThrow(/reconciliation/)
  expect(f.h.store.get('memory-revocation-head','current')).toBeUndefined();expect(reconcile).not.toHaveBeenCalled();expect(delivery).not.toHaveBeenCalled();expect(refresh).not.toHaveBeenCalled();expect(f.adapter.workflowState).not.toHaveBeenCalled()
 })
+
+it.each([false,true])('guards HTTP worker authentication before plan reconciliation (pending ledger: %s)',async pending=>{
+ const f=await planFixture(),token=readFileSync(f.h.workerTools.grant(f.work),'utf8')
+ const s=await serve(f.h);servers.push(s)
+ if(pending){const body={seq:1,previous:'',tenantId:'local',scopeId:'team',action:'forget',id:'missing',generation:1,at:Date.now()};writeFileSync(join(f.h.config.stateDir,'memory-revocations.jsonl'),JSON.stringify({...body,hash:stableDigest(body)})+'\n')}
+ const reconcile=vi.spyOn(f.h.memory,'reconcile'),delivery=vi.spyOn(f.h,'deliverLiveInputs'),refresh=vi.spyOn(f.h,'refreshWork')
+ const before=db(f.h)
+ const response=await fetch(s.url+'/worker',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({name:'superagent_workflow',args:{action:'plan',sourceId:'local',target:'local-issue',stateId:'done'}})})
+ const result=await response.json()
+ if(pending){expect(response.ok).toBe(false);expect(db(f.h)).toBe(before);expect(result.error).toMatch(/reconciliation/);expect(f.adapter.workflowState).not.toHaveBeenCalled()}
+ else{expect(response.status).toBe(200);expect(result.success).toBe(true);expect(JSON.parse(result.contentItems[0].text)).toMatchObject({readOnly:true,authorizesExecution:false})}
+ expect(f.h.store.get('memory-revocation-head','current')).toBeUndefined();if(pending)expect(reconcile).not.toHaveBeenCalled();expect(delivery).not.toHaveBeenCalled();expect(refresh).not.toHaveBeenCalled();expect(f.writes).toBe(0);expect(f.h.workflows.list()).toHaveLength(0)
+})
+
+it.each(['missing','unknown','expired'])('HTTP plan cannot bypass %s Worker authentication',async kind=>{
+ const f=await planFixture(),token=readFileSync(f.h.workerTools.grant(f.work),'utf8'),s=await serve(f.h);servers.push(s)
+ if(kind==='expired')f.source.allowedActors=[]
+ const response=await fetch(s.url+'/worker',{method:'POST',headers:{'content-type':'application/json',...(kind==='missing'?{}:{authorization:'Bearer '+(kind==='unknown'?'unknown':token)})},body:JSON.stringify({name:'superagent_workflow',args:{action:'plan',sourceId:'local',target:'local-issue',stateId:'done'}})})
+ expect(response.ok).toBe(false);expect(f.adapter.workflowState).not.toHaveBeenCalled();expect(f.writes).toBe(0)
+})

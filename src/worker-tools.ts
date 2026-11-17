@@ -13,6 +13,7 @@ import {knowledgeCommandSchema,knowledgeSpecs} from './knowledge.ts'
 import {browserToolDefinition,browserToolSchema} from './browser-contract.ts'
 const json=(properties:Record<string,unknown>,required:string[])=>({type:'object',additionalProperties:false,properties,required})
 const text={type:'string'},integer={type:'integer',minimum:0}
+const isWorkflowPlan=(name:string|undefined,value:unknown)=>name==='superagent_workflow'&&!!value&&typeof value==='object'&&'action' in value&&value.action==='plan'
 export const workerDefinitions=[
  browserToolDefinition,
  {name:'superagent_workflow',description:'List the workflow targets linked to this entry, inspect an issue and its status choices, read a side-effect-free plan for one supported workflow status change, or propose a change for operator approval. A proposal is pending until the host returns a readback receipt. Pass the plan actionDigest as planDigest when proposing to reject scope/version drift. A plan never authorizes execution. Other operations have no supported preview. Reuse requestId for the same proposal.',validator:z.object({action:z.enum(['list','inspect','plan','propose']),sourceId:z.string().optional(),target:z.string().optional(),stateId:z.string().optional(),requestId:z.string().optional(),planDigest:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict(),schema:json({action:{type:'string',enum:['list','inspect','plan','propose']},sourceId:text,target:text,stateId:text,requestId:text,planDigest:text},['action'])},
@@ -42,7 +43,7 @@ export class WorkerTools {
   return this.host.activity.tool(name,{ticketId:owner.ticketId,workerId:run?.workerId,agentId:owner.agentId,sourceId:ticket?.mandate.actor.source,triggerId:ticket?.origin.triggerId},()=>this.invoke(owner,name,value),undefined,browser?.success?{action:'browser:'+browser.data.action}:{})
  }
  private async invoke(owner:WorkOwner,name:string,value:unknown):Promise<{contentItems:ToolContent[];success:boolean}>{
-  const plan=name==='superagent_workflow'&&!!value&&typeof value==='object'&&'action' in value&&value.action==='plan'
+  const plan=isWorkflowPlan(name,value)
   const read=<T>(fn:()=>T):T=>plan?this.host.scopes.readOnly(()=>this.host.memory.readOnly(fn)):fn()
   read(()=>this.host.delegation.guardWorker(owner.ticketId,name))
   if(!read(()=>this.host.validWork(owner)))throw Error('Assignment capability has ended')
@@ -121,10 +122,13 @@ export class WorkerTools {
   writeFileSync(path,token,{flag:'wx',mode:0o600})
   return path
  }
- authenticate(authorization:string|undefined){
+ authenticate(authorization:string|undefined,name?:string,value?:unknown){
   if(!authorization?.startsWith('Bearer '))throw Error('Worker capability required')
   const key=createHash('sha256').update(authorization.slice(7)).digest('hex'),owner=this.host.store.get<WorkOwner>('worker-grant',key)
-  if(!owner||!this.host.validWork(owner))throw Error('Worker capability has expired')
+  if(!owner)throw Error('Worker capability has expired')
+  const valid=()=>this.host.validWork(owner)
+  const active=isWorkflowPlan(name,value)?this.host.scopes.readOnly(()=>this.host.memory.readOnly(valid)):valid()
+  if(!active)throw Error('Worker capability has expired')
   return owner
  }
 }
