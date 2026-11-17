@@ -1,4 +1,5 @@
 import {TransientModelError,type ModelRequest} from '../model.ts'
+import {ApiFailure} from './api-failure.ts'
 import {OperationError} from '../operation-errors.ts'
 type Output=ModelRequest['onOutput']
 type Usage=(value:any)=>void
@@ -34,6 +35,7 @@ export async function readResponsesStream(reader:ReadableStreamDefaultReader<Uin
   for await(const data of events(reader,maxBytes,signal)){
     if(data==='[DONE]')continue
     const value=parse(data);if(value.response?.usage)onUsage?.(value.response.usage);providerError(value)
+    if(value.type==='response.incomplete'&&value.response?.incomplete_details?.reason==='max_output_tokens')throw new ApiFailure('model_output_truncated')
     if(['response.failed','response.incomplete'].includes(value.type))throw Error('Responses stream '+value.type)
     if(value.type==='response.output_item.added'&&value.item?.type==='message')phases.set(value.item.id,value.item.phase==='commentary'?'commentary':'answer')
     if(value.type==='response.output_text.delta'&&typeof value.delta==='string'){

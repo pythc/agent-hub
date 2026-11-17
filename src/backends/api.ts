@@ -11,6 +11,26 @@ import {contextProjection,recall,recallSpec} from './context.ts'
 import {providerUsage} from '../model-usage.ts'
 export {readResponsesStream} from './stream.ts'
 
+import {ApiFailure,ApiNetworkFailure,type ApiFailureCode} from './api-failure.ts'
+export {ApiFailure,ApiNetworkFailure} from './api-failure.ts'
+async function httpFailure(response:Response,signal:AbortSignal):Promise<ApiFailure>{
+ const status=response.status
+ // Only a bounded, recognized quota code may affect the diagnosis. Raw provider data is discarded.
+ let quota=false
+ if(status===429){
+  const reader=response.body?.getReader();let size=0;const chunks:Uint8Array[]=[]
+  if(reader){
+   const abort=()=>{void reader.cancel().catch(()=>{})};signal.addEventListener('abort',abort,{once:true})
+   try{for(;;){signal.throwIfAborted();const r=await reader.read();signal.throwIfAborted();if(r.done)break;size+=r.value.length;if(size>8192)break;chunks.push(r.value)}
+    if(size<=8192){const data=JSON.parse(Buffer.concat(chunks).toString('utf8'));quota=data?.error?.code==='insufficient_quota'}
+   }catch{signal.throwIfAborted()}finally{signal.removeEventListener('abort',abort);await reader.cancel().catch(()=>{});reader.releaseLock()}
+  }
+ }else await response.body?.cancel().catch(()=>{})
+ signal.throwIfAborted()
+ const code:ApiFailureCode=status===401||status===403?'api_key_rejected':status===429?(quota?'api_quota_exhausted':'api_rate_limited'):status===400||status===422?'api_request_rejected':status===404?'api_model_or_endpoint_missing':status>=500?'api_service_unavailable':'api_http_error'
+ return new ApiFailure(code,status)
+}
+
 export interface ThreadStore {get<T>(kind:string,id:string):T|undefined;put(kind:string,id:string,value:unknown):void}
 type Call={id:string;name:string;arguments:string}
 type ToolResult={contentItems:ToolContent[];success:boolean}
@@ -36,20 +56,27 @@ export class ApiModel implements Model {
   if(d.kind==='anthropic'){headers['anthropic-version']='2023-06-01';if(credential)headers['x-api-key']=credential}
   else if(credential)headers.authorization='Bearer '+credential
   let response:Response
-  try{response=await fetch(this.endpoint(path),{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.any([signal,AbortSignal.timeout(d.requestTimeoutMs)]),redirect:'error'})}
-  catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' network request failed or timed out')}
-  if(!response.ok){await response.body?.cancel();throw Error('Backend '+this.id+' HTTP '+response.status)}
+  const timeout=AbortSignal.timeout(d.requestTimeoutMs),requestSignal=AbortSignal.any([signal,timeout])
+  try{response=await fetch(this.endpoint(path),{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined,signal:requestSignal,redirect:'error'})}
+  catch{signal.throwIfAborted();throw new ApiNetworkFailure(timeout.aborted?'connection_timeout':'connection_network_failed')}
+  if(!response.ok){try{throw await httpFailure(response,requestSignal)}catch(error){signal.throwIfAborted();if(timeout.aborted)throw new ApiNetworkFailure('connection_timeout');throw error}}
   const reader=response.body?.getReader();if(!reader)throw Error('Backend response is empty')
-  if(response.headers.get('content-type')?.includes('text/event-stream'))return d.kind==='anthropic'?readAnthropicStream(reader,d.maxContextBytes,signal,onOutput,'anthropic',onUsage):d.kind==='openai-chat'?readChatStream(reader,d.maxContextBytes,signal,onOutput,'chat',onUsage):readResponsesStream(reader,d.maxContextBytes,signal,onOutput,onUsage)
-  if(d.subscription&&body)throw Error('Subscription response must be an event stream')
-  const chunks:Uint8Array[]=[];let bytes=0
-  for(;;){
-   let value:ReadableStreamReadResult<Uint8Array>
-   try{value=await reader.read()}catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' response connection interrupted')}
-   if(value.done)break;bytes+=value.value.length;if(bytes>d.maxContextBytes){await reader.cancel();throw Error('Backend response size limit exceeded')}chunks.push(value.value)
-  }
-  let value:any;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Backend returned invalid JSON')}
-  if(value.usage)onUsage?.(value.usage);return value
+  try{
+   if(response.headers.get('content-type')?.includes('text/event-stream'))return await (d.kind==='anthropic'?readAnthropicStream(reader,d.maxContextBytes,requestSignal,onOutput,'anthropic',onUsage):d.kind==='openai-chat'?readChatStream(reader,d.maxContextBytes,requestSignal,onOutput,'chat',onUsage):readResponsesStream(reader,d.maxContextBytes,requestSignal,onOutput,onUsage))
+   if(d.subscription&&body)throw Error('Subscription response must be an event stream')
+   const chunks:Uint8Array[]=[];let bytes=0
+   const abort=()=>{void reader.cancel().catch(()=>{})};requestSignal.addEventListener('abort',abort,{once:true})
+   try{for(;;){
+    requestSignal.throwIfAborted()
+    let value:ReadableStreamReadResult<Uint8Array>
+    try{value=await reader.read()}catch{requestSignal.throwIfAborted();throw new ApiNetworkFailure('connection_network_failed')}
+    requestSignal.throwIfAborted()
+    if(value.done)break;bytes+=value.value.length;if(bytes>d.maxContextBytes){await reader.cancel();throw Error('Backend response size limit exceeded')}chunks.push(value.value)
+   }}finally{requestSignal.removeEventListener('abort',abort)}
+   let value:any;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Backend returned invalid JSON')}
+
+   if(value.usage)onUsage?.(value.usage);return value
+  }catch(error){signal.throwIfAborted();if(timeout.aborted)throw new ApiNetworkFailure('connection_timeout');if(error instanceof TransientModelError)throw new ApiNetworkFailure('connection_network_failed');throw error}
  }
  async catalog(provider?:string){
   if(provider&&provider!==this.id&&provider!==this.definition.kind)throw Error('Unknown backend model catalog: '+provider)
@@ -91,16 +118,19 @@ export class ApiModel implements Model {
   const kind=this.definition.kind
   if(kind==='openai-chat'){
    const choice=response.choices?.[0],m=choice?.message
+   if(choice?.finish_reason==='length')throw new ApiFailure('model_output_truncated')
    if(!m||choice.finish_reason&& !['stop','tool_calls'].includes(choice.finish_reason)||m.refusal)throw Error('Backend did not complete a usable response')
    const calls=(m.tool_calls??[]).map((c:any)=>{if(c.type!=='function')throw Error('Unsupported provider tool type');return {id:c.id,name:c.function?.name,arguments:c.function?.arguments}})
    const text=typeof m.content==='string'?m.content:typeof m.content==='object'&&Array.isArray(m.content)?m.content.filter((x:any)=>x.type==='text').map((x:any)=>x.text).join(''):''
    return {calls,text,wire:[{role:'assistant',content:m.content??null,...(m.reasoning_content!==undefined?{reasoning_content:m.reasoning_content}:{}),...(calls.length?{tool_calls:m.tool_calls}:{})}]}
   }
   if(kind==='anthropic'){
+   if(response.stop_reason==='max_tokens')throw new ApiFailure('model_output_truncated')
    if(!['tool_use','end_turn'].includes(response.stop_reason)||!Array.isArray(response.content))throw Error('Backend did not complete a usable response')
    const calls=response.content.filter((x:any)=>x.type==='tool_use').map((c:any)=>({id:c.id,name:c.name,arguments:JSON.stringify(c.input)}))
    return {calls,text:response.content.filter((x:any)=>x.type==='text').map((x:any)=>x.text).join(''),wire:[{role:'assistant',content:response.content}]}
   }
+  if(response.status==='incomplete'&&response.incomplete_details?.reason==='max_output_tokens')throw new ApiFailure('model_output_truncated')
   if(response.status!=='completed'||!Array.isArray(response.output))throw Error('Backend response is incomplete or failed')
   const calls:Call[]=[],wire:any[]=[],texts:string[]=[]
   for(const item of response.output){
@@ -178,7 +208,7 @@ export class ApiModel implements Model {
     persist();checkBudget(this.body(t,instructions,r),r.contextBudget,'api-wire','complete',r.onBudget);if(queue.length)continue
     let value:any;try{value=JSON.parse(accepted.text)}catch{}
     if(value===undefined||!validateOutput(value)){
-     if(++repairs>2)throw Error('Backend final output failed the required JSON schema')
+     if(++repairs>2||step+1>=this.definition.maxSteps)throw new ApiFailure('model_reply_invalid')
      appendUser('Your final output must be a single valid JSON object matching the supplied schema. Correct its structure; do not repeat completed tools.');persist();continue
     }
     turn.status='completed';persist();return {threadId:t.id,turnId:turn.id,text:JSON.stringify(value)}
