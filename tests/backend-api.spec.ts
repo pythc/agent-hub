@@ -328,14 +328,26 @@ it.each(kinds)('%s runs the actual Runtime routing/file/result/follow-up path wi
  expect(host.store.tickets.get(ticket.id)!.assignments.at(-1)!.state).toBe('ended')
  await expect(host.takeover(ticket.id)).rejects.toThrow('no native desktop takeover');expect(host.store.get<any>('run',ticket.id).phase).not.toBe('human')
 })
+function managedShellResponse(kind:Kind,b:any){
+  const values=results(kind,b).map((r:any)=>JSON.parse(kind==='openai-chat'?r.content:kind==='anthropic'?r.content[0].text:r.output[0].text))
+  const job=values.find((v:any)=>v.id&&v.kind==='shell')
+  if(!job)return output(kind,'',[{id:'shell',name:'superagent_shell',args:{command:'printf shell-api-marker > result.txt; cat result.txt',requestId:'one',yieldMs:1000}}])
+  const latest=values.filter((v:any)=>v.id===job.id).at(-1)
+  // The command itself contains the marker even while the job is still running.
+  // Only terminal success plus retained output can justify the fixture's ready reply.
+  if(latest.state==='completed'){
+   expect(latest.exitCode).toBe(0);expect(latest.output).toContain('shell-api-marker')
+   return output(kind,JSON.stringify({state:'ready',summary:'Command verified',reply:'shell-api-marker',question:null,askedBy:null,handbacks:[]}))
+  }
+  expect(['starting','running']).toContain(latest.state)
+  return output(kind,'',[{id:'wait-'+values.length,name:'superagent_job',args:{id:job.id,action:'wait',yieldMs:1000}}])
+}
 it.skipIf(!['darwin','linux'].includes(process.platform)).each(kinds)('%s executes a real managed shell through the platform sandbox with no Codex binary',async kind=>{
  const root=mkdtempSync(join(tmpdir(),'api-shell-'));roots.push(root);const cwd=join(root,'files');mkdirSync(cwd);writeFileSync(join(cwd,'input.txt'),'shell-api-marker')
  const f=await server(b=>{
   const instructions=kind==='anthropic'?b.system:kind==='openai-responses'?b.instructions:b.messages[0].content
   if(instructions.includes('"targetTicketId"'))return output(kind,JSON.stringify({action:'accept',title:'Command',scope:'Write and read result.txt with a sandboxed command',rules:[],ruleAssessments:[],reason:'Synthetic request',targetTicketId:null}))
-  const receipts=JSON.stringify(results(kind,b))
-  if(receipts.includes('shell-api-marker'))return output(kind,JSON.stringify({state:'ready',summary:'Command verified',reply:'shell-api-marker',question:null,askedBy:null,handbacks:[]}))
-  return output(kind,'',[{id:'shell',name:'superagent_shell',args:{command:'printf shell-api-marker > result.txt; cat result.txt',requestId:'one',yieldMs:1000}}])
+  return managedShellResponse(kind,b)
  })
  const config=configSchema.parse({stateDir:join(root,'state'),codex:'/missing/codex',execution:{backend:'api'},backends:{api:definition(kind,f.url)},work:{sandboxDriver:process.platform==='linux'?'bubblewrap':'seatbelt',network:false},sources:[{id:'local',kind:'local',cwd,sandbox:'workspace-write',allowedActors:['operator']}]})
  const host=new Runtime(config);hosts.push(host);host.receive('local','operator',{id:'one',thread:'shell',addressed:true,text:'Write and read result.txt with a sandboxed command'})
@@ -343,6 +355,20 @@ it.skipIf(!['darwin','linux'].includes(process.platform)).each(kinds)('%s execut
  expect(host.work.list()).toEqual([expect.objectContaining({kind:'shell',state:'completed',exitCode:0})])
  expect(host.work.list()[0]!.cwd.startsWith(join(config.stateDir,'work'))).toBe(true)
  expect(host.store.deliveries().some(d=>d.kind==='reply'&&d.text==='shell-api-marker'&&d.status==='sent')).toBe(true)
+})
+
+it.each(kinds)('%s shell fixture waits for terminal output instead of matching the command text',async kind=>{
+ const f=await server(b=>managedShellResponse(kind,b)),calls:string[]=[]
+ const model=new ApiModel('test',definition(kind,f.url),memory(),10000)
+ const result=await model.run(request({schema:{type:'object'},tools:['superagent_shell','superagent_job'].map(name=>({type:'function' as const,name,description:'Synthetic shell lifecycle',inputSchema:{type:'object'}})),onTool:async(name,args)=>{
+  calls.push(name)
+  if(calls.length===1)expect(name).toBe('superagent_shell')
+  else{expect(name).toBe('superagent_job');expect(args).toMatchObject({id:'job-one',action:'wait'})}
+  const receipt={id:'job-one',kind:'shell',command:'printf shell-api-marker > result.txt; cat result.txt',state:calls.length<3?'running':'completed',output:calls.length<3?'':'shell-api-marker',...(calls.length<3?{}:{exitCode:0})}
+  return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(receipt)}]}
+ }}))
+ expect(calls).toEqual(['superagent_shell','superagent_job','superagent_job'])
+ expect(JSON.parse(result.text)).toMatchObject({state:'ready',reply:'shell-api-marker'})
 })
 
 it.each(kinds)('%s assesses proactive messages, delegates and receives results in one persistent Router conversation',async kind=>{
