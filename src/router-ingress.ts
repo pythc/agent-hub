@@ -45,6 +45,24 @@ export class RouterIngress {
   const thread:Thread={key:this.discussion(trigger),ref:trigger.threads[0]!,createdAt:trigger.at,subscriptions:anchor?[anchor.triggerId]:[],correlated:[],pending:[],meta:{}}
   return this.policy(trigger).gate(trigger,thread,[])
  }
+ /** Diagnostic only: the original gate/authority is still checked on every action. */
+ explain(id:string,discussion:string):'source_disabled'|'scope_not_listened'|'member_not_admitted'|'entry_unavailable'|'input_changed'|'authority_unavailable'|'current' {
+  const trigger=this.store.triggers.get(id)
+  if(!trigger||!trigger.threads[0])return 'authority_unavailable'
+  // Authority includes scheduled/delegated producers; raw ingress gating alone is not their contract.
+  try{this.authority(id,discussion);return 'current'}catch{}
+  const record=this.get(id),anchor=record?.anchor?this.get(record.anchor):undefined
+  const gate=this.gate(trigger,anchor)
+  if(!gate.admissible){
+   if(gate.reason==='sourceDisabled')return 'source_disabled'
+   if(gate.reason==='scopeNotListened')return 'scope_not_listened'
+   return 'member_not_admitted'
+  }
+  const restriction=this.scopes?.triggerRestriction(trigger)
+  if(restriction==='member_unavailable')return 'member_not_admitted'
+  if(restriction)return restriction
+  return 'authority_unavailable'
+ }
  private valid(record:RouterAdmission):boolean{
   const trigger=this.store.triggers.get(record.triggerId),mandate=record.mandate
   if(record.state!=='accepted'||!trigger||!mandate||!this.policy(trigger).revalidate(mandate))return false

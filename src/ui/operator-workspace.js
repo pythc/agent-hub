@@ -516,6 +516,7 @@ function opTaskDialog(){
     const card=field&&Object.hasOwn(field,'value')?taskDecisionsCard(field.value,operator.drawerProof.taskId):null
     if(card)body.append(card)
   }
+  if(currentProof&&typeof taskPermissionsCard==='function'){const field=Object.getOwnPropertyDescriptor(task,'permissions');const card=field&&Object.hasOwn(field,'value')?taskPermissionsCard(field.value,task.id):null;if(card)body.append(card)}
   if(task.resultTruncated)body.append(el('p','flow-help',L('This result is shortened. Read the complete resource in advanced controls.','结果较长，此处已缩短。可在完整任务控制台读取全文。')))
   if(task.deliveryUncertain)body.append(el('p','alert warning',L('Delivery is uncertain. Inspect the original conversation before retrying.','回传结果不确定，请先核对原会话，再决定是否重试。')))
   if(task.acceptedGoal){const link=el('a','button',L('Save as a skill','保存为技能'));link.href='/router-proactive?'+new URLSearchParams({goal:task.acceptedGoal.id,scope:task.acceptedGoal.scopeId});body.append(link)}
