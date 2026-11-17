@@ -114,7 +114,7 @@ export class RouterProactive {
    if(context&&context.trigger.id!==anchor.id)throw Error('Use the current human authorization as schedule anchor')
    const entry=this.host.scopes.binding(c.route.entryId)
    if(entry.privateActor&&!context)throw Error('Operator cannot impersonate a private message author')
-   if(spec.skill){if(spec.mode!=='standalone')throw Error('Saved skills start a new goal');this.host.skills.resolve(spec.skill,x.scopeId,entry.id,c)}
+   if(spec.skill){if(spec.mode!=='standalone')throw Error('Saved skills start a new goal');this.host.skills.reusable(spec.skill,x.scopeId,entry.id,c)}
    if(spec.ticketId){this.host.scopes.checkTask(spec.ticketId,c,true);this.host.scopes.checkTaskEntry(this.host.scopes.ownership(spec.ticketId)!,entry.id,'result')}
    const next:Schedule={...spec,scopeId:x.scopeId,entryId:entry.id,bindingRevision:entry.revision,revision:(old?.revision??0)+1,createdAt:old?.createdAt??this.now(),nextAt:nextTime(spec.timing,Math.max(this.now(),Date.parse(spec.timing.startAt)))}
    if(next.active&&next.nextAt===undefined)throw Error('No future occurrence in the selected time range')
@@ -146,7 +146,7 @@ export class RouterProactive {
  skillStart(input:unknown,context:ScopeContext){
   const run=this.runForTrigger(context.trigger.id)
   if(!run?.spec.skill)return false
-  const {template}=this.host.skills.resolve(run.spec.skill,run.scopeId,run.spec.entryId,context)
+  const {template}=this.host.skills.reusable(run.spec.skill,run.scopeId,run.spec.entryId,context)
   const expected=goalCommandSchema.parse({...template,action:'start',operationId:run.id,expectedRevision:0,authorizationQuote:run.spec.prompt})
   return stableDigest(input)===stableDigest(expected)
  }

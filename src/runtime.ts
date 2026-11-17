@@ -413,10 +413,10 @@ export class Runtime {
         return {success:ok,contentItems:[{type:'inputText',text:JSON.stringify({ok})}]}
       }}
     }
-    request={...request,options,principal:request.principal??(trigger?{source:trigger.source,actor:trigger.actor.id}:undefined),instructions:this.model instanceof BackendRegistry?request.instructions:appendAgentPrompt(request.instructions,options.prompt),tools:options.tools?request.tools?.filter(t=>options.tools!.includes(t.name)):request.tools}
+    request={...request,options,principal:request.principal??(trigger?{source:trigger.source,actor:trigger.actor.id}:undefined),instructions:this.model instanceof BackendRegistry?request.instructions:appendAgentPrompt(request.instructions,options.prompt,options.persona),tools:options.tools?request.tools?.filter(t=>options.tools!.includes(t.name)):request.tools}
     if(request.onTool&&options.tools){const invoke=request.onTool;request.onTool=async(name,args,callId)=>{if(!options.tools!.includes(name))return {success:false,contentItems:[{type:'inputText',text:'Tool is disabled for this Agent'}]};return invoke(name,args,callId)}}
     const onActive=request.onActive
-    if(onActive)request.onActive=control=>onActive({...control,...(control.refresh?{refresh:(instructions:string)=>control.refresh!(appendAgentPrompt(instructions,options.prompt))}:{})})
+    if(onActive)request.onActive=control=>onActive({...control,...(control.refresh?{refresh:(instructions:string)=>control.refresh!(appendAgentPrompt(instructions,options.prompt,options.persona))}:{})})
     request=this.delegation.restrict(request)
     if(request.tools?.some(tool=>tool.name===chatStatusTool.name))request={...request,instructions:request.instructions+'\nDuring substantial work, use superagent_status to keep the Chat status concise and current in the user language. Update only when the work stage changes. Lifecycle states are managed by the host.'}
     if(role==='worker'&&context.ticketId){const run=this.store.get<Run>('run',context.ticketId);if(run)this.store.put('run',context.ticketId,{...run,agentOptions:request.options})}

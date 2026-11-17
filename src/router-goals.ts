@@ -169,7 +169,13 @@ export class RouterGoals {
   n.state='held';n.reason=summary;n.failure={kind:'quality',reason:summary}
   this.save(g)
  }
- private save(g:RouterGoal){this.host.store.put('router-goal',g.id,g)}
+ private save(g:RouterGoal){
+  this.host.store.put('router-goal',g.id,g)
+  if(g.state==='held'){
+   const rounds=this.host.store.list<VerificationRound>('goal-verification').filter(r=>r.goalId===g.id&&['failed','insufficient'].includes(r.state)).sort((a,b)=>b.at-a.at)
+   if(rounds[0])try{this.host.agentMemory.observeExperience(g,rounds[0])}catch(error){this.host.store.audit({type:'memory.experience_failed',goalId:g.id,error:String(error)})}
+  }
+ }
  budget(g:RouterGoal){return projectBudget(this.host.store,g,this.now())}
  holdBudget(g:RouterGoal){
   if(!g.project?.policy.budget||g.project.review?.state==='approved'||!['active','waiting'].includes(g.state))return false

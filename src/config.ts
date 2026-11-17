@@ -86,6 +86,7 @@ export const configSchema = z.object({
   delivery:z.object({workerPublish:z.boolean().default(false),authorization:z.enum(['per-head','policy']).default('per-head'),maxDraftLines:z.number().int().min(1).default(100000),commitName:z.string().min(1).default('Super-agent'),commitEmail:z.string().email().default('superagent@localhost.invalid'),automatedReviewers:z.array(z.string()).default([]),maxReviewRounds:z.number().int().min(1).max(10).default(3),autoMerge:z.boolean().default(false),mergeGh:z.string().optional(),requiredReviewers:z.array(z.string()).default([]),maxChangedLines:z.number().int().min(1).default(200),requireChecks:z.boolean().default(true),method:z.enum(['squash','merge','rebase']).default('squash')}).strict().prefault({}),
   watchdog: watchdogConfigSchema,
   prompts: z.object({ shared:z.string().default(''), router:z.string().default(''), worker:z.string().default(''), delivery:z.string().default(''),
+    personality:z.string().max(4000).optional(),
     team:z.object({communication:z.string().default(''),scope:z.string().default(''),delivery:z.string().default('')}).strict().prefault({}),
     skills:z.record(z.string().regex(/^[a-z][a-z0-9-]*$/),z.string()).prefault({}),
     overrides:z.record(z.string().refine(id=>id in builtins,'Unknown prompt part'),z.object({text:z.string(),base:z.string().regex(/^[a-f0-9]{64}$/)}).strict()).prefault({}),

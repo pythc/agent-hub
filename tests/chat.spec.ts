@@ -4,6 +4,7 @@ import {Readable} from 'node:stream'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
+import {memoryWorkspace} from '../src/memory-workspace.ts'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import {serve} from '../src/server.ts'
@@ -838,4 +839,51 @@ it('keeps explicit Agent tool selection when offering the Chat status tool',asyn
  await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
  expect(calls[0]!.tools?.some(t=>t.name==='superagent_status')).toBe(false)
  expect(calls[0]!.instructions).not.toContain('use superagent_status')
+})
+
+
+it('resets all personal learning and methods, rotates context, and replays over old backups without resetting later choices',async()=>{
+ const f=fixture(),h=f.h
+ h.scopes.command({action:'scope.put',operationId:'external-scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'External team',managers:[JSON.stringify(['local','operator'])],workerIds:['research','review'],sourceIds:['local'],backendIds:['codex']}})
+ h.updateSettings(h.settings.current().revision,{execution:{...h.config.execution,router:{...h.config.execution.router,persona:{identity:'Personal coordinator',soul:'Keep my manually chosen personality'}}}})
+ const settings=h.settings.current(),chat=h.chat.space('owner',true).conversation!,other=h.chat.space('other',true).conversation!
+ const run=send(h,chat.id,'Build a reusable personal report'),t=h.store.triggers.get(run.runId)!,c=h.scopes.context(t,'local:chat:'+chat.id)!,space=h.agentMemory.space(c)
+ h.chat.send(other.id,'other',{clientMessageId:randomUUID(),text:'Keep another account intact'})
+ const evidence=h.memory.ingest(c),fact=h.memory.command(c,{action:'remember',operationId:'personal-old',expectedRevision:0,subject:'Old preference',content:'OLD_PERSONAL_LEARNING',kind:'preference',sourceIds:[evidence.id],candidate:false,visibility:'private'},true) as any
+ h.memory.command(c,{action:'remember',operationId:'personal-candidate',expectedRevision:0,subject:'Old lesson',content:'OLD_PERSONAL_LEARNING',origin:'experience',sourceIds:[evidence.id],candidate:true,visibility:'private'},true)
+ const goal=h.goals.command({action:'start',operationId:'personal-method',expectedRevision:0,title:'Old method',objective:t.text,authorizationQuote:t.text,criteria:[{id:'file',description:'report exists'}],nodes:[{id:'write',title:'Write',instruction:'OLD_PERSONAL_LEARNING',workerId:'research',criterionIds:['file']}]},c)
+ h.store.put('goal-verification','personal-accepted',{id:'personal-accepted',goalId:goal.id,state:'passed'})
+ h.store.put('router-goal',goal.id,{...goal,state:'completed',finalRoundId:'personal-accepted'})
+ const draft=h.skills.command({action:'draft',goalId:goal.id},c),skill=h.skills.command({action:'save',goalId:goal.id,expectedVersion:0,template:draft.template},c)
+ h.skills.command({action:'retire',skill:{id:skill.id,version:skill.version},scopeId:c.route.scopeId,entryId:c.route.entryId,expectedRevision:0},c)
+ h.agentMemory.manage(c,{action:'configure',expectedRevision:0,policy:{writeMode:'adaptive',maxCallsPerDay:7}})
+ for(const kind of ['memory-maintenance','memory-consolidation','memory-sequence','memory-last-extract'])h.store.put(kind,space,{content:'OLD_PERSONAL_LEARNING'})
+ h.store.put('memory-personal',space,{enabled:false})
+ h.store.put('memory-extraction-session','old-extraction',{space,content:'OLD_PERSONAL_LEARNING'})
+ h.store.put('memory-suppression','old-suppression',{factId:fact.id,scopeId:c.route.scopeId,content:'OLD_PERSONAL_LEARNING'})
+ const backup=join(f.root,'personal-before-reset.sqlite');h.store.db.prepare('VACUUM INTO ?').run(backup)
+ const op=randomUUID(),reset=h.chat.reset('owner',op)
+ expect(h.settings.current()).toEqual(settings);expect(h.chat.view(other.id,'other').messages[0]?.text).toBe('Keep another account intact')
+ expect(h.store.get<any>('memory-policy',c.route.scopeId)?.value.writeMode).toBe('explicit_only')
+ expect(h.store.get('memory-suppression','old-suppression')).toBeUndefined()
+ expect(h.store.get('memory-consolidation',space)).toEqual({deleted:true})
+ h.store.put('memory-consolidation',space,{status:'completed',content:'OLD_PERSONAL_LEARNING'});expect(h.store.get('memory-consolidation',space)).toEqual({deleted:true})
+ const fresh=h.chat.space('owner',true).conversation!,next=send(h,fresh.id,'A fresh task'),current=h.scopes.context(h.store.triggers.get(next.runId)!,'local:chat:'+fresh.id)!
+ expect(current.route.entryId).not.toBe(c.route.entryId);expect(h.agentMemory.space(current)).not.toBe(space)
+ expect(h.agentMemory.learning(current)).toMatchObject({mode:'explicit_only',enabled:true,coldStart:true});expect(h.agentMemory.cooperation(current)).toEqual([]);expect(h.skills.list(current.route.scopeId,current)).toEqual([])
+ expect(memoryWorkspace(h,'owner').contexts[0]!.items).toEqual([])
+ h.agentMemory.manage(current,{action:'configure',expectedRevision:h.agentMemory.policyRevision(current),policy:{writeMode:'adaptive'}})
+ await h.memory.cleanup.process({run:async()=>{throw Error('unused')},purge:async()=>({local:'verified',provider:'not_managed'})},async()=>true)
+ expect(h.memory.cleanup.receipts().find(r=>r.id===reset.cleanupId)?.status).toBe('completed')
+ expect(h.chat.reset('owner',op).conversation?.id).toBe(fresh.id);expect(h.agentMemory.policy(current).writeMode).toBe('adaptive')
+ await h.close();hosts.splice(hosts.indexOf(h),1)
+ const restarted=new Runtime(f.config,{model:f.model});hosts.push(restarted)
+ expect(restarted.store.get<any>('memory-policy',c.route.scopeId)?.value.writeMode).toBe('adaptive')
+ await restarted.close();hosts.splice(hosts.indexOf(restarted),1)
+ writeFileSync(join(f.config.stateDir,'state.sqlite'),readFileSync(backup))
+ const restored=new Runtime(f.config,{model:f.model});hosts.push(restored)
+ expect(restored.store.get<any>('memory-policy',c.route.scopeId)?.value.writeMode).toBe('explicit_only')
+ expect(restored.store.get('memory-consolidation',space)).toEqual({deleted:true});expect(restored.memory.fact(fact.id)?.content).toBe('')
+ expect(()=>restored.chat.view(chat.id,'owner')).toThrow('cleared');expect(restored.skills.list(c.route.scopeId)).toEqual([])
+ expect(restored.settings.current()).toEqual(settings)
 })

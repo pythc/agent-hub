@@ -205,6 +205,41 @@ function teamBasics(current) {
     values: [['enabled', L('Accept tasks', '接收任务')], ['paused', L('Pause new tasks', '暂停新任务')], ['retiring', L('Finish existing tasks', '完成现有任务后退出')]],
     help: L('Existing work continues. Pausing or retiring does not cancel running tasks.', '已有任务继续执行。暂停或退出不会取消运行中的任务。')
   }))
+  if (teamFeatures().options) {
+    for (const [key, label, rows] of [['identity', L('Identity', '身份介绍'), 2], ['soul', L('Personality', '性格与表达'), 3]]) {
+      const input=el('textarea','team-prompt');input.id='team-persona-'+key;input.rows=rows;input.maxLength=key==='identity'?2000:4000;input.value=current.value.persona?.[key]||''
+      input.oninput=()=>teamWrite('persona',{...teamCurrent().value.persona,[key]:input.value})
+      const field=el('label');field.htmlFor=input.id;field.textContent=label
+      fields.append(add(el('div','control-field'),field,input))
+    }
+  }
+  if (teamFeatures().options) {
+    const files=el('div','team-fields'),actions=el('div','actions')
+    for(const file of ['IDENTITY.md','SOUL.md','AGENTS.md']) {
+      actions.append(opButton(file,()=>{
+        const agent=teamCurrent().value
+        const text='# '+file+'\n\n'+(file==='IDENTITY.md'?'Name: '+(agent.label||teamCurrent().name)+'\n\n'+(agent.persona?.identity||''):file==='SOUL.md'?(agent.persona?.soul||''):(agent.prompt||''))
+        const url=URL.createObjectURL(new Blob([text],{type:'text/markdown;charset=utf-8'})),a=el('a');a.href=url;a.download=file;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
+      },'text-button'))
+    }
+    const upload=el('input');upload.type='file';upload.accept='.md';upload.id='team-persona-file'
+    upload.onchange=async()=>{
+      const file=upload.files?.[0];if(!file)return
+      if(!['IDENTITY.md','SOUL.md','AGENTS.md'].includes(file.name)||file.size>64000){setNotice('error','Choose IDENTITY.md, SOUL.md or AGENTS.md under 64 KB.','请选择 64 KB 以内的 IDENTITY.md、SOUL.md 或 AGENTS.md。');render();return}
+      const selected=teamStudio.selected
+      let text=(await file.text()).replace(/^\uFEFF/,'').replace(/^#\s+(?:IDENTITY|SOUL|AGENTS)\.md\s*\n/,'').trim()
+      if(selected!==teamStudio.selected)return
+      const name=file.name==='IDENTITY.md'?text.match(/^Name:\s*([^\n]+)\n?/):null
+      if(name)text=text.slice(name[0].length).trim()
+      if(text.length>(file.name==='IDENTITY.md'?2000:file.name==='SOUL.md'?4000:64000)||name&&name[1].length>100){setNotice('error','File content is too long.','文件内容过长。');render();return}
+      if(name)teamWrite('label',name[1].trim())
+      if(file.name==='AGENTS.md')teamWrite('prompt',text)
+      else teamWrite('persona',{...teamCurrent().value.persona,[file.name==='SOUL.md'?'soul':'identity']:text})
+      setNotice('success','Imported into the draft. Save to apply.','已导入草稿，保存后生效。');render()
+    }
+    const label=el('label');label.htmlFor=upload.id;label.textContent=L('Import personality file','导入人格文件')
+    files.append(actions,label,upload);fields.append(detail(L('Personality files','人格文件'),files))
+  }
   fields.append(teamPrompt(current))
   return fields
 }

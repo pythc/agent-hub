@@ -107,7 +107,7 @@ export class Webhooks {
   if(x.normalizerSourceId){const source=this.host.sources.get(x.normalizerSourceId);if(!(source instanceof ProcessSource)||!source.pkg.manifest.methods.includes('webhook')||source.pkg.manifest.network||Object.keys(source.pkg.manifest.credentials).length||source.pkg.manifest.methods.some(m=>!['webhook','close'].includes(m))||!this.host.scopes.scope(c.route.scopeId).sourceIds.includes(x.normalizerSourceId))throw new WebhookError(403,'invalid_webhook_normalizer')}
   if(x.transport.kind==='github-workflow'&&x.eventSource!=='https://github.com/'+x.transport.repository)throw new WebhookError(400,'github_source_mismatch')
   const scope=this.host.scopes.scope(c.route.scopeId)
-  if(x.skill&&stableDigest(this.host.skills.resolve(x.skill,c.route.scopeId,c.route.entryId,c).template)!==stableDigest(x.template))throw new WebhookError(409,'skill_version_changed')
+  if(x.skill&&stableDigest(this.host.skills.reusable(x.skill,c.route.scopeId,c.route.entryId,c).template)!==stableDigest(x.template))throw new WebhookError(409,'skill_version_changed')
   validateGraph(x.template.nodes,x.template.criteria)
   if(x.template.nodes.some(n=>!scope.workerIds.includes(n.workerId)))throw new WebhookError(403,'template_worker_outside_scope')
   if(new Set(x.template.criteria.map(cr=>cr.id)).size!==x.template.criteria.length||x.template.criteria.some(cr=>cr.id==='__goal__'))throw new WebhookError(400,'invalid_criteria')
@@ -246,6 +246,8 @@ export class Webhooks {
  approvedStart(value:unknown,c:ScopeContext){
   const input=this.host.store.get<AutomationInput>('webhook-input',c.trigger.id);if(!input)return false
   this.authority(c.trigger.id)
+  const grant=this.grant(input.grantId)
+  if(grant.skill)this.host.skills.reusable(grant.skill,grant.scopeId,grant.entryId,c)
   if(stableDigest(goalCommandSchema.parse(value))!==input.commandHash)throw new WebhookError(403,'automation_template_changed')
   return true
  }

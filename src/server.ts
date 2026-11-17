@@ -5,6 +5,8 @@ import {ResourceUsage} from './resource-usage.ts'
 import {CredentialReferences} from './credential-references.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {BackendPluginError} from './backends/plugin-contract.ts'
+import {memoryWorkspace,changeMemoryWorkspace} from './memory-workspace.ts'
+import {personaFiles,importPersonaFile} from './persona.ts'
 import {deploymentMaintenance,DeploymentError} from './deployment-maintenance.ts'
 import {requestHostOrigin} from './http-deployment.ts'
 import {apiUsagePage} from './api-usage.ts'
@@ -411,6 +413,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(options.configurationPreview&&req.method!=='GET'){send(res,403,{code:'preview_restricted'});return}
       const owner=account.status(req).user?.id??'local-operator'
       const query=new URL(req.url!,'http://localhost').searchParams
+      if(path==='/api/chat/memory'&&req.method==='GET'){send(res,200,memoryWorkspace(runtime,owner));return}
+      if(path==='/api/chat/memory'&&req.method==='POST'){send(res,200,await changeMemoryWorkspace(runtime,owner,await body(req)));return}
       if(path==='/api/chat/readiness'&&req.method==='GET'){send(res,200,{...runtime.chat.readiness(),...(options.configurationPreview?{ready:false,code:'preview_restricted'}:{}),user:account.status(req).user??null});return}
       if(path==='/api/chat/space'){
         if(req.method==='GET'){send(res,200,runtime.chat.space(owner));return}
@@ -601,6 +605,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       }
       send(res,200,{ok:true});return
     }
+    if(path==='/agent-persona'&&req.method==='GET'){send(res,200,personaFiles(runtime,Object.fromEntries(new URL(req.url!,'http://localhost').searchParams)));return}
+    if(path==='/agent-persona'&&req.method==='POST'){send(res,200,importPersonaFile(runtime,await body(req)));return}
     if(req.method==='GET'&&path==='/settings'){send(res,200,{current:runtime.settings.current(),history:runtime.settings.history()});return}
     if(req.method==='POST'&&path==='/settings'){
       const input=z.object({revision:z.number().int(),patch:z.unknown()}).strict().parse(await body(req))

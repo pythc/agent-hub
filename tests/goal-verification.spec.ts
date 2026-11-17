@@ -613,3 +613,23 @@ it('retains task-owned browser action results for acceptance without inferring o
  expect(ledger.browserActions[2]).toMatchObject({state:'uncertain',resultComplete:false})
  expect(JSON.stringify(ledger)).not.toMatch(/other-task-secret|unowned-result/)
 })
+
+it('validates parameterized method trials, preserves old versions and fences retired versions across restart',async()=>{
+ const f=fixture(r=>{writeFileSync(join(r.cwd,'result.json'),'{}');return ready()})
+ const g=f.start({criteria:[{id:'sum',description:'Result exists',files:['result.json'],check:{kind:'file_exists',path:'result.json'}}]})
+ await until(f,()=>f.goal().state==='completed')
+ const draft=f.h.skills.command({action:'draft',goalId:g.id}),v1=f.h.skills.command({action:'save',goalId:g.id,expectedVersion:0,template:draft.template})
+ const template={...draft.template,title:'Generate {{filename}}',nodes:draft.template.nodes.map((n:any)=>({...n,instruction:n.instruction+' Name: {{filename}}'}))},parameters=[{name:'filename',label:'文件名称'}]
+ const v2=f.h.skills.command({action:'save',goalId:g.id,expectedVersion:1,template,parameters}),c=f.context()
+ expect(f.h.skills.status(v2).state).toBe('candidate');expect(f.h.skills.status(v1).state).toBe('active')
+ expect(()=>f.h.skills.reusable(v2,c.route.scopeId,c.route.entryId,c)).toThrow('accepted')
+ expect(()=>f.h.skills.execute(v2,c,'missing',c.trigger.text)).toThrow('inputs')
+ const run=f.h.skills.execute(v2,c,'trial',c.trigger.text,{filename:'日报'});expect(run.title).toBe('Generate 日报')
+ await until(f,()=>f.h.goals.get(run.id)?.state==='completed');expect(f.h.skills.status(v2)).toMatchObject({state:'active',passed:1})
+ expect(()=>f.h.skills.command({action:'save',goalId:g.id,expectedVersion:2,template:{...template,nodes:template.nodes.map((n:any)=>({...n,workerId:'{{filename}}'}))},parameters})).toThrow('Placeholders')
+ f.h.skills.command({action:'retire',skill:{id:v2.id,version:2},scopeId:c.route.scopeId,entryId:c.route.entryId,expectedRevision:0})
+ await f.restart();expect(f.h.skills.status(v2).state).toBe('retired');expect(()=>f.h.skills.execute(v2,f.context(),'after-retirement',f.context().trigger.text,{filename:'日报'})).toThrow('retired')
+ expect(f.h.skills.resolve(v1,c.route.scopeId,c.route.entryId).template).toEqual(v1.template)
+ const restored=f.h.skills.command({action:'save',goalId:g.id,expectedVersion:2,template:v1.template});expect(restored.version).toBe(3);expect(f.h.skills.status(restored).state).toBe('candidate')
+ expect(()=>f.h.skills.command({action:'save',goalId:g.id,expectedVersion:1,template:v1.template})).toThrow('changed')
+})

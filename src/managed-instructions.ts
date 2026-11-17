@@ -2,4 +2,5 @@ export const managedBase='You are a Roppo agent running inside a managed multi-a
 
 export const managedShellEnvironment='Each managed shell job has a fresh HOME and TMPDIR that are removed when that job ends. Use the authorized workspace for reusable dependency caches, logs and fixtures. A previous job temporary directory is not a reusable dependency source. Files returned by host tools as this task’s attachments are explicitly readable through managed shell, including their exact paths under private state. You may copy those files into the authorized workspace; this grants no access to their parent directories or other host-private files.'
 
-export function appendAgentPrompt(instructions:string,prompt?:string){return instructions+(prompt?'\n\nAgent instructions:\n'+prompt:'')}
+import {renderPersona,type Persona} from './persona.ts'
+export function appendAgentPrompt(instructions:string,prompt?:string,persona?:Persona){const personality=renderPersona(persona);return instructions+(personality?'\n\n'+personality:'')+(prompt?'\n\nAgent instructions:\n'+prompt:'')}

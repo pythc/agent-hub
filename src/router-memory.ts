@@ -1,4 +1,5 @@
 import {z} from 'zod'
+import {addPersonalReset,applyPersonalReset} from './personal-memory-reset.ts'
 import {randomUUID} from 'node:crypto'
 import {appendFileSync,existsSync,readFileSync,openSync,fsyncSync,closeSync} from 'node:fs'
 import {join} from 'node:path'
@@ -62,7 +63,7 @@ export class RouterMemory {
   const scopeId='@chat:'+stableDigest(owner),id='chat-reset:'+stableDigest([owner,operationId]),ledger=readRevocations(this.stateDir)
   if(ledger.some(r=>r.cleanup?.id===id))return {cleanupId:id}
   const at=Math.max(Date.now(),(this.store.get<number>('memory-clock','last')??0)+1)
-  const cleanup=planChatHistory(this.store,this.stateDir,scopeId,id,at,conversationIds)
+  const cleanup=addPersonalReset(this.store,planChatHistory(this.store,this.stateDir,scopeId,id,at,conversationIds),owner,conversationIds)
   if(cleanup.tickets.some(id=>this.store.get<{phase:string}>('run',id)?.phase==='merging'))throw Error('A Chat task merge is in progress. Reconcile its outcome before clearing history.')
   const conversations=conversationIds.map(id=>this.store.get<{id:string;sourceId:string;nativeId?:string}>('chat-conversation',id)!)
   const entries=new Set(this.scopes.bindings().filter(b=>conversations.some(c=>b.sourceId===c.sourceId&&b.nativeId===(c.nativeId??'chat:'+c.id))).map(b=>b.id))
@@ -73,9 +74,11 @@ export class RouterMemory {
   const add=(value:Pick<Revocation,'tenantId'|'scopeId'|'action'|'generation'>&Partial<Pick<Revocation,'id'|'cleanup'>>)=>{
    const body={seq:(previous?.seq??0)+1,previous:previous?.hash??'',at,...value},row={...body,hash:stableDigest(body)};rows.push(row);previous=row
   }
+  if(this.store.get<{tenantId:string}>('management-scope',scopeId)?.tenantId===scopeId)add({tenantId:scopeId,scopeId,action:'clear',generation:this.generation(scopeId)+1})
   for(const e of evidence)add({tenantId:e.tenantId,scopeId:e.scopeId,action:'source.delete',generation:this.generation(e.scopeId),id:e.id})
   for(const f of facts)add({tenantId:f.tenantId,scopeId:f.scopeId,action:'forget',generation:this.generation(f.scopeId),id:f.id})
   add({tenantId:scopeId,scopeId,action:'history.extend',generation:0,cleanup})
+  this.store.requireEvolutionSchema()
   this.appendRevocations(rows);this.store.atomic(()=>{for(const row of rows)this.applyRevocation(row)});this.onMutation?.()
   return {cleanupId:id}
  }
@@ -365,7 +368,7 @@ export class RouterMemory {
   if(r.suppression)this.store.put('memory-suppression',r.suppression.id,r.suppression)
   if(r.action==='suppression.remove'){const old=this.store.get<MemorySuppression>('memory-suppression',r.id!);if(old)this.store.put('memory-suppression',r.id!,{...old,active:false,revision:(old.revision??1)+1});this.store.put('memory-revocation-head','current',{seq:r.seq,hash:r.hash});return}
   if(r.action==='source.change'){this.applySourceChange(r);this.store.put('memory-revocation-head','current',{seq:r.seq,hash:r.hash});return}
-  if(r.action==='history.extend'){if(r.cleanup)this.cleanup.apply(r.cleanup);this.store.put('memory-revocation-head','current',{seq:r.seq,hash:r.hash});return}
+  if(r.action==='history.extend'){if(r.cleanup){applyPersonalReset(this.store,r.cleanup);this.cleanup.apply(r.cleanup);}this.store.put('memory-revocation-head','current',{seq:r.seq,hash:r.hash});return}
   if(r.action==='clear'||r.action==='history.delete'){
    this.store.put('memory-clock','last',r.at)
    this.store.put('memory-generation',r.scopeId,Math.max(r.generation,this.generation(r.scopeId)));this.store.put('memory-watermark',r.scopeId,r.at)

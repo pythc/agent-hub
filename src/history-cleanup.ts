@@ -1,10 +1,12 @@
 import {existsSync,lstatSync,rmSync} from 'node:fs'
 import {join,resolve,relative,sep,dirname} from 'node:path'
+import type {PersonalReset} from './personal-memory-reset.ts'
 import type {Store} from './store.ts'
 import {stableDigest} from './sources.ts'
 import type {Model} from './model.ts'
 
 export interface HistoryPlan {
+ personalReset?:PersonalReset
  id:string;scopeId:string;at:number;roots:string[];records:[string,string][];
  tickets:string[];triggers:string[];sessions:{threadId:string;cwd:string}[];files:string[];unresolvedSessions?:string[]
 }
@@ -112,6 +114,7 @@ export class HistoryCleanup {
  blocked(kind:string,id:string,value?:unknown){return this.plans().some(p=>p.records.some(([k,i])=>k===kind&&i===id)||!excluded.test(kind)&&references(value,new Set(p.roots)))}
  private filter(kind:string,id:string,value:unknown){
   if(!this.blocked(kind,id,value))return value
+  if(kind.startsWith('memory-'))return {deleted:true}
   if(kind==='thread'){
    const v=value as any,ref=v.ref??this.store.triggers.get(id)?.threads[0]??this.store.list<any>('trigger').flatMap(t=>t.threads??[]).find(r=>r.source+':'+r.id===id)
    if(!ref)throw Error('Deleted thread requires its original source identity for reconciliation')

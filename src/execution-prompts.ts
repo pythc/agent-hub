@@ -3,6 +3,7 @@ import {builtins,compose,composeCoordinator,digest,type Part} from './prompts.ts
 import {appendAgentPrompt,managedBase} from './managed-instructions.ts'
 import {mergeOptions} from './agent-options.ts'
 import {workerProfiles} from './worker-pool.ts'
+import {renderPersona,type Persona} from './persona.ts'
 
 export interface PromptSection {id:string;source:string;text:string;digest:string}
 export interface ExecutionPrompt {
@@ -15,6 +16,7 @@ export interface ExecutionPrompt {
  managedGoal?:boolean
  project?:Record<string,unknown>|boolean
  agentPrompt?:string
+ persona?:Persona
 }
 export const previewModes=['standalone','delegated','goal','project','subagent'] as const
 export type PreviewMode=typeof previewModes[number]
@@ -45,7 +47,10 @@ export function composeExecutionPrompt(config:Config,input:ExecutionPrompt){
    part(input.managedGoal?'runtime/worker/goal':input.delegated?'runtime/worker/continuation':'runtime/worker/standalone')
   }
  }
- const text=appendAgentPrompt(sections.map(section=>section.text).join('\n\n'),input.agentPrompt)
+ if(config.prompts.personality)add('team-personality','Shared personality (communication style; preserve role and current task requirements):\n'+config.prompts.personality,'settings:prompts.personality')
+ const text=appendAgentPrompt(sections.map(section=>section.text).join('\n\n'),input.agentPrompt,input.persona)
+ const personality=renderPersona(input.persona)
+ if(personality)add('agent-personality',personality,'agent:effective-options.persona')
  if(input.agentPrompt)add('agent-profile','Agent instructions:\n'+input.agentPrompt,'agent:effective-options.prompt')
  return {text,sections}
 }
@@ -66,7 +71,7 @@ export function previewInstructions(config:Config,input:PromptPreviewInput,scope
  const profile=input.role==='router'?config.execution.router:mode==='subagent'&&backendId!==parentBackend?undefined:worker
  const options=mergeOptions(backend.defaults,profile)
  const environment={preview:true,agentName:input.role==='router'?config.execution.router?.label??'Router':worker?.label??worker?.id??'Worker',source:source?.id,cwd:'<task directory>',...(input.role==='router'?{discussion:'<source conversation>',...(['goal','project'].includes(mode)?{routerId:'<router>',scopeId:'<scope>'}:{})}:{ticketId:'<task>',mandate:'<immutable task mandate>',matchedRules:[],...(mode==='subagent'?{subagent:true}:{})})}
- const composed=composeExecutionPrompt(config,{role:mode==='subagent'?'subagent':input.role,environment,hostRouter,scoped:['goal','project'].includes(mode),delegated:['delegated','goal','project'].includes(mode),managedGoal:['goal','project'].includes(mode),project:mode==='project'?{cwd:'<task directory>',base:'<base commit>',prerequisites:['<accepted dependency commits, if any>'],testCommand:source?.workspace?.project?.testCommand??'<project test command>',integration:true}:false,agentPrompt:options.prompt})
+ const composed=composeExecutionPrompt(config,{role:mode==='subagent'?'subagent':input.role,environment,hostRouter,scoped:['goal','project'].includes(mode),delegated:['delegated','goal','project'].includes(mode),managedGoal:['goal','project'].includes(mode),project:mode==='project'?{cwd:'<task directory>',base:'<base commit>',prerequisites:['<accepted dependency commits, if any>'],testCommand:source?.workspace?.project?.testCommand??'<project test command>',integration:true}:false,agentPrompt:options.prompt,persona:options.persona})
  const baseInstructions=backend.kind==='codex'?managedBase:undefined
  return {...composed,role:input.role,mode,sourceId:source?.id,workerId:worker?.id,backendId,baseInstructions,baseDigest:baseInstructions?digest(baseInstructions):undefined,digest:digest(composed.text),context:'configuration-scenario' as const,boundary:'Task input and output/tool schemas are supplied separately. Provider protocol framing and platform-owned instructions are not part of this role preview.'}
 }

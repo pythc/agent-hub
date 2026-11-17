@@ -84,6 +84,13 @@ export class AgentMemory {
   return items.filter(f=>!['profile','preference','interest'].includes(f.kind??'fact')||f.owner===c.actor)
  }
  applicable(c:ScopeContext){return this.authorized(c).filter(f=>!f.learning?.discussion||f.learning.discussion===c.route.discussion)}
+ cooperation(c:ScopeContext){
+  // Derived from current visible revisions: deleting or changing a source removes
+  // its contribution immediately, without a stale second summary store.
+  return this.applicable(c).filter(f=>f.entryId===c.route.entryId&&(f.kind==='preference'||f.origin==='experience'))
+   .sort((a,b)=>Number(!!b.protected)-Number(!!a.protected)||b.createdAt-a.createdAt).slice(0,12)
+   .map(f=>({id:f.id,revision:f.revision,content:f.content,condition:f.learning?.condition??'',kind:f.origin==='experience'?'method':'preference'}))
+ }
  learning(c:ScopeContext){return {mode:this.policy(c).writeMode,enabled:this.enabled(c),coldStart:!this.applicable(c).some(f=>f.kind==='preference'||f.kind==='profile')}}
  private queryKey(c:ScopeContext,q:string){return stableDigest([this.space(c),q.slice(0,200),this.policyRevision(c)])}
  modelSelection(c:ScopeContext){const p=this.policy(c),scope=this.host.scopes.scope(c.route.scopeId),backend=p.extractBackend??scope.router?.backend??this.host.config.execution.router?.backend??this.host.config.execution.roles.router??this.host.config.execution.backend;if(!scope.backendIds.includes(backend))throw Error('Memory backend is outside scope');return {backendId:backend,model:p.extractModel??scope.router?.model??this.host.config.execution.router?.model}}

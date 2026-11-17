@@ -52,7 +52,7 @@ export class BackendRegistry implements Model {
   const compact=legacyContext&&!r.skipContextCompaction
   let nativeThread=r.threadId
   r.onBackend?.(id)
-  try{return await this.model(id,options).run({...r,options,compactBeforeTurn:!!compact,onContextReady:()=>{if(definition.kind==='codex'&&r.managed&&nativeThread&&(!legacyContext||compact))this.store.put('native-context',nativeThread,{version:nativeContextProfile,at:Date.now(),compacted:!!compact});r.onContextReady?.()},instructions:appendAgentPrompt(r.instructions,options.prompt),model:r.model??(!r.threadId&&role==='router'?this.config.execution.router?.model:undefined),onThread:threadId=>{nativeThread=threadId;if(!locked){locked=threadId;this.writers.add(threadId)}this.store.put('backend-binding',threadId,binding);r.onThread?.(threadId)}})}
+  try{return await this.model(id,options).run({...r,options,compactBeforeTurn:!!compact,onContextReady:()=>{if(definition.kind==='codex'&&r.managed&&nativeThread&&(!legacyContext||compact))this.store.put('native-context',nativeThread,{version:nativeContextProfile,at:Date.now(),compacted:!!compact});r.onContextReady?.()},instructions:appendAgentPrompt(r.instructions,options.prompt,options.persona),model:r.model??(!r.threadId&&role==='router'?this.config.execution.router?.model:undefined),onThread:threadId=>{nativeThread=threadId;if(!locked){locked=threadId;this.writers.add(threadId)}this.store.put('backend-binding',threadId,binding);r.onThread?.(threadId)}})}
   finally{if(locked)this.writers.delete(locked)}
  }
  async probe(id:string){const model=this.model(id);if(!(model instanceof ProcessBackend))throw Error('Probe requires an execution backend package');return model.probe()}

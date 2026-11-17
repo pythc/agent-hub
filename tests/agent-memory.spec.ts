@@ -544,3 +544,24 @@ it('hides revoked topic sources immediately even when background scheduling is p
  const e=f.h.memory.ingest(c);f.h.store.put('memory-evidence',e.id,{...e,revoked:true,version:e.version+1,text:''});f.h.pause(true)
  const view=f.h.agentMemory.manage(f.send('new current input'),{action:'inspect'}) as any;expect(view.topics).toEqual([])
 })
+
+it('keeps failed-attempt lessons pending, deduplicates them and never reviews cancellation as failure',async()=>{
+ const f=fixture(input=>input.sources?{lessons:[{topic:'输入检查',content:'输入文件缺失时先核对路径',condition:'本项目的文件任务',source:0,quote:'input.json missing'}]}:{memories:[],topics:[]})
+ f.configure({writeMode:'adaptive'});const c=f.send('处理输入文件')
+ const g=f.h.goals.command({action:'start',operationId:'failure-goal',expectedRevision:0,objective:c.trigger.text,authorizationQuote:c.trigger.text,criteria:[{id:'file',description:'产物可用'}]},c)
+ const round:any={id:'failed-round',goalId:g.id,triggerId:c.trigger.id,scopeId:c.route.scopeId,entryId:c.route.entryId,state:'failed',at:Date.now(),snapshot:{evidence:[{id:'exec',kind:'execution',key:'host',content:'input.json missing'}]},checks:[{criterionId:'file',verdict:'failed',evidenceIds:['exec']}]}
+ f.h.store.put('goal-verification',round.id,round)
+ f.h.agentMemory.observeExperience({...g,state:'cancelled'},round);expect(f.h.agentMemory.observations().filter(r=>r.kind==='experience')).toHaveLength(0)
+ const held={...g,state:'held'};f.h.store.put('router-goal',g.id,held)
+ const observe=f.h.agentMemory.observeEvidence;f.h.agentMemory.observeEvidence=()=>{throw Error('queue unavailable')}
+ expect(()=>f.h.agentMemory.observeExperience(held,round)).toThrow('queue unavailable')
+ expect(f.h.store.list<any>('memory-evidence').filter(e=>e.locator==='goal-verification:'+round.id)).toEqual([])
+ f.h.agentMemory.observeEvidence=observe
+ f.h.agentMemory.observeExperience(held,round);f.h.agentMemory.observeExperience(held,round)
+ expect(f.h.agentMemory.observations().filter(r=>r.kind==='experience')).toHaveLength(1)
+ await f.learn();await f.learn()
+ const pending=f.h.agentMemory.authorized(c,true).find(f=>f.origin==='experience')!;expect(pending).toMatchObject({state:'candidate',content:'输入文件缺失时先核对路径'})
+ expect(f.h.agentMemory.cooperation(c)).toEqual([])
+ await f.restart();expect(f.h.memory.fact(pending.id)?.state).toBe('candidate')
+ f.h.store.requireCodeProjectSchema();expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(14)
+})

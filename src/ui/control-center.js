@@ -225,6 +225,7 @@ function controlPrompts() {
   form.setAttribute('aria-labelledby', 'prompt-tab-' + promptTarget)
   if (promptTarget === 'shared') {
     form.append(
+      promptRuleField('personality', L('Shared personality', '共同性格'), L('For example: direct, thoughtful and warm.', '例如：自然直接、有主见、认真负责。')),
       promptRuleField('team.communication', L('Communication', '沟通方式'), L('Use the language of the request; lead with the result.', '使用用户的语言，先说结论，再说明依据。')),
       promptRuleField('team.scope', L('Work scope', '工作范围'), L('Describe the work your team handles.', '填写团队负责的工作和处理范围。')),
       promptRuleField('team.delivery', L('Delivery standards', '交付标准'), L('Provide usable results, files and verification.', '提供可直接使用的结果、文件或链接，以及检查情况。')))

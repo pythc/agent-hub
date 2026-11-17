@@ -2,6 +2,7 @@ import {z} from 'zod'
 import {teamTargetSchema} from './delegation/contract.ts'
 import type {DecisionConfig} from './decision-config.ts'
 import {browserOptionsSchema} from './browser-contract.ts'
+import {personaSchema} from './persona.ts'
 const envName=z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
 const name=z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)
 const apiBase=z.string().url().superRefine((s,ctx)=>{
@@ -15,6 +16,7 @@ export const parametersSchema=z.record(z.string(),z.unknown()).superRefine((p,ct
 })
 export const effortSchema=z.enum(['none','minimal','low','medium','high','xhigh'])
 export const agentOptionsSchema=z.object({
+ persona:personaSchema.optional(),
  effort:effortSchema.optional(),parameters:parametersSchema.optional(),prompt:z.string().max(64000).optional(),
  maxOutputTokens:z.number().int().min(64).max(200000).optional(),maxSteps:z.number().int().min(1).max(256).optional(),
  maxToolCalls:z.number().int().min(1).max(10000).optional(),timeoutMs:z.number().int().min(1000).max(3600000).optional(),
