@@ -78,14 +78,15 @@ it('uses an inferred preference as tentative context without replacing a stated 
  f.h.memory.command(c,{action:'remember',operationId:'stated-edit',id:tentative.id,expectedRevision:tentative.revision,subject:tentative.subject,content:'报告必须提供证据',sourceIds:tentative.sources.map(s=>s.id),kind:'preference',candidate:false,learning:{...tentative.learning!,inferred:false}},true)
  const next=f.send('本次没有继续追问证据','next');await f.learn()
  expect(f.h.agentMemory.applicable(next).map(f=>f.content)).toEqual(['报告必须提供证据'])
- expect(f.h.agentMemory.authorized(next,true).some(f=>f.state==='candidate'&&f.learning?.inferred)).toBe(true)
+ expect(f.h.agentMemory.authorized(next,true).some(f=>f.state==='candidate')).toBe(false)
+ expect(f.h.store.list<MemoryFact>('memory-fact').some(f=>f.archived&&f.learning?.inferred)).toBe(true)
 })
 
-it('keeps unrelated facts in review under adaptive learning',async()=>{
+it('applies sourced project facts without a confirmation queue',async()=>{
  const f=fixture(input=>({memories:[decision(input,{kind:'fact',content:'项目使用 TypeScript'})],topics:[]}));f.configure({writeMode:'adaptive'})
  const c=f.send('项目使用 TypeScript');await f.learn()
- expect(f.h.agentMemory.applicable(c)).toHaveLength(0)
- expect(f.h.agentMemory.authorized(c,true)[0]?.state).toBe('candidate')
+ expect(f.h.agentMemory.applicable(c)).toHaveLength(1)
+ expect(f.h.agentMemory.authorized(c,true)[0]).toMatchObject({state:'active',protected:false,content:'项目使用 TypeScript'})
 })
 
 it('does not replace a human-confirmed inference with a new inferred preference',async()=>{
@@ -94,15 +95,17 @@ it('does not replace a human-confirmed inference with a new inferred preference'
  await f.learn()
  expect(f.h.memory.fact(original.id)).toMatchObject({state:'active',protected:true})
  expect(f.h.agentMemory.applicable(c).map(f=>f.content)).toEqual(['喜欢短报告'])
- expect(f.h.agentMemory.authorized(c,true).some(f=>f.state==='candidate'&&f.replaces?.[0]?.id===original.id)).toBe(true)
+ expect(f.h.agentMemory.authorized(c,true).some(f=>f.state==='candidate')).toBe(false)
+ expect(f.h.store.list<MemoryFact>('memory-fact').some(f=>f.archived&&f.replaces?.[0]?.id===original.id)).toBe(true)
 })
 
-it('keeps automatic deletion proposals pending even in adaptive mode',async()=>{
+it('does not treat a learning proposal as a user deletion action',async()=>{
  const f=fixture(input=>({memories:[decision(input,{action:'delete',target:0,scope:'discussion',content:'不再保留旧偏好'})],topics:[]}));f.configure({writeMode:'adaptive'})
- const c=f.send('考虑忘掉旧偏好'),original=f.remember(c,'旧偏好',{kind:'preference'})
+ const c=f.send('请忘掉旧偏好'),original=f.remember(c,'旧偏好',{kind:'preference'})
  await f.learn()
  expect(f.h.memory.fact(original.id)?.state).toBe('active')
- expect(f.h.agentMemory.authorized(c,true).find(f=>f.proposalAction==='forget')).toMatchObject({state:'candidate',replaces:[{id:original.id,revision:original.revision}]})
+ expect(f.h.agentMemory.authorized(c,true).map(f=>f.id)).toEqual([original.id])
+ expect(f.h.store.list<MemoryFact>('memory-fact').every(f=>!!f.id&&!!f.revision)).toBe(true)
 })
 
 it('learns working methods from accepted execution evidence and removes them with the original source',async()=>{
@@ -148,15 +151,14 @@ it('upgrades existing memory without changing its policy or activating pending p
  expect(f.h.memory.query(f.context(c.trigger.id),{candidates:true}).items).toEqual(before)
 })
 
-it('learns through the real ingress hook, keeps proposals out of context and persists restart recovery',async()=>{
+it('learns through real ingress, applies memories directly and persists restart recovery',async()=>{
  const f=fixture(input=>({memories:[decision(input)],topics:[{label:'后端开发',existing:null}]}));f.configure({writeMode:'auto'})
  const c=f.send('我希望回答先给结论')
  expect(f.h.agentMemory.observations()).toHaveLength(1)
  await f.restart();await f.learn()
  const current=f.context(c.trigger.id),items=f.h.memory.query(current,{candidates:true}).items
- expect(items).toHaveLength(1);expect(items[0]).toMatchObject({state:'candidate',kind:'preference',origin:'extracted'})
- expect(JSON.parse(f.h.memory.build(current,{},'test').input).memory.facts).toHaveLength(0)
- f.h.memory.command(current,{action:'confirm',operationId:'confirm',id:items[0]!.id,expectedRevision:1},true)
+ expect(items).toHaveLength(1);expect(items[0]).toMatchObject({state:'active',kind:'preference',origin:'extracted'})
+ expect(JSON.parse(f.h.memory.build(current,{},'test').input).memory.facts).toHaveLength(1)
  expect(JSON.parse(f.h.memory.build(current,{},'test').input).memory.facts[0].kind).toBe('preference')
  await f.restart();await f.learn();expect(f.calls).toHaveLength(1)
  expect(f.h.agentMemory.observations()[0]).toMatchObject({state:'done',attempts:1})
@@ -209,7 +211,7 @@ it('counts independent sessions once and normalizes model-resolved topic aliases
  expect(f.h.store.list('memory-fact')).toHaveLength(0)
  f.send('讨论 Golang 后端','two');await f.learn()
  expect(f.h.store.list<any>('memory-topic')).toHaveLength(1);expect(f.h.store.list<any>('memory-topic')[0].aliases).toContain('Golang 后端')
- expect(f.h.store.list<MemoryFact>('memory-fact')[0]).toMatchObject({kind:'interest',state:'candidate'})
+ expect(f.h.store.list<MemoryFact>('memory-fact')[0]).toMatchObject({kind:'interest',state:'active'})
 })
 it('does not let another member or entry inherit personal preferences',()=>{
  const f=fixture(),alice=f.send('Alice prefers concise answers'),bob=f.send('Bob asks','bob','bob'),other=f.send('Other entry','other','alice','g2')
@@ -362,14 +364,14 @@ it('keeps explicit-only quiet and prevents paused personal memory from capture a
  f.h.agentMemory.manage(c,{action:'personal',enabled:false});f.send('记住：另一个偏好')
  expect(f.h.store.list('memory-fact')).toHaveLength(1);expect(f.h.agentMemory.recall(c,'中文').status).toBe('unavailable')
 })
-it('only proposes consolidation and retains every source until human confirmation',async()=>{
+it('applies consolidation atomically while retaining source history',async()=>{
  const f=fixture(()=>({merges:[{indices:[0,1],content:'偏好 Go 后端开发'}]})),c=f.send()
  const a=f.remember(c,'偏好 Go 后端'),b=f.remember(c,'偏好 Go 后端开发')
  expect((await f.h.agentMemory.consolidate(c) as any).proposed).toBe(1)
- expect(f.h.memory.query(c,{}).items).toHaveLength(2)
- const proposed=f.h.memory.query(c,{candidates:true}).items.find(x=>x.state==='candidate')!
+ expect(f.h.memory.query(c,{}).items).toHaveLength(1)
+ const proposed=f.h.memory.query(c,{}).items[0]!
  expect(proposed.replaces?.map(r=>r.id).sort()).toEqual([a.id,b.id].sort())
- f.h.memory.command(c,{action:'confirm',operationId:'merge-confirm',id:proposed.id,expectedRevision:1},true)
+ expect(f.h.memory.fact(a.id)?.state).toBe('superseded');expect(f.h.memory.fact(b.id)?.state).toBe('superseded')
  expect(f.h.memory.query(c,{}).items.map(x=>x.content)).toEqual(['偏好 Go 后端开发'])
 })
 it('recovers interrupted automatic consolidation without waiting a day and does not resume while paused',async()=>{
@@ -383,7 +385,7 @@ it('recovers interrupted automatic consolidation without waiting a day and does 
  f.h.agentMemory.manage(current,{action:'personal',enabled:false});await f.learn();expect(f.calls).toHaveLength(0)
  f.h.agentMemory.manage(current,{action:'personal',enabled:true});await f.learn()
  expect(f.calls).toHaveLength(1);expect(f.h.store.get<any>('memory-consolidation',space)).toMatchObject({status:'completed',proposed:1})
- expect(f.h.memory.query(current,{}).items).toHaveLength(6)
+ expect(f.h.memory.query(current,{}).items).toHaveLength(5)
  await f.restart();await f.learn();expect(f.calls).toHaveLength(1)
 })
 it('does not automatically resume an interrupted manual consolidation under explicit-only policy',async()=>{
@@ -545,7 +547,7 @@ it('hides revoked topic sources immediately even when background scheduling is p
  const view=f.h.agentMemory.manage(f.send('new current input'),{action:'inspect'}) as any;expect(view.topics).toEqual([])
 })
 
-it('keeps failed-attempt lessons pending, deduplicates them and never reviews cancellation as failure',async()=>{
+it('learns sourced failure lessons directly, deduplicates them and never treats cancellation as failure',async()=>{
  const f=fixture(input=>input.sources?{lessons:[{topic:'输入检查',content:'输入文件缺失时先核对路径',condition:'本项目的文件任务',source:0,quote:'input.json missing'}]}:{memories:[],topics:[]})
  f.configure({writeMode:'adaptive'});const c=f.send('处理输入文件')
  const g=f.h.goals.command({action:'start',operationId:'failure-goal',expectedRevision:0,objective:c.trigger.text,authorizationQuote:c.trigger.text,criteria:[{id:'file',description:'产物可用'}]},c)
@@ -560,8 +562,9 @@ it('keeps failed-attempt lessons pending, deduplicates them and never reviews ca
  f.h.agentMemory.observeExperience(held,round);f.h.agentMemory.observeExperience(held,round)
  expect(f.h.agentMemory.observations().filter(r=>r.kind==='experience')).toHaveLength(1)
  await f.learn();await f.learn()
- const pending=f.h.agentMemory.authorized(c,true).find(f=>f.origin==='experience')!;expect(pending).toMatchObject({state:'candidate',content:'输入文件缺失时先核对路径'})
- expect(f.h.agentMemory.cooperation(c)).toEqual([])
- await f.restart();expect(f.h.memory.fact(pending.id)?.state).toBe('candidate')
+ const pending=f.h.agentMemory.authorized(c,true).find(f=>f.origin==='experience')!;expect(pending).toMatchObject({state:'active',content:'输入文件缺失时先核对路径'})
+ expect(f.h.agentMemory.cooperation(c)).toContainEqual(expect.objectContaining({content:'输入文件缺失时先核对路径'}))
+ expect(f.h.goals.get(g.id)?.state).toBe('held')
+ await f.restart();expect(f.h.memory.fact(pending.id)?.state).toBe('active')
  f.h.store.requireCodeProjectSchema();expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(14)
 })

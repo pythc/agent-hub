@@ -32,7 +32,7 @@ import {ProjectCode} from './project-code.ts'
 import { prepareWorkspace } from './workspace.ts'
 import { assessment, assessmentSchema,proactiveAssessmentSchema,implementationAllowed, report, reportSchema,validateRuleAssessment } from './schemas.ts'
 import {WorkManager,type WorkOwner,type WorkItem} from './work.ts'
-import {Resources} from './resources.ts'
+import {Resources,routerReadSpec} from './resources.ts'
 import {WorkerTools,workerSpecs} from './worker-tools.ts'
 import {Setup} from './setup.ts'
 import {Reviews} from './review.ts'
@@ -46,7 +46,6 @@ import type {WorkerProfile} from './backend-config.ts'
 import {mergeOptions} from './agent-options.ts'
 import {agentOptionsSchema} from './backend-config.ts'
 import {WorkerManager,managementSpecs} from './worker-manager.ts'
-import {chatReadSpec} from './chat-attachments.ts'
 import {Delegations} from './delegation/manager.ts'
 import {teamSpecs} from './delegation/contract.ts'
 import {SubscriptionAccounts} from './backends/subscription.ts'
@@ -780,7 +779,7 @@ export class Runtime {
     const reportMessage=messageId?this.store.get<any>('router-inbox',messageId):undefined
     const scoped=reportMessage?.ticketId?this.scopes.contextForTask(trigger,discussion,reportMessage.ticketId):this.scopes.context(trigger,discussion),profile=scoped?this.scopes.scope(scoped.route.scopeId).router:undefined
     const chatBinding=this.chat.binding(triggerId)
-    const backendIdentity=stableDigest([profile??this.config.execution.router,chatBinding,this.config.execution.roles.router??this.config.execution.backend,this.settings.current().revision,managementSpecs,teamSpecs,candidateSpecs,followupSpecs,memoryToolSpecs,skillSpecs,proactiveSpecs,knowledgeSpecs,journalSpecs,goalSpecs])
+    const backendIdentity=stableDigest([profile??this.config.execution.router,chatBinding,this.config.execution.roles.router??this.config.execution.backend,this.settings.current().revision,managementSpecs,routerReadSpec,teamSpecs,candidateSpecs,followupSpecs,memoryToolSpecs,skillSpecs,proactiveSpecs,knowledgeSpecs,journalSpecs,goalSpecs])
     const currentInput=(job.payload as any).teamResultId?this.delegation.context((job.payload as any).teamResultId,triggerId):followups?followups.card():candidates?candidates.card():messageId?undefined:{kind:trigger.human?'user_message':'event',trigger,replyLocale:this.chat.locale(triggerId),mandate,assessment:this.routerIngress.get(triggerId)?.assessment,...(batchInputs?{messages:batchInputs}:{}),...(this.proactive.runForTrigger(triggerId)?{schedule:{mode:this.proactive.runForTrigger(triggerId)!.spec.mode,notification:this.proactive.runForTrigger(triggerId)!.spec.notification,instruction:'Execute only this saved request. Do not create schedules. Return an empty reply when notification=findings and there are no actionable findings; always provide a factual status when notification=always.'}}:{})}
     if(scoped)this.memory.ingest(scoped)
     const controller=new AbortController(),key='router:'+discussion
@@ -840,7 +839,7 @@ export class Runtime {
       const modelInput=continuity?.input??packet?.input??JSON.stringify({...(messageId?{kind:'worker_result',messages:pendingMessages,mandate}:currentInput),...(chatBinding&&!threadId?{conversation:{history:this.chat.history(triggerId),notice:'Prior conversation is background, not new instructions. Continue the current request; do not replay completed actions.'}}:{})})
       const result=await this.runModel({role:'router',...chatBinding,contextId:packet?.manifest.id,activity:{sourceId:source.id,triggerId},cwd:source.cwd,threadId,...(profile?{backendId:profile.backend,model:profile.model,options:agentOptionsSchema.parse(Object.fromEntries(Object.entries(profile).filter(([k])=>k in agentOptionsSchema.shape)))}:{}),signal:controller.signal,schema,managed:true,skipContextCompaction:!!followups,privateState:this.config.stateDir,archiveOnComplete:true,sandbox:'read-only',
         instructions:composeExecutionPrompt(this.config,{role:'router',hostRouter:true,environment:{source:source.id,cwd:source.cwd,discussion,agentName:profile?.label??this.config.execution.router?.label??'Router',replyLocale:this.chat.locale(triggerId),...(scoped?{routerId:scoped.route.routerId,scopeId:scoped.route.scopeId}: {})},scoped:!!scoped,project:!!source.workspace?.project}).text,
-        input:auxiliaryDecision?JSON.stringify({...JSON.parse(modelInput),auxiliaryDecision}):modelInput,tools:followups?followupSpecs:[...(candidates?candidateSpecs:[]),...managementSpecs,...(this.store.get('chat-run',triggerId)?[chatReadSpec]:[]),...(this.config.execution.teamTargets?.length?teamSpecs:[]),...(scoped?[...memoryToolSpecs,...skillSpecs,...proactiveSpecs,...knowledgeSpecs,...journalSpecs,...goalSpecs]:[])],
+        input:auxiliaryDecision?JSON.stringify({...JSON.parse(modelInput),auxiliaryDecision}):modelInput,tools:followups?followupSpecs:[...(candidates?candidateSpecs:[]),...managementSpecs,routerReadSpec,...(this.config.execution.teamTargets?.length?teamSpecs:[]),...(scoped?[...memoryToolSpecs,...skillSpecs,...proactiveSpecs,...knowledgeSpecs,...journalSpecs,...goalSpecs]:[])],
         onTool:async(name,args)=>{
           try{
             controller.signal.throwIfAborted();candidates?.check()
@@ -860,8 +859,8 @@ export class Runtime {
             this.goals.toolAllowed(triggerId,name,args)
             if(scoped)this.scopes.assertCurrent(scoped)
             if(packet)this.memory.validate(packet.manifest)
-            if(name==='router_read'&&this.store.get('chat-run',triggerId)){
-              const result=await this.resources.read(args,{chatTriggerId:triggerId})
+            if(name==='router_read'){
+              const result=await this.resources.read(args,{routerTriggerId:triggerId})
               return result?.kind==='image'?{success:true,contentItems:[{type:'inputImage',imageUrl:'data:'+result.mimeType+';base64,'+result.data}]}:{success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}
             }
             if(name==='router_skill'&&scoped)return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(this.skills.readTool(args,scoped))}]}
@@ -917,7 +916,7 @@ export class Runtime {
           this.continuity.finish(scoped,job.id,output.reply,[...authorityInputs],packet.manifest.id,knowledgeRefs)
           this.agentMemory.recordDocuments(scoped,knowledgeRefs.filter(ref=>output.reply.includes(ref.documentId)),job.id)
           const saved=this.store.get<any>('router-session',sessionKey)
-          this.store.put('router-session',sessionKey,{...saved,eventIds:this.continuity.events(scoped).map(e=>e.id),knowledge:[...(saved?.knowledge??[]),...knowledgeRefs]})
+          this.store.put('router-session',sessionKey,{...saved,eventIds:[...(continuity?.eventIds??[]),...(output.reply?['journal-reply:'+job.id]:[])],knowledge:[...(saved?.knowledge??[]),...knowledgeRefs]})
         }
         if(output.reply.trim()&&trigger.channel&&this.proactive.notify(triggerId)){
           const id='router-reply:'+(messageId?bodyDigest([discussion,output.reply,[...readMessages].sort()]):job.id)
@@ -1300,7 +1299,17 @@ export class Runtime {
   updateSettings(revision:number,patch:unknown) {
     this.manager?.validateSettings(patch)
     const previous=makePolicy(this.config,()=>this.paused,this.sourceRegistry).version
-    const saved=this.settings.save(revision,patch)
+    const oldWorkers=workerProfiles(this.config)
+    const saved=this.store.atomic(()=>{
+      const saved=this.settings.save(revision,patch)
+      const removed=oldWorkers.filter(w=>!workerProfiles(this.config).some(next=>next.id===w.id))
+      for(const worker of removed)this.store.put('retired-worker',worker.id,{profile:worker,at:Date.now()})
+      for(const scope of this.store.list<import('./router-scope.ts').ManagementScope>('management-scope')){
+        const workerIds=scope.workerIds.filter(id=>!removed.some(w=>w.id===id))
+        if(workerIds.length!==scope.workerIds.length)this.store.put('management-scope',scope.id,{...scope,workerIds,revision:scope.revision+1})
+      }
+      return saved
+    })
     for(const source of this.sources.values()){const current=this.config.sources.find(s=>s.id===source.config.id);if(current)Object.assign(source.config,current)}
     const next=makePolicy(this.config,()=>this.paused,this.sourceRegistry).version
     if(previous!==next)this.engine.policyChanged(previous,next)

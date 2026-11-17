@@ -19,7 +19,7 @@ it('previews project runtime sections and selected Worker without restricting co
  expect(p.baseInstructions).toBe(managedBase)
  expect(c.execution.workers).toHaveLength(2)
  const r=previewInstructions(c,{role:'router'})
- expect(r.sections.map(s=>s.id)).toEqual(['role','runtime/coordinator/project','runtime/coordinator/context','runtime/personalization','agent-profile'])
+ expect(r.sections.map(s=>s.id)).toEqual(['role','runtime/coordinator/project','runtime/coordinator/context','runtime/personalization','agent-personality','agent-profile'])
  expect(r.text).toContain('one Worker')
  expect(r.text).toContain('Router profile')
 })

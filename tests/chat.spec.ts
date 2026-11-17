@@ -246,7 +246,7 @@ it('delivers batch clarification once into chat, waits for input and recovers le
 })
 it.each(['accept','ignore','failure'])('projects the %s batch lifecycle without leaving chat queued forever',async action=>{
  const f=fixture(async r=>{if(!r.ephemeral)return {reply:'Router continued'};if(action==='failure')throw Error('Assessment unavailable');return batchDecision(action)}),c=f.h.chat.create('owner');enableChatBatch(f.h,c.id)
- send(f.h,c.id);expect(()=>send(f.h,c.id,'Too early')).toThrow('Wait')
+ send(f.h,c.id)
  await settle(f.h,()=>f.h.store.list<any>('router-batch').some(b=>b.state==='decided'||b.state==='failed'))
  await settle(f.h,()=>['completed','failed'].includes(f.h.chat.view(c.id,'owner').run?.state??''))
  expect(f.h.chat.view(c.id,'owner').run?.state).toBe(action==='failure'?'failed':'completed')
@@ -379,7 +379,8 @@ it('receives a browser message exactly once and rejects conflicting identity reu
   expect(()=>send(h,c.id,'Changed',id)).toThrow('different content')
   expect(h.chat.view(c.id,'owner').messages).toHaveLength(1)
   expect(h.store.jobs().filter(j=>j.kind==='router')).toHaveLength(1)
-  expect(()=>send(h,c.id,'Parallel')).toThrow('Wait')
+  expect(()=>send(h,c.id,'Parallel')).not.toThrow()
+  expect(h.chat.view(c.id,'owner').messages).toHaveLength(2)
 })
 it('keeps conversation owners isolated while following current Router options',async()=>{
   const {h,calls,config}=fixture(),a=h.chat.create('owner'),b=h.chat.create('other')
@@ -886,4 +887,24 @@ it('resets all personal learning and methods, rotates context, and replays over 
  expect(restored.store.get('memory-consolidation',space)).toEqual({deleted:true});expect(restored.memory.fact(fact.id)?.content).toBe('')
  expect(()=>restored.chat.view(chat.id,'owner')).toThrow('cleared');expect(restored.skills.list(c.route.scopeId)).toEqual([])
  expect(restored.settings.current()).toEqual(settings)
+})
+
+it('removes deleted Workers from contacts after refresh and restart while preserving their messages and tasks',async()=>{
+ const f=fixture(),h=f.h,c=h.chat.create('owner'),sent=send(h,c.id)
+ const trigger=h.store.triggers.get(sent.runId)!,context={trigger,discussion:'local:chat:'+c.id}
+ const task=await h.manager.call({action:'assign',revision:0,requestId:'historical-worker',id:'research',text:'Previous task'},context)
+ const before=h.chat.view(c.id,'owner').messages
+ expect(before.some(m=>m.recipient?.id==='research')).toBe(true)
+ await h.manager.call({action:'destroy',revision:0,requestId:'remove-contact',id:'research',cancelRunning:true},context)
+ for(let i=0;i<2;i++){
+  const view=h.chat.view(c.id,'owner')
+  expect(view.participants.map(p=>p.id)).not.toContain('research')
+  expect(view.workers.map(w=>w.id)).not.toContain('research')
+  expect(view.messages).toEqual(before)
+  expect(h.store.tickets.get(task.ticketId)?.ended).toBeTruthy()
+ }
+ await h.close();hosts.splice(hosts.indexOf(h),1)
+ const restored=new Runtime(f.config,{model:f.model});hosts.push(restored)
+ expect(restored.chat.view(c.id,'owner').participants.map(p=>p.id)).not.toContain('research')
+ expect(restored.chat.view(c.id,'owner').messages).toEqual(before)
 })

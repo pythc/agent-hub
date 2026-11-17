@@ -60,7 +60,7 @@ it('persists real settings, preserves unknown nested values and returns a confli
 })
 it('rejects invalid settings and deployment edits atomically with actionable error codes',async()=>{
  const f=await fixture(),source=f.runtime.config.sources[0]!
- const invalid=await f.post(0,{concurrency:999});expect(invalid.status).toBe(400);expect(await invalid.json()).toMatchObject({code:'validation_error',issues:[{path:['concurrency']}]})
+ const invalid=await f.post(0,{concurrency:-1});expect(invalid.status).toBe(400);expect(await invalid.json()).toMatchObject({code:'validation_error',issues:[{path:['concurrency']}]})
  const deployment=await f.post(0,{sources:[{...source,cwd:'/different/startup/workspace'}]});expect(deployment.status).toBe(400);expect(await deployment.json()).toMatchObject({code:'restart_required'})
  expect(f.runtime.settings.current().revision).toBe(0);expect(f.runtime.config.sources[0]!.cwd).toBe(source.cwd)
 })

@@ -12,6 +12,7 @@ export function configurationSnapshot(runtime:Runtime){
   decisionCalls:runtime.decision.records(),
   current:runtime.settings.current(),history:runtime.settings.history(),
   editableKeys:Object.keys(patchSchema.shape),
+  retiredWorkerIds:runtime.store.list<{profile:{id:string}}>('retired-worker').map(w=>w.profile.id),
   restartRequiredKeys:['stateDir','port','codex','turnTimeoutMs','sources.deployment','sourcePlugins','backendPlugins','backends.pluginDeployment','toolConnections'],
   adapterCatalog:runtime.sourceRegistry.catalog(),toolConnections:runtime.toolConnections.configured(),
   sourceEditableKeys:['allowedActors','allowedBots','enabled','admission','listenScopes','pollSeconds','memberSync'],

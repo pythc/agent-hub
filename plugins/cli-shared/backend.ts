@@ -109,7 +109,7 @@ export function createCliPlugin(driver:CliDriver):BackendPlugin{return {create(r
      let result=await request.onTool(name,args,id)
      if(request.contextBudget&&protocolBytes(result)>request.contextBudget.toolReserveBytes){
       if(!request.retainToolResult)throw new BackendAdapterError('unsupported')
-      result=receiptReference(result,await request.retainToolResult(id,result))
+      result=receiptReference(result,await request.retainToolResult(id,result),request.tools?.some(t=>t.name==='router_read')?'router_read':'superagent_read')
      }
      call.result=result;save();budget('cli-tool-result');wire?.check('native-tool-result',{id,result})
      return call.result as Awaited<ReturnType<NonNullable<ModelRequest['onTool']>>>

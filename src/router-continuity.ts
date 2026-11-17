@@ -44,10 +44,11 @@ export class RouterContinuity {
   }
  }
  prepare(c:ScopeContext,packet:{input:string;manifest:ContextManifest},backendIdentity:string){
+  const pending=this.host.chat.pendingInputs(c.trigger.id)
   // Upgrade captures historical admitted messages, not arbitrary platform history.
   for(const a of this.host.store.list<any>('router-admission')){
    const t=this.host.store.triggers.get(a.triggerId),r=this.host.store.get<any>('router-route',a.triggerId)
-   if(a.state==='accepted'&&a.discussion===c.route.discussion&&t?.human&&r?.entryId===c.route.entryId&&JSON.stringify([t.actor.source,t.actor.id])===c.actor&&this.validInputs([t.id]))this.capture(c,[t.id])
+   if(a.state==='accepted'&&a.discussion===c.route.discussion&&t?.human&&!pending.has(t.id)&&r?.entryId===c.route.entryId&&JSON.stringify([t.actor.source,t.actor.id])===c.actor&&this.validInputs([t.id]))this.capture(c,[t.id])
   }
   // Recover pre-upgrade replies only with their original delivery provenance.
   // Unverifiable legacy replies are reported as a gap, never silently trusted.
@@ -60,7 +61,7 @@ export class RouterContinuity {
    if(owner?.manifest?.entryId===c.route.entryId&&this.validInputs(owner.inputs)&&this.validContext(owner.manifest.id))this.finish(c,String(row.id),result.reply,owner.inputs,owner.manifest.id,owner.manifest.knowledge??[])
    else legacyUnavailable++
   }
-  const key=this.key(c),events=this.events(c),requirements=this.commitments(c)
+  const key=this.key(c),events=this.events(c).filter(e=>!e.triggerIds.some(id=>pending.has(id))),requirements=this.commitments(c)
   const checkpoint=this.host.store.get<any>('router-checkpoint',key)
   const safeCheckpoint=checkpoint&&checkpoint.text&&Array.isArray(checkpoint.triggerIds)&&this.validInputs(checkpoint.triggerIds)&&this.validContext(checkpoint.contextId)&&checkpoint.eventIds.every((id:string)=>events.some(e=>e.id===id))?checkpoint:undefined
   const history=events.filter(e=>e.kind==='user'||!safeCheckpoint?.eventIds.includes(e.id)).map(({id,kind,text,triggerIds})=>({id,kind,text,triggerIds}))

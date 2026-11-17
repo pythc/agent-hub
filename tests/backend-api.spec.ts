@@ -11,6 +11,7 @@ import {Runtime} from '../src/runtime.ts'
 import type {ModelRequest} from '../src/model.ts'
 import {TransientModelError} from '../src/model.ts'
 import {ContextBudgetExceeded,scopeBudget} from '../src/context-budget.ts'
+import {routerReadSpec} from '../src/resources.ts'
 const servers:Server[]=[],roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();await Promise.all(servers.splice(0).map(s=>new Promise<void>(r=>{s.closeAllConnections();s.close(()=>r())})));for(const p of roots.splice(0))rmSync(p,{recursive:true,force:true});delete process.env.AGENTHUB_FIXTURE_KEY})
 const kinds=['openai-chat','openai-responses','anthropic'] as const
@@ -68,6 +69,46 @@ it.each(kinds)('%s retains a full oversized tool result and sends a complete rec
  expect(effects).toBe(1);expect(saved[0].result.contentItems[0].text.length).toBe(20000)
  expect(JSON.stringify(f.requests[1].body)).toContain('receiptId');expect(JSON.stringify(f.requests[1].body)).not.toContain('完整结果')
  expect(store.get<any>('backend-thread',r.threadId).effects['effect-once'].result).toEqual(saved[0].result)
+})
+it.each(kinds)('%s directs oversized Router results to its available reader',async kind=>{
+ const f=await server(b=>results(kind,b).length?output(kind,'{"answer":"done"}'):output(kind,'',[{id:'large-list',name:'read_marker',args:{path:'workers'}}]))
+ const model=new ApiModel('test',definition(kind,f.url),memory(),10000),base=request()
+ await model.run({...base,role:'router',tools:[...base.tools!,routerReadSpec],contextBudget:scopeBudget(12000),retainToolResult:()=> 'activity:large-list',onTool:async()=>({success:true,contentItems:[{type:'inputText',text:'catalog '.repeat(1000)}]})})
+ expect(JSON.stringify(results(kind,f.requests[1].body))).toContain('with router_read using limit 800')
+ expect(JSON.stringify(results(kind,f.requests[1].body))).not.toContain('with superagent_read')
+})
+
+it('pages a large Worker catalog through the real API loop, configures its shared Worker and creates Worker eleven',async()=>{
+ let step=0,resource='',catalog='',revision=0
+ const wire=await server(body=>{
+  const call=(name:string,args:any)=>output('openai-chat','',[{id:'call-'+step++,name,args}])
+  if(step===0)return call('worker_manage',{action:'list'})
+  const last=JSON.parse(body.messages.filter((m:any)=>m.role==='tool').at(-1).content)
+  if(last.status==='retained'){
+   expect(last.notice).toContain('router_read');resource=last.resource
+   return call('router_read',{resource,offset:0,limit:800})
+  }
+  if(typeof last.text==='string'){
+   catalog+=last.text
+   if(last.nextOffset!==null)return call('router_read',{resource,offset:last.nextOffset,limit:800})
+   const list=JSON.parse(JSON.parse(catalog).contentItems[0].text);revision=list.revision
+   expect(list.policy).toMatchObject({maxWorkers:12,backends:['codex','connected-api']})
+   expect(list.workers[0]).toMatchObject({shared:true,canConfigure:true})
+   return call('worker_manage',{action:'configure',id:'worker-1',revision,requestId:'configure',patch:{backend:list.connections.find((c:any)=>c.label==='DeepSeek').id,effort:'minimal'}})
+  }
+  if(last.worker?.id==='worker-1')return call('worker_manage',{action:'create',revision:last.revision,requestId:'create',profile:{id:'worker-11',backend:'connected-api'}})
+  expect(last.worker.id).toBe('worker-11');return output('openai-chat','{"reply":"Configured the existing Worker and added a spare."}')
+ })
+ const root=mkdtempSync(join(tmpdir(),'router-catalog-'));roots.push(root)
+ const h=new Runtime(configSchema.parse({stateDir:join(root,'state'),backends:{'connected-api':{...definition('openai-chat',wire.url),label:'DeepSeek'}},execution:{router:{mode:'host',backend:'connected-api'},management:{enabled:true,maxWorkers:12,backends:['codex']},workers:Array.from({length:10},(_,i)=>({id:'worker-'+(i+1),backend:'codex',prompt:'Keep the task independent. '.repeat(20)}))},work:{sandboxDriver:'disabled'},sources:[{id:'local',kind:'local',cwd:root,allowedActors:['operator']}]}));hosts.push(h)
+ h.scopes.command({action:'scope.put',operationId:'external',expectedRevision:0,scope:{id:'external',tenantId:'external',name:'External',managers:[JSON.stringify(['local','operator'])],workerIds:['worker-1'],backendIds:['codex'],sourceIds:['local']}})
+ const c=h.chat.create('owner');h.chat.send(c.id,'owner',{clientMessageId:'catalog-check',text:'Configure the existing Worker and add a spare'})
+ for(let i=0;i<500&&h.chat.view(c.id,'owner').run?.state!=='completed';i++){await h.tick();await new Promise(r=>setTimeout(r,3))}
+ expect(h.chat.view(c.id,'owner').run?.state).toBe('completed')
+ expect(h.config.execution.workers).toHaveLength(11)
+ expect(h.config.execution.workers![0]).toMatchObject({backend:'connected-api',effort:'minimal'})
+ expect(h.activity.list().filter(c=>c.name==='worker_manage'&&c.action==='list')).toHaveLength(1)
+ expect(h.activity.list().filter(c=>c.state==='failed')).toEqual([])
 })
 it.each(kinds)('%s closes all tool pairs without effects if generated calls exhaust the context',async kind=>{
  const calls=Array.from({length:5},(_,i)=>({id:'c'+i,name:'read_marker',args:{path:'x'.repeat(3000)}}))

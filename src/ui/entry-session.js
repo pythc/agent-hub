@@ -125,8 +125,10 @@ function applyWorkspaceLocation() {
   const page = Object.hasOwn(workspacePages, hash) ? workspacePages[hash] : null
   let matched
   if (page) return entryNavigate(page, '', { fromLocation: true, view: page === 'execution' ? 'calls' : 'roles' })
-  if (hash === 'execution/configuration')
+  if ((matched = /^execution\/configuration(?:\/([a-z][a-z0-9_-]*))?$/.exec(hash))) {
+    if (matched[1]) teamStudio.selected = matched[1]
     return entryNavigate('execution', '', { fromLocation: true, view: 'configuration' })
+  }
   if (hash === 'prompts/templates')
     return entryNavigate('prompts', '', { fromLocation: true, view: 'templates' })
   if (hash === 'advanced' || (hash.startsWith('advanced/') && advancedPages.includes(hash.slice(9))))

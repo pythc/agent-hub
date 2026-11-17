@@ -19,6 +19,9 @@
 - Router 输入草稿跨视图和设置导航保留。请求重试使用同一客户端消息标识，避免重发任务。
 - 会话固定创建时的 Router 后端、模型和调用选项。修改 Router 选择在下一次上下文重置后生效；修改原后端定义会提示在设置中清空内置 Chat 上下文，避免原线程悄悄换服务。后端显示名称可修改。
 - 用户只向当前 Router 发消息。「设置 → 聊天」可切换群聊或Agents 列表。群聊按时间展示 Router 派工、Worker 回复及 Router 的答复；Agents 列表可选择 Router，或只读查看各 Worker 与 Router 的协作记录。列表名字下显示最近一条对话消息；翻页不影响预览，无消息时显示“暂无消息”。Worker 输入框显示“请与 Router 对话”。切换视图不创建线程，不改变执行分工。
+- 每个当前 Agent 旁的管理按钮直接打开对应配置。Router 始终保留一个，可修改名称、模型连接、指令和参数；已有会话的模型绑定规则仍按上文执行。
+- 当前 Agent 列表以已配置的 Worker 为准。删除后刷新或重启不会从历史任务、发言者记录中重新加入联系人；协作消息和任务历史保留。Worker 可以全部删除，空团队仍可与 Router 对话，委派前需添加 Worker。
+- 个人 Chat 所有者可管理和删除与其他入口共享的 Worker，修改作用于该 Worker 的所有使用范围。外部入口的范围管理员仍需复制共享 Worker 后再修改。删除有未完成任务的 Worker 必须先完成或明确取消这些任务；已删除身份不可复用。
 - 发言身份与接收对象由真实的 Worker 指派/补充消息和已交付结果生成，记录任务与触发来源；不把工具状态或模型私有推理伪装成发言。升级前未记录聊天归属的旧 Worker 投递不反推为当前会话消息；新增协作记录会持久化并在重启后恢复。
 - Router 回复按模型实际返回的文本增量更新同一条消息。停止或断流后保留已收到的内容，并标记未完成；最终校验通过后才标记完成。不会展示模型私有推理，也没有模拟打字。
 - 每轮请求下展示真实工具调用：执行者、操作、耗时和成功/失败/中断状态；展开可查看工具名称。保留失败和重试记录，不复制原始参数、工具结果或密钥。调用记录随会话持久化，当前页面最多读取最近 200 条执行记录。
@@ -50,3 +53,7 @@ npm run check
 隔离验收宿主：`npx tsx examples/chat-acceptance.ts fixture` 使用明确的模型 fixture；`npx tsx examples/chat-acceptance.ts native` 使用本机真实 Codex 登录，可能消耗订阅额度。两者使用 `.local/` 中独立状态和专用测试账号，不覆盖用户实例。测试登录信息只保存在各自 `browser.json` 中，不提交仓库。
 
 当前单空间回归包括 `tests/chat.spec.ts`、`tests/model-stream.spec.ts` 与 `tests/browser/chat-space.py`。使用 `CHAT_BROWSER_DIR=/tmp/roppo-chat-review npx tsx examples/chat-space-browser.ts` 启动隔离宿主，再用相同环境变量运行浏览器脚本。它使用真实 HTTP、SQLite 和执行工具流，以及明确的确定性模型 fixture，不代表真实模型修复验收。真实 Codex 流式验收脚本为 `tests/browser/chat-native-stream.py`，需另外配置并有意执行。开源依赖见 [许可记录](THIRD_PARTY_CHAT.md)。
+
+Agent 管理浏览器回归：先启动独立 `examples/chat-acceptance.ts fixture`，再运行 `python tests/browser/agent-management.py <fixture目录> <证据目录>`。脚本会修改和删除测试 Worker，仅用于专用测试实例。
+
+兼容性：空 Worker 团队持久化为 `execution.workers: []` 和 `concurrency: 0`。早期版本要求至少一个 Worker；如需回退到这类版本，须先在当前版本添加一个新 Worker。不要通过恢复旧数据库撤销删除，否则会混淆任务历史与外部执行结果。

@@ -253,7 +253,7 @@ function validateShape(key, value) {
     if (typeof candidate !== typeof template) throw Error()
   }
   if (key === 'execution' && value.workers !== undefined &&
-    (!Array.isArray(value.workers) || value.workers.length < 1 || value.workers.length > 10 ||
+    (!Array.isArray(value.workers) ||
       value.workers.some(worker => !worker || typeof worker.id !== 'string' ||
         typeof worker.backend !== 'string' || (worker.model !== undefined && typeof worker.model !== 'string'))))
     throw Error()

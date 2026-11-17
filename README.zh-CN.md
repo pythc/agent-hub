@@ -92,7 +92,7 @@ npm ci
 ./start.sh
 ```
 
-创建本地账号，连接模型，配置托管 Router 和至少一个 Worker，然后打开**对话**。无需注册 Roppo 云端账号，启动器会将个人安装保存在 `~/.agent-hub`。
+创建本地账号，连接模型，配置托管 Router，并按需添加 Worker，然后打开**对话**。无需注册 Roppo 云端账号，启动器会将个人安装保存在 `~/.agent-hub`。
 
 使用 Docker？启动 Docker 和 Compose 后执行：
 

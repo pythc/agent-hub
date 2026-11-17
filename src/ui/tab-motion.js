@@ -17,6 +17,7 @@
   // Explicit adapters keep nested tabs independent and exclude ordinary buttons and live data.
   const adapters = [
     { selector: '.workspace-tabs', panels: following },
+    { selector: '.memory-file-tabs', panels: node => [node.parentElement.querySelector('[role=tabpanel]')] },
     { selector: '.prompt-rules-tabs', panels: node => [node.parentElement.querySelector('.prompt-rules-form')] },
     { selector: '.ui-seg__track', pill: true, panels: (_node, selected) => [document.getElementById(selected.getAttribute('aria-controls'))] },
     { selector: '.market-tabs', panels: node => [...following(node), ...(location.hash.endsWith('/tools') ? [document.querySelector('.configuration-outlet')] : [])] },

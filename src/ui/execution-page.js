@@ -1,7 +1,7 @@
 // Execution content only. The existing application header and sidebar own navigation.
 const executionView={root:null,motion:null,mode:'calls',instructions:null,instructionFocus:'',selected:null,inspect:null,callId:null,dialogVersion:0,stale:false}
 function executionSetCount(count){
- if(!Number.isInteger(count)||count<1||count>10)return
+ if(!Number.isInteger(count)||count<0||count>10)return
  const draft=executionDraft(),next=draft.workers.slice(0,count)
  while(next.length<count){let index=next.length+1;while(next.some(w=>w.id==='worker-'+index))index++;next.push({id:'worker-'+index,backend:draft.workers[0]?.backend??draft.router})}
  draft.workers=next;editExecution(draft);render();queueMicrotask(()=>document.getElementById('worker-count')?.focus())

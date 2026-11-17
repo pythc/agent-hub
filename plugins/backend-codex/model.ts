@@ -111,7 +111,7 @@ export class CodexModel implements Model {
         try{result=await invoke!(name,args,callId)}catch(error){result={success:false,contentItems:[{type:'inputText',text:String(error).slice(0,1000)}]}}
         if(request.contextBudget&&protocolBytes(result)>request.contextBudget.toolReserveBytes){
           if(!request.retainToolResult)throw Error('A durable receipt store is required for an oversized native tool result')
-          result=receiptReference(result,await request.retainToolResult(callId,result))
+          result=receiptReference(result,await request.retainToolResult(callId,result),request.tools?.some(t=>t.name==='router_read')?'router_read':'superagent_read')
         }
         if(pending)context.toolResult(pending,result)
         try{check('tool_receipt')}catch(error){exceeded(error)}

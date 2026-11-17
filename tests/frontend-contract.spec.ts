@@ -151,3 +151,16 @@ it('ignores inventory responses rejected by the workspace epoch guard',async()=>
   await b.get('integrationsDiscover()')
   expect(b.get('integrations.data.tools[0].id')).toBe('current-workspace')
 })
+
+it('keeps an explicitly empty Worker pool empty and allows configuring the retained Router',()=>{
+ const config=configuration();config.execution.workers=[];config.concurrency=0
+ const b=browser(config)
+ expect(b.get('teamWorkers()')).toEqual([])
+ b.get("teamWrite('label','Coordinator')")
+ expect(b.get('S.draft.execution.router.label')).toBe('Coordinator')
+ b.get("S.snap.retiredWorkerIds=['worker-1','worker-2'];teamAddWorker()")
+ expect(b.get('teamWorkers().map(w=>w.id)')).toEqual(['worker-3'])
+ b.get('teamRemoveWorker()')
+ expect(b.get('teamWorkers()')).toEqual([])
+ expect(b.get('S.draft.concurrency')).toBe(0)
+})

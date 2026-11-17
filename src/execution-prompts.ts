@@ -3,7 +3,7 @@ import {builtins,compose,composeCoordinator,digest,type Part} from './prompts.ts
 import {appendAgentPrompt,managedBase} from './managed-instructions.ts'
 import {mergeOptions} from './agent-options.ts'
 import {workerProfiles} from './worker-pool.ts'
-import {renderPersona,type Persona} from './persona.ts'
+import {renderPersona,routerPersona,routerWorkingRules,type Persona} from './persona.ts'
 
 export interface PromptSection {id:string;source:string;text:string;digest:string}
 export interface ExecutionPrompt {
@@ -48,10 +48,12 @@ export function composeExecutionPrompt(config:Config,input:ExecutionPrompt){
   }
  }
  if(config.prompts.personality)add('team-personality','Shared personality (communication style; preserve role and current task requirements):\n'+config.prompts.personality,'settings:prompts.personality')
- const text=appendAgentPrompt(sections.map(section=>section.text).join('\n\n'),input.agentPrompt,input.persona)
- const personality=renderPersona(input.persona)
+ const persona=input.role==='router'?routerPersona(input.persona):input.persona
+ const agentPrompt=input.agentPrompt??(input.role==='router'?routerWorkingRules:undefined)
+ const text=appendAgentPrompt(sections.map(section=>section.text).join('\n\n'),agentPrompt,persona)
+ const personality=renderPersona(persona)
  if(personality)add('agent-personality',personality,'agent:effective-options.persona')
- if(input.agentPrompt)add('agent-profile','Agent instructions:\n'+input.agentPrompt,'agent:effective-options.prompt')
+ if(agentPrompt)add('agent-profile','Agent instructions:\n'+agentPrompt,input.agentPrompt===undefined?'built-in:router-working-rules':'agent:effective-options.prompt')
  return {text,sections}
 }
 

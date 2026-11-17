@@ -1,18 +1,91 @@
-.memory-settings{max-width:800px;color:var(--c-text)}
-.memory-settings h2{font-size:var(--roppo-font-section);font-weight:600;line-height:1.5;margin:0 0 8px}
-.memory-settings .memory-note{padding:20px 0;border-bottom:1px solid var(--c-line)}
-.memory-settings .memory-note:last-child{border-bottom:0}
-.memory-settings .memory-content{font-size:14px;line-height:1.75;margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
-.memory-settings .memory-context{font-size:14px;line-height:1.6;color:var(--c-text);margin:6px 0 0;overflow-wrap:anywhere}
-.memory-settings .memory-actions{display:flex;align-items:center;gap:20px;margin-top:12px}
-.memory-settings .memory-actions button{display:inline-flex;align-items:center;gap:6px;min-height:32px}
-.memory-settings .memory-edit label{display:flex;flex-direction:column;gap:8px;font-size:var(--roppo-font-body)}
-.memory-settings .memory-edit textarea{background:var(--c-bg);color:var(--c-text);border:1px solid var(--c-line);border-radius:7px;padding:10px 12px;font:inherit;min-width:0;width:100%;min-height:104px;line-height:1.65;resize:vertical}
-.memory-settings .memory-delete{display:flex;align-items:center;gap:20px;margin-top:12px;font-size:13px}
-.memory-settings .memory-delete .memory-actions{margin-top:0}
-.memory-settings .memory-error,.memory-settings .memory-empty{font-size:13px;line-height:1.65;color:var(--c-muted);margin:12px 0}
-@media(max-width:700px){.memory-settings .memory-edit textarea{font-size:var(--roppo-font-input)}.memory-settings .memory-actions button{min-height:40px}.memory-settings .memory-delete{flex-wrap:wrap;gap:8px 20px}}
+.management-content .operator-workspace .memory-settings{max-width:800px;color:var(--c-text)}
+.management-content .operator-workspace .memory-settings h2{font-size:var(--roppo-font-section);font-weight:600;line-height:1.5;margin:0 0 8px}
+.management-content .operator-workspace .memory-settings .memory-note{padding:20px 0;border-bottom:1px solid var(--c-line)}
+.management-content .operator-workspace .memory-settings .memory-note:last-child{border-bottom:0}
+.management-content .operator-workspace .memory-settings .memory-content{font-size:14px;line-height:1.75;margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.management-content .operator-workspace .memory-settings .memory-context{font-size:12px;line-height:1.6;color:var(--c-muted);margin:6px 0 0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.management-content .operator-workspace .memory-settings .memory-actions{display:flex;align-items:center;gap:20px;margin-top:12px}
+.management-content .operator-workspace .memory-settings .memory-actions button{display:inline-flex;align-items:center;gap:6px;min-height:32px}
+.management-content .operator-workspace .memory-settings .memory-edit label{display:flex;flex-direction:column;gap:8px;font-size:var(--roppo-font-body)}
+.management-content .operator-workspace .memory-settings .memory-edit textarea{background:var(--c-bg);color:var(--c-text);border:1px solid var(--c-line);border-radius:7px;padding:10px 12px;font:inherit;min-width:0;width:100%;min-height:104px;line-height:1.65;resize:vertical}
+.management-content .operator-workspace .memory-settings .memory-delete{display:flex;align-items:center;gap:20px;margin-top:12px;font-size:13px}
+.management-content .operator-workspace .memory-settings .memory-delete .memory-actions{margin-top:0}
+.management-content .operator-workspace .memory-settings .memory-error,.management-content .operator-workspace .memory-settings .memory-empty{font-size:13px;line-height:1.65;color:var(--c-muted);margin:12px 0}
+@media(max-width:700px){.management-content .operator-workspace .memory-settings .memory-edit textarea{font-size:var(--roppo-font-input)}.management-content .operator-workspace .memory-settings .memory-actions button{min-height:40px}.management-content .operator-workspace .memory-settings .memory-delete{flex-wrap:wrap;gap:8px 20px}}
+.memory-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.memory-heading h3{font-size:var(--roppo-font-body);font-weight:600;margin:12px 0}.memory-toggle{display:flex;gap:8px;align-items:center;font-size:var(--roppo-font-body)}.memory-entry{padding:12px 0 24px}.memory-section{border-top:1px solid var(--c-line);padding:16px 0;font-size:var(--roppo-font-body)}.memory-section summary{cursor:pointer;font-weight:500}.memory-section p{line-height:1.7}.management-content .operator-workspace .memory-settings .memory-actions{flex-wrap:wrap;gap:8px 20px}.management-content .operator-workspace .memory-settings .memory-edit{display:grid;gap:12px}.management-content .operator-workspace .memory-settings .memory-edit input{background:var(--c-bg);color:var(--c-text);border:1px solid var(--c-line);border-radius:7px;padding:10px 12px;font:inherit;min-width:0;width:100%}.memory-evidence{margin-top:12px;padding:12px;background:var(--c-surface,var(--c-bg));border:1px solid var(--c-line);border-radius:8px;font-size:var(--roppo-font-body);overflow-wrap:anywhere}.memory-evidence pre{white-space:pre-wrap;font:inherit;max-height:240px;overflow:auto}.memory-evidence blockquote{margin:0 0 12px;padding-left:12px;border-left:2px solid var(--c-line)}.memory-method{padding:12px 0;border-bottom:1px solid var(--c-line);display:flex;align-items:start;justify-content:space-between;gap:12px;flex-wrap:wrap}.memory-method p{margin:4px 0;color:var(--c-muted)}.management-content .operator-workspace .memory-settings .memory-context{white-space:normal;overflow:visible}
+.memory-source,.memory-import{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0;font-size:var(--roppo-font-body)}.memory-source select{min-width:0;max-width:100%;flex:1;font:inherit;padding:8px 10px;border:1px solid var(--c-line);border-radius:7px;background:var(--c-bg);color:var(--c-text)}.management-content .operator-workspace .memory-settings .memory-heading .memory-toggle{margin-left:auto}.memory-import input{max-width:100%;font:inherit}.management-content .operator-workspace .memory-settings button:focus-visible,.management-content .operator-workspace .memory-settings summary:focus-visible,.management-content .operator-workspace .memory-settings input:focus-visible,.management-content .operator-workspace .memory-settings select:focus-visible{outline:2px solid var(--c-text);outline-offset:3px}
+/* Memory reader: shared Roppo type roles and flat surfaces. */
+.management-content .operator-workspace .memory-settings{max-width:none;width:100%;font-size:var(--roppo-font-body);line-height:1.6;padding-bottom:24px}
+.management-content .operator-workspace .memory-settings .memory-heading{display:flex;justify-content:space-between;align-items:center;margin:0 0 24px}
+.management-content .operator-workspace .memory-settings .memory-heading h2{margin:0;font-size:var(--roppo-font-dialog)}
+.management-content .operator-workspace .memory-settings .button,.management-content .operator-workspace .memory-settings .memory-icon{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:7px 13px;border:1px solid var(--c-line);border-radius:7px;background:var(--c-bg);color:var(--c-text);font:inherit;line-height:1.3;cursor:pointer}
+.management-content .operator-workspace .memory-settings .button.primary{background:var(--c-text);border-color:var(--c-text);color:var(--c-bg)}
+.management-content .operator-workspace .memory-settings button:disabled,.management-content .operator-workspace .memory-settings input:disabled{opacity:.5;cursor:default}
+.management-content .operator-workspace .memory-settings .memory-icon{padding:7px;width:36px}
+.management-content .operator-workspace .memory-settings .memory-actions{margin:0;display:flex;align-items:center;gap:8px}
+.management-content .operator-workspace .memory-settings .text-button{display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:4px 0;border:0;background:none;color:var(--c-text);font:inherit;cursor:pointer;text-align:left}
+.management-content .operator-workspace .memory-settings .memory-toolbar{min-height:42px;margin-bottom:28px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+.management-content .operator-workspace .memory-settings .memory-scope{display:flex;align-items:center;gap:10px;min-width:0}
+.management-content .operator-workspace .memory-settings .memory-scope select{max-width:360px;min-width:220px;padding:8px 12px;border:1px solid var(--c-line);border-radius:7px;background:var(--c-bg);color:var(--c-text);font:inherit}
+.management-content .operator-workspace .memory-settings .memory-toggle{display:flex;align-items:center;gap:12px;margin:0;cursor:pointer;white-space:nowrap}
+.management-content .operator-workspace .memory-settings .memory-toggle input{appearance:none;position:relative;flex:none;width:38px;height:22px;margin:0;border:1px solid var(--c-line);border-radius:12px;background:var(--c-hover,#e5e5e5);cursor:pointer;transition:background-color 150ms}
+.management-content .operator-workspace .memory-settings .memory-toggle input:before{content:'';position:absolute;width:16px;height:16px;left:2px;top:2px;border-radius:50%;background:var(--c-bg);box-shadow:0 1px 2px #0002;transition:transform 150ms}
+.management-content .operator-workspace .memory-settings .memory-toggle input:checked{background:var(--c-text);border-color:var(--c-text)}
+.management-content .operator-workspace .memory-settings .memory-toggle input:checked:before{transform:translateX(16px)}
+.memory-file-tabs{display:flex;gap:28px;border-bottom:1px solid var(--c-line);overflow-x:auto;scrollbar-width:thin;position:relative}
+.management-content .operator-workspace .memory-settings .memory-file-tabs button{padding:0 2px 14px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--c-muted);font:inherit;white-space:nowrap;cursor:pointer}
+.management-content .operator-workspace .memory-settings .memory-file-tabs button[aria-selected=true]{border-bottom-color:var(--c-text);color:var(--c-text);font-weight:600}
+.management-content .operator-workspace .memory-settings .memory-file-tabs[data-tab-motion=ready] button[aria-selected=true]{border-bottom-color:transparent}
+.management-content .operator-workspace .memory-settings .memory-file-hint{margin:16px 0 28px;color:var(--c-muted);font:inherit}
+.memory-reader{display:grid;grid-template-columns:minmax(240px,.95fr) minmax(0,1.85fr);gap:30px;min-height:360px}
+.management-content .operator-workspace .memory-settings .memory-list{border-right:1px solid var(--c-line);padding-right:24px;display:flex;flex-direction:column;gap:8px;align-self:start;max-height:65vh;overflow-y:auto;min-width:0;scrollbar-width:thin}
+.management-content .operator-workspace .memory-settings .memory-list button{display:flex;align-items:flex-start;gap:14px;width:100%;min-height:86px;padding:18px 16px;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--c-text);font:inherit;cursor:pointer}
+.management-content .operator-workspace .memory-settings .memory-list button:hover{background:var(--c-soft,var(--c-hover))}
+.management-content .operator-workspace .memory-settings .memory-list button[aria-current=true]{background:var(--c-hover,#f0f0f0)}
+.management-content .operator-workspace .memory-settings .memory-list button>svg{flex:none;margin-top:3px}
+.management-content .operator-workspace .memory-settings .memory-list button>span{display:flex;min-width:0;flex-direction:column;gap:4px}
+.management-content .operator-workspace .memory-settings .memory-list strong{font-size:var(--roppo-font-section);font-weight:550;line-height:1.5;overflow-wrap:anywhere}
+.management-content .operator-workspace .memory-settings .memory-list button>span>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--c-muted);max-width:100%}
+.management-content .operator-workspace .memory-settings .memory-detail{min-width:0;padding:8px 0 0 4px}
+.management-content .operator-workspace .memory-settings .memory-detail>header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:24px}
+.management-content .operator-workspace .memory-settings h3{font-size:var(--roppo-font-dialog);line-height:1.5;margin:0;font-weight:600;overflow-wrap:anywhere}
+.management-content .operator-workspace .memory-settings .memory-content{color:var(--c-text);font-size:var(--roppo-font-reading);line-height:1.8;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.management-content .operator-workspace .memory-settings .memory-condition{font:inherit;color:var(--c-muted);margin:16px 0 0}
+.management-content .operator-workspace .memory-settings .memory-source-detail{border-top:1px solid var(--c-line);margin-top:40px;padding-top:22px}
+.management-content .operator-workspace .memory-settings h4{font-size:var(--roppo-font-section);margin:0 0 20px;font-weight:550}
+.management-content .operator-workspace .memory-settings blockquote{margin:0 0 12px;padding:12px 16px;border-left:3px solid var(--c-line);border-radius:0 6px 6px 0;background:var(--c-soft,var(--c-hover));white-space:pre-wrap;overflow-wrap:anywhere}
+.management-content .operator-workspace .memory-settings .memory-history{margin-top:28px;border-top:1px solid var(--c-line);border-bottom:1px solid var(--c-line);padding:16px 0}
+.management-content .operator-workspace .memory-settings summary{cursor:pointer;list-style:none}
+.management-content .operator-workspace .memory-settings summary::-webkit-details-marker{display:none}
+.management-content .operator-workspace .memory-settings .memory-history summary{display:flex;justify-content:space-between;align-items:center;font-weight:500}
+.management-content .operator-workspace .memory-settings .memory-history[open] summary>svg{transform:rotate(90deg)}
+.management-content .operator-workspace .memory-settings .memory-history p{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:0}
+.management-content .operator-workspace .memory-settings .memory-history>div{border-top:1px solid var(--c-line);margin-top:16px;padding-top:16px}
+.management-content .operator-workspace .memory-settings .memory-evidence{font:inherit;border:0;background:var(--c-soft,var(--c-hover));padding:12px 16px;max-height:300px;overflow:auto;white-space:pre-wrap}
+.management-content .operator-workspace .memory-settings .memory-empty{min-height:260px;padding:52px 20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;font:inherit;color:var(--c-muted)}
+.management-content .operator-workspace .memory-settings .memory-empty h3{color:var(--c-text);font-size:var(--roppo-font-section)}
+.management-content .operator-workspace .memory-settings .memory-empty p{margin:0}
+.management-content .operator-workspace .memory-settings .memory-file-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--roppo-font-reading);line-height:1.85}
+.management-content .operator-workspace .memory-settings .memory-delete{display:block;padding:16px;background:var(--c-soft,var(--c-hover));border:1px solid var(--c-line);border-radius:7px;font:inherit;margin-top:24px}
+.management-content .operator-workspace .memory-settings .memory-delete p{margin:0 0 12px}
+.management-content .operator-workspace .memory-settings .memory-error{font:inherit;padding:12px 0;color:var(--c-error,#a82b32);display:flex;gap:16px;align-items:center}
+.management-content .operator-workspace .memory-settings .memory-back{display:none}
+.management-content .operator-workspace .memory-settings .memory-menu{position:relative;z-index:4;border:0;padding:0;margin:0}
+.management-content .operator-workspace .memory-settings .memory-menu>summary{display:flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--c-line);border-radius:7px;min-height:36px}
+.memory-menu-items{position:absolute;right:0;top:calc(100% + 8px);width:200px;padding:6px;background:var(--c-bg);border:1px solid var(--c-line);border-radius:9px;box-shadow:0 8px 24px #00000014}
+.management-content .operator-workspace .memory-settings .memory-menu-items button{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;text-align:left;border:0;border-radius:5px;background:none;color:var(--c-text);font:inherit;cursor:pointer}
+.management-content .operator-workspace .memory-settings .memory-menu-items button:hover{background:var(--c-hover)}
+.management-content .operator-workspace .memory-settings .memory-method-dialog{width:min(760px,calc(100vw - 32px));max-height:85dvh;padding:24px;border:1px solid var(--c-line);border-radius:12px;background:var(--c-bg);color:var(--c-text);font:inherit;overflow:auto}
+.memory-method-dialog::backdrop{background:#0005}
+.memory-method-dialog>header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+.management-content .operator-workspace .memory-settings .memory-edit input,.management-content .operator-workspace .memory-settings .memory-edit textarea{font-size:var(--roppo-font-input);line-height:1.75}
+@media(max-width:1000px){.memory-reader{grid-template-columns:minmax(210px,1fr) minmax(0,1.7fr);gap:20px}.management-content .operator-workspace .memory-settings .memory-list{padding-right:16px}.memory-file-tabs{gap:22px}}
+@media(max-width:700px){.management-content .operator-workspace .memory-settings .memory-toolbar{flex-wrap:wrap;gap:20px}.management-content .operator-workspace .memory-settings .memory-toggle{margin-left:auto}.management-content .operator-workspace .memory-settings .memory-scope select{min-width:0;max-width:260px}.memory-file-tabs{gap:22px}.management-content .operator-workspace .memory-settings .memory-file-hint{margin-bottom:22px}.memory-reader{display:block;min-height:260px}.management-content .operator-workspace .memory-settings .memory-list{padding:0;border:0;max-height:none}.management-content .operator-workspace .memory-settings .memory-reader[data-detail=false]>.memory-detail{display:none}.management-content .operator-workspace .memory-settings .memory-reader[data-detail=true]>.memory-list{display:none}.management-content .operator-workspace .memory-settings .memory-detail{padding:0}.management-content .operator-workspace .memory-settings .memory-back{display:flex;align-items:center;gap:8px;margin:0 0 20px;border:0;background:none;color:var(--c-muted);font:inherit;min-height:36px}.management-content .operator-workspace .memory-settings .memory-detail>header{align-items:center}.management-content .operator-workspace .memory-settings .memory-source-detail{margin-top:28px}.management-content .operator-workspace .memory-settings .button{min-height:40px}.management-content .operator-workspace .memory-settings .memory-heading{margin-bottom:20px}}
+@media(prefers-reduced-motion:reduce){.management-content .operator-workspace .memory-settings .memory-toggle input,.management-content .operator-workspace .memory-settings .memory-toggle input:before{transition:none}}
+/* The React portal is a grid item in the settings stack. */
+.management-content .operator-workspace .memory-mount{min-width:0;max-width:100%}
+.management-content .operator-workspace .memory-settings{min-width:0;max-width:100%}
+.memory-file-tabs{min-width:0;max-width:100%}
 
-.memory-settings .memory-provenance{margin:8px 0 0;font-size:14px;font-weight:500;line-height:1.6;color:var(--c-text);overflow-wrap:anywhere}
-.memory-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.memory-heading h3{font-size:var(--roppo-font-body);font-weight:600;margin:12px 0}.memory-toggle{display:flex;gap:8px;align-items:center;font-size:var(--roppo-font-body)}.memory-entry{padding:12px 0 24px}.memory-section{border-top:1px solid var(--c-line);padding:16px 0;font-size:var(--roppo-font-body)}.memory-section summary{cursor:pointer;font-weight:500}.memory-section p{line-height:1.7}.memory-settings .memory-actions{flex-wrap:wrap;gap:8px 20px}.memory-settings .memory-edit{display:grid;gap:12px}.memory-settings .memory-edit input{background:var(--c-bg);color:var(--c-text);border:1px solid var(--c-line);border-radius:7px;padding:10px 12px;font:inherit;min-width:0;width:100%}.memory-evidence{margin-top:12px;padding:12px;background:var(--c-surface,var(--c-bg));border:1px solid var(--c-line);border-radius:8px;font-size:var(--roppo-font-body);overflow-wrap:anywhere}.memory-evidence pre{white-space:pre-wrap;font:inherit;max-height:240px;overflow:auto}.memory-evidence blockquote{margin:0 0 12px;padding-left:12px;border-left:2px solid var(--c-line)}.memory-method{padding:12px 0;border-bottom:1px solid var(--c-line);display:flex;align-items:start;justify-content:space-between;gap:12px;flex-wrap:wrap}.memory-method p{margin:4px 0;color:var(--c-muted)}.memory-settings .memory-context{white-space:normal;overflow:visible}
-.memory-source,.memory-import{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0;font-size:var(--roppo-font-body)}.memory-source select{min-width:0;max-width:100%;flex:1;font:inherit;padding:8px 10px;border:1px solid var(--c-line);border-radius:7px;background:var(--c-bg);color:var(--c-text)}.memory-settings .memory-heading .memory-toggle{margin-left:auto}.memory-import input{max-width:100%;font:inherit}.memory-settings button:focus-visible,.memory-settings summary:focus-visible,.memory-settings input:focus-visible,.memory-settings select:focus-visible{outline:2px solid var(--c-text);outline-offset:3px}
+.management-content .operator-workspace .memory-settings .memory-provenance{margin:8px 0 0;font-size:14px;font-weight:500;line-height:1.6;color:var(--c-text);overflow-wrap:anywhere}
+.management-content .operator-workspace .memory-settings .memory-context{font-size:14px;color:var(--c-text);white-space:normal;overflow:visible}

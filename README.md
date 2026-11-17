@@ -92,7 +92,7 @@ npm ci
 ./start.sh
 ```
 
-Create your local account, connect a model, configure a hosted Router and at least one Worker, then open **Conversations**. No Roppo cloud account is required. The launcher keeps your installation in `~/.agent-hub`.
+Create your local account, connect a model, configure a hosted Router and add Workers as needed, then open **Conversations**. No Roppo cloud account is required. The launcher keeps your installation in `~/.agent-hub`.
 
 Prefer Docker? With Docker and Compose running:
 

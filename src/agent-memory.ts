@@ -92,6 +92,21 @@ export class AgentMemory {
    .map(f=>({id:f.id,revision:f.revision,content:f.content,condition:f.learning?.condition??'',kind:f.origin==='experience'?'method':'preference'}))
  }
  learning(c:ScopeContext){return {mode:this.policy(c).writeMode,enabled:this.enabled(c),coldStart:!this.applicable(c).some(f=>f.kind==='preference'||f.kind==='profile')}}
+ /** Automatically apply supported notes; guesses cannot replace a human-edited fact. */
+ acceptNote(c:ScopeContext,fact:MemoryFact){
+  return this.host.store.atomic(()=>{
+   const current=this.authorized(c,true).find(f=>f.id===fact.id&&f.revision===fact.revision&&f.entryId===c.route.entryId&&f.owner===c.actor)
+   if(!current||current.state!=='candidate')return this.host.memory.fact(fact.id)
+   const targets=current.replaces?.map(ref=>({ref,f:this.host.memory.fact(ref.id)}))??[]
+   if(targets.some(({ref,f})=>!f||f.state!=='active'||f.revision!==ref.revision||current.learning?.inferred&&(f.protected||f.learning?.inferred!==true))||current.proposalAction==='forget'){
+    this.host.store.put('memory-version',current.id+':'+current.revision,current)
+    this.host.store.put('memory-fact',current.id,{...current,archived:true,revision:current.revision+1})
+    return {id:current.id,status:'not_applied'}
+   }
+   return this.host.memory.acceptLearning(c,current)
+  })
+ }
+ settleNotes(c:ScopeContext){for(const fact of this.authorized(c,true))if(fact.state==='candidate'&&fact.entryId===c.route.entryId&&fact.owner===c.actor)this.acceptNote(c,fact)}
  private queryKey(c:ScopeContext,q:string){return stableDigest([this.space(c),q.slice(0,200),this.policyRevision(c)])}
  modelSelection(c:ScopeContext){const p=this.policy(c),scope=this.host.scopes.scope(c.route.scopeId),backend=p.extractBackend??scope.router?.backend??this.host.config.execution.router?.backend??this.host.config.execution.roles.router??this.host.config.execution.backend;if(!scope.backendIds.includes(backend))throw Error('Memory backend is outside scope');return {backendId:backend,model:p.extractModel??scope.router?.model??this.host.config.execution.router?.model}}
  private vectorModel(c:ScopeContext){const e=this.policy(c).embedding;return e?stableDigest([e.url,e.model]):''}
@@ -178,7 +193,8 @@ export class AgentMemory {
   if(!this.enabled(c))return {items:[],status:'unavailable',reason:'Memory disabled'}
   if(x.action==='query')return this.search(c,x.query??'')
   if(x.action==='inspect'){const items=this.applicable(c).filter(f=>!x.id||f.id===x.id).slice(0,20);this.recordUse(c,items,'inspect','authorized');return {items,status:'complete'}}
-  return this.host.memory.tool(c,x)
+  const fact=await this.host.memory.tool(c,x) as MemoryFact
+  return this.acceptNote(c,fact)
  }
  recordUse(c:ScopeContext,items:{id:string;revision:number}[],kind:string,mode:string){
   const now=this.now();for(const ref of items){const f=this.host.memory.fact(ref.id);if(f?.revision===ref.revision)this.host.store.put('memory-fact',f.id,{...f,lastUsedAt:now})}
@@ -301,7 +317,7 @@ export class AgentMemory {
    row.sessions=[...new Set([...row.sessions,...batch.map(b=>b.session)])]
    row.sources=[...new Map([...row.sources,...batch.map(b=>{const e=this.host.memory.evidence(b.sourceId)!;return {id:e.id,version:e.version}})].map(s=>[s.id,s])).values()]
    if(!row.proposalId&&row.sessions.length>=this.policy(c).interestThreshold){
-    try{const fact=this.host.memory.command(c,{action:'remember',operationId:'interest:'+id,expectedRevision:0,subject:'interest:'+row.label,content:row.label,sourceIds:row.sources.slice(-30).map(s=>s.id),kind:'interest',candidate:true,topicAliases:row.aliases,visibility:this.host.scopes.binding(c.route.entryId).privateActor?'private':'group'}) as MemoryFact;row.proposalId=fact.id}catch{}
+    try{const fact=this.host.memory.command(c,{action:'remember',operationId:'interest:'+id,expectedRevision:0,subject:'interest:'+row.label,content:row.label,sourceIds:row.sources.slice(-30).map(s=>s.id),kind:'interest',candidate:true,topicAliases:row.aliases,visibility:this.host.scopes.binding(c.route.entryId).privateActor?'private':'group'}) as MemoryFact;this.acceptNote(c,fact);row.proposalId=fact.id}catch{}
    }
    this.host.store.put('memory-topic',id,row)
   }

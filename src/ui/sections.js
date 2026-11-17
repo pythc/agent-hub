@@ -90,7 +90,7 @@ function renderWork() {
   return [add(el('div', 'settings-columns'),
     group(L('Task limits', '任务限制'), null,
       scaledNumber('work.backgroundTimeoutMs', L('Background task deadline (seconds)', '后台任务时限（秒）'), 1000, 100),
-      num('work.maxAgents', L('Maximum agents', '最大代理数'), 1, 32),
+      num('work.maxAgents', L('Concurrent subagents per task', '单任务并发子代理上限'), 1, 32),
       num('work.maxDepth', L('Subagent depth', '子代理嵌套深度'), 1, 8),
       scaledNumber('work.maxOutputBytes', L('Output limit (KiB)', '输出上限（KiB）'), 1024, 1024, 16000000),
       toggle('work.autoRecover', L('Automatic recovery', '自动恢复'))),

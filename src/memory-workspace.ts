@@ -36,7 +36,7 @@ const command=z.object({entryId:z.string().min(1),action:z.enum(['edit','forget'
 
 export function memoryWorkspace(host:Runtime,owner:string){
  const contexts=memoryContexts(host,owner)
- return {contexts:contexts.map(({id,label,conversationId,context:c})=>({id,label,conversationId,scopeId:c.route.scopeId,
+ return {contexts:contexts.map(({id,label,conversationId,context:c})=>({id,label:conversationId?label:host.scopes.scope(c.route.scopeId).name,conversationId,scopeId:c.route.scopeId,
   request:{id:c.trigger.id,text:c.trigger.text},policy:host.agentMemory.policy(c),revision:host.agentMemory.policyRevision(c),enabled:host.agentMemory.enabled(c),
   items:host.agentMemory.authorized(c,true).filter(f=>f.entryId===id),
   skills:host.skills.list(c.route.scopeId,c),
@@ -47,6 +47,10 @@ export function memoryWorkspace(host:Runtime,owner:string){
 }
 
 export async function changeMemoryWorkspace(host:Runtime,owner:string,value:unknown){
+ if(z.object({action:z.literal('refresh')}).strict().safeParse(value).success){
+  for(const entry of memoryContexts(host,owner))host.agentMemory.settleNotes(entry.context)
+  return memoryWorkspace(host,owner)
+ }
  const x=command.parse(value),entry=memoryContexts(host,owner).find(c=>c.id===x.entryId)
  if(!entry)throw Error('Memory entry unavailable')
  const c=entry.context
@@ -69,7 +73,7 @@ export async function changeMemoryWorkspace(host:Runtime,owner:string,value:unkn
    if(parent.revoked)throw Error('Import source unavailable')
    if(prior&&(prior.revoked||prior.hash!==stableDigest(x.text)))throw Error('This import changed or was revoked')
    if(!prior)host.store.put('memory-evidence',id,{...parent,id,parentId:parent.id,text:x.text,hash:stableDigest(x.text),locator:'memory-file:'+x.file})
-   const facts=notes.map((content,index)=>host.memory.command(c,{action:'remember',operationId:id+':'+index,expectedRevision:0,subject:x.file,content,kind:x.file==='USER.md'?'profile':'fact',origin:'manual',candidate:true,sourceIds:[id,parent.id],visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'},true))
+   const facts=notes.map((content,index)=>host.memory.command(c,{action:'remember',operationId:id+':'+index,expectedRevision:0,subject:x.file,content,kind:x.file==='USER.md'?'profile':'fact',origin:'manual',candidate:false,sourceIds:[id,parent.id],visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'},true))
    return {imported:facts.length}
   })
  }
@@ -92,7 +96,7 @@ export async function changeMemoryWorkspace(host:Runtime,owner:string,value:unkn
   return host.agentMemory.manage(c,{action:'archive',id:fact.id,expectedRevision:fact.revision})
  }
  if(x.action==='edit'){
-  if(fact.state!=='active')throw Error('Only active memories can be edited')
+  if(!['active','candidate'].includes(fact.state))throw Error('Memory cannot be edited')
   if(!x.content)throw Error('Memory content required')
   return host.memory.command(c,editMemory(fact,x.content,x.condition),true)
  }

@@ -48,9 +48,9 @@ The model control below the Chat composer selects the Router connection and reas
 
 ## Router and Workers
 
-**Execution** shows connected software → Router → queue → Workers. Choose the Router service/model independently. Set the Worker count from **1 to 10**, then choose each Worker's service/model. A blank model uses that service's default. Saved Router settings apply to subsequent Chat turns. Chat rebuilds compatible backend context while preserving its transcript and durable memory. Worker tasks retain their existing backend binding; new tasks use the saved Worker configuration.
+**Execution** shows connected software → Router → queue → Workers. Choose the Router service/model independently. Set **Worker limit** above the Worker list, then add Workers and choose each Worker's service/model. The limit defaults to 10 and can be raised; lowering it does not stop or remove existing Workers. A blank model uses that service's default. Saved Router settings apply to subsequent Chat turns. Chat rebuilds compatible backend context while preserving its transcript and durable memory. Worker tasks retain their existing backend binding; new tasks use the saved Worker configuration.
 
-Workers reserve slots while managed background jobs are active. Excess new tasks queue. The prototype's additional lane remains available for one human follow-up to an existing conversation; it is not an eleventh configurable Worker. Reducing the pool lets active work finish and limits subsequent dispatch. New assignments use a rotating selection rather than model-based specialization.
+Workers reserve slots while managed background jobs are active. Excess new tasks queue. A reserved scheduling slot lets a human follow-up continue an existing task without adding another Worker profile. Reducing the pool lets active work finish and limits subsequent dispatch. New assignments use a rotating selection rather than model-based specialization.
 
 Existing deployments without an explicit pool derive Workers from their previous concurrency and Worker role/model settings. The advanced JSON shape is documented in [backends](BACKENDS.md).
 
@@ -108,7 +108,9 @@ The default Router assigns a cohesive task to one Worker for investigation, impl
 
 The personal built-in Chat discovers all model connections configured on this host. Adding a connection makes it available on the next message without clearing history or memory. `execution.management.enabled` and `maxWorkers` still apply. `execution.management.backends` continues to restrict external Routers and explicitly bound Chat scopes, together with each scope's `backendIds`; the personal Chat does not rewrite those settings.
 
-Within an authorized task, the Router can choose, create and configure a Worker without a separate staffing approval. `worker_manage list` provides connection names, models, supported options, tool names and per-Worker permissions. The tool schema exposes model, reasoning effort, prompt, provider parameters, limits, timeout, tools, tool connections and browser options. Provider support varies: native Codex has no host API step/token limits; Anthropic reasoning uses provider parameters. A Worker shared with another scope must be cloned to a new ID before its profile is changed. The clone is enabled by default and belongs to the requesting scope. Existing tasks retain their model sessions until explicitly migrated.
+Within an authorized task, the Router can choose, create and configure a Worker without a separate staffing approval. `worker_manage list` provides connection names, models, supported options, tool names and per-Worker permissions. Large results are retained as complete receipts that the Router can page with `router_read`, so connection IDs and permissions remain readable as the team grows. The tool schema exposes model, reasoning effort, prompt, provider parameters, limits, timeout, tools, tool connections and browser options. Provider support varies: native Codex has no host API step/token limits; Anthropic reasoning uses provider parameters. Personal Chat can configure existing Workers, including shared profiles; these changes apply to all scopes using that profile. External Routers must clone a shared Worker when `canConfigure` is false. The clone is enabled by default and belongs to the requesting scope. Existing tasks retain their model sessions until explicitly migrated.
+
+Built-in Chat accepts messages while the Router or Workers are busy. Router turns serialize in the same conversation; Workers continue in the background and their results wake the Router for a follow-up. The composer always offers **Send**, without a stop button. Explicit task cancellation remains available in task controls. **Concurrent subagents per task** (`work.maxAgents`) is separate from the Worker pool limit (`execution.management.maxWorkers`).
 
 ## Verify and grant access
 
@@ -155,7 +157,7 @@ Backups include SQLite, effective configuration and managed API/bot credentials.
 
 ## 中文上手
 
-部署者安装依赖后运行 `./start.sh setup`，打开终端给出的管理链接。在**软件接入**新建并命名入口；在**模型服务**新建连接，再到**执行**分别选择 Router 与各 Worker 的服务和模型（1–10 个 Worker）。飞书选群名，客户端点安装，企微按管理员创建条件填写 Bot ID/Secret。配置保存后，到对应软件发送测试，并核对收到、准入、执行和原入口回复四步。
+部署者安装依赖后运行 `./start.sh setup`，打开终端给出的管理链接。在**软件接入**新建并命名入口；在**模型服务**新建连接，再到**执行**分别选择 Router 与各 Worker 的服务和模型（Worker 列表上方可设置数量上限，默认 10）。飞书选群名，客户端点安装，企微按管理员创建条件填写 Bot ID/Secret。配置保存后，到对应软件发送测试，并核对收到、准入、执行和原入口回复四步。
 
 日常使用者只需要管理员发来的使用说明：在原来的群聊、私聊或客户端交代任务，在原处补充和接收成果。不要给普通使用者分发管理令牌。网页聊天是可选诊断，管理页优先展示需要人处理的事和入口状态。
 
@@ -163,4 +165,4 @@ Backups include SQLite, effective configuration and managed API/bot credentials.
 
 ## Execution and recorded calls
 
-Execution opens on **Calls**. Select a Router or Worker to put it at the center of the call map. Connections flow during recorded running calls. Click a tool or count for recorded status, duration and actual model. Switch to **Configuration** for independent Router/Worker settings, 1–10 Workers, new connections/services and instructions. See [the execution UI and acceptance record](EXECUTION_UI_2026-11-05.md) for prompt scope, retained drafts and validation boundaries.
+Execution opens on **Calls**. Select a Router or Worker to put it at the center of the call map. Connections flow during recorded running calls. Click a tool or count for recorded status, duration and actual model. Switch to **Configuration** for independent Router/Worker settings, the Worker limit, new connections/services and instructions. See [the execution UI and acceptance record](EXECUTION_UI_2026-11-05.md) for prompt scope, retained drafts and validation boundaries.

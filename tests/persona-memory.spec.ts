@@ -28,17 +28,16 @@ it('shows only the signed-in owner’s private memories and rejects cross-owner 
  await expect(changeMemoryWorkspace(f.h,'bob',{action:'edit',entryId:a.entryId,id:note.id,revision:note.revision,content:'跨用户修改'})).rejects.toThrow('unavailable')
  f.h.chat.reset('alice',randomUUID());expect(memoryContexts(f.h,'alice')).toEqual([]);expect(memoryWorkspace(f.h,'bob').contexts).toHaveLength(1)
 })
-it('imports candidates idempotently, dismisses without suppressing source, and keeps edits revisioned',async()=>{
+it('imports active memories idempotently and keeps edits revisioned',async()=>{
  const f=fixture(),a=f.chat('alice'),note=f.note(a.c,'先给结论'),policy=f.h.agentMemory.policy(a.c)
  const input={entryId:a.entryId,action:'import',file:'USER.md',text:'# USER.md\n\n- 喜欢简短的日报\n- 每周五看周报',operationId:randomUUID()}
  await changeMemoryWorkspace(f.h,'alice',input);await changeMemoryWorkspace(f.h,'alice',input)
- let view=memoryWorkspace(f.h,'alice').contexts[0]!,candidates=view.items.filter(f=>f.state==='candidate');expect(candidates).toHaveLength(2)
- await changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'dismiss',id:candidates[0]!.id,revision:candidates[0]!.revision})
+ let view=memoryWorkspace(f.h,'alice').contexts[0]!,candidates=view.items.filter(f=>f.subject==='USER.md');expect(candidates).toHaveLength(2);expect(candidates.every(f=>f.state==='active')).toBe(true)
+ await changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'forget',id:candidates[0]!.id,revision:candidates[0]!.revision})
  expect(f.h.memory.fact(note.id)?.state).toBe('active');expect(f.h.memory.evidence(note.sources[0]!.id)?.revoked).toBeFalsy()
- await changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'confirm',id:candidates[1]!.id,revision:candidates[1]!.revision})
  await changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'edit',id:note.id,revision:note.revision,content:'先列验证结果',condition:'代码报告'})
  await expect(changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'edit',id:note.id,revision:note.revision,content:'过期编辑'})).rejects.toThrow('changed')
- const edited=f.h.memory.fact(note.id)!;expect(edited.sources).toEqual(note.sources);expect(f.h.agentMemory.cooperation(a.c)).toContainEqual(expect.objectContaining({content:'先列验证结果',condition:'代码报告'}))
+ const edited=f.h.memory.fact(note.id)!;expect(edited.sources).toEqual(note.sources);expect(f.h.agentMemory.cooperation(memoryContexts(f.h,'alice')[0]!.context)).toContainEqual(expect.objectContaining({content:'先列验证结果',condition:'代码报告'}))
  await changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'forget',id:edited.id,revision:edited.revision})
  expect(f.h.agentMemory.cooperation(memoryContexts(f.h,'alice')[0]!.context).some(f=>f.id===note.id)).toBe(false)
  const exported=await changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'export',file:'USER.md'});expect(JSON.stringify(exported)).not.toContain('先列验证结果')
@@ -62,4 +61,25 @@ it('round trips personality files through revisioned settings and shares preview
  const preview=previewInstructions(f.h.config,{role:'router'});expect(preview.text).toContain('项目协调助手');expect(preview.text.match(/简洁、坦诚/g)).toHaveLength(1);expect(preview.text).not.toContain('重视证据的执行者')
  f.chat('alice');for(let i=0;i<100&&!f.calls.length;i++){await f.h.tick();await new Promise(r=>setTimeout(r,3))}
  expect(f.calls[0]!.instructions).toContain('简洁、坦诚');expect(f.calls[0]!.instructions.match(/简洁、坦诚/g)).toHaveLength(1)
+})
+it('settles legacy personal notes without crossing owners and keeps refresh idempotent',async()=>{
+ const f=fixture(),a=f.chat('alice'),b=f.chat('bob'),pending=f.note(a.c,'日常回答简短一些',true),other=f.note(b.c,'Bob 的私有候选',true)
+ const settings=structuredClone(f.h.settings.current()),first=await changeMemoryWorkspace(f.h,'alice',{action:'refresh'}) as ReturnType<typeof memoryWorkspace>
+ expect(first.contexts[0]!.items.find(n=>n.id===pending.id)).toMatchObject({state:'active',protected:false})
+ const revision=f.h.memory.fact(pending.id)!.revision
+ await changeMemoryWorkspace(f.h,'alice',{action:'refresh'});expect(f.h.memory.fact(pending.id)!.revision).toBe(revision)
+ expect(f.h.memory.fact(other.id)?.state).toBe('candidate');expect(f.h.settings.current()).toEqual(settings)
+ await changeMemoryWorkspace(f.h,'alice',{entryId:a.entryId,action:'forget',id:pending.id,revision})
+ await changeMemoryWorkspace(f.h,'alice',{action:'refresh'});expect(memoryWorkspace(f.h,'alice').contexts[0]!.items.some(f=>f.id===pending.id)).toBe(false)
+})
+it('keeps Router defaults concise and warm, respects custom personality and leaves Workers unchanged',async()=>{
+ const f=fixture(),files=personaFiles(f.h,{}),router=previewInstructions(f.h.config,{role:'router'}),worker=previewInstructions(f.h.config,{role:'worker'})
+ expect(files.files['SOUL.md']).toContain('默认简短');expect(files.files['SOUL.md']).toContain('自然措辞')
+ expect(router.text).toContain('默认简短');expect(router.text).toContain('只在复杂问题');expect(router.text).toContain('略带俏皮')
+ expect(worker.text).not.toContain('略带俏皮');expect(router.text).not.toContain('Name: Muse')
+ f.chat('alice');for(let i=0;i<100&&!f.calls.length;i++){await f.h.tick();await new Promise(r=>setTimeout(r,3))}
+ expect(f.calls[0]!.instructions).toContain('默认简短')
+ importPersonaFile(f.h,{agentId:'router',file:'SOUL.md',text:'保持严肃的科学报告风格',revision:files.revision})
+ const customized=previewInstructions(f.h.config,{role:'router'}).text
+ expect(customized).toContain('保持严肃的科学报告风格');expect(customized).not.toContain('略带俏皮')
 })

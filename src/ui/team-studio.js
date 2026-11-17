@@ -54,10 +54,10 @@ function teamSelect(id, tab = teamStudio.tab) {
 }
 function teamAddWorker(cloneSelected = false) {
   const workers = teamWorkers()
-  if (workers.length >= 10) return
+  if (workers.length >= teamWorkerLimit()) return
   const selected = workers.find(worker => worker.id === teamStudio.selected)
   let index = 1
-  while (workers.some(worker => worker.id === 'worker-' + index)) index++
+  while (workers.some(worker => worker.id === 'worker-' + index) || (S.snap?.retiredWorkerIds || []).includes('worker-' + index)) index++
   const worker = cloneSelected && selected ? { ...clone(selected), id: 'worker-' + index,
     label: (selected.label || L('Worker', '执行者')) + L(' copy', ' 副本') }
     : { id: 'worker-' + index, backend: executionDraft().router }
@@ -70,12 +70,26 @@ function teamAddWorker(cloneSelected = false) {
   render()
   document.getElementById('team-name')?.focus()
 }
+function teamWorkerLimit() { return S.draft.execution.management?.maxWorkers ?? 10 }
+function teamPoolLimit() {
+  const field = teamField('team-max-workers', L('Worker limit', 'Worker 数量上限'), teamWorkerLimit(), value => {
+    const count = Number(value), path = 'execution.management.maxWorkers'
+    if (!Number.isSafeInteger(count) || count < 1) S.errors.set(path, ['Enter a positive whole number.', '请输入正整数。'])
+    else { clearRelated(path); set(S.draft, path, count) }
+    updateBar()
+    const capacity = document.getElementById('team-capacity')
+    if (capacity) capacity.textContent = teamWorkers().length + ' / ' + teamWorkerLimit()
+    for (const button of document.querySelectorAll('[data-add-worker]')) button.disabled = S.errors.has(path) || teamWorkers().length >= teamWorkerLimit()
+  }, { number: true, min: 1 })
+  field.classList.add('team-pool-limit')
+  return field
+}
 function teamRemoveWorker() {
   const current = teamCurrent()
-  if (current.router || teamWorkers().length <= 1) return
+  if (current.router) return
   confirmWorkspaceAction(L('Remove this Worker?', '移除此 Worker？'),
-    L('Remove it from the configuration. Existing work is not cancelled; its history is retained.',
-      '将其从配置中移除。正在执行的任务不会因此取消，历史记录会保留。'),
+    L('Remove it from the configuration. Finish or cancel its tasks before saving. History is retained.',
+      '将其从配置中移除。保存前需完成或取消其任务，历史记录会保留。'),
     L('Remove Worker', '移除 Worker'), () => {
       const previous = teamWorkers(), workers = previous.filter(worker => worker.id !== teamStudio.selected)
       for (const map of [S.buffers, S.errors]) {
@@ -125,9 +139,12 @@ function teamGraph() {
       worker.model || connections.find(item => item.id === worker.backend)?.model, status))
   }
   const addWorker = opButton(L('Add Worker', '添加 Worker'), () => teamAddWorker(), 'button', 'plus')
-  addWorker.disabled = workers.length >= 10
+  addWorker.dataset.addWorker = ''
+  addWorker.disabled = workers.length >= teamWorkerLimit()
+  const capacity = el('span', 'team-capacity', workers.length + ' / ' + teamWorkerLimit()); capacity.id = 'team-capacity'
   graph.append(source, el('div', 'team-trunk'), router, line,
-    add(el('div', 'team-pool-heading'), el('h2', '', L('Workers', '执行者')), el('span', 'team-capacity', workers.length + ' / 10'), addWorker), list)
+    add(el('div', 'team-pool-heading'), el('h2', '', L('Workers', '执行者')), capacity, addWorker),
+    ...(teamFeatures().management ? [teamPoolLimit()] : []), list)
   const remote=el('div','team-remote-list')
   remote.append(add(el('div','team-pool-heading'),el('h2','',L('Child teams','子团队')),opButton(L('Connect a team','连接子团队'),()=>opNavigate('deployments'),'button','plus')))
   for(const target of S.draft.execution.teamTargets||[])remote.append(add(opButton('',()=>opNavigate('deployments'),'team-node'),el('strong','',target.label),el('span','team-node-role',L('Independent team coordination','由子团队独立统筹')),el('span','team-node-state',target.state==='paused'?L('Intake paused','暂停接单'):L('Accepting work','接收任务'))))
@@ -137,7 +154,7 @@ function teamGraph() {
 function teamField(id, label, value, change, options = {}) {
   const field = controlField(id, label, value, change, options.values || null, options.placeholder || '')
   const input = field.querySelector('input, select')
-  if (options.number) { input.type = 'number'; input.min = options.min; input.max = options.max; input.step = '1' }
+  if (options.number) { input.type = 'number'; input.min = options.min; if (options.max !== undefined) input.max = options.max; input.step = '1' }
   if (options.help) {
     const help = el('small', 'team-help', options.help); help.id = id + '-help'
     input.setAttribute('aria-describedby', help.id); field.append(help)
@@ -325,11 +342,6 @@ function teamTools(current) {
     enabled.onchange = () => { clearRelated('execution.management'); set(S.draft, 'execution.management', { ...policy, enabled: enabled.checked }); updateBar(); render() }
     const label = el('label', 'team-toggle'); label.htmlFor = enabled.id
     fields.append(add(label, enabled, el('span', '', L('Allow Router to manage Workers', '允许 Router 管理 Worker'))),
-      teamField('team-max-workers', L('Maximum Workers', 'Worker 数量上限'), policy.maxWorkers || 10, value => {
-        const count = Number(value)
-        if (!Number.isInteger(count) || count < 1 || count > 10) { S.errors.set('execution.management.maxWorkers', ['Enter a whole number from 1 to 10.', '请输入 1 到 10 的整数。']); updateBar(); return }
-        clearRelated('execution.management.maxWorkers'); set(S.draft, 'execution.management.maxWorkers', count); updateBar()
-      }, { values: Array.from({ length: 10 }, (_, index) => [String(index + 1), String(index + 1)]) }),
       teamJson('execution.management.backends', L('External Router connection IDs (JSON array)', '外部 Router 可用连接 ID（JSON 数组）'), 'array'))
   }
   if (integrations.data || S.snap?.toolConnections) fields.append(integrationGrants(current))
@@ -353,10 +365,12 @@ function teamInspector() {
   panel.append(({ essentials: teamBasics, tools: teamTools, advanced: teamAdvanced })[teamStudio.tab](current))
   panel.addEventListener('input', teamUpdatePreview)
   pane.append(tabs, panel)
+  if (current.router) pane.append(el('p', 'team-help', L('One Router is required. You can rename it or replace its model connection and instructions.', '保留一个 Router。可修改名称，或更换模型连接与指令。')))
   if (!current.router) {
     const copy = opButton(L('Duplicate', '复制 Worker'), () => teamAddWorker(true), 'button')
-    copy.disabled = teamWorkers().length >= 10
-    const remove = opButton(L('Remove', '移除'), teamRemoveWorker, 'text-button team-danger'); remove.disabled = teamWorkers().length <= 1
+    copy.dataset.addWorker = ''
+    copy.disabled = teamWorkers().length >= teamWorkerLimit()
+    const remove = opButton(L('Remove', '移除'), teamRemoveWorker, 'text-button team-danger')
     pane.append(add(el('div', 'team-inspector-footer'), copy, remove))
   }
   return pane

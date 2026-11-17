@@ -20,6 +20,8 @@
 .operator-workspace .team-pool-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .operator-workspace .team-pool-heading .button { margin-left: auto; }
 .operator-workspace .team-capacity { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.operator-workspace .team-pool-limit { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; }
+.operator-workspace .team-pool-limit input { width: 84px; min-height: 36px; font-variant-numeric: tabular-nums; }
 .operator-workspace .team-worker-list { display: grid; gap: 12px; padding-left: 26px; position: relative; }
 .operator-workspace .team-worker-list::before { position: absolute; content: ''; left: 7px; top: 0; bottom: 56px; width: 1px; background: var(--team-edge); }
 .operator-workspace .team-worker-list .team-node { position: relative; }

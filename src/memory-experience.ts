@@ -54,10 +54,7 @@ export async function extractExperience(engine:AgentMemory,c:ScopeContext,batch:
     subject:lesson.topic,content:lesson.content,kind:'fact',origin:'experience',candidate:true,sourceIds:sources,capture,
     learning:{inferred:true,condition:lesson.condition,quote:lesson.quote},visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group',
    },true) as MemoryFact
-   const evidence=host.memory.evidence(lesson.row.sourceId)!
-   // Unsuccessful attempts remain reviewable proposals; they cannot silently
-   // become standing methods before a person has inspected the evidence.
-   if(JSON.parse(evidence.text).outcome!=='failed_attempt')host.memory.acceptLearning(c,fact)
+   engine.acceptNote(c,fact)
   }
  }}
 }

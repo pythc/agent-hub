@@ -46,3 +46,8 @@
  .team-chip+.send-actions{margin-left:auto}
 }
 @media(prefers-reduced-motion:reduce){.composer,.composer-input,.send-button{transition:none}.send-button>svg,.composer .draft-attachment{animation:none}}
+
+.agent-contact-row { display:flex; align-items:center; gap:2px; min-width:0; }
+.agent-contact-row .agent-contact { flex:1; min-width:0; }
+.agent-manage { display:grid; place-items:center; flex:0 0 30px; height:36px; color:var(--c-muted); border-radius:8px; }
+.agent-manage:hover,.agent-manage:focus-visible { background:var(--c-hover); color:var(--c-text); }

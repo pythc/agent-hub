@@ -40,4 +40,25 @@ describe('Chat companion reflects current execution',()=>{
   expect(companionStatus(s,L,{...options,sending:true}).phase).toBe('thinking');
   expect(companionStatus(null,L,options).phase).toBe('idle');
  });
+ it('keeps background work visible after a newer conversation turn completes',()=>{
+  const s=base();s.run!.state='completed';
+  s.workers=[{id:'a',tasks:[{id:'background',state:'running'}]}] as unknown as Snapshot['workers'];
+  s.calls=[call({kind:'worker',workerId:'a',ticketId:'background',runId:'earlier',status:{phase:'working',label:'正在修复摘要',updatedAt:100}})];
+  expect(companionStatus(s,L,options)).toMatchObject({phase:'working',label:'正在修复摘要'});
+  s.browsers=[{ticketId:'background',runId:'earlier',control:'paused',ended:false}] as Snapshot['browsers'];
+  expect(companionStatus(s,L,options).phase).toBe('waiting');
+ });
+ it('shows an older Worker result waking the Router after the latest message was answered',()=>{
+  const s=base();s.run!.state='completed';s.reply={id:'result',runId:'earlier',state:'running'};
+  s.calls=[call({runId:'earlier',status:{phase:'reviewing',label:'正在复核修复',updatedAt:100}})];
+  expect(companionStatus(s,L,options)).toMatchObject({phase:'reviewing',label:'正在复核修复'});
+ });
+ it('keeps a background task needing input visible after a later question is answered',()=>{
+  const s=base();s.run!.state='completed';
+  s.workers=[{id:'a',tasks:[{id:'background',state:'waiting'}]}] as unknown as Snapshot['workers'];
+  expect(companionStatus(s,L,options).phase).toBe('waiting');
+  expect(companionStatus(s,L,{...options,participantId:'a'}).phase).toBe('waiting');
+  s.reply={id:'followup',runId:'current',state:'running'};
+  expect(companionStatus(s,L,options).phase).toBe('thinking');
+ });
 });

@@ -89,7 +89,7 @@ export async function extractMemories(engine:AgentMemory,c:ScopeContext,batch:Me
    if(fullCapture.epoch!==capture.epoch||fullCapture.generation!==capture.generation)throw Error('stale_extraction')
    try{
     const fact=host.memory.command(c,{action:'remember',operationId:'extract:'+stableDigest([d.source.id,d.action,d.kind,d.topic,d.content,target?.id,learning]),expectedRevision:0,subject:d.topic,content:d.content,sourceIds:ids,kind:d.kind,importance:d.importance,expiresAt:d.expiresAt,candidate:true,origin:'extracted',learning,replaces:target?[{id:target.id,revision:target.revision}]:undefined,proposalAction:d.action==='delete'?'forget':'replace',capture:fullCapture,visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'}) as MemoryFact
-    if(engine.policy(c).writeMode==='adaptive'&&d.kind==='preference'&&d.action!=='delete'&&(!d.inferred||!target||target.learning?.inferred===true&&!target.protected))host.memory.acceptLearning(c,fact)
+    engine.acceptNote(c,fact)
    }catch(error){if(!String(error).includes('Fact was forgotten'))throw error}
   }
   for(const t of resolvedTopics)if(t.id&&t.alias&&!host.memory.topicSuppressed(c.route.scopeId,t.alias)){const old=host.store.get<any>('memory-topic',t.id);if(old)host.store.put('memory-topic',t.id,{...old,aliases:[...new Set([...old.aliases,t.alias])].slice(-12)})}
@@ -120,7 +120,8 @@ export async function consolidateMemories(engine:AgentMemory,c:ScopeContext,sign
   })
   return host.store.atomic(()=>{const proposed=merges.map(m=>{
    const sources=[...new Set(m.members.flatMap(f=>f.sources.map(s=>s.id)))];if(sources.length>30)throw Error('merge_evidence_limit')
-   return host.memory.command(c,{action:'remember',operationId:'merge:'+stableDigest([m.members.map(f=>[f.id,f.revision]),m.content]),expectedRevision:0,subject:m.members[0]!.subject,content:m.content,sourceIds:sources,kind:m.members[0]!.kind??'fact',candidate:true,origin:'consolidated',learning:m.members[0]!.learning,replaces:m.members.map(f=>({id:f.id,revision:f.revision})),visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'})
+   const fact=host.memory.command(c,{action:'remember',operationId:'merge:'+stableDigest([m.members.map(f=>[f.id,f.revision]),m.content]),expectedRevision:0,subject:m.members[0]!.subject,content:m.content,sourceIds:sources,kind:m.members[0]!.kind??'fact',candidate:true,origin:'consolidated',learning:m.members[0]!.learning,replaces:m.members.map(f=>({id:f.id,revision:f.revision})),visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'}) as MemoryFact
+   return engine.acceptNote(c,fact)
   })
   const report={at:engine.now(),status:'completed',reviewed:candidates.length,proposed:proposed.length};host.store.put('memory-consolidation',space,report);return report
   })

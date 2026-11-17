@@ -1,97 +1,83 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useId,useRef,useState} from 'react';
+import {ArrowLeft,ChevronDown,ChevronRight,Download,FileText,MessageSquare,MoreHorizontal,Pencil,RefreshCw,Trash2,Upload,Users,UserRound} from 'lucide-react';
 import type {MemoryProjection} from '../../src/router-memory.ts';
-import type {SkillVersion} from '../../src/saved-skills.ts';
-import './memory.css';
+import {download,request,type Entry,type Labels} from './memory-api.ts';
+import {MemoryFile,personaRequest,type PersonaFile,type PersonaFiles} from './memory-files.tsx';
+import {Methods} from './memory-methods.tsx';
 import {memoryProvenance} from './memory-provenance.ts';
+import './memory.css';
 
-type Labels=(en:string,zh:string)=>string;
-type Method={id:string;version:number;goalId:string;title:string;state:string;revision:number;passed:number;failed:number;parameters:{name:string;label:string}[]};
-type Entry={conversationId?:string;request:{id:string;text:string};id:string;label:string;scopeId:string;revision:number;enabled:boolean;policy:{writeMode:string};items:MemoryProjection[];skills:Method[];goals:{id:string;title:string}[];cooperation:{id:string;content:string;condition:string}[]};
-async function request<T>(body?:unknown,signal?:AbortSignal):Promise<T>{
- const response=await fetch('/api/chat/memory',{signal,...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{})});
- if(!response.ok)throw Error('memory_request_failed');return response.json();
-}
-function download(file:string,text:string){const url=URL.createObjectURL(new Blob([text],{type:'text/markdown;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=file;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-function MemoryRow({fact:f,entry,L,changed}:{fact:MemoryProjection;entry:Entry;L:Labels;changed:()=>void}){
+type FileTab='MEMORY.md'|'USER.md'|PersonaFile;
+const files:FileTab[]=['MEMORY.md','USER.md','SOUL.md','IDENTITY.md','AGENTS.md'];
+type Note={fact:MemoryProjection;entry:Entry};
+type Detail={evidence:{id:string;text:string;locator:string}[];versions:MemoryProjection[]};
+function title(f:MemoryProjection,L:Labels){return /^(Explicit memory |interest:)|\.md$/.test(f.subject)?f.content.split(/[。！？\n]/)[0]!.slice(0,28)||L('Memory','记忆'):f.subject;}
+function NoteDetail({note:{fact:f,entry},L,changed,editingChanged,back}:{note:Note;L:Labels;changed:()=>void;editingChanged:(v:boolean)=>void;back:()=>void}){
  const editButton=useRef<HTMLButtonElement>(null),deleteButton=useRef<HTMLButtonElement>(null);
- const cancel=(mode:'edit'|'delete')=>{setEdit(null);setDeleting(false);setError(false);requestAnimationFrame(()=>{(mode==='edit'?editButton:deleteButton).current?.focus();});};
  const [edit,setEdit]=useState<{content:string;condition:string}|null>(null),[deleting,setDeleting]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(false);
- const [detail,setDetail]=useState<{evidence:{id:string;text:string;locator:string}[];versions:MemoryProjection[]}|null>(null);
- const mutate=async(action:string,extra:Record<string,unknown>={})=>{setBusy(true);setError(false);try{await request({entryId:entry.id,id:f.id,revision:f.revision,action,...extra});setEdit(null);setDeleting(false);setDetail(null);changed();}catch{setError(true);}finally{setBusy(false);}};
- const inspect=async()=>{setBusy(true);setError(false);try{const result=await request<{detail:NonNullable<typeof detail>}>({entryId:entry.id,action:'inspect',id:f.id});setDetail(result.detail);}catch{setError(true);}finally{setBusy(false);}};
+ const [detail,setDetail]=useState<Detail|null>(null),[sourceError,setSourceError]=useState(false),[sourceOpen,setSourceOpen]=useState(false);
+ const inspect=()=>{setSourceError(false);void request<{detail:Detail}>({entryId:entry.id,action:'inspect',id:f.id}).then(r=>setDetail(r.detail)).catch(()=>setSourceError(true));};
+ useEffect(()=>{inspect();},[f.id,f.revision,entry.id]);
+ useEffect(()=>{editingChanged(edit!==null||deleting);return()=>editingChanged(false);},[edit!==null,deleting]);
  const provenance=memoryProvenance(f,L);
- const context=[f.learning?.condition,f.learning?.discussion?L('One conversation only','仅对应会话'):undefined].filter(Boolean).join(' · ');
- return <article className="memory-note" data-memory-id={f.id}>
-  {edit?<form className="memory-edit" onSubmit={e=>{e.preventDefault();void mutate('edit',edit);}}>
-   <label>{L('Memory content','记忆内容')}<textarea autoFocus value={edit.content} required maxLength={16000} onChange={e=>setEdit({...edit,content:e.target.value})}/></label>
-   <label>{L('When to use','适用情况')}<input value={edit.condition} maxLength={300} onChange={e=>setEdit({...edit,condition:e.target.value})}/></label>
-   <div className="memory-actions"><button className="button primary" disabled={busy}>{L('Save','保存')}</button><button type="button" className="text-button" disabled={busy} onClick={()=>cancel('edit')}>{L('Cancel','取消')}</button></div>
-  </form>:<>
-   <p className="memory-content">{f.content}</p>
-   {context&&<p className="memory-context">{context}</p>}
-   {provenance.length>0&&<p className="memory-provenance">{provenance.map(detail=>detail.value).join(' · ')}</p>}
-   {f.state==='candidate'&&(f.proposalAction==='forget'||!!f.replaces?.length)&&<p>{f.proposalAction==='forget'?L('Proposes forgetting this memory','建议删除这条记忆'):L('Proposes replacing an earlier memory','建议替换原有记忆')}</p>}
-   <div className="memory-actions">
-    {f.state==='candidate'?<><button className="text-button" disabled={busy} onClick={()=>void mutate('confirm')}>{L('Accept','采纳')}</button><button className="text-button" disabled={busy} onClick={()=>void mutate('dismiss')}>{L('Dismiss','忽略')}</button></>:
-     <><button className="text-button" disabled={busy} ref={editButton} onClick={()=>setEdit({content:f.content,condition:f.learning?.condition??''})}>{L('Edit','修改')}</button><button className="text-button" disabled={busy} ref={deleteButton} onClick={()=>setDeleting(true)}>{L('Delete','删除')}</button></>}
-    <button className="text-button" disabled={busy} onClick={()=>detail?setDetail(null):void inspect()}>{detail?L('Hide source','收起来源'):L('Source & history','来源与历史')}</button>
-   </div>
-   {deleting&&<div className="memory-delete"><span>{L('Delete this memory?','删除这条记忆？')}</span><button className="text-button" disabled={busy} onClick={()=>void mutate('forget')}>{L('Delete','删除')}</button><button className="text-button" onClick={()=>cancel('delete')}>{L('Cancel','取消')}</button></div>}
-  </>}
-  {detail&&<div className="memory-evidence">{f.learning?.quote&&<blockquote>{f.learning.quote}</blockquote>}{detail.evidence.map(e=><details key={e.id}><summary>{e.locator}</summary><pre>{e.text}</pre></details>)}<p>{L('Current revision','当前修订')} {f.revision}</p>{detail.versions.map(v=><p key={v.revision}>{v.revision} · {v.content}</p>)}</div>}
-  {error&&<p role="alert" className="memory-error">{L('Change not saved. Refresh and try again.','操作未完成，请刷新后重试。')}</p>}
+ const cancel=()=>{setError(false);const wasDelete=deleting;setEdit(null);setDeleting(false);requestAnimationFrame(()=>(wasDelete?deleteButton:editButton).current?.focus());};
+ const mutate=async(action:string,extra:Record<string,unknown>={})=>{setBusy(true);setError(false);try{await request({entryId:entry.id,id:f.id,revision:f.revision,action,...extra});setEdit(null);setDeleting(false);changed();}catch{setError(true);}finally{setBusy(false);}};
+ return <article className="memory-detail" data-memory-id={f.id}>
+  <button className="memory-back" onClick={back} disabled={edit!==null||deleting}><ArrowLeft size={16}/>{L('Back to memories','返回记忆列表')}</button>
+  <header><h3>{title(f,L)}</h3>{!edit&&!deleting&&<div className="memory-actions"><button className="button" ref={editButton} onClick={()=>setEdit({content:f.content,condition:f.learning?.condition??''})}><Pencil size={15}/>{L('Edit','编辑')}</button><button className="memory-icon" ref={deleteButton} aria-label={L('Delete memory','删除记忆')} title={L('Delete','删除')} onClick={()=>setDeleting(true)}><Trash2 size={17}/></button></div>}</header>
+  {edit?<form className="memory-edit" onSubmit={e=>{e.preventDefault();void mutate('edit',edit);}}><label>{L('Memory content','记忆内容')}<textarea required autoFocus maxLength={16000} rows={6} value={edit.content} onChange={e=>setEdit({...edit,content:e.target.value})}/></label><label>{L('When to use','适用情况')}<input maxLength={300} value={edit.condition} onChange={e=>setEdit({...edit,condition:e.target.value})}/></label><div className="memory-actions"><button className="button primary" disabled={busy}>{L('Save','保存')}</button><button className="button" type="button" disabled={busy} onClick={cancel}>{L('Cancel','取消')}</button></div></form>:<><p className="memory-content">{f.content}</p>{provenance.length>0&&<p className="memory-provenance">{provenance.map(detail=>detail.value).join(' · ')}</p>}{f.learning?.discussion&&<p className="memory-context">{L('One conversation only','仅对应会话')}</p>}{f.learning?.condition&&<p className="memory-condition">{L('Applies to: ','适用情况：')}{f.learning.condition}</p>}</>}
+  {deleting&&<div className="memory-delete" role="group" aria-label={L('Delete memory','删除记忆')}><p>{L('Delete this memory?','删除这条记忆？')}</p><div className="memory-actions"><button className="button primary" disabled={busy} onClick={()=>void mutate('forget')}>{L('Delete','删除')}</button><button className="button" disabled={busy} onClick={cancel}>{L('Cancel','取消')}</button></div></div>}
+  {error&&<p role="alert" className="memory-error">{L('Could not save. Your edits are kept; refresh and try again.','操作未完成，已保留编辑内容；请刷新后重试。')}</p>}
+  {!edit&&!deleting&&<section className="memory-source-detail"><h4>{L('Source','来源')}</h4>
+   {f.learning?.quote&&<blockquote>{f.learning.quote}</blockquote>}
+   {sourceError?<button className="text-button" onClick={inspect}>{L('Retry loading source','重新读取来源')}</button>:!detail?<p role="status">{L('Loading source…','正在读取来源…')}</p>:<>
+    <button className="text-button memory-source-link" onClick={()=>setSourceOpen(v=>!v)}>{sourceOpen?L('Hide original','收起原文'):L('View original','查看原文')}<ChevronRight size={15}/></button>
+    {sourceOpen&&<div className="memory-evidence">{detail.evidence.length?detail.evidence.map(e=><p key={e.id}>{e.text}</p>):<p>{L('The original is no longer available.','原文已不可用。')}</p>}</div>}
+    <details className="memory-history"><summary>{L('Change history','修改记录')}<ChevronRight size={16}/></summary>{detail.versions.length?detail.versions.toSorted((a,b)=>b.revision-a.revision).map(v=><div key={v.revision}><strong>{L('Revision','修订')} {v.revision}</strong><p>{v.content}</p></div>):<p>{L('No changes yet.','暂无修改记录。')}</p>}</details>
+   </>}
+  </section>}
  </article>;
 }
-function Methods({entry,L,changed}:{entry:Entry;L:Labels;changed:()=>void}){
- const [runOperation,setRunOperation]=useState('');
- const [running,setRunning]=useState<Method|null>(null),[inputs,setInputs]=useState<Record<string,string>>({}),[quote,setQuote]=useState(''),[receipt,setReceipt]=useState(false);
- const [draft,setDraft]=useState<SkillVersion|null>(null),[parameters,setParameters]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(false);
- const act=async(value:unknown)=>{setBusy(true);setError(false);try{return await request<SkillVersion>({entryId:entry.id,action:'skill',skill:value});}catch{setError(true);return null;}finally{setBusy(false);}};
- const open=async(goalId:string,method?:Method)=>{const latest=await act({action:'draft',goalId});if(!latest)return;try{const source=method?await request<SkillVersion>({entryId:entry.id,action:'skill-read',id:method.id,revision:method.version}):latest;setDraft({...source,version:latest.version});setParameters((source.parameters??[]).map(p=>p.name+' = '+p.label).join('\n'));}catch{setError(true);}};
- const unsaved=entry.goals.filter(g=>!entry.skills.some(s=>s.goalId===g.id));
- return <details className="memory-section"><summary>{L('Working methods','工作方法')} · {entry.skills.length}</summary>
-  {unsaved.slice(0,10).map(g=><div className="memory-method" key={g.id}><span>{g.title}</span><button className="text-button" disabled={busy} onClick={()=>void open(g.id)}>{L('Save as method','保存为方法')}</button></div>)}
-  {entry.skills.map(s=><div className="memory-method" key={s.id+':'+s.version}><div>{s.title} · v{s.version}<p>{s.state==='retired'?L('Retired','已停用'):s.state==='candidate'?L('Awaiting trial','待试用'):L('Available','可用')} · {L('Passed','验收通过')} {s.passed} · {L('Failed attempts','未通过')} {s.failed}</p></div><div className="memory-actions"><button className="text-button" disabled={busy} onClick={()=>void open(s.goalId,s)}>{L('Edit or restore','编辑或恢复此版')}</button><button className="text-button" disabled={busy} onClick={()=>void request<{file:string;text:string}>({entryId:entry.id,action:'skill-export',id:s.id,revision:s.version}).then(r=>download(r.file,r.text)).catch(()=>setError(true))}>{L('Export','导出')}</button>{s.state!=='retired'&&<button className="text-button" disabled={busy} onClick={()=>{setRunning(s);setRunOperation(crypto.randomUUID());setInputs({});setQuote(entry.request.text);setReceipt(false);}}>{L('Run / trial','运行 / 试用')}</button>}{s.state!=='retired'&&<button className="text-button" disabled={busy} onClick={()=>void act({action:'retire',skill:{id:s.id,version:s.version},scopeId:entry.scopeId,entryId:entry.id,expectedRevision:s.revision}).then(r=>{if(r)changed();})}>{L('Retire','停用')}</button>}</div></div>)}
-  {running&&<form className="memory-edit" onSubmit={e=>{e.preventDefault();void act({action:'run',skill:{id:running.id,version:running.version},triggerId:entry.request.id,authorizationQuote:quote,inputs,operationId:runOperation}).then(r=>{if(r){setRunning(null);setReceipt(true);changed();}});}}><h3>{running.title}</h3><label>{L('Request from this conversation','本次任务的对话原文')}<textarea required value={quote} onChange={e=>setQuote(e.target.value)}/></label>{running.parameters.map(p=><label key={p.name}>{p.label}<input required maxLength={2000} value={inputs[p.name]??''} onChange={e=>setInputs({...inputs,[p.name]:e.target.value})}/></label>)}<div className="memory-actions"><button className="button primary" disabled={busy}>{L('Start actual task','启动实际任务')}</button><button className="text-button" type="button" onClick={()=>setRunning(null)}>{L('Cancel','取消')}</button></div></form>}
-  {receipt&&<p role="status">{L('Task started. Follow its progress in Tasks.','任务已启动，可在任务页查看进展。')}</p>}
-  {!entry.skills.length&&!unsaved.length&&<p>{L('Methods appear after a task passes acceptance.','任务通过验收后，可在这里保存工作方法。')}</p>}
-  {draft&&<form className="memory-edit" onSubmit={e=>{e.preventDefault();const inputs=parameters.split('\n').filter(s=>s.trim()).map(s=>{const [name,...label]=s.split('=');return {name:name!.trim(),label:label.join('=').trim()||name!.trim()};});void act({action:'save',goalId:draft.goalId,expectedVersion:draft.version,template:draft.template,parameters:inputs}).then(r=>{if(r){setDraft(null);changed();}});}}>
-   <label>{L('Method name','方法名称')}<input required value={draft.template.title} onChange={e=>setDraft({...draft,template:{...draft.template,title:e.target.value}})}/></label>
-   <label>{L('Objective','目标')}<textarea required value={draft.template.objective} onChange={e=>setDraft({...draft,template:{...draft.template,objective:e.target.value}})}/></label>
-   {draft.template.nodes.map((n,i)=><label key={n.id}>{n.title}<textarea required value={n.instruction} onChange={e=>setDraft({...draft,template:{...draft.template,nodes:draft.template.nodes.map((row,j)=>i===j?{...row,instruction:e.target.value}:row)}})}/></label>)}
-   <details><summary>{L('Acceptance requirements','验收要求')}</summary>{draft.template.criteria.map((c,i)=><div className="memory-edit" key={c.id}>
-    <label>{L('Acceptance criterion','验收条件')}<textarea required value={c.description} onChange={e=>setDraft({...draft,template:{...draft.template,criteria:draft.template.criteria.map((row,j)=>i===j?{...row,description:e.target.value}:row)}})}/></label>
-    <label>{L('Evidence files, one per line','验收文件，每行一个')}<textarea value={c.files.join('\n')} onChange={e=>setDraft({...draft,template:{...draft.template,criteria:draft.template.criteria.map((row,j)=>i===j?{...row,files:e.target.value.split('\n').filter(Boolean)}:row)}})}/></label>
-    {c.check&&<label>{L('Checked file path','检查的文件路径')}<input required value={c.check.path} onChange={e=>setDraft({...draft,template:{...draft.template,criteria:draft.template.criteria.map((row,j)=>i===j?{...row,check:row.check?{...row.check,path:e.target.value}:undefined}:row)}})}/></label>}
-   </div>)}</details>
-   <label>{L('Inputs: name = label, one per line','输入参数：每行填写 name = 名称')}<textarea value={parameters} placeholder="file = 文件路径" onChange={e=>setParameters(e.target.value)}/></label><p>{L('Use {{name}} in the objective or steps. Changed methods become available after a successful trial.','在目标或步骤中使用 {{name}}。修改后需通过一次实际任务验收。')}</p>
-   <div className="memory-actions"><button className="button primary" disabled={busy}>{L('Save method','保存方法')}</button><button type="button" className="text-button" onClick={()=>setDraft(null)}>{L('Cancel','取消')}</button></div>
-  </form>}
-  {error&&<p className="memory-error" role="alert">{L('Method update failed. Check inputs or refresh.','方法操作未完成，请检查参数或刷新后重试。')}</p>}
- </details>;
-}
-function MemoryEntry({entry,L,changed}:{entry:Entry;L:Labels;changed:()=>void}){
- const [busy,setBusy]=useState(false),[error,setError]=useState(false);
- const [learning,setLearning]=useState(entry.policy.writeMode!=='explicit_only');
- useEffect(()=>setLearning(entry.policy.writeMode!=='explicit_only'),[entry.policy.writeMode]);
- const candidates=entry.items.filter(f=>f.state==='candidate'),active=entry.items.filter(f=>f.state==='active');
- const action=async(body:Record<string,unknown>)=>{setBusy(true);setError(false);try{const result=await request<{file:string;text:string}>({entryId:entry.id,...body});if(body.action==='export')download(result.file,result.text);else changed();return true;}catch{setError(true);return false;}finally{setBusy(false);}};
- return <section className="memory-entry" aria-label={entry.label}>
-  <div className="memory-heading"><label className="memory-toggle"><input type="checkbox" checked={learning} disabled={busy||!entry.enabled} onChange={e=>{const enabled=e.target.checked;setLearning(enabled);void action({action:'learning',enabled,revision:entry.revision}).then(ok=>{if(!ok)setLearning(!enabled);});}}/>{L('Learn from interactions','从交流中学习')}</label></div>
-  {active.length?active.map(f=><MemoryRow key={f.id+':'+f.revision} fact={f} entry={entry} L={L} changed={changed}/>):<p className="memory-empty">{L('No saved memories yet.','暂无已保存的记忆。')}</p>}
-  <details className="memory-section"><summary>{L('Pending suggestions','待确认的记忆')} · {candidates.length}</summary>{candidates.map(f=><MemoryRow key={f.id+':'+f.revision} fact={f} entry={entry} L={L} changed={changed}/>)}</details>
-  <details className="memory-section"><summary>{L('How we work together','我们的协作方式')}</summary>{entry.cooperation.length?entry.cooperation.map(f=><p key={f.id}>{f.content}{f.condition?' · '+f.condition:''}</p>):<p>{L('No established preferences or methods yet.','还没有形成稳定的偏好和工作方法。')}</p>}</details>
-  <Methods entry={entry} L={L} changed={changed}/>
-  <details className="memory-section"><summary>{L('Organize & export','整理与导出')}</summary><div className="memory-actions"><button className="text-button" disabled={busy} onClick={()=>void action({action:'consolidate'})}>{L('Organize memories','整理记忆')}</button>{['USER.md','MEMORY.md','AGENTS.md','ALIGNMENT_SYNTHESIS.md'].map(file=><button className="text-button" key={file} disabled={busy} onClick={()=>void action({action:'export',file})}>{file}</button>)}</div><label className="memory-import">{L('Import memory file','导入记忆文件')}<input type="file" accept=".md" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;if(!['USER.md','MEMORY.md','AGENTS.md','ALIGNMENT_SYNTHESIS.md'].includes(file.name)||file.size>32000){setError(true);return;}void file.text().then(text=>action({action:'import',file:file.name,text,operationId:crypto.randomUUID()})).catch(()=>setError(true));}}/></label></details>
-  {error&&<p role="alert" className="memory-error">{L('Operation failed. Refresh and try again.','操作未完成，请刷新后重试。')}</p>}
- </section>;
-}
 export function MemorySettings({L}:{L:Labels}){
- const [selected,setSelected]=useState('');
- const [entries,setEntries]=useState<Entry[]|null>(null),[error,setError]=useState(false),[revision,refresh]=useState(0);
- useEffect(()=>{const controller=new AbortController();setError(false);void request<{contexts:Entry[]}>(undefined,controller.signal).then(result=>setEntries(result.contexts)).catch(()=>{if(!controller.signal.aborted)setError(true);});return()=>controller.abort();},[revision]);
- const entry=entries?.find(e=>e.id===selected)??entries?.find(e=>e.conversationId&&e.items.length)??entries?.find(e=>e.items.length)??entries?.[0];
- return <section className="memory-settings" aria-label={L('Memory','记忆')}><div className="memory-heading"><h2>{L('Saved memories','已保存的记忆')}</h2><button className="text-button" onClick={()=>refresh(v=>v+1)}>{L('Refresh','刷新')}</button></div>
-  {error?<p role="alert" className="memory-error">{L('Couldn’t load memories. Refresh to retry.','记忆读取失败，请刷新后重试。')}</p>:entries===null?<p role="status">{L('Loading…','加载中…')}</p>:entry?<><label className="memory-source">{L('Memory source','记忆来源')}<select aria-label={L('Memory source','记忆来源')} value={entry.id} onChange={e=>setSelected(e.target.value)}>{entries.map(e=><option key={e.id} value={e.id}>{(e.conversationId?L('Chat · ','对话 · '):L('Group · ','群聊 · '))+e.label.slice(0,60)}</option>)}</select></label><MemoryEntry key={entry.id} entry={entry} L={L} changed={()=>refresh(v=>v+1)}/></>:<p className="memory-empty">{L('No manageable memories yet.','暂无可管理的记忆。')}</p>}
+ const id=useId(),[file,setFile]=useState<FileTab>('MEMORY.md'),[scope,setScope]=useState('personal'),[entries,setEntries]=useState<Entry[]|null>(null),[persona,setPersona]=useState<PersonaFiles|null>(null);
+ const [selected,setSelected]=useState(''),[mobileDetail,setMobileDetail]=useState(false),[editing,setEditing]=useState(false),[revision,refresh]=useState(0),[error,setError]=useState(''),[busy,setBusy]=useState(false),[pendingLearning,setPendingLearning]=useState<boolean|null>(null),[methods,setMethods]=useState(false),[methodEntry,setMethodEntry]=useState('');
+ const menu=useRef<HTMLDetailsElement>(null),importInput=useRef<HTMLInputElement>(null),methodsDialog=useRef<HTMLDialogElement>(null),menuButton=useRef<HTMLElement|null>(null);
+ const personal=file==='MEMORY.md'||file==='USER.md',groups=entries?.filter(e=>!e.conversationId)??[],all=entries??[];
+ const actualScope=scope!=='personal'&&!groups.some(e=>e.id===scope)?'personal':scope;
+ const visible=all.filter(e=>actualScope==='personal'?!!e.conversationId:e.id===actualScope);
+ const notes:Note[]=[...new Map(visible.flatMap(entry=>entry.items.filter(f=>['active','candidate'].includes(f.state)&&f.proposalAction!=='forget'&&(file!=='USER.md'||['profile','preference','interest'].includes(f.kind??''))).map(fact=>[fact.id,{fact,entry}] as const))).values()].sort((a,b)=>b.fact.createdAt-a.fact.createdAt);
+ const current=notes.find(n=>n.fact.id===selected)??notes[0];
+ const learning=visible.length>0&&visible.every(e=>e.policy.writeMode!=='explicit_only');
+ useEffect(()=>{let disposed=false;setError('');void Promise.all([request<{contexts:Entry[]}>({action:'refresh'}),personaRequest()]).then(([m,p])=>{if(!disposed){setEntries(m.contexts);setPersona(p);}}).catch(()=>{if(!disposed)setError(L('Could not load. Try refreshing.','读取失败，请刷新重试。'));});return()=>{disposed=true;};},[revision]);
+ useEffect(()=>{if(methods)methodsDialog.current?.showModal();else methodsDialog.current?.close();},[methods]);
+ useEffect(()=>{const close=(event:PointerEvent)=>{if(menu.current&&!menu.current.contains(event.target as Node))menu.current.open=false;};document.addEventListener('pointerdown',close);return()=>document.removeEventListener('pointerdown',close);},[]);
+ const closeMenu=()=>{if(menu.current)menu.current.open=false;};
+ const run=async(work:()=>Promise<unknown>,reload=true)=>{setBusy(true);setError('');closeMenu();try{await work();if(reload)refresh(v=>v+1);}catch{setError(L('Could not complete the operation. Please try again.','操作未完成，请重试。'));}finally{setBusy(false);}};
+ const changeLearning=async()=>{const enabled=!learning;setBusy(true);setPendingLearning(enabled);setError('');try{const scopes=[...new Map(visible.map(e=>[e.scopeId,e])).values()];for(const e of scopes)await request({entryId:e.id,action:'learning',enabled,revision:e.revision});setEntries((await request<{contexts:Entry[]}>({action:'refresh'})).contexts);}catch{setError(L('Could not change learning. Try refreshing.','学习设置未能保存，请刷新重试。'));}finally{setPendingLearning(null);setBusy(false);}};
+ const exportFile=()=>void run(async()=>{if(!personal){if(persona)download(file,persona.files[file]);return;}const text=await Promise.all(visible.map(e=>request<{text:string}>({entryId:e.id,action:'export',file})));download(file,text.map(t=>t.text).join('\n\n'));},false);
+ const chooseFile=(next:FileTab)=>{setFile(next);setMobileDetail(false);setSelected('');};
+ const activeMethod=visible.find(e=>e.id===methodEntry)??visible[0];
+ const noteHint=personal?L('These files shape Roppo’s memory. Usually, you won’t need to change them.','这些文件影响 Roppo 的记忆，通常无需修改。'):L('These are Router personality and behavior settings. Usually, you won’t need to change them.','这些是 Router 的人格与行为设置，通常无需修改。');
+ return <section className="memory-settings" aria-label={L('Memory','记忆')}>
+  <div className="memory-heading"><h2>{L('Memory','记忆')}</h2><details ref={menu} className="memory-menu" onKeyDown={e=>{if(e.key==='Escape'){closeMenu();menu.current?.querySelector('summary')?.focus();}}}><summary aria-label={L('More memory actions','更多记忆操作')}><MoreHorizontal size={17}/>{L('More','更多')}<ChevronDown size={14}/></summary><div className="memory-menu-items">
+   <button disabled={editing||busy} onClick={()=>{closeMenu();refresh(v=>v+1);}}><RefreshCw size={16}/>{L('Refresh','刷新')}</button>
+   <button disabled={busy||!persona||personal&&!visible.length} onClick={exportFile}><Download size={16}/>{L('Export current file','导出当前文件')}</button>
+   <button disabled={busy||editing||personal&&!visible.length} onClick={()=>{closeMenu();importInput.current?.click();}}><Upload size={16}/>{L('Import file','导入文件')}</button>
+   {personal&&<><button disabled={busy||editing||!visible.length} onClick={()=>void run(async()=>{for(const e of visible)await request({entryId:e.id,action:'consolidate'});})}><FileText size={16}/>{L('Organize memories','整理记忆')}</button><button disabled={!visible.length} onClick={e=>{menuButton.current=e.currentTarget;closeMenu();setMethods(true);}}><FileText size={16}/>{L('Working methods','工作方法')}</button></>}
+  </div></details></div>
+  <div className="memory-toolbar">
+   {personal?<><div className="memory-scope"><UserRound size={17}/>{groups.length?<select aria-label={L('Memory scope','记忆范围')} disabled={editing||busy} value={actualScope} onChange={e=>{setScope(e.target.value);setSelected('');setMobileDetail(false);}}><option value="personal">{L('My memories','我的记忆')}</option><optgroup label={L('Group memories','群聊记忆')}>{groups.map(e=><option key={e.id} value={e.id}>{e.label}</option>)}</optgroup></select>:<span>{L('My memories','我的记忆')}</span>}</div><label className="memory-toggle"><span>{L('Learn from interactions','从交流中学习')}</span><input role="switch" type="checkbox" checked={pendingLearning??learning} disabled={busy||!visible.length||visible.some(e=>!e.enabled)} onChange={()=>void changeLearning()}/></label></>:<div className="memory-scope"><Users size={17}/><span>Router</span></div>}
+  </div>
+  <div className="memory-file-tabs" role="tablist" aria-label={L('Memory and personality files','记忆与人格文件')} onKeyDown={e=>{if(!['ArrowRight','ArrowLeft','Home','End'].includes(e.key)||editing)return;e.preventDefault();const i=files.indexOf(file),next=e.key==='Home'?0:e.key==='End'?files.length-1:(i+(e.key==='ArrowRight'?1:-1)+files.length)%files.length;chooseFile(files[next]!);document.getElementById(id+'-'+files[next])?.focus();}}>{files.map(name=><button id={id+'-'+name} key={name} role="tab" aria-selected={file===name} aria-controls={id+'-panel'} tabIndex={file===name?0:-1} disabled={editing} onClick={()=>chooseFile(name)}>{name}</button>)}</div>
+  <p className="memory-file-hint">{noteHint}</p>
+  {error&&<p className="memory-error" role="alert">{error}<button className="text-button" onClick={()=>refresh(v=>v+1)}>{L('Refresh','刷新')}</button></p>}
+  <div id={id+'-panel'} role="tabpanel" aria-labelledby={id+'-'+file}>
+   {entries===null||!persona?<p className="memory-empty" role="status">{error?L('Memory is unavailable.','记忆暂不可用。'):L('Loading…','加载中…')}</p>:personal?notes.length&&current?<div className="memory-reader" data-detail={mobileDetail}>
+    <nav className="memory-list" aria-label={L('Memories','记忆列表')}>{notes.map(note=><button key={note.fact.id} aria-current={note.fact.id===current.fact.id?'true':undefined} disabled={editing} onClick={()=>{setSelected(note.fact.id);setMobileDetail(true);}}><MessageSquare size={19}/><span><strong>{title(note.fact,L)}</strong><span>{note.fact.content}</span></span></button>)}</nav>
+    <NoteDetail key={current.fact.id+':'+current.fact.revision} note={current} L={L} changed={()=>refresh(v=>v+1)} editingChanged={setEditing} back={()=>setMobileDetail(false)}/>
+   </div>:<div className="memory-empty"><MessageSquare size={24}/><h3>{L('No memories yet','还没有记忆')}</h3><p>{file==='USER.md'?L('Preferences and information about you appear here.','关于你的偏好与习惯会显示在这里。'):L('What Roppo learns from your conversations appears here.','交流中记住的内容会显示在这里。')}</p></div>:<MemoryFile key={file} file={file} data={persona} L={L} saved={setPersona} editingChanged={setEditing}/>}
+  </div>
+  <input ref={importInput} type="file" accept=".md" hidden onChange={e=>{const upload=e.target.files?.[0];e.target.value='';if(!upload)return;if(upload.size>64000||!files.includes(upload.name as FileTab)){setError(L('Choose one of the Markdown files shown above.','请选择上方页签对应的 Markdown 文件。'));return;}void run(async()=>{const text=await upload.text();if(upload.name==='MEMORY.md'||upload.name==='USER.md'){const entry=visible[0];if(!entry)throw Error('No memory context');await request({entryId:entry.id,action:'import',file:upload.name,text,operationId:crypto.randomUUID()});}else{if(!persona)throw Error('No settings');setPersona(await personaRequest({agentId:'router',file:upload.name,text,revision:persona.revision}));}});}}/>
+  <dialog ref={methodsDialog} className="memory-method-dialog" onCancel={()=>setMethods(false)} onClose={()=>{setMethods(false);menu.current?.querySelector('summary')?.focus();}}><header><h3>{L('Working methods','工作方法')}</h3><button className="button" onClick={()=>setMethods(false)}>{L('Close','关闭')}</button></header>{visible.length>1&&<label>{L('Conversation','对话')}<select value={activeMethod?.id} onChange={e=>setMethodEntry(e.target.value)}>{visible.map(e=><option key={e.id} value={e.id}>{e.label}</option>)}</select></label>}{activeMethod&&<Methods key={activeMethod.id} entry={activeMethod} L={L} changed={()=>refresh(v=>v+1)}/>}</dialog>
  </section>;
 }

@@ -14,11 +14,11 @@ function config(count=2){const root=mkdtempSync(join(tmpdir(),'agenthub-workers-
 const ready={state:'ready',summary:'Done',reply:'Actual result',question:null,handbacks:[]}
 const router=(r:ModelRequest)=>{const input=JSON.parse(r.input);return {threadId:'router-'+Date.now(),turnId:'router-turn',text:JSON.stringify({action:input.trigger?'ignore':'accept',title:input.triggers?.[0]?.text??'',scope:'Reply to this request',reason:'Explicit request',rules:[],ruleAssessments:[],targetTicketId:null})}}
 async function ticks(h:Runtime,until:()=>boolean,max=200){for(let i=0;i<max;i++){await h.tick();await new Promise(r=>setTimeout(r,2));if(until())return}throw Error('Worker pool did not settle')}
-it('accepts one through ten workers, rejects eleven, duplicates and unavailable services',()=>{
+it('accepts configurable Worker counts beyond ten, rejects duplicates and unavailable services',()=>{
  expect(workerProfiles(config(1))).toHaveLength(1);expect(workerProfiles(config(10))).toHaveLength(10)
- expect(()=>config(11)).toThrow();const c=config();c.execution.workers![1]!.id='worker-1';expect(()=>validateBackendSelection(c)).toThrow('Duplicate worker');c.execution.workers![1]!.id='worker-2';c.execution.workers![1]!.backend='missing';expect(()=>validateBackendSelection(c)).toThrow('Unknown execution backend')
+ expect(workerProfiles(config(12))).toHaveLength(12);const c=config();c.execution.workers![1]!.id='worker-1';expect(()=>validateBackendSelection(c)).toThrow('Duplicate worker');c.execution.workers![1]!.id='worker-2';c.execution.workers![1]!.backend='missing';expect(()=>validateBackendSelection(c)).toThrow('Unknown execution backend')
 })
-it.each([1,2,10])('dispatches %i workers with independent models and queues new requests until a slot is free',async(count)=>{
+it.each([1,2,10,12])('dispatches %i workers with independent models and queues new requests until a slot is free',async(count)=>{
  const calls:ModelRequest[]=[],release:(()=>void)[]=[],c=config(count),model:Model={async run(r){if(r.ephemeral)return router(r);calls.push(r);const id='worker-thread-'+calls.length;r.onThread?.(id);r.onModel?.(r.model!);r.onTurn?.('turn-'+calls.length);await new Promise<void>(resolve=>{release.push(resolve);r.signal?.addEventListener('abort',()=>resolve(),{once:true})});return {threadId:id,turnId:'done-'+calls.length,text:JSON.stringify(ready)}}}
  const h=new Runtime(c,{model});hosts.push(h);expect(h.config.concurrency).toBe(count)
  for(let i=0;i<count+1;i++)h.receive('local','operator',{id:String(i),thread:'topic-'+i,text:'Request '+i,addressed:true})

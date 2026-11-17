@@ -86,7 +86,6 @@ it('preserves persisted settings, sparse saves, backup/restore and transaction f
 
 const minimal = baseline.cases[0]!.input
 const boundaries: { name: string; limit: number; schema: z.ZodType; wrap: (values: unknown[]) => unknown; path: string[]; valid: (index: number) => unknown }[] = [
-  { name: 'Worker profiles', limit: 10, schema: configSchema, wrap: workers => ({ ...minimal, execution: { workers } }), path: ['execution', 'workers'], valid: i => ({ id: 'worker-' + i, backend: 'codex' }) },
   { name: 'event attachments', limit: 100, schema: incomingSchema, wrap: attachments => ({ id: 'event', thread: 'discussion', text: 'Read', attachments }), path: ['attachments'], valid: i => ({ id: 'attachment-' + i }) },
   { name: 'browser grants', limit: 10, schema: profileInput, wrap: allowedWorkers => ({ name: 'Personal', allowedWorkers }), path: ['allowedWorkers'], valid: i => 'worker-' + i },
   { name: 'entry actors', limit: 50, schema: entryPlanSchema, wrap: actors => ({ revision: 0, entryId: 'feishu', actors }), path: ['actors'], valid: i => 'actor-' + i },

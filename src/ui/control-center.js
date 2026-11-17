@@ -27,8 +27,8 @@ function executionDraft() {
     router: route.router?.backend ?? route.roles?.router ?? backend,
     routerOptions: clone(route.router || {}),
     routerModel: route.router?.model || config.models?.router || '',
-    workers: clone(route.workers?.length ? route.workers : Array.from(
-      { length: Math.min(10, Math.max(1, config.concurrency || 1)) },
+    workers: clone(route.workers !== undefined ? route.workers : Array.from(
+      { length: Math.max(0, config.concurrency ?? 1) },
       (_, index) => ({
         id: 'worker-' + (index + 1),
         backend: route.roles?.worker ?? backend,

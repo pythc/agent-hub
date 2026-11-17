@@ -283,7 +283,7 @@ export class RouterMemory {
    if(x.visibility==='task'){if(!x.ticketId)throw Error('Task required');this.scopes.checkTask(x.ticketId,c,true)}
    if(!x.candidate&&!operator)throw Error('Automatic extraction can only propose a candidate')
    const sources=[...new Map([...capture.sourceVersions.filter(s=>x.sourceIds.includes(s.id)),...parents.flatMap(p=>p.sources)].map(s=>[s.id,s])).values()]
-   const blocked=this.suppressionRecords().find(r=>r.active!==false&&r.scopeId===c.route.scopeId&&(r.subjectHash===suppressionHash(x.subject)||r.contentHash===suppressionHash(x.content)||r.topicHashes?.includes(suppressionHash(x.content))||sources.some(s=>r.evidenceIds?.includes(s.id)||r.evidenceHashes?.includes(suppressionHash(this.evidence(s.id)?.text??'')))||parents.some(p=>r.factId===p.id||r.dependencyIds?.includes(p.id))))
+   const blocked=this.suppressionRecords().find(r=>r.active!==false&&r.scopeId===c.route.scopeId&&(r.subjectHash===suppressionHash(x.subject)||r.contentHash===suppressionHash(x.content)||r.topicHashes?.includes(suppressionHash(x.content))||(!old||x.candidate)&&sources.some(s=>r.evidenceIds?.includes(s.id)||r.evidenceHashes?.includes(suppressionHash(this.evidence(s.id)?.text??'')))||parents.some(p=>r.factId===p.id||r.dependencyIds?.includes(p.id))))
    if(blocked||(this.store.get<any>('memory-suppression',stableDigest([c.route.scopeId,c.actor,x.subject]))?.active!==false&&this.store.get('memory-suppression',stableDigest([c.route.scopeId,c.actor,x.subject]))))throw Error('Fact was forgotten; explicit suppression removal is required')
    const replaces=x.replaces??(old&&x.candidate?[{id:old.id,revision:old.revision}]:undefined)
    if(replaces?.some(ref=>parents.some(p=>this.dependsOn(p,new Set([ref.id])))))throw Error('Replacement cannot depend on a target it supersedes')
@@ -326,7 +326,8 @@ export class RouterMemory {
  }
  /** Host learning uses the same versioned replacement transaction as confirmation. */
  acceptLearning(c:ScopeContext,fact:MemoryFact){
-  const accepted=this.command(c,{action:'confirm',operationId:'learn:'+fact.id,id:fact.id,expectedRevision:fact.revision},true) as MemoryFact
+  const accepted=this.command(c,{action:'confirm',operationId:'learn:'+fact.id,id:fact.id,expectedRevision:fact.revision},true) as MemoryFact|{id:string;status:string}
+  if(!('revision' in accepted))return accepted
   const next={...accepted,protected:false};this.save(next);return next
  }
  private dependsOn(fact:MemoryFact,targets:Set<string>,seen=new Set<string>()):boolean{if(targets.has(fact.id))return true;if(seen.has(fact.id))return false;seen.add(fact.id);return !!fact.dependencies?.some(ref=>{const parent=this.fact(ref.id);return !!parent&&this.dependsOn(parent,targets,seen)})}
