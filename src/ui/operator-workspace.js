@@ -526,7 +526,10 @@ function opTaskDialog(){
     for(const file of task.artifacts){
       const link=el('a','text-button',file.path+' · v'+file.version+' · '+(file.size/1024).toFixed(1)+' KiB · '+file.sha256.slice(0,12))
       link.href='/goal-artifacts/'+encodeURIComponent(file.id)
-      body.append(add(el('p'),link))
+      const details=el('a','text-button',L('Version details','版本详情')),url=new URL('/configure#artifact/'+encodeURIComponent(file.id),location.origin)
+      if(workspaceContext.activeId)url.searchParams.set('workspace',workspaceContext.activeId)
+      details.href=url.pathname+url.search+url.hash
+      body.append(add(el('p'),link,document.createTextNode(' · '),details))
     }
   }
   for(const change of task.workflowActions||[])body.append(el('p','message',workflowOutcome(change)+' · '+change.view.current.name+' → '+change.next.name))

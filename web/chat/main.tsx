@@ -55,6 +55,7 @@ const PluginMarketplace=lazy(()=>import("./plugin-marketplace.tsx").then(m=>({de
 const AutomationWorkspace=lazy(()=>import("./automations.tsx").then(m=>({default:m.AutomationWorkspace})));
 const WorkerTemplates=lazy(()=>import("./worker-templates.tsx").then(m=>({default:m.WorkerTemplates})));
 const ConnectorManagement=lazy(()=>import("./connector-management.tsx").then(m=>({default:m.ConnectorManagement})));
+const ArtifactResult=lazy(()=>import("./artifact-result.tsx").then(m=>({default:m.ArtifactResult})));
 const ExecutionTrace=lazy(()=>import("./execution-trace.tsx").then(m=>({default:m.ExecutionTrace})));
 import {spaceRequest,clearChatDrafts,type ChatSpace} from './chat-settings.tsx';
 import { Configuration } from "./configuration.tsx";
@@ -888,7 +889,8 @@ function Chat(p: ChatProps) {
   const templatesRoute=configuring&&hash==='worker-templates';
   const connectorsRoute=configuring&&hash==='connectors';
   const traceRoute=configuring&&hash==='execution-trace';
-  const capabilityRoute=templatesRoute||connectorsRoute||traceRoute;
+  const artifactRoute=configuring&&hash.startsWith('artifact/');
+  const capabilityRoute=templatesRoute||connectorsRoute||traceRoute||artifactRoute;
   const marketRoute=configuring&&(hash==='integrations'||hash.startsWith('integrations/'));
   const marketTools=hash==='integrations'||hash==='integrations/tools';
   const views=useWorkspaceViews();
@@ -903,6 +905,7 @@ function Chat(p: ChatProps) {
     "worker-templates": L("Worker templates", "Worker 模板"),
     connectors: L("Connectors", "连接器"),
     "execution-trace": L("Task progress", "任务进展"),
+    artifact: L("File version", "文件版本"),
     execution: L("Agent team", "Agent 团队"),
     deployments: L("Deployments", "部署"),
     models: L("Model connections", "模型连接"),
@@ -1418,7 +1421,7 @@ function Chat(p: ChatProps) {
             </header>
             {marketRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading plugins…","正在加载插件…")}</div>}><PluginMarketplace route={hash} language={lang}/></Suspense>:null}
             {automationRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading automations…","正在加载自动化…")}</div>}><AutomationWorkspace language={lang}/></Suspense>:null}
-            {capabilityRoute?<WorkspaceTransportOwner language={lang}><Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading workspace…","正在加载工作区…")}</div>}>{templatesRoute?<WorkerTemplates language={lang}/>:connectorsRoute?<ConnectorManagement language={lang}/>:<ExecutionTrace language={lang}/>}</Suspense></WorkspaceTransportOwner>:null}
+            {capabilityRoute?<WorkspaceTransportOwner language={lang}><Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading workspace…","正在加载工作区…")}</div>}>{templatesRoute?<WorkerTemplates language={lang}/>:connectorsRoute?<ConnectorManagement language={lang}/>:artifactRoute?<ArtifactResult key={hash} id={hash.slice(9)} language={lang}/>:<ExecutionTrace language={lang}/>}</Suspense></WorkspaceTransportOwner>:null}
             <Configuration
               visible={configuring&&!capabilityRoute&&!automationRoute&&!pluginId&&(!marketRoute||marketTools)}
               route={route}
