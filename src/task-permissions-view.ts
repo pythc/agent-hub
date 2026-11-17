@@ -32,6 +32,14 @@ export function taskPermissionsView(h:Runtime,id:string,now=Date.now()):TaskPerm
     try{h.scopes.checkTaskEntry(h.scopes.ownership(id)!,c.route.entryId,'request')}catch{return result('request_scope_missing')}
     try{h.scopes.checkTask(id,c,true)}catch{return result('requester_or_manager_required')}
    }
+   // WorkerManager also retains the assignment/continuation authority after a newer input.
+   const assignment=h.store.get<{parentTrigger?:string;discussion:string}>('worker-assignment',id)
+   const continuation=h.store.get<{triggerId:string;discussion:string}>('task-continuation',id)
+   const retained=continuation?{id:continuation.triggerId,discussion:continuation.discussion}:assignment?.parentTrigger?{id:assignment.parentTrigger,discussion:assignment.discussion}:undefined
+   if(retained){
+    if(h.scopes.enabled()){const t=h.store.triggers.get(retained.id),entry=t&&h.scopes.entry(t);if(!entry||entry.privateActor)return}
+    try{h.routerIngress.authority(retained.id,retained.discussion)}catch{return result('authority_unavailable')}
+   }
    if(!h.scopes.taskRunnable(id))return result('task_unavailable')
    const saved=h.store.get<{manifest:ContextManifest}>('task-context',id)
    if(saved)h.memory.validate(saved.manifest)

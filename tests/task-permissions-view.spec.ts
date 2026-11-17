@@ -106,3 +106,13 @@ it.each(['current','disabled','revoked','missing'])('omits private or unknown cu
  expect(taskPermissionsView(f.h,f.id)).toBeUndefined()
  expect(db(f.h)).toBe(before)
 })
+
+it('revalidates retained requester authority after a different admitted manager follows up',async()=>{
+ const f=await fixture(true),input=f.receive('Continue','bob')
+ f.h.scopes.noteInput(f.id,input.context)
+ f.h.memory.moveTaskContext(f.id,input.context)
+ expect(taskPermissionsView(f.h,f.id)?.reason).toBe('current')
+ f.h.config.sources[0]!.allowedActors=['bob']
+ expect(taskPermissionsView(f.h,f.id)?.reason).toBe('authority_unavailable')
+ await expect(f.h.manager.call({action:'send',ticketId:f.id,revision:f.h.settings.current().revision,requestId:'retained-revoked',text:'Continue'},{discussion:input.context.route.discussion,trigger:input.trigger,scoped:input.context,manifest:input.packet.manifest})).rejects.toThrow()
+})
