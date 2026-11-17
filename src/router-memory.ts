@@ -12,15 +12,17 @@ import {HistoryCleanup,planHistory,planChatHistory,type HistoryPlan} from './his
 import {detectExplicitMemory,renderMemory,type MemoryKind} from './vendor/weknora/primitives.ts'
 
 const id=z.string().min(1).max(300)
+export const memoryCategories=['preference','fact','project_decision','method'] as const
+export type MemoryCategory=typeof memoryCategories[number]
 export interface MemoryEvidence {id:string;parentId?:string;tenantId:string;scopeId:string;entryId:string;sourceId:string;actor:string;version:number;hash:string;text:string;locator:string;occurredAt?:string;capturedAt:number;revoked:boolean}
-export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;origin?:'explicit'|'manual'|'extracted'|'consolidated'|'experience';learning?:MemoryLearning;importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;topicAliases?:string[]}
-export interface MemoryProjection extends MemoryFact {freshness:{status:'verified'|'unverified'|'unavailable'|'stale';capturedAt:number;checkedAt?:number;sourceVersions:{id:string;version:number}[]};access:{audienceEntry:string;sourceEntry:string;mode:'origin'|'published_revision';revision:number;shareId?:string}}
+export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;category?:MemoryCategory;origin?:'explicit'|'manual'|'extracted'|'consolidated'|'experience';learning?:MemoryLearning;importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;topicAliases?:string[]}
+export interface MemoryProjection extends MemoryFact {taskRecord?:{state:'open'|'completed'|'merged'|'closed'|'dropped'|'stopped';updatedAt:string;newerThanMemory:boolean};freshness:{status:'verified'|'unverified'|'unavailable'|'stale';capturedAt:number;checkedAt?:number;sourceVersions:{id:string;version:number}[]};access:{audienceEntry:string;sourceEntry:string;mode:'origin'|'published_revision';revision:number;shareId?:string}}
 export interface MemoryShare {id:string;factId:string;revision:number;targetEntry:string;active:boolean;expiresAt?:number;publishedAt?:number}
 export interface MemoryCapture {tenantId:string;scopeId:string;generation:number;epoch:number;sourceVersions:{id:string;version:number}[]}
 export interface ContextManifest {id:string;triggerId:string;actor:string;tenantId:string;scopeId:string;entryId:string;routerId:string;epoch:number;generation:number;facts:{id:string;revision:number}[];evidence:{id:string;version:number}[];inputEvidence?:{id:string;version:number}[];knowledge?:{documentId:string;revision:number}[];taskOwners:{id:string;epoch:number;dataRevision?:number}[];bytes:number;truncated:boolean;retrieval?:{status:string;reason?:string};at:number;backend:string;sessionKey:string}
 const base={operationId:id,expectedRevision:z.number().int().min(0)}
 export const memoryCommandSchema=z.discriminatedUnion('action',[
- z.object({action:z.literal('remember'),...base,id:id.optional(),subject:id,content:z.string().min(1).max(16000),sourceIds:z.array(id).max(30),derivedFrom:z.array(id).max(20).default([]),relation:z.enum(['independent','joint']).default('joint'),visibility:z.enum(['group','private','task']).default('group'),ticketId:id.optional(),expiresAt:z.number().int().positive().optional(),candidate:z.boolean().default(true),kind:z.enum(['profile','preference','fact','task','interest']).default('fact'),importance:z.number().int().min(1).max(5).default(3),origin:z.enum(['explicit','manual','extracted','consolidated','experience']).optional(),learning:memoryLearningSchema.optional(),replaces:z.array(z.object({id,revision:z.number().int().positive()}).strict()).max(20).optional(),proposalAction:z.enum(['replace','forget']).default('replace'),topicAliases:z.array(z.string().min(1).max(100)).max(12).optional(),capture:z.object({tenantId:id,scopeId:id,generation:z.number(),epoch:z.number(),sourceVersions:z.array(z.object({id,version:z.number()}).strict())}).strict().optional()}).strict(),
+ z.object({action:z.literal('remember'),...base,id:id.optional(),subject:id,content:z.string().min(1).max(16000),sourceIds:z.array(id).max(30),derivedFrom:z.array(id).max(20).default([]),relation:z.enum(['independent','joint']).default('joint'),visibility:z.enum(['group','private','task']).default('group'),ticketId:id.optional(),expiresAt:z.number().int().positive().optional(),candidate:z.boolean().default(true),kind:z.enum(['profile','preference','fact','task','interest']).default('fact'),category:z.enum(memoryCategories).optional(),importance:z.number().int().min(1).max(5).default(3),origin:z.enum(['explicit','manual','extracted','consolidated','experience']).optional(),learning:memoryLearningSchema.optional(),replaces:z.array(z.object({id,revision:z.number().int().positive()}).strict()).max(20).optional(),proposalAction:z.enum(['replace','forget']).default('replace'),topicAliases:z.array(z.string().min(1).max(100)).max(12).optional(),capture:z.object({tenantId:id,scopeId:id,generation:z.number(),epoch:z.number(),sourceVersions:z.array(z.object({id,version:z.number()}).strict())}).strict().optional()}).strict(),
  z.object({action:z.literal('suppression.remove'),...base,id}).strict(),
  z.object({action:z.literal('confirm'),...base,id}).strict(),
  z.object({action:z.literal('share'),...base,id,targetEntry:id,expiresAt:z.number().int().positive().optional()}).strict(),
@@ -217,6 +219,20 @@ export class RouterMemory {
   const items=matched.slice(offset,offset+x.limit),more=offset+items.length<matched.length
   return {items:items.map(f=>({...f,freshness:this.freshness(f),access:{audienceEntry:c.route.entryId,sourceEntry:f.entryId,mode:f.entryId===c.route.entryId?'origin':'published_revision',revision:f.revision,...(f.entryId===c.route.entryId?{}:{shareId:stableDigest([f.id,c.route.entryId])})},sources:f.sources.map(s=>({id:s.id,version:s.version,locator:this.evidence(s.id)?.locator}))})),status:degraded?'partial':more?'truncated':'complete',...(degraded?{reason:'Search index unavailable; authorized local text fallback used'}:{}),...(more?{cursor:Buffer.from(JSON.stringify({signature,offset:offset+items.length})).toString('base64url')}:{})}
  }
+ /** Management display only: never add live task data to model memory context. */
+ taskRecord(f:MemoryFact,c:ScopeContext):MemoryProjection['taskRecord']{
+  if(!f.ticketId)return
+  try{
+   if(!this.visible(f,c,true))return
+   this.scopes.checkTask(f.ticketId,c)
+   this.scopes.checkTaskEntry(this.scopes.ownership(f.ticketId)!,c.route.entryId,'result')
+   const ticket=this.store.tickets.get(f.ticketId),updated=Date.parse(ticket?.updatedAt??'')
+   if(!ticket||!Number.isFinite(updated))return
+   const state=ticket.ended?.outcome??'open'
+   if(!['open','completed','merged','closed','dropped','stopped'].includes(state))return
+   return {state,updatedAt:ticket.updatedAt,newerThanMemory:updated>f.createdAt}
+  }catch{return}
+ }
  private freshness(f:MemoryFact):MemoryProjection['freshness']{
   const observations=f.sources.map(ref=>{const e=this.evidence(ref.id)!,source=this.scopes.config.sources.find(s=>s.id===e.sourceId),trigger=e.locator.startsWith('trigger:')?this.store.triggers.get(e.locator.slice(8)):undefined,key=e.sourceId+':'+trigger?.meta.messageId
    if(source?.kind==='local')return {status:'verified' as const,checkedAt:e.capturedAt,capturedAt:e.capturedAt}
@@ -264,6 +280,7 @@ export class RouterMemory {
    this.revision(e.version,x.expectedRevision);const r=this.revoke(c,{action:'source.delete',id:e.id,generation:this.generation(c.route.scopeId)});return {status:'stopped_using',localMemory:'verified',cleanupId:r.cleanup!.id,conversationHistory:'processing',external:'not_managed'}
   }
   if(x.action==='remember'){
+   if(x.category&&!operator)throw Error('Memory classification requires an explicit operator')
    assertNoMemorySecret(x.content);assertNoMemorySecret(x.subject)
    if(x.learning){assertNoMemorySecret(x.learning.condition);if(x.learning.quote)assertNoMemorySecret(x.learning.quote)}
    const capture=x.capture??this.capture(c,x.sourceIds);this.validCapture(c,capture)
@@ -288,7 +305,7 @@ export class RouterMemory {
    for(const ref of replaces??[]){const target=this.fact(ref.id);if(!target||!this.visible(target,c)||target.scopeId!==c.route.scopeId||target.entryId!==c.route.entryId||target.owner!==c.actor&&!manager||target.revision!==ref.revision)throw Error('Replacement target changed or is outside authority')}
    if(!operator&&x.origin&&x.origin!=='extracted'&&x.origin!=='consolidated')throw Error('Automatic memory cannot claim human origin')
    const proposed=!!old&&x.candidate
-   const fact:MemoryFact={id:proposed?'memory-'+randomUUID():old?.id??'memory-'+randomUUID(),revision:proposed?1:(old?.revision??0)+1,tenantId:c.route.tenantId,scopeId:c.route.scopeId,subject:x.subject,content:x.content,state:x.candidate?'candidate':'active',sources,dependencies:parents.map(p=>({id:p.id,revision:p.revision})),relation:x.relation,visibility:x.visibility,owner:old?.owner??c.actor,entryId:c.route.entryId,ticketId:x.ticketId,expiresAt:x.expiresAt,generation:capture.generation,createdAt:Date.now(),kind:x.kind,importance:x.importance,origin:x.origin??(operator?'manual':'extracted'),protected:operator&&!x.candidate,replaces,proposalAction:x.proposalAction,topicAliases:x.topicAliases,learning:x.learning}
+   const fact:MemoryFact={id:proposed?'memory-'+randomUUID():old?.id??'memory-'+randomUUID(),revision:proposed?1:(old?.revision??0)+1,tenantId:c.route.tenantId,scopeId:c.route.scopeId,subject:x.subject,content:x.content,state:x.candidate?'candidate':'active',sources,dependencies:parents.map(p=>({id:p.id,revision:p.revision})),relation:x.relation,visibility:x.visibility,owner:old?.owner??c.actor,entryId:c.route.entryId,ticketId:x.ticketId,expiresAt:x.expiresAt,generation:capture.generation,createdAt:Date.now(),kind:x.kind,category:x.category??old?.category,importance:x.importance,origin:x.origin??(operator?'manual':'extracted'),protected:operator&&!x.candidate,replaces,proposalAction:x.proposalAction,topicAliases:x.topicAliases,learning:x.learning}
    if(old&&!proposed)this.store.put('memory-version',old.id+':'+old.revision,{...old,state:'superseded'})
    this.save(fact);return fact
   }

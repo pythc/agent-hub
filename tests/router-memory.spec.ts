@@ -677,3 +677,28 @@ it('stops legacy ambiguous history cleanup before modifying unrelated records',(
  expect(f.memory.evidence(e.id)?.revoked).toBe(false)
  expect(f.memory.cleanup.plans()).toHaveLength(0)
 })
+
+it('O25 keeps explicit memory classification descriptive and preserves it across legacy edits',()=>{
+ const f=fixture(),fact=f.remember('Decision notes','g1',{category:'project_decision'}),c=f.context();
+ expect(fact.category).toBe('project_decision');expect(f.store.list('ticket')).toHaveLength(0);
+ const edited=f.memory.command(c,{action:'remember',operationId:'legacy-edit',id:fact.id,expectedRevision:fact.revision,subject:fact.subject,content:'Revised notes',sourceIds:fact.sources.map(s=>s.id),candidate:false},true) as MemoryFact;
+ expect(edited.category).toBe('project_decision');
+ const e=f.memory.ingest(c);
+ expect(()=>f.memory.command(c,{action:'remember',operationId:'automatic-category',expectedRevision:0,subject:'Decision',content:'Approve payment',sourceIds:[e.id],category:'project_decision',candidate:true})).toThrow('explicit operator');
+ expect(()=>f.remember('Bad category','g1',{category:'approval'})).toThrow();
+});
+it('O25 projects only independently authorized current task state, never copied memory status',()=>{
+ const f=fixture(),c=f.context();f.scopes.own('linked-task',c,'codex');
+ f.store.put('ticket','linked-task',{id:'linked-task',updatedAt:'2026-11-17T06:00:00Z',ended:{at:'2026-11-17T06:00:00Z',by:'worker',outcome:'completed'}});
+ const fact=f.remember('Task is ongoing','g1',{ticketId:'linked-task'});
+ f.store.put('memory-fact',fact.id,{...fact,createdAt:0});
+ const found=f.memory.query(f.context(),{id:fact.id}).items[0]!;
+ expect(f.memory.taskRecord(found,f.context())).toEqual({state:'completed',updatedAt:'2026-11-17T06:00:00Z',newerThanMemory:true});
+ expect(found.content).toBe('Task is ongoing');expect(found.taskRecord).toBeUndefined();expect(f.memory.fact(fact.id)).not.toHaveProperty('taskRecord');
+ f.memory.command(f.context(),{action:'share',operationId:'share-memory',id:fact.id,expectedRevision:fact.revision,targetEntry:f.context('g2').route.entryId});
+ expect(f.memory.taskRecord(f.memory.query(f.context('g2'),{id:fact.id}).items[0]!,f.context('g2'))).toBeUndefined();
+ f.scopes.command({action:'task.channel',operationId:'context-only',expectedRevision:0,ticketId:'linked-task',entryId:f.context('g2').route.entryId,context:true,request:false,result:false});
+ expect(f.memory.taskRecord(f.memory.query(f.context('g2'),{id:fact.id}).items[0]!,f.context('g2'))).toBeUndefined();
+ const owner=f.scopes.ownership('linked-task')!;f.store.put('task-ownership',owner.ticketId,{...owner,state:'held'});
+ expect(f.memory.taskRecord(f.memory.query(f.context(),{id:fact.id}).items[0]!,f.context())).toBeUndefined();
+});

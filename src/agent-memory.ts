@@ -324,7 +324,7 @@ export class AgentMemory {
   this.host.scopes.assertCurrent(c)
   if(x.action==='inspect'){
    this.reconcile()
-   const items=this.authorized(c,true),fact=x.id?items.find(f=>f.id===x.id):undefined
+   const items=this.authorized(c,true).map(f=>({...f,taskRecord:this.host.memory.taskRecord(f,c)})),fact=x.id?items.find(f=>f.id===x.id):undefined
    if(x.id&&!fact)throw Error('Memory unavailable')
    const origin=fact?.entryId===c.route.entryId
    const evidence=origin?fact!.sources.flatMap(s=>{try{this.host.memory.capture(c,[s.id]);return [this.host.memory.evidence(s.id)!]}catch{return []}}):[]
