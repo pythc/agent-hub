@@ -110,7 +110,7 @@ export class RouterContinuity {
     }
     store.put('router-commitment',result.id,result)
    }
-   store.put('journal-receipt',key,{scopeId:c.route.scopeId,entryId:c.route.entryId,triggerIds,fingerprint,result});return result
+   store.put('journal-receipt',key,{scopeId:c.route.scopeId,entryId:c.route.entryId,triggerIds,fingerprint,result,...(x.action==='supersede'?{supersedes:x.supersedes}:{})});return result
   })
  }
 }

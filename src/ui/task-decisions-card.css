@@ -1,0 +1,10 @@
+.operator-workspace .task-decisions-card { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--body); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.operator-workspace .task-decisions-card h3 { margin: 0 0 12px; color: var(--ink); font-size: 14px; font-weight: 600; }
+.operator-workspace .task-decision { margin-top: 16px; }
+.operator-workspace .task-decisions-card p { margin: 0 0 8px; font-size: 14px; white-space: pre-wrap; }
+.operator-workspace .task-decisions-label { font-weight: 600; color: var(--ink); }
+.operator-workspace .task-decision-sources { margin: 0 0 8px; }
+.operator-workspace .task-decision-sources summary { cursor: pointer; color: var(--ink); font-size: 14px; padding: 4px 0; }
+.operator-workspace .task-decision-sources summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.operator-workspace .task-decision-sources[open] summary { margin-bottom: 12px; }
+.operator-workspace .task-decision-sources blockquote { margin: 0 0 12px; padding-left: 12px; border-left: 2px solid var(--line); font-size: 14px; white-space: pre-wrap; }
