@@ -147,8 +147,9 @@ function controlIntegrations() {
   tools.append(cards); root.append(tools)
   const apps = el('section'); apps.append(el('h2', '', L('Application adapters', '应用适配器')))
   const grid = el('div', 'integration-grid')
+  const adapterNames = { local: L('Local operator', '本地操作员'), delegation: L('Delegated team', '委派团队'), webhook: L('HTTP events', 'HTTP 事件'), wecom: L('WeCom', '企业微信'), feishu: L('Lark', 'Feishu/飞书') }
   for (const adapter of integrations.data.adapters) {
-    const card = add(el('article', 'integration-card'), add(el('h3', 'integration-app-title'), opMark(adapter.kind), el('span', '', adapter.label || adapter.kind)))
+    const card = add(el('article', 'integration-card'), add(el('h3', 'integration-app-title'), opMark(adapter.kind), el('span', '', adapterNames[adapter.kind] || adapter.label || adapter.kind)))
     const sources = integrations.data.sources.filter(source => source.kind === adapter.kind)
     for (const source of sources) card.append(el('strong', '', source.id + (source.enabled ? '' : ' · ' + L('Disabled', '已停用'))), el('p', 'team-help', ['events', 'replies', 'resources'].filter(key => source.capabilities?.[key]).map(key => ({ events: L('Receive events', '接收事件'), replies: L('Send replies', '发送回复'), resources: L('Read resources', '读取资源') })[key]).join(' · ') || L('No capabilities enabled', '未开启能力')))
     if (!sources.length) card.append(el('p', 'team-help', L('Available; no source configured', '可用，尚未配置来源')))
