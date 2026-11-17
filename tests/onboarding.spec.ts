@@ -31,7 +31,7 @@ async function provider(){
   const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString()),all=JSON.stringify(body)
   requests.push({authorization:req.headers.authorization,key:req.headers['x-api-key'] as string|undefined})
   if(req.headers.authorization!=='Bearer synthetic-onboarding-key'&&req.headers['x-api-key']!=='synthetic-onboarding-key'){res.writeHead(401);res.end('{}');return}
-  const answer=all.includes('targetTicketId')?{action:'accept',title:'First request',scope:'Say hello',reason:'Explicit local request',rules:[],ruleAssessments:[],targetTicketId:null}:all.includes('handbacks')?{state:'ready',summary:'Hello',reply:'Hello from your assistant.',question:null,askedBy:null,handbacks:[]}:{ok:true}
+  const answer=all.includes('targetTicketId')?{action:'accept',title:'First request',scope:'Say hello',reason:'Explicit local request',rules:[],ruleAssessments:[],targetTicketId:null}:all.includes('handbacks')?{state:'ready',summary:'Hello',reply:'Hello from your assistant.',question:null,askedBy:null,handbacks:[],decision:null}:{ok:true}
   const text=JSON.stringify(answer),value=req.url==='/v1/responses'?{status:'completed',output:[{type:'message',content:[{type:'output_text',text}]}]}:req.url==='/v1/messages'?{stop_reason:'end_turn',content:[{type:'text',text}]}:{choices:[{message:{content:text}}]}
   res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(value))
  });await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))})

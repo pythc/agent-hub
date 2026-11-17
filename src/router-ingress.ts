@@ -74,7 +74,9 @@ export class RouterIngress {
   return record
  }
  /** Called inside the host transaction: admission and its durable job are indivisible. */
- admit(trigger:Trigger):RouterAdmission{
+ /** A directly submitted business answer is admitted but not sent to the Router twice. */
+ admitDecision(trigger:Trigger):RouterAdmission {if(!trigger.human)throw Error('Human decision required');return this.admit(trigger,false)}
+ admit(trigger:Trigger,dispatch=true):RouterAdmission{
   if(!trigger.threads[0])throw Error('A Router event must belong to a thread')
   this.store.triggers.save(trigger)
   const discussion=this.discussion(trigger),policy=this.policy(trigger)
@@ -87,6 +89,7 @@ export class RouterIngress {
   const record:RouterAdmission={...base,state:gate.strength==='explicit'?'accepted':'pending',reason:gate.strength==='explicit'?'explicit':'ruleAssessmentRequired',
    mandate:{strength:gate.strength,policyVersion:policy.version,basis:gate.basis,actor:trigger.actor,scope:trigger.text}}
   this.save(record)
+  if(!dispatch)return record
   if(record.state==='accepted'&&this.explicitCommand?.(trigger))return record
   if(this.defer?.(record,trigger))return record
   if(record.state==='accepted')this.enqueue(record)

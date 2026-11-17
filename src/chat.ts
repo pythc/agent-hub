@@ -1,3 +1,4 @@
+import {businessDecision,assertBusinessDecision,decisionActorMatches,type BusinessDecisionView} from './business-decisions.ts'
 import {isApiBackend} from './backend-config.ts'
 import {createHash, randomUUID} from 'node:crypto'
 import type {Runtime} from './runtime.ts'
@@ -25,7 +26,7 @@ interface Conversation {
 }
 interface Speaker {id:string;label:string;kind:'router'|'worker'}
 interface Message {id:string; conversationId:string; runId:string; sequence:number; role:'user'|'assistant'; text:string; attachments?:ChatAttachment[];createdAt:number;clientMessageId?:string;status?:'streaming'|'complete'|'interrupted'|'failed';speaker?:Speaker;recipient?:Speaker;ticketId?:string}
-interface ChatRun {id:string; conversationId:string; triggerId:string; clientMessageId:string; locale?:string; createdAt:number; cancelRequested?:boolean; cancelled?:boolean}
+interface ChatRun {decisionTicketId?:string;id:string; conversationId:string; triggerId:string; clientMessageId:string; locale?:string; createdAt:number; cancelRequested?:boolean; cancelled?:boolean}
 interface Delegation {ticketId:string; workerId:string; discussion:string; parentTrigger?:string}
 type ChatCall=ExecutionCall&{conversationId:string;runId:string}
 export type ChatRunState='queued'|'running'|'waiting'|'completed'|'failed'|'cancel_requested'|'cancelled'
@@ -291,8 +292,68 @@ export class ChatSessions {
       return {runId:run.id,duplicate:false}
     })
   }
+  businessDecisions(id:string,owner:string):BusinessDecisionView[]{
+    const c=this.get(id,owner),actor={source:c.sourceId,id:c.actor},tasks=new Set(this.tasks(c).map(t=>t.id))
+    return this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>this.host.store.list<BusinessDecisionView>('business-decision').filter(d=>{
+      if(!tasks.has(d.ticketId)||!decisionActorMatches(this.host,d.id,actor))return false
+      try{
+        const parent=this.host.taskAuthority(d.ticketId)?.parentTrigger,trigger=parent&&this.host.store.triggers.get(parent)
+        if(!trigger)return false
+        this.host.routerIngress.authority(trigger.id,c.discussion)
+        const context=this.host.scopes.context(trigger,c.discussion)
+        if(context){this.host.scopes.checkTask(d.ticketId,context);this.host.scopes.checkTaskEntry(this.host.scopes.ownership(d.ticketId)!,context.route.entryId,'result')}
+        const saved=this.host.store.get<{manifest:ContextManifest}>('task-context',d.ticketId);if(saved)this.host.memory.validate(saved.manifest)
+        return true
+      }catch{return false}
+    }).map(d=>businessDecision(this.host,d.id)!).filter(Boolean).sort((a,b)=>b.createdAt-a.createdAt).slice(0,50)))
+  }
+  decide(id:string,owner:string,input:{action:'answer'|'renew';id:string;version:string;requestId:string;text?:string}){
+    return this.host.store.atomic(()=>{
+      const c=this.get(id,owner),h=this.host,actor={source:c.sourceId,id:c.actor},text=input.text?.trim()??'',fingerprint=stableDigest({...input,text}),key=stableDigest([owner,id,input.requestId])
+      const d=this.businessDecisions(id,owner).find(d=>d.id===input.id)
+      if(!d||!decisionActorMatches(h,input.id,actor))throw new ChatError('decision_identity','This decision belongs to a different conversation or person.',403)
+      const previous=h.store.get<{fingerprint:string;triggerId:string;decisionId:string}>('business-decision-action',key)
+      const authorize=(triggerId:string)=>{
+        const trigger=h.store.triggers.get(triggerId);if(!trigger)throw new ChatError('decision_unavailable','Decision context is unavailable.')
+        h.routerIngress.authority(trigger.id,c.discussion)
+        const scoped=h.scopes.context(trigger,c.discussion)
+        if(scoped)h.scopes.checkTask(d.ticketId,scoped,true)
+        return {discussion:c.discussion,trigger,...(scoped?{scoped}:{})}
+      }
+      if(previous){
+        if(previous.fingerprint!==fingerprint)throw new ChatError('decision_conflict','Request identity was reused with different content.')
+        authorize(previous.triggerId)
+        return {decision:businessDecision(h,previous.decisionId)!,duplicate:true}
+      }
+      if(c.archived)throw new ChatError('conversation_archived','Restore this conversation before answering.')
+      const active=this.view(id,owner).run
+      if(active&&['queued','running','cancel_requested'].includes(active.state))throw new ChatError('conversation_busy','Wait for the current run or stop it first.')
+      if(d.version!==input.version)throw new ChatError('decision_stale','The question changed. Refresh before answering.')
+      if(input.action==='answer'){
+        if(!text||text.length>10000)throw new ChatError('decision_invalid','Enter an answer up to 10000 characters.',400)
+        assertBusinessDecision(h,input.id,input.version,actor)
+      }else if(!['expired','stale'].includes(d.status)||h.store.tickets.get(d.ticketId)?.attention?.id!==d.id)throw new ChatError('decision_stale','This question cannot be renewed.')
+      const source=h.sources.get(c.sourceId),ready=this.readiness()
+      if(!ready.ready||!source?.config.enabled||source.config.kind!=='local'||!source.config.allowedActors.includes(c.actor))throw new ChatError('decision_unavailable','This conversation is unavailable.')
+      this.bindEntry(c)
+      const trigger=source.trigger({id:'chat-decision:'+id+':'+input.requestId,thread:'chat:'+id,scope:c.nativeId??'chat:'+id,text:input.action==='answer'?text:'Please show the current question again before I decide.',addressed:true},c.actor)
+      const admission=h.routerIngress.admitDecision(trigger)
+      if(admission.state!=='accepted')throw new ChatError('decision_unavailable','This reply is not admitted by current policy.')
+      const context=authorize(trigger.id)
+      let nextId=input.id
+      if(input.action==='answer'){
+        h.manager.sendImmediate({action:'send',ticketId:d.ticketId,questionId:d.id,decisionVersion:input.version,text,requestId:'chat-decision:'+key,revision:h.settings.current().revision},context)
+        const run:ChatRun={decisionTicketId:d.ticketId,id:trigger.id,triggerId:trigger.id,conversationId:id,clientMessageId:input.requestId,createdAt:Date.now()}
+        h.store.put('chat-run',run.id,run)
+        this.message(c,{id:'user:'+run.id,runId:run.id,role:'user',text,clientMessageId:input.requestId})
+      }else nextId=h.renewBusinessQuestion(d.ticketId)
+      h.store.put('business-decision-action',key,{fingerprint,triggerId:trigger.id,decisionId:nextId})
+      this.changed(id)
+      return {decision:businessDecision(h,nextId)!,duplicate:false}
+    })
+  }
   private tasks(c:Conversation,run?:ChatRun){
-    return this.rows<Delegation>('worker-assignment','discussion',c.discussion).filter(d=>!run||d.parentTrigger===run.triggerId).map(d=>{
+    return this.rows<Delegation>('worker-assignment','discussion',c.discussion).filter(d=>!run||d.parentTrigger===run.triggerId||d.ticketId===run.decisionTicketId).map(d=>{
       const t=this.host.store.tickets.get(d.ticketId),r=this.host.store.get<Run>('run',d.ticketId),report=t?.assignments.at(-1)?.report
       const state=t?.ended?.by==='human'?'cancelled':t?.ended?'completed':['starting','running','background','delivering','merging'].includes(r?.phase??'')?'running':r?.phase==='uncertain'||r?.phase==='human'||t?.attention||['blocked','failed','waiting'].includes(report?.state??'')?'waiting':report?.state==='ready'?'completed':'queued'
       return {id:d.ticketId,workerId:d.workerId,title:t?.title??'',state,question:t?.attention?.question??undefined,summary:report?.summary??undefined}
@@ -347,7 +408,7 @@ export class ChatSessions {
       const files=screenshots.filter(a=>a.runId===message.runId&&(!participant||a.ticketId===message.ticketId))
       if(files.length){message.attachments=[...(message.attachments??[]),...files];for(const file of files)screenshots.splice(screenshots.indexOf(file),1)}
     }
-    return {...result,browsers:this.host.browser.conversation(owner,id)}
+    return {...result,decisions:this.businessDecisions(id,owner),browsers:this.host.browser.conversation(owner,id)}
   }
   /** A durable revision plus a fresh full projection recovers SSE gaps without replaying execution. */
   revision(id:string,owner:string){

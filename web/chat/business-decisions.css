@@ -1,0 +1,9 @@
+.business-decisions{margin:20px 0;color:var(--c-text);font-size:15px;line-height:1.65;overflow-wrap:anywhere}
+.business-decisions h2,.business-decisions h3{font-size:16px;line-height:1.6;margin:0 0 10px;font-weight:600}
+.business-decision{padding:18px 0;border-top:1px solid var(--c-line)}
+.business-decisions p{margin:8px 0}
+.business-decision dl{margin:10px 0}.business-decision dl div{display:flex;gap:14px}.business-decision dt{flex:0 0 65px}.business-decision dd{margin:0;min-width:0}
+.business-decision label{display:grid;gap:8px}.business-decision textarea{font:inherit;color:var(--c-text);background:var(--c-bg);border:1px solid var(--c-line);border-radius:8px;padding:10px;width:100%;min-height:86px;resize:vertical}
+.decision-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}.decision-actions button{font:inherit;min-height:40px;padding:6px 14px;border:1px solid var(--c-line);border-radius:8px;transition:background .15s ease}.decision-actions button:disabled{opacity:.55}.business-decision :focus-visible{outline:2px solid currentColor;outline-offset:3px}
+@media(max-width:700px){.business-decision textarea{font-size:16px}}
+@media(prefers-reduced-motion:reduce){.decision-actions button{transition:none}}
