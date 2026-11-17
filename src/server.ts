@@ -51,7 +51,7 @@ import {BrowserError} from './browser-contract.ts'
 import {browserRequest} from './browser-http.ts'
 import {serveWebhooks} from './webhook-http.ts'
 import {WebhookError} from './webhook-protocol.ts'
-import {enabledView,viewCatalog} from './workspace-view-package.ts'
+import {enabledView,viewCatalog,viewArtifactReference} from './workspace-view-package.ts'
 import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 
 export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string)=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
@@ -340,7 +340,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(!digest||!/^[a-f0-9]{64}$/.test(digest)){send(res,400,{code:'view_digest_required'});return}
       let pkg
       try{pkg=enabledView(runtime.config,match[1]!,digest)}catch{send(res,404,{code:'view_unavailable'});return}
-      if(match[2]==='bundle'){send(res,200,{digest:pkg.digest,code:pkg.code});return}
+      if(match[2]==='bundle'){send(res,200,{digest:pkg.digest,code:pkg.code,reference:viewArtifactReference(pkg)});return}
       if(!pkg.manifest.capabilities.includes('workspace.runtime.read')){send(res,403,{code:'view_capability_required'});return}
       params.delete('digest')
       const query=viewQuerySchema.parse(Object.fromEntries(params))
