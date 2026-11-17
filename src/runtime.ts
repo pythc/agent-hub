@@ -337,6 +337,12 @@ export class Runtime {
           if(channel)this.store.outbox.send({id:'failure:'+bodyDigest([ticketId,latestAssignment(ticket)?.id,value.state,reply]),ticketId,channel,kind:'reply',text:reply})
         }
       }
+      if(ticket.attention&&ticket.attention.id!==previous?.id){
+        // Durable ordering fence for explicit business replies. Unlike optional
+        // provenance, this is committed atomically with the question and reply.
+        const admissionSeq=Number(this.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM audit').get()!.seq)
+        this.store.put('question-answer-boundary',bodyDigest([ticketId,ticket.attention.id]),{ticketId,questionId:ticket.attention.id,questionDigest:bodyDigest(ticket.attention.question),createdAt:Date.now(),admissionSeq})
+      }
     })
   }
   previewPrompt(input:import('./execution-prompts.ts').PromptPreviewInput,config=this.config){return previewInstructions(config,input,this.scopes.enabled())}
