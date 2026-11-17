@@ -165,15 +165,16 @@ function resourcePaint(){
  fields.state.hidden=!!data
  fields.state.textContent=data?L('Recorded usage','已记录用量'):resourceView.failed||!resourceAuthorized()?L('Usage unavailable','用量暂不可用'):L('Loading usage…','正在读取用量…')
  fields.refresh.textContent=resourceView.busy?L('Refreshing…','正在刷新…'):L('Refresh usage','刷新用量');fields.refresh.disabled=resourceView.busy||!resourceAuthorized()
- fields.time.hidden=!data;if(data){fields.time.dateTime=new Date(data.observedAt).toISOString();fields.time.textContent=L('Observed at ','观测时间 ')+date(data.observedAt)}
- fields.failure.hidden=!resourceView.failed;fields.failure.textContent=data?L('Update failed. Showing the snapshot from the time above.','更新失败，显示上方时间的旧记录。'):L('Usage could not be loaded. Try refreshing.','无法读取用量，请重试刷新。')
- fields.metrics.hidden=!data;fields.details.hidden=!data;fields.coverage.hidden=!data;fields.observer.hidden=!data?.usage.watchdogUnavailable;fields.legacy.hidden=!data?.usage.legacyUntrackedCalls
- if(!data){fields.time.dateTime='';for(const node of [...Object.values(fields.values),...Object.values(fields.extraValues)])node.textContent='—';for(const node of [fields.time,fields.coverage,fields.observer,fields.legacy,fields.contextTime])node.textContent='';return}
- fields.values.tokens.textContent=data.usage.totalTokens===null?L('Not reported','未报告'):format(data.usage.totalTokens)
- fields.coverage.textContent=L('Reported calls: ','有报告的调用：')+format(data.usage.reportedCalls)+' / '+format(data.usage.calls)+L(' · Unreported: ',' · 未报告：')+format(data.usage.unknownCalls)+L(' · Partial: ',' · 部分报告：')+format(data.usage.partialCalls)
- fields.observer.textContent=L('Background monitor usage is unavailable.','后台监测用量暂不可用。');fields.legacy.textContent=L('Older calls without accounting: ','缺少用量记录的旧调用：')+format(data.usage.legacyUntrackedCalls)
+ fields.time.hidden=!data;if(data){fields.time.dateTime=new Date(data.observedAt).toISOString();fields.time.textContent=L('Updated ','更新于 ')+date(data.observedAt)}
+ fields.failure.hidden=!resourceView.failed;fields.failure.textContent=data?L('Refresh failed. Showing earlier data from the time above.','刷新失败，暂显示上方时间的数据。'):L('Usage could not be loaded. Try refreshing.','无法读取用量，请重试刷新。')
+ fields.metrics.hidden=!data;fields.details.hidden=!data;fields.coverage.hidden=!data;fields.note.hidden=!data;fields.observer.hidden=!data?.usage.watchdogUnavailable;fields.legacy.hidden=!data?.usage.legacyUntrackedCalls
+ if(!data){fields.time.dateTime='';for(const node of [...Object.values(fields.values),...Object.values(fields.extraValues)])node.textContent='—';for(const node of [fields.time,fields.coverage,fields.note,fields.observer,fields.legacy,fields.contextTime])node.textContent='';return}
+ fields.values.tokens.textContent=data.usage.totalTokens===null?L('No data','暂无数据'):format(data.usage.totalTokens)
+ fields.coverage.textContent=data.usage.calls===0?L('No calls recorded.','尚无调用记录。'):L(format(data.usage.reportedCalls)+' of '+format(data.usage.calls)+' calls supplied usage',format(data.usage.calls)+' 次调用中 '+format(data.usage.reportedCalls)+' 次提供用量')+(data.usage.partialCalls?L('; '+format(data.usage.partialCalls)+' incomplete.','，'+format(data.usage.partialCalls)+' 次不完整。'):L('.','。'))
+ fields.note.textContent=L('Usage may be incomplete. This is not a bill or remaining quota.','用量可能不全，不是账单或剩余额度。')
+ fields.observer.textContent=L('Background usage is unavailable.','后台用量暂时缺失。');fields.legacy.textContent=L('Older calls missing usage: ','另有旧调用缺少用量：')+format(data.usage.legacyUntrackedCalls)
  for(const [key,node]of Object.entries(fields.extraValues)){const [group,section,name]=key.split('.'),value=name?data[group][section][name]:data[group][section];node.textContent=typeof value==='number'?format(value):L('Not recorded','尚无记录')}
- fields.contextTime.textContent=data.context.lastCheckAt===null?L('No recognized check recorded.','尚无可识别的检查记录。'):L('Last retained check: ','最近保留的检查：')+date(data.context.lastCheckAt)
+ fields.contextTime.textContent=data.context.lastCheckAt===null?L('No check recorded.','尚无检查记录。'):L('Last check: ','最近检查：')+date(data.context.lastCheckAt)
 }
 async function resourceRefresh(){
  resourceResetIdentity();if(resourceView.busy||!resourceVisible())return
@@ -190,16 +191,16 @@ function resourcePanel(){
  const title=el('h2','',L('Workspace usage','当前环境用量'));title.id='resource-usage-title'
  const state=el('strong','resource-state'),time=el('time','resource-time'),refresh=opButton(L('Refresh usage','刷新用量'),()=>void resourceRefresh(),'button');refresh.id='resource-refresh'
  const failure=el('p','resource-failure');failure.setAttribute('role','alert')
- const coverage=el('p','resource-coverage'),observer=el('p','resource-warning'),legacy=el('p','resource-warning'),metrics=el('dl','resource-metrics'),values={},details=el('details','resource-details'),extra=el('dl','resource-extra'),extraValues={}
+ const coverage=el('p','resource-coverage'),note=el('p','resource-note'),observer=el('p','resource-warning'),legacy=el('p','resource-warning'),metrics=el('dl','resource-metrics'),values={},details=el('details','resource-details'),extra=el('dl','resource-extra'),extraValues={}
  const metric=(list,key,en,zh,target)=>{const cell=el('div'),value=el('dd','','—');target[key]=value;cell.append(el('dt','',L(en,zh)),value);list.append(cell)}
- metric(metrics,'tokens','Reported tokens','已报告 token',values)
+ metric(metrics,'tokens','Recorded usage (tokens)','已记录用量（token）',values)
  for(const [key,en,zh]of [
-  ['context.retainedActivities','Retained context checks','保留的上下文检查'],['context.withinBudgetActivities','Within the recorded limit','记录中未超限'],['context.exceededActivities','Recorded over limit','记录中已超限'],['context.unrecognizedActivities','Unrecognized checks','不可识别的检查'],
-  ['work.retainedItems','Retained work records','保留的工作记录'],['work.states.starting','Recorded as starting','记录为启动中'],['work.states.running','Recorded as running','记录为运行中'],['work.states.completed','Recorded as completed','记录为已完成'],['work.states.failed','Recorded as failed','记录为失败'],['work.states.cancelled','Recorded as cancelled','记录为已取消'],['work.states.interrupted','Recorded as interrupted','记录为已中断'],['work.unrecognizedStateItems','Unrecognized work states','不可识别的工作状态'],['work.deadlineItems','Recorded active deadlines','活动记录中的期限'],['work.pastDeadlineItems','Recorded deadlines in the past','记录期限已过'],['work.invalidDeadlineItems','Invalid recorded deadlines','无效期限记录'],
-  ['work.limits.maxAgentsPerTicket','Subagents per task limit','单任务子 Agent 上限'],['work.limits.maxDepth','Nesting depth limit','嵌套层数上限'],['work.limits.backgroundTimeoutMs','Background interval (ms)','后台期限间隔（毫秒）'],['work.limits.maxOutputBytesPerShell','Stored shell output limit (bytes)','Shell 输出保留上限（字节）']])metric(extra,key,en,zh,extraValues)
- const contextTime=el('p','resource-context-time');details.append(el('summary','',L('View retained checks and limits','查看保留检查与配置限制')),el('p','',L('These records and configured limits do not show current free capacity. A past deadline does not prove work was stopped.','这些记录与配置限制不代表当前可用容量，期限已过也不代表工作已经停止。')),contextTime,extra,el('p','resource-note',L('Reported tokens are not a bill or remaining quota.','已报告 token 不代表账单或剩余额度。')))
- root.append(add(el('div','resource-heading'),add(el('div'),title,state),refresh),time,failure,metrics,coverage,observer,legacy,details)
- root.resourceFields={state,time,refresh,failure,metrics,coverage,observer,legacy,values,details,extraValues,contextTime};resourceView.root=root
+  ['context.retainedActivities','Context checks','上下文检查'],['context.withinBudgetActivities','Within limit','未超限'],['context.exceededActivities','Over limit','已超限'],['context.unrecognizedActivities','Unrecognized checks','无法识别的检查'],
+  ['work.retainedItems','Work records','工作记录'],['work.states.starting','Starting','启动中'],['work.states.running','Running','运行中'],['work.states.completed','Completed','已完成'],['work.states.failed','Failed','失败'],['work.states.cancelled','Cancelled','已取消'],['work.states.interrupted','Interrupted','已中断'],['work.unrecognizedStateItems','Unrecognized work states','无法识别的工作状态'],['work.deadlineItems','Active work with deadlines','设定期限的进行中工作'],['work.pastDeadlineItems','Past deadline','已超过期限'],['work.invalidDeadlineItems','Invalid deadlines','无法识别的期限'],
+  ['work.limits.maxAgentsPerTicket','Subagents per task limit','单任务子 Agent 上限'],['work.limits.maxDepth','Nesting depth limit','嵌套层数上限'],['work.limits.backgroundTimeoutMs','Background timeout (ms)','后台超时（毫秒）'],['work.limits.maxOutputBytesPerShell','Stored shell output limit (bytes)','Shell 输出保留上限（字节）']])metric(extra,key,en,zh,extraValues)
+ const contextTime=el('p','resource-context-time');details.append(el('summary','',L('Details and limits','明细与上限')),el('p','',L('These saved records do not show free capacity. Overdue work may still be running.','这些记录不代表当前可用名额，超过期限的工作也可能仍在继续。')),contextTime,extra)
+ root.append(add(el('div','resource-heading'),add(el('div'),title,state),refresh),time,failure,metrics,coverage,note,observer,legacy,details)
+ root.resourceFields={state,time,refresh,failure,metrics,coverage,note,observer,legacy,values,details,extraValues,contextTime};resourceView.root=root
  queueMicrotask(()=>{resourcePaint();if(!resourceView.loaded)void resourceRefresh()})
  return root
 }

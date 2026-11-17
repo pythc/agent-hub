@@ -300,7 +300,9 @@
 .operator-workspace .resource-panel p { font-size:14px; margin:12px 0; }
 .operator-workspace .resource-failure { color:var(--status-danger); }
 .operator-workspace .resource-warning { color:var(--status-warning); }
-.operator-workspace .resource-note,.operator-workspace .resource-details p { color:var(--text-secondary); }
+.operator-workspace .resource-coverage,.operator-workspace .resource-note { color:var(--text-primary); }
+.operator-workspace .resource-panel .resource-note { margin-top:6px; }
+.operator-workspace .resource-details p { color:var(--text-secondary); }
 .operator-workspace .resource-details { border-top:1px solid var(--border-subtle); margin-top:20px; padding-top:14px; }
 .operator-workspace .resource-details summary { width:fit-content; font-size:14px; cursor:pointer; border-radius:3px; }
 .operator-workspace .resource-extra { display:grid; gap:12px; margin:18px 0 0; }
