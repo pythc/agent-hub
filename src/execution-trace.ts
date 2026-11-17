@@ -1,3 +1,4 @@
+import {recoveryManifest,type RecoveryManifest} from './recovery-manifest.ts'
 import {createHash} from 'node:crypto'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
@@ -23,6 +24,7 @@ type RecoveryInput=z.infer<typeof traceRecoverySchema>
 type RecoveryResult={status:'inspected'|'history_verified'|'history_unavailable'|'resumed'|'cancelled';ticketId:string;replayed:false;at:number;task?:TraceTask}
 interface RecoveryReceipt {fingerprint:string;state:'started'|'completed'|'uncertain';action:RecoveryInput['action'];ticketId:string;at:number;result?:RecoveryResult}
 export interface TraceTask {
+ recovery?:RecoveryManifest
  blocker?:ExecutionBlocker|null
  status:TaskStatusProjection
  id:string;label:string;state:TraceState;phase?:TraceState;updatedAt:string;workerId?:string;backendId?:string;sessionRef?:string;hasResult:boolean;
@@ -141,7 +143,8 @@ export class ExecutionTrace {
   if((!blocker||['manual','after_repair'].includes(blocker.retryPolicy.mode))&&!ticket.ended&&!unknown&&!held&&!approvals.length&&!ticket.attention&&run?.threadId&&['idle','interrupted'].includes(run.phase)&&canRetry(ticket)&&!host.executionActive(ticket.id)&&!jobs.some(j=>j.state==='running')&&!work.some(w=>['running','starting'].includes(w.state))&&!workflow.some(w=>!['applied','declined','stale','observed'].includes(w.state))&&!host.workflows.unsettled(ticket.id)){
    try{if(host.model.describe?.(run.threadId).resume&&this.authorized(host,ticket,run))actions.push('resume_session')}catch{/* Preserve backend and session identity fences. */}
   }
-  return {blocker,status:projectTaskStatus(host,ticket),id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
+  const projected:TraceTask={blocker,status:projectTaskStatus(host,ticket),id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
+  return {...projected,recovery:recoveryManifest(host.store,projected)}
  }
  private readAllowed(host:Runtime,ticket:Ticket){
   const source=host.config.sources.find(s=>s.id===ticket.mandate.actor.source)
