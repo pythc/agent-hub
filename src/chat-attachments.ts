@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+import type {ChatArtifactReference} from './artifact-reference.ts'
 import {createWriteStream,copyFileSync,mkdirSync,readFileSync,rmSync} from 'node:fs'
 import {dirname,extname,join} from 'node:path'
 import {pipeline} from 'node:stream/promises'
@@ -6,8 +8,8 @@ import {ChatError} from './chat-errors.ts'
 import {stableDigest} from './sources.ts'
 
 export const chatUploadLimits={maxBytes:25*1024*1024,maxFiles:10}
-export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string}
-interface Upload {id:string;kind:'chat-upload';conversationId:string;name:string;mimeType:string;bytes:number;path:string;createdAt:number;state:'uploading'|'ready';triggerId?:string;previewType?:string}
+export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string;reference?:ChatArtifactReference}
+interface Upload {id:string;kind:'chat-upload';conversationId:string;name:string;mimeType:string;bytes:number;path:string;createdAt:number;state:'uploading'|'ready';triggerId?:string;previewType?:string;sha256?:string}
 interface Conversation {id:string;owner:string;discussion:string;archived:boolean}
 
 function previewType(bytes:Buffer){
@@ -23,7 +25,8 @@ export class ChatAttachments {
   private discard(row:Upload){rmSync(dirname(row.path),{recursive:true,force:true});this.host.store.db.prepare("DELETE FROM records WHERE kind='asset' AND id=?").run(row.id)}
   private public(row:Upload):ChatAttachment {
     const url='/api/chat/conversations/'+row.conversationId+'/attachments/'+row.id
-    return {id:row.id,name:row.name,mimeType:row.mimeType,bytes:row.bytes,url,...(row.previewType?{previewUrl:url+'?preview=1'}:{})}
+    const reference:ChatArtifactReference={schema:1,kind:'chat-attachment',id:row.sha256?stableDigest(['chat-attachment-version',row.id,row.sha256]):row.id,version:row.sha256?1:null,sha256:row.sha256??null,visibility:'conversation',retention:'subject_to_history_cleanup',publication:'not_tracked'}
+    return {reference,id:row.id,name:row.name,mimeType:row.mimeType,bytes:row.bytes,url,...(row.previewType?{previewUrl:url+'?preview=1'}:{})}
   }
   private row(id:string,conversationId:string){
     const row=this.host.store.get<Upload>('asset',id)
@@ -43,12 +46,13 @@ export class ChatAttachments {
     const directory=join(this.host.config.stateDir,'assets',id),path=join(directory,'upload'+extname(input.name).replace(/[^.a-z0-9]/gi,'').slice(0,20))
     const row:Upload={id,kind:'chat-upload',conversationId,name:input.name,mimeType:input.mimeType,bytes:0,path,createdAt:Date.now(),state:'uploading'}
     mkdirSync(directory,{recursive:true,mode:0o700});this.host.store.put('asset',id,row)
+    const hash=createHash('sha256')
     try{
-      await pipeline(body,async function*(source){for await(const chunk of source){row.bytes+=chunk.byteLength;if(row.bytes>chatUploadLimits.maxBytes)throw new ChatError('attachment_too_large','File exceeds 25 MB.',413);yield chunk}},createWriteStream(path,{flags:'wx',mode:0o600}))
+      await pipeline(body,async function*(source){for await(const chunk of source){row.bytes+=chunk.byteLength;if(row.bytes>chatUploadLimits.maxBytes)throw new ChatError('attachment_too_large','File exceeds 25 MB.',413);hash.update(chunk);yield chunk}},createWriteStream(path,{flags:'wx',mode:0o600}))
       authorize();this.conversation(conversationId,owner)
       if(!this.host.store.get('asset',id))throw new ChatError('attachment_missing','Upload was removed.',404)
       row.previewType=previewType(readFileSync(path).subarray(0,12));if(row.previewType)row.mimeType=row.previewType
-      row.state='ready';this.host.store.put('asset',id,row)
+      row.sha256=hash.digest('hex');row.state='ready';this.host.store.put('asset',id,row)
       return this.public(row)
     }catch(error){this.discard(row);throw error}
   }
