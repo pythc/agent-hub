@@ -17,7 +17,7 @@ async function request<T>(binding:WorkspaceBinding,path:string,isCurrent:()=>boo
   // The shared legacy transport owns current-session login handling. Never let an
   // old page add a second redirect after its context has already changed.
   if(error?.status===401)throw new TraceRequestError('login_required')
-  const code=error?.payload?.code,allowed=['trace_changed','trace_settings_conflict','trace_task_missing','trace_reconcile_required','trace_recovery_uncertain','trace_action_unavailable','trace_cursor_ahead']
+  const code=error?.payload?.code,allowed=['trace_changed','trace_settings_conflict','trace_task_missing','trace_reconcile_required','trace_recovery_uncertain','trace_action_unavailable','trace_repair_confirmation_required','trace_cursor_ahead']
   throw new TraceRequestError(typeof code==='string'&&allowed.includes(code)?code:'trace_request_failed')
  }
 }
@@ -53,7 +53,7 @@ function StageIcon({stage}:{stage:TraceStage}){const Icon=stage==='approval'?Shi
 export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh,word=(names:[string,string])=>names[language==='en'?0:1]
- const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmStop,setConfirmStop]=useState(false),[truncated,setTruncated]=useState(false)
+ const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmResume,setConfirmResume]=useState(''),[confirmStop,setConfirmStop]=useState(false),[truncated,setTruncated]=useState(false)
  const taskNumbers=useRef(new Map<string,number>())
  const taskName=(item:TraceTask)=>{if(!taskNumbers.current.has(item.id))taskNumbers.current.set(item.id,taskNumbers.current.size+1);return workerName(item.workerId,language)+L(' · Task ',' · 任务 ')+taskNumbers.current.get(item.id)}
  const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<()=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
@@ -65,7 +65,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal]),current=++generation.current;let fetching=false,hasMore=false
   pageRead.current=signal
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!signal.aborted
-  cursor.current=0;visibility.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop(false);setBusy(false)
+  cursor.current=0;visibility.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop(false);setConfirmResume('');setBusy(false)
   const readEvents=async()=>{
    if(!isCurrent())return
    const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
@@ -93,14 +93,14 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   void refresh();const timer=setInterval(()=>void refresh(),3000)
   return()=>{controller.abort();clearInterval(timer);if(generation.current===current)generation.current++}
  },[selected,binding,contextKey,readSignal])
- const failure=(code:string)=>code==='trace_changed'||code==='trace_settings_conflict'?L('This task changed. Review its current state before trying again.','任务状态已变更，请核对最新状态后重试。'):code==='trace_reconcile_required'?L('Check the external outcome before repeating any work.','请先核查外部结果，再决定是否重复执行。'):code==='trace_recovery_uncertain'?L('The action could not be confirmed. Check the current task and original session.','操作结果尚未确认，请检查当前任务和原会话。'):code==='trace_action_unavailable'?L('This action is no longer available. Review the latest task state.','此操作已不可用，请查看最新任务状态。'):code==='trace_cursor_ahead'?L('The saved history changed. Refresh to reload the timeline.','历史记录已变更，请刷新以重新加载轨迹。'):L('Updates are unavailable. Your last known state is still shown.','暂时无法更新，当前显示最近一次已知状态。')
- async function recover(action:Action){
+ const failure=(code:string)=>code==='trace_changed'||code==='trace_settings_conflict'?L('This task changed. Review its current state before trying again.','任务状态已变更，请核对最新状态后重试。'):code==='trace_reconcile_required'?L('Check the external outcome before repeating any work.','请先核查外部结果，再决定是否重复执行。'):code==='trace_recovery_uncertain'?L('The action could not be confirmed. Check the current task and original session.','操作结果尚未确认，请检查当前任务和原会话。'):code==='trace_action_unavailable'?L('This action is no longer available. Review the latest task state.','此操作已不可用，请查看最新任务状态。'):code==='trace_repair_confirmation_required'?L('Confirm that you have checked or repaired the reported problem before a single manual continuation.','请确认已核查或修复所报问题，再手动继续一次。'):code==='trace_cursor_ahead'?L('The saved history changed. Refresh to reload the timeline.','历史记录已变更，请刷新以重新加载轨迹。'):L('Updates are unavailable. Your last known state is still shown.','暂时无法更新，当前显示最近一次已知状态。')
+ async function recover(action:Action,repairConfirmed=false){
   const current=generation.current,signal=pageRead.current
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!!signal&&!signal.aborted
   if(!task||busy||!isCurrent())return
-  setBusy(true);setActionError('');setNotice('');setConfirmStop(false)
+  setBusy(true);setActionError('');setNotice('');setConfirmStop(false);setConfirmResume('')
   try{
-   const result=await request<{status:string}>(binding,'/recover',isCurrent,undefined,{ticketId:task.id,action,revision:task.revision,observed:task.observed,requestId:crypto.randomUUID()})
+   const result=await request<{status:string}>(binding,'/recover',isCurrent,undefined,{ticketId:task.id,action,revision:task.revision,observed:task.observed,...(repairConfirmed?{repairConfirmed:true}:{}),requestId:crypto.randomUUID()})
    if(!isCurrent())return
    const messages:Record<string,[string,string]>={inspected:['Current task state checked.','已核对当前任务状态。'],history_verified:['The original session is readable. External outcomes still need review.','原会话可读取，外部结果仍需核查。'],history_unavailable:['The original session could not be read. No work was repeated.','暂时无法读取原会话，未重复执行任务。'],resumed:['Resuming the original task and session.','正在恢复原任务及原会话。'],cancelled:['Task stopped. Existing external effects remain.','任务已停止，已发生的外部效果仍保留。']}
    setNotice(word(messages[result.status]??['Action completed.','操作已完成。']))
@@ -124,7 +124,18 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   {task?<article className="trace-task-detail"><header><h2>{taskName(task)}</h2></header><TaskStatus value={task.status} language={language}/>
    {guidance?<p className="trace-guidance">{guidance}{task.next==='reconnect'?<a href="/configure#connectors">{L('Open connections','打开连接设置')}<ArrowRight size={14}/></a>:null}</p>:null}
    {task.next!=='reconnect'&&['auth_required','configuration_invalid'].includes(task.problem)?<p className="trace-guidance">{L('Also check the account and connection.','还需核对账号与连接。')}<a href="/configure#connectors">{L('Open connections','打开连接设置')}<ArrowRight size={14}/></a></p>:null}
-   <footer className="trace-task-actions">{task.actions.includes('inspect')?<button disabled={busy} onClick={()=>void recover('inspect')}><RefreshCw size={15}/>{L('Check current state','核对当前状态')}</button>:null}{task.actions.includes('read_history')?<button disabled={busy} onClick={()=>void recover('read_history')}><History size={15}/>{L('Check history','核查历史')}</button>:null}{task.actions.includes('resume_session')?<button className="trace-primary" disabled={busy} onClick={()=>void recover('resume_session')}><ArrowRight size={15}/>{L('Continue task','继续任务')}</button>:null}{task.actions.includes('cancel')?<button disabled={busy} onClick={()=>setConfirmStop(true)}><Square size={13}/>{L('Stop task','停止任务')}</button>:null}{busy?<span role="status"><LoaderCircle size={15} className="trace-spin"/>{L('Checking…','处理中…')}</span>:null}</footer>
+   {task.blocker?<p className="trace-guidance" role="status">{({
+    reconnect_same_account:L('Reconnect the account used by this task. Reconnection does not replay earlier actions.','请重新连接此任务原来使用的账号；重连不会重放先前操作。'),
+    wait_for_policy:L('Rate limited. Wait for the existing retry policy; this view does not schedule or repeat requests.','请求受限。请等待现有重试策略处理；此页面不会调度或重复请求。'),
+    review_rate_limit:L('Rate limited, with no future retry schedule recorded. Check the provider limit before a single manual continuation.','请求受限，尚无未来重试计划记录。请先核查服务方限制，再手动继续一次。'),
+    review_quota:L('Quota is exhausted. Check the existing account quota before continuing; do not repeatedly retry.','额度已耗尽。继续前请核对原账号额度，不要反复重试。'),
+    reconcile:L('The effect is unknown. Verify the existing operation before retrying; do not resend it.','操作效果未知。先核实已有操作，不要直接重发。'),
+    review_context:L('Review current context access or limits before continuing.','继续前请核对当前上下文权限或限制。'),
+    review_configuration:L('Review the current backend configuration; do not switch accounts to bypass the problem.','请核对当前后端配置，不要通过切换账号绕过问题。'),
+    inspect:L('Inspect current state before choosing a recovery action.','先核对当前状态，再选择恢复操作。'),
+   })[task.blocker.resolution]}{task.blocker.retryPolicy.notBefore?<span>{L(' Scheduled retry no earlier than: ',' 已有重试计划不早于：')}{new Date(task.blocker.retryPolicy.notBefore).toLocaleString()}</span>:null}</p>:null}
+   <footer className="trace-task-actions">{task.actions.includes('inspect')?<button disabled={busy} onClick={()=>void recover('inspect')}><RefreshCw size={15}/>{L('Check current state','核对当前状态')}</button>:null}{task.actions.includes('read_history')?<button disabled={busy} onClick={()=>void recover('read_history')}><History size={15}/>{L('Check history','核查历史')}</button>:null}{task.actions.includes('resume_session')?<button className="trace-primary" disabled={busy} onClick={()=>task.blocker?.retryPolicy.mode==='after_repair'?setConfirmResume(JSON.stringify([task.id,task.observed,task.revision])):void recover('resume_session')}><ArrowRight size={15}/>{L('Continue task','继续任务')}</button>:null}{task.actions.includes('cancel')?<button disabled={busy} onClick={()=>setConfirmStop(true)}><Square size={13}/>{L('Stop task','停止任务')}</button>:null}{busy?<span role="status"><LoaderCircle size={15} className="trace-spin"/>{L('Checking…','处理中…')}</span>:null}</footer>
+   {confirmResume&&confirmResume===JSON.stringify([task.id,task.observed,task.revision])?<div className="trace-confirm" role="group" aria-label={L('Confirm repair','确认修复')}><p>{L('Have you checked or repaired the reported problem? Continue once using the same account and session. This does not verify credentials or replay uncertain effects.','已核查或修复所报问题？将使用同一账号和会话继续一次；这不代表凭据验证成功，也不会重放效果未知的操作。')}</p><button disabled={busy} onClick={()=>void recover('resume_session',true)}>{L('Checked, continue once','已核查，继续一次')}</button><button onClick={()=>setConfirmResume('')}>{L('Cancel','取消')}</button></div>:null}
    {confirmStop?<div className="trace-confirm" role="group" aria-label={L('Confirm stop','确认停止')}><p>{L('Stop this task? Earlier actions will not be undone.','停止此任务？先前已发生的操作不会因此撤销。')}</p><button className="trace-primary" disabled={busy} onClick={()=>void recover('cancel')}>{L('Stop task','停止任务')}</button><button onClick={()=>setConfirmStop(false)}>{L('Keep working','继续运行')}</button></div>:null}
    <details className="trace-records"><summary>{L('View records','查看记录')}</summary><div className="trace-records-body"><dl className="trace-facts"><div><dt>{L('Session reference','会话编号')}</dt><dd>{task.sessionRef??L('Not started','尚未启动')}</dd></div><div><dt>{L('Result','结果')}</dt><dd>{task.hasResult?L('Saved','已保留'):L('Not recorded','尚无记录')}</dd></div><div><dt>{L('Backend','执行后端')}</dt><dd>{task.backendId??L('Not recorded','尚无记录')}</dd></div></dl>
     <div className="trace-evidence" aria-label={L('Evidence checks','证据核查')}><div><GitCommitHorizontal size={16}/><span>{L('Commit','提交')}</span><strong>{task.evidence.commit==='recorded'?task.evidence.commitRef?.slice(0,12):L('Unverified','未验证')}</strong></div><div><FileCheck2 size={16}/><span>{L('Tests','测试')}</span><strong>{task.evidence.tests==='unverified'?L('Unverified','未验证'):task.evidence.tests==='passed'?L('Passed','通过'):L('Failed','失败')}</strong></div><div><CheckCircle2 size={16}/><span>{L('Deployment','部署')}</span><strong>{L('Unverified','未验证')}</strong></div></div>
