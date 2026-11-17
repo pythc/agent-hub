@@ -278,3 +278,94 @@ it.each(['scheduled','goal_wake','scheduled_dependency_goal_wake'] as const)('ke
   server.server.closeAllConnections();await new Promise<void>(resolve=>server.server.close(()=>resolve()));await server.closeRuntime();hosts.splice(hosts.indexOf(host),1)
  }
 })
+it.each(['auth_required','quota_exhausted','rate_limited','HTTP 429 insufficient_quota'])('projects a bounded blocker and requires explicit repair confirmation for %s',async error=>{
+ const {host,trace}=fixture(),ticket=task(host),retry=vi.spyOn(host,'retry'),run=host.store.get<Run>('run',ticket.id)!
+ const old=command(trace,ticket.id,'resume_session')
+ host.store.put('run',ticket.id,{...run,error:error+' SECRET_PROVIDER_DETAIL'})
+ const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!
+ expect(current.blocker).toMatchObject({version:1,retryPolicy:{automatic:false}})
+ expect(current.actions).toContain('resume_session')
+ expect(JSON.stringify(current.blocker)).not.toContain('SECRET_')
+ await expect(trace.recover(old)).rejects.toThrow('trace_changed')
+ await expect(trace.recover(command(trace,ticket.id,'resume_session'))).rejects.toThrow('trace_repair_confirmation_required')
+ expect(retry).not.toHaveBeenCalled()
+})
+it('retains unknown delivery precedence and projects only existing future execute schedule',()=>{
+ const {host,trace}=fixture(),ticket=task(host),run=host.store.get<Run>('run',ticket.id)!
+ host.store.put('run',ticket.id,{...run,error:'rate_limited'})
+ host.store.enqueue('scheduled','execute',{ticketId:ticket.id})
+ const future=Date.now()+60000
+ host.store.db.prepare("UPDATE jobs SET next_at=? WHERE id='scheduled'").run(future)
+ const before=host.store.db.prepare('SELECT * FROM jobs').all()
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.blocker?.retryPolicy.notBefore).toBe(future)
+ expect(host.store.db.prepare('SELECT * FROM jobs').all()).toEqual(before)
+ host.store.put('tool-receipt','uncertain',{id:'uncertain',ticketId:ticket.id,state:'uncertain'})
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.blocker).toMatchObject({kind:'outcomeUnknown',retryPolicy:{mode:'never'}})
+})
+
+it('allows a single confirmed continuation after repair without clearing historical error',async()=>{
+ const {host,trace}=fixture(),ticket=task(host),retry=vi.spyOn(host,'retry'),run=host.store.get<Run>('run',ticket.id)!
+ host.store.put('run',ticket.id,{...run,error:'quota_exhausted'})
+ const input={...command(trace,ticket.id,'resume_session'),repairConfirmed:true}
+ const result=await trace.recover(input)
+ expect(result.status).toBe('resumed');expect(retry).toHaveBeenCalledTimes(1)
+ expect(await trace.recover(input)).toEqual(result);expect(retry).toHaveBeenCalledTimes(1)
+})
+it('waits while a rate-limit job is scheduled and permits confirmed manual recovery after expiry',async()=>{
+ const {host,trace}=fixture(),ticket=task(host),run=host.store.get<Run>('run',ticket.id)!
+ host.store.put('run',ticket.id,{...run,error:'rate_limited'})
+ host.store.enqueue('scheduled','execute',{ticketId:ticket.id})
+ host.store.db.prepare("UPDATE jobs SET next_at=? WHERE id='scheduled'").run(Date.now()+60000)
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.actions).not.toContain('resume_session')
+ host.store.db.prepare("UPDATE jobs SET next_at=0 WHERE id='scheduled'").run()
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.blocker).toMatchObject({owner:'runtime',retryPolicy:{mode:'scheduled'}})
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.actions).not.toContain('resume_session')
+ host.store.db.prepare("UPDATE jobs SET state='done' WHERE id='scheduled'").run()
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.blocker).toMatchObject({owner:'operator',resolution:'review_rate_limit'})
+ await expect(trace.recover({...command(trace,ticket.id,'resume_session'),repairConfirmed:true})).resolves.toMatchObject({status:'resumed'})
+})
+
+it('exports a redacted read-only recovery manifest from durable local checkpoints',()=>{
+ const {host,trace}=fixture(),ticket=task(host)
+ host.store.put('tool-receipt','checkpoint-secret',{id:'checkpoint-secret',ticketId:ticket.id,state:'complete',token:'SECRET_TOKEN',result:'SECRET_RESULT'})
+ const before=host.store.db.prepare('SELECT * FROM records ORDER BY kind,id').all(),audit=host.store.db.prepare('SELECT * FROM audit ORDER BY seq').all()
+ const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!,manifest=current.recovery!
+ expect(manifest).toMatchObject({schema:1,ticketId:ticket.id,settingsRevision:current.revision,observation:current.observed,replayAllowed:false,checkpointScope:'retained_ticket_history'})
+ expect(manifest.checkpoints).toEqual([{stage:'tool',cursor:expect.any(Number),origin:'transition'}])
+ expect(JSON.stringify(manifest)).not.toMatch(/SECRET_|fixture-session|checkpoint-secret/)
+ expect(host.store.db.prepare('SELECT * FROM records ORDER BY kind,id').all()).toEqual(before)
+ expect(host.store.db.prepare('SELECT * FROM audit ORDER BY seq').all()).toEqual(audit)
+})
+it('requires reconciliation even for retained effects not covered by legacy trace uncertainty',()=>{
+ const {host,trace}=fixture(),ticket=task(host)
+ host.store.put('pr-delivery',ticket.id+':old',{ticketId:ticket.id,phase:'unknown',token:'SECRET_TOKEN'})
+ const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!
+ expect(current.status.effects.state).toBe('unknown')
+ expect(current.recovery).toMatchObject({nextSafeAction:'reconcile_effects',replayAllowed:false})
+})
+it('keeps completed external effects separate from waiting delivery and does not propose replay',()=>{
+ const {host,trace}=fixture(),ticket=task(host),trigger=host.store.triggers.get(ticket.origin.triggerId)!
+ host.store.outbox.send({id:'pending-delivery',ticketId:ticket.id,kind:'reply',channel:trigger.channel!,text:'SECRET_DELIVERY'})
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.recovery).toMatchObject({nextSafeAction:'wait_for_current_work',replayAllowed:false})
+ host.store.deliveryStarted('pending-delivery')
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.recovery!.nextSafeAction).toBe('reconcile_effects')
+})
+it('retains checkpoint references and conservative recovery guidance across restart',async()=>{
+ const {host,trace,config,model}=fixture(),ticket=task(host)
+ host.store.put('tool-receipt','unfinished',{id:'unfinished',ticketId:ticket.id,state:'uncertain'})
+ const manifest=trace.snapshot({ticketId:ticket.id}).tasks[0]!.recovery!
+ await host.close();hosts.splice(hosts.indexOf(host),1)
+ const restored=new Runtime(config,{model});hosts.push(restored)
+ const after=new ExecutionTrace(()=>restored).snapshot({ticketId:ticket.id}).tasks[0]!.recovery!
+ expect(after.checkpoints).toEqual(manifest.checkpoints)
+ expect(after.nextSafeAction).toBe('reconcile_effects');expect(after.replayAllowed).toBe(false)
+})
+it('does not hide pending approval or held delivery behind an in-progress effect',()=>{
+ const {host,trace}=fixture(),ticket=task(host),trigger=host.store.triggers.get(ticket.origin.triggerId)!
+ host.store.outbox.send({id:'held-delivery',ticketId:ticket.id,kind:'reply',channel:trigger.channel!,text:'SECRET_DELIVERY'})
+ host.store.db.prepare("UPDATE outbox SET status='held' WHERE id='held-delivery'").run()
+ host.store.put('approval','approval-mixed',{id:'approval-mixed',ticketId:ticket.id,status:'pending',expiresAt:Date.now()+60000})
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.recovery!.nextSafeAction).toBe('answer_approval')
+ host.store.put('approval','approval-mixed',{id:'approval-mixed',ticketId:ticket.id,status:'expired',expiresAt:0})
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.recovery!.nextSafeAction).not.toBe('wait_for_current_work')
+})

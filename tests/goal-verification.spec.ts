@@ -1,11 +1,13 @@
+import {stableDigest} from '../src/sources.ts'
 import * as XLSX from 'xlsx'
 import AdmZip from 'adm-zip'
 import {backendDefinition} from '../src/backend-config.ts'
 import {it,expect,afterEach} from 'vitest'
-import {mkdtempSync,writeFileSync,rmSync,symlinkSync,readFileSync} from 'node:fs'
+import {mkdtempSync,writeFileSync,rmSync,symlinkSync,readFileSync,appendFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {Runtime} from '../src/runtime.ts'
+import {serve} from '../src/server.ts'
 import {configSchema} from '../src/config.ts'
 import type {Model,ModelRequest} from '../src/model.ts'
 import type {RouterGoal} from '../src/router-goals.ts'
@@ -634,4 +636,72 @@ it('validates parameterized method trials, preserves old versions and fences ret
  expect(f.h.skills.resolve(v1,c.route.scopeId,c.route.entryId).template).toEqual(v1.template)
  const restored=f.h.skills.command({action:'save',goalId:g.id,expectedVersion:2,template:v1.template});expect(restored.version).toBe(3);expect(f.h.skills.status(restored).state).toBe('candidate')
  expect(()=>f.h.skills.command({action:'save',goalId:g.id,expectedVersion:1,template:v1.template})).toThrow('changed')
+})
+
+
+it('keeps retained artifact references fixed across workspace changes and reports retention without publication claims',async()=>{
+ const f=fixture(),g=f.start(),path='report.pdf'
+ writeFileSync(join(f.root,path),'first retained PDF')
+ const first=f.h.artifacts.evidence(g,'build','fixture',f.root,path,[]).artifact!
+ writeFileSync(join(f.root,path),'second retained PDF')
+ const second=f.h.artifacts.evidence(g,'build','fixture',f.root,path,[]).artifact!
+ const describe=()=>f.h.artifacts.describe(first.id)
+ const before=f.h.store.db.prepare('SELECT total_changes() AS n').get()!.n
+ expect(describe()).toMatchObject({schema:1,kind:'goal-artifact',id:first.id,version:1,sha256:first.sha256,name:path,category:'document',visibility:'operator_workspace',retention:'subject_to_history_cleanup',availability:'retained',publication:'not_tracked',downloadPath:'/goal-artifacts/'+first.id})
+ expect(f.h.artifacts.describe(second.id).version).toBe(2)
+ expect(JSON.stringify(describe())).not.toContain(f.root)
+ expect(f.h.store.db.prepare('SELECT total_changes() AS n').get()!.n).toBe(before)
+ rmSync(join(f.root,path));expect(f.h.artifacts.download(first.id).bytes.toString()).toBe('first retained PDF')
+ await f.restart();expect(describe().sha256).toBe(first.sha256)
+ f.h.store.db.prepare('DELETE FROM goal_artifact_bytes WHERE id=?').run(first.id)
+ expect(describe()).toMatchObject({availability:'unavailable',downloadPath:null})
+ expect(()=>f.h.artifacts.download(first.id)).toThrow(/unavailable/)
+})
+
+it('protects fixed-version metadata on the real HTTP route and rechecks current goal authority',async()=>{
+ const f=fixture(),g=f.start();writeFileSync(join(f.root,'item.png'),'png fixture')
+ const a=f.h.artifacts.evidence(g,'build','fixture',f.root,'item.png',[]).artifact!
+ f.h.config.port=0
+ const http=await serve(f.h),url=http.url+'/goal-artifact-versions/'+a.id,headers={authorization:'Bearer '+readFileSync(http.tokenPath,'utf8').trim()}
+ try{
+  expect((await fetch(url)).status).toBe(401)
+  const response=await fetch(url,{headers});expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toContain('no-store')
+  expect(await response.json()).toMatchObject({id:a.id,sha256:a.sha256,category:'image'})
+  expect((await fetch(url,{headers,method:'POST'})).status).toBe(405)
+  expect((await fetch(http.url+'/goal-artifact-versions/missing',{headers})).status).toBe(404)
+  f.h.store.put('router-goal',g.id,{...g,bindingRevision:g.bindingRevision-1})
+  const denied=await fetch(url,{headers});expect(denied.status).toBe(404);expect(await denied.json()).toEqual({code:'artifact_unavailable'})
+  f.h.store.put('router-goal',g.id,{...g,contextIds:[...(g.contextIds??[]),'revoked-context']})
+  expect((await fetch(url,{headers})).status).toBe(404)
+  f.h.store.put('router-goal',g.id,g)
+  const entry=f.h.scopes.binding(g.entryId)
+  const originalBinding=f.h.scopes.binding.bind(f.h.scopes)
+  f.h.scopes.binding=(id:string)=>id===g.entryId?{...entry,privateActor:'private-user'}:originalBinding(id)
+  expect((await fetch(url,{headers})).status).toBe(404)
+  f.h.scopes.binding=originalBinding
+  const cleanup=planHistory(f.h.store,f.config.stateDir,'team','artifact-erase',Date.now());f.h.memory.cleanup.apply(cleanup)
+  expect((await fetch(url,{headers})).status).toBe(404)
+ }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
+})
+
+
+it('does not reconcile a pending revocation ledger when reading artifact metadata over HTTP',async()=>{
+ const f=fixture(),packet=f.h.memory.build(f.context(),{request:'Continue'},'test'),g=f.start()
+ f.h.store.put('router-goal',g.id,{...g,contextIds:[packet.manifest.id]})
+ writeFileSync(join(f.root,'readonly.pdf'),'retained bytes')
+ const a=f.h.artifacts.evidence(g,'build','fixture',f.root,'readonly.pdf',[]).artifact!
+ f.h.config.port=0
+ const http=await serve(f.h),url=http.url+'/goal-artifact-versions/'+a.id,headers={connection:'close',authorization:'Bearer '+readFileSync(http.tokenPath,'utf8').trim()}
+ try{
+  expect((await fetch(url,{headers})).status).toBe(200)
+  const body={seq:1,previous:'',tenantId:'org',scopeId:'team',action:'forget',generation:0,id:'absent-fact',at:Date.now()}
+  const ledger=join(f.config.stateDir,'memory-revocations.jsonl')
+  appendFileSync(ledger,JSON.stringify({...body,hash:stableDigest(body)})+'\n')
+  const before=f.h.store.db.prepare('SELECT total_changes() AS n').get()!.n,bytes=readFileSync(ledger,'utf8')
+  const response=await fetch(url,{headers})
+  expect(f.h.store.db.prepare('SELECT total_changes() AS n').get()!.n).toBe(before)
+  expect(f.h.store.get('memory-revocation-head','current')).toBeUndefined()
+  expect(response.status).toBe(404);expect(await response.json()).toEqual({code:'artifact_unavailable'})
+  expect(readFileSync(ledger,'utf8')).toBe(bytes)
+ }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
 })

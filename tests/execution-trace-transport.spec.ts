@@ -28,7 +28,7 @@ const events=(cursor=5,more=false)=>({visibility:'visibility',events:[],cursor,h
 function find(node:any,predicate:(n:any)=>boolean):any{if(!node||typeof node!=='object')return;if(predicate(node))return node;for(const child of [node.props?.children].flat(Infinity)){const result=find(child,predicate);if(result)return result}}
 function button(node:any,label:string){const found=find(node,n=>n.type==='button'&&[n.props.children].flat(Infinity).includes(label));if(!found)throw Error('Missing button '+label);return found}
 async function settlePage(p:ReturnType<typeof pageFixture>){p.render();p.flush();p.pending.shift().resolve(snapshot());await tick();p.pending.shift().resolve(events());await tick();return p.render()}
-async function selectTask(p:ReturnType<typeof pageFixture>){const view=await settlePage(p);find(view,n=>n.type==='select'&&n.props.id==='trace-task').props.onChange({target:{value:task.id}});p.render();p.flush();p.pending.shift().resolve(snapshot());await tick();p.pending.shift().resolve(events());await tick();return p.render()}
+async function selectTask(p:ReturnType<typeof pageFixture>,selectedTask:any=task){const view=await settlePage(p);find(view,n=>n.type==='select'&&n.props.id==='trace-task').props.onChange({target:{value:task.id}});p.render();p.flush();p.pending.shift().resolve(snapshot([selectedTask]));await tick();p.pending.shift().resolve(events());await tick();return p.render()}
 it('uses the original workspace binding for snapshot, event catch-up and polling, never direct fetch',async()=>{
  const p=pageFixture();await settlePage(p);expect(p.calls.map(c=>c.path)).toEqual(['/api/execution-trace?limit=100','/api/execution-trace/events?cursor=0&limit=100']);expect(p.calls.every(c=>c.url.startsWith('/workspaces/studio/'))).toBe(true);expect(p.calls[0].signal).not.toBe(p.owner.signal)
  p.timers[0].callback();expect(p.calls.at(-1).path).toBe('/api/execution-trace?limit=100');expect(p.rootFetch).not.toHaveBeenCalled();p.unmount();expect(p.calls[0].signal.aborted).toBe(true)
@@ -69,4 +69,18 @@ it('maps unrecognized transport exceptions to fixed errors without raw messages 
 })
 it('fails closed outside the shared owner without any root fallback',()=>{
  const p=pageFixture();p.withoutOwner();expect(()=>p.render()).toThrow('workspace_owner_required');expect(p.calls).toEqual([]);expect(p.rootFetch).not.toHaveBeenCalled()
+})
+
+it('requires explicit repair confirmation and invalidates it on settings revision change',async()=>{
+ const p=pageFixture(),blocked={...task,blocker:{resolution:'review_quota',retryPolicy:{mode:'after_repair',automatic:false}}}
+ let view=await selectTask(p,blocked)
+ const count=p.calls.length
+ button(view,'Continue task').props.onClick();view=p.render()
+ expect(p.calls).toHaveLength(count)
+ expect(button(view,'Checked, continue once')).toBeTruthy()
+ p.timers.at(-1).callback();p.pending.shift().resolve(snapshot([{...blocked,revision:8}]));await tick();p.pending.shift().resolve(events());await tick()
+ expect(find(p.render(),n=>n.type==='div'&&n.props['aria-label']==='Confirm repair')).toBeUndefined()
+ button(p.render(),'Continue task').props.onClick();button(p.render(),'Checked, continue once').props.onClick()
+ expect(p.calls.at(-1).body).toMatchObject({action:'resume_session',revision:8,repairConfirmed:true})
+ p.unmount()
 })

@@ -352,6 +352,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='GET'&&path==='/router-scopes'){send(res,200,runtime.scopes.snapshot());return}
     if(req.method==='GET'&&path==='/router-proactive/state'){send(res,200,runtime.proactive.snapshot(new URL(req.url!,'http://localhost').searchParams.get('scopeId')??''));return}
+    if(path.startsWith('/goal-artifact-versions/')){
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      try{send(res,200,runtime.artifacts.describe(path.slice('/goal-artifact-versions/'.length)))}
+      catch{send(res,404,{code:'artifact_unavailable'})}return
+    }
     if(req.method==='GET'&&path.startsWith('/goal-artifacts/')){
       const {artifact,bytes}=runtime.artifacts.download(path.slice('/goal-artifacts/'.length))
       res.writeHead(200,{'content-type':artifact.mime,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(artifact.path.split('/').at(-1)!),'cache-control':'no-store','x-content-type-options':'nosniff'})
