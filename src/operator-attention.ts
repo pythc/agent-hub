@@ -178,3 +178,6 @@ export class OperatorAttention {
   }))
  }
 }
+
+/** Read-only visibility; never an execution or recovery capability. */
+export function operatorTaskReadable(host:Runtime,ticket:Ticket){return host.scopes.readOnly(()=>host.memory.readOnly(()=>taskVisible(host,ticket)))}
