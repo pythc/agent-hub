@@ -1,5 +1,6 @@
+import type {WorkspaceViewArtifactReference} from './artifact-reference.ts'
 /** Browser-safe contract. Metadata only: no credentials, prompts, tool arguments or native session history. */
-export interface ViewCatalogItem {id:string;label:{en:string;'zh-CN':string};version:string|null;digest:string;available:boolean;capabilities:('workspace.runtime.read')[]}
+export interface ViewCatalogItem {reference?:WorkspaceViewArtifactReference;id:string;label:{en:string;'zh-CN':string};version:string|null;digest:string;available:boolean;capabilities:('workspace.runtime.read')[]}
 export type TaskState='queued'|'running'|'attention'|'ready'|'replied'|'closed'
 export interface ViewQuery {source?:string;state?:TaskState;search?:string;offset?:number}
 export interface ViewTask {id:string;title:string;state:TaskState;sourceId:string;sourceLabel:string;updatedAt:string;summary:string;workerId?:string;replySent:boolean;replyRead:boolean;deliveryUncertain:boolean;approvals:number}

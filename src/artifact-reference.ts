@@ -27,4 +27,16 @@ export interface ChatArtifactReference {
  retention:'subject_to_history_cleanup'
  publication:'not_tracked'
 }
-export type VersionedArtifactReference=ArtifactReference|ChatArtifactReference
+/** Verified package identity, not a frozen runtime snapshot or authorization grant. */
+export interface WorkspaceViewArtifactReference {
+ schema:1
+ kind:'workspace-view'
+ id:string
+ /** Manifest digest pins the complete package, including its code checksum. */
+ version:string
+ sha256:string
+ visibility:'operator_workspace'
+ retention:'subject_to_plugin_removal'
+ publication:'not_tracked'
+}
+export type VersionedArtifactReference=ArtifactReference|ChatArtifactReference|WorkspaceViewArtifactReference

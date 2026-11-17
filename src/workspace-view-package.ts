@@ -1,3 +1,5 @@
+import type {WorkspaceViewArtifactReference} from './artifact-reference.ts'
+import type {ViewCatalogItem} from './workspace-view-contract.ts'
 import {z} from 'zod'
 import {createHash,randomUUID} from 'node:crypto'
 import {readFileSync,writeFileSync,mkdirSync,existsSync,realpathSync,lstatSync,renameSync,rmSync} from 'node:fs'
@@ -68,9 +70,13 @@ export function enabledView(config:Config,id:string,expected?:string){
   if(pkg.manifest.id!==id)throw Error('Workspace view id mismatch')
   return pkg
 }
-export function viewCatalog(config:Config){
+/** Only call with the verified bytes returned by readViewPackage/enabledView. */
+export function viewArtifactReference(pkg:ReturnType<typeof readViewPackage>):WorkspaceViewArtifactReference {
+  return {schema:1,kind:'workspace-view',id:pkg.manifest.id,version:pkg.digest,sha256:pkg.manifest.codeSha256,visibility:'operator_workspace',retention:'subject_to_plugin_removal',publication:'not_tracked'}
+}
+export function viewCatalog(config:Config):ViewCatalogItem[]{
   return config.viewPlugins.filter(p=>p.enabled).map(ref=>{
-    try{const {manifest,digest}=enabledView(config,ref.id);return {id:manifest.id,label:manifest.label,version:manifest.version,digest,capabilities:manifest.capabilities,available:true}}
+    try{const pkg=enabledView(config,ref.id),{manifest,digest}=pkg;return {reference:viewArtifactReference(pkg),id:manifest.id,label:manifest.label,version:manifest.version,digest,capabilities:manifest.capabilities,available:true}}
     catch{return {id:ref.id,label:{en:ref.id,'zh-CN':ref.id},version:null,digest:ref.digest,capabilities:[],available:false}}
   })
 }

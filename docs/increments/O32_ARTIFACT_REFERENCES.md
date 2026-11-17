@@ -71,3 +71,23 @@ endpoint, download capability, sharing or automatic publication is introduced.
 Workspace View packages and cross-kind enumeration are not integrated in this
 slice. #43 remains open. No browser visual/keyboard, real provider/IM or public
 deployment validation is claimed.
+
+## Workspace View package identity (fourth slice)
+
+The existing operator-only catalog and digest-pinned bundle response now expose
+an additive `workspace-view` reference from the verified installed package.
+`id` is the package ID, `version` the full manifest digest (not a mutable semantic
+version label), and `sha256` the verified JavaScript bundle checksum. The manifest
+digest includes that checksum. This identifies code, not the live runtime data
+rendered by the view, and grants no runtime capability or download permission.
+Unavailable/tampered packages expose no verified reference; disabled packages
+remain absent. Existing clients may omit/ignore the optional metadata.
+
+No new resolver, endpoint, historical-package execution, public link or iframe
+permission is introduced. Existing bundle/runtime routes still require current
+operator access and the currently enabled digest, with runtime capabilities
+checked separately. Upgrading disables access through the old digest even if its
+package bytes remain installed; rollback can restore it. Package removal can
+invalidate references. Thus historical result opening, cross-kind result UI and
+browser acceptance remain unfinished, and #43 stays open. No browser, real
+provider/IM or public deployment validation is claimed for this slice.
