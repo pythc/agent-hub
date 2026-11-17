@@ -204,7 +204,7 @@ export class GoalVerification {
    if(options.readOnly&&!this.host.store.get('router-route',g.triggerId))return false
    return stableDigest(this.snapshot(g,round.nodeId?g.nodes?.find(n=>n.id===round.nodeId):undefined,false,options))===stableDigest(round.snapshot)
   }
-  try{return options.readOnly?this.host.memory.readOnly(compare):compare()}catch{return false}
+  try{return options.readOnly?this.host.scopes.readOnly(()=>this.host.memory.readOnly(compare)):compare()}catch{return false}
  }
  ensure(g:RouterGoal,node?:GoalNode):VerificationRound {
   const snapshot=this.snapshot(g,node,false),id='verify-'+stableDigest([g.id,node?.id??'goal',snapshot])

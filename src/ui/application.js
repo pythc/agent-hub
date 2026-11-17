@@ -127,11 +127,13 @@ class ApiError extends Error {
     this.payload = payload
   }
 }
-async function api(path, body, publicRead = false, scope = workspaceContext.activeId) {
-  const epoch = workspaceContext.epoch
+async function api(path, body, publicRead = false, scope = workspaceContext.activeId, readSignal) {
+  const epoch = workspaceContext.epoch, activeId=workspaceContext.activeId, accountId=workspaceAccountId(), sessionIsolation=workspaceContext.sessionIsolation
   const headers = {}
   if (!publicRead && S.token) headers.authorization = 'Bearer ' + S.token
   if (body !== undefined) headers['content-type'] = 'application/json'
+  const timeout=AbortSignal.timeout(['/setup-check', '/onboarding/check', '/onboarding/apply', '/entry-setup/probe', '/entry-setup/apply', '/entry-setup/install', '/entry-setup/model/check', '/entry-setup/model/apply'].includes(path) ? 120000 : 30000)
+  const signal=body===undefined&&readSignal?AbortSignal.any([timeout,readSignal]):timeout
   const res = await fetch(workspacePath(path, publicRead, scope), {
     method: body === undefined ? 'GET' : 'POST',
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -139,12 +141,12 @@ async function api(path, body, publicRead = false, scope = workspaceContext.acti
     cache: 'no-store',
     redirect: 'error',
     credentials: 'same-origin',
-    signal: AbortSignal.timeout(
-      ['/setup-check', '/onboarding/check', '/onboarding/apply', '/entry-setup/probe', '/entry-setup/apply', '/entry-setup/install', '/entry-setup/model/check', '/entry-setup/model/apply'].includes(path) ? 120000 : 30000
-    )
+    signal
   })
   const payload = await res.json().catch(() => null)
-  if (epoch !== workspaceContext.epoch) throw new ApiError(409, { code: 'workspace_obsolete', error: 'Workspace changed during request' })
+  if(body===undefined)signal.throwIfAborted()
+  if (epoch !== workspaceContext.epoch || activeId!==workspaceContext.activeId || accountId!==workspaceAccountId() || sessionIsolation!==workspaceContext.sessionIsolation) throw new ApiError(409, { code: 'workspace_obsolete', error: 'Workspace changed during request' })
+  if (res.status === 401 && !publicRead) workspaceSessionEnded()
   if (res.status === 401 && entryState.account?.configured && !publicRead) { location.replace(location.pathname + location.search + location.hash); throw new ApiError(res.status, payload) }
   if (!res.ok || !payload) throw new ApiError(res.status, payload)
   return payload
@@ -273,7 +275,9 @@ async function run(label, fn) {
   }
 }
 async function connectHost(credential = S.typed, cookieSession = false) {
-  if (!credential.trim() && !cookieSession) return
+  if ((!credential.trim() && !cookieSession) || S.busy) return
+  workspaceTransportPending()
+  let connectEpoch=workspaceContext.epoch
   await run('connect', async () => {
     S.token = credential.trim()
     S.typed = ''
@@ -287,13 +291,17 @@ async function connectHost(credential = S.typed, cookieSession = false) {
       S.token = ''
     }
     await workspaceDiscover()
+    connectEpoch=workspaceContext.epoch
     const [snap] = await Promise.all([snapshot(), runtimeStatus(), loadGuideContext(), health()])
     adopt(snap)
     S.authed = true
     // Client installation probes belong to the connection pages, not every navigation.
     await Promise.all([readOperatorWork(), connectionDiscover(), integrationsDiscover()])
     if (!S.latest) announce(L('Connected to the host.', '已连接到宿主。'))
+    if(connectEpoch!==workspaceContext.epoch)throw new ApiError(409,{code:'workspace_obsolete',error:'Workspace changed during request'})
+    workspaceTransportCommitReady()
   })
+  if (workspaceContext.transportPhase==='pending'&&workspaceContext.epoch===connectEpoch) workspaceTransportBlock('workspace_initialization_failed')
   if (S.authed) void ensureEntryInventory()
 }
 async function refreshStatus() {
@@ -332,6 +340,7 @@ async function disconnect() {
   if ((dirty() || entryHasDraft()) && !confirm(L('Disconnect and discard this draft?', '断开连接并放弃当前草稿？'))) return
   await run('connect', async () => {
     await api('/logout', {})
+    workspaceSessionEnded()
     if (entryState.account?.configured) { location.replace('/auth'); return }
     workspaceReset()
     Object.assign(S, {

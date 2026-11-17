@@ -1,8 +1,9 @@
 import {ProcessSource} from './plugin-process.ts'
+import {OperationError,type Operation} from './operation-errors.ts'
 import type {TaskContinuation} from './task-context.ts'
 import {Client} from '@modelcontextprotocol/sdk/client/index.js'
 import {StdioClientTransport,getDefaultEnvironment} from '@modelcontextprotocol/sdk/client/stdio.js'
-import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import {StreamableHTTPClientTransport,StreamableHTTPError} from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import {Ajv} from 'ajv'
 import {Ajv2020} from 'ajv/dist/2020.js'
 import type {jsonSchemaValidator,JsonSchemaType} from '@modelcontextprotocol/sdk/validation/types.js'
@@ -29,6 +30,20 @@ function abortable<T>(promise:Promise<T>,signal?:AbortSignal):Promise<T>{
     promise.then(value=>{signal.removeEventListener('abort',abort);resolve(value)},error=>{signal.removeEventListener('abort',abort);reject(error)})
   })
 }
+// Only host-owned types/status metadata are inspected. SDK messages may include
+// provider response bodies; never carry them (including as Error.cause) outward.
+function toolFailure(operation:Operation,error:unknown,signal?:AbortSignal){
+  if(signal?.aborted)return new OperationError(operation,'cancelled')
+  if(error instanceof OperationError)return new OperationError(operation,error.code)
+  if(error instanceof StreamableHTTPError){
+    const code=Object.getOwnPropertyDescriptor(error,'code')?.value
+    if(code===401)return new OperationError(operation,'auth_required')
+    if(code===403)return new OperationError(operation,'provider_rejected')
+    if(code===429)return new OperationError(operation,'rate_limited')
+    if(code===408||Number.isInteger(code)&&code>=500&&code<=599)return new OperationError(operation,'transient')
+  }
+  return new OperationError(operation,'operation_failed')
+}
 interface Connection {client:Client;ready:Promise<Client>;controller:AbortController}
 /** Outbound MCP is independent of conversation sources and model backends. */
 export class ToolConnections {
@@ -53,13 +68,14 @@ export class ToolConnections {
     const c=this.host.config.toolConnections[id]!,client=new Client({name:'agenthub-tools',version:'1.0.0'},{capabilities:{},jsonSchemaValidator:schemas})
     const entry:Connection={client,ready:Promise.resolve(client),controller:new AbortController()}
     entry.ready=(async()=>{
-      const resolveEnv=(refs:Record<string,string>)=>Object.fromEntries(Object.entries(refs).map(([key,env])=>{const value=process.env[env];if(!value)throw Error('Missing tool credential environment variable '+env);return [key,value]}))
-      const t=c.transport
-      if(t.kind==='plugin')throw Error('Native plugin tools do not use an MCP transport')
-      const transport=t.kind==='stdio'?new StdioClientTransport({command:t.command,args:t.args,cwd:t.cwd,env:{...getDefaultEnvironment(),...resolveEnv(t.env)},stderr:'ignore',maxBufferSize:8_000_000}):new StreamableHTTPClientTransport(new URL(t.url),{requestInit:{headers:resolveEnv(t.headerEnv),redirect:'error'}})
-      client.onclose=()=>{if(this.clients.get(id)===entry)this.clients.delete(id)}
-      try{await client.connect(transport,{timeout:c.timeoutMs,signal:entry.controller.signal});if(this.closing)throw Error('Host is stopping');return client}
-      catch(error){await client.close().catch(()=>{});throw error}
+      try{
+        const resolveEnv=(refs:Record<string,string>)=>Object.fromEntries(Object.entries(refs).map(([key,env])=>{const value=process.env[env];if(!value)throw new OperationError('tool_initialize','configuration_invalid');return [key,value]}))
+        const t=c.transport
+        if(t.kind==='plugin')throw Error('Native plugin tools do not use an MCP transport')
+        const transport=t.kind==='stdio'?new StdioClientTransport({command:t.command,args:t.args,cwd:t.cwd,env:{...getDefaultEnvironment(),...resolveEnv(t.env)},stderr:'ignore',maxBufferSize:8_000_000}):new StreamableHTTPClientTransport(new URL(t.url),{requestInit:{headers:resolveEnv(t.headerEnv),redirect:'error'}})
+        client.onclose=()=>{if(this.clients.get(id)===entry)this.clients.delete(id)}
+        await client.connect(transport,{timeout:c.timeoutMs,signal:entry.controller.signal});if(this.closing)throw Error('Host is stopping');return client
+      }catch(error){await client.close().catch(()=>{});throw toolFailure('tool_initialize',error,entry.controller.signal)}
     })()
     this.clients.set(id,entry)
     void entry.ready.catch(()=>{if(this.clients.get(id)===entry)this.clients.delete(id)})
@@ -72,10 +88,12 @@ export class ToolConnections {
       if(!(source instanceof ProcessSource)||!this.host.config.sources.find(s=>s.id===source.config.id)?.enabled)throw Error('Plugin connection is unavailable')
       return source.pkg.manifest.tools.filter(t=>config.allowedTools.includes(t.name)).map(t=>({name:t.name,description:t.description,inputSchema:t.inputSchema as Tool['inputSchema']}))
     }
-    const client=await abortable(this.connect(id),signal),result:Tool[]=[],seen=new Set<string>();let cursor:string|undefined
+    let client:Client
+    try{client=await abortable(this.connect(id),signal)}catch(error){throw toolFailure('tool_initialize',error,signal)}
+    const result:Tool[]=[],seen=new Set<string>();let cursor:string|undefined
     do{
       signal?.throwIfAborted();this.allowed(owner,id)
-      const page=await client.listTools(cursor?{cursor}:{},{timeout:config.timeoutMs,signal})
+      const page=await client.listTools(cursor?{cursor}:{},{timeout:config.timeoutMs,signal}).catch(error=>{throw toolFailure('tool_catalog',error,signal)})
       result.push(...page.tools);cursor=page.nextCursor
       if(result.length>5000||seen.size>=100||cursor&&seen.has(cursor))throw Error('Tool catalog pagination did not finish')
       if(cursor)seen.add(cursor)

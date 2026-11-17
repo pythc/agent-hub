@@ -106,7 +106,13 @@ function workspaceHash() {
 }
 function updateWorkspaceLocation(replace = false) {
   const url = new URL(location.href)
-  if(typeof configurationHost !== 'undefined' && configurationHost){url.pathname='/configure';url.search=''}
+  if(typeof configurationHost !== 'undefined' && configurationHost){
+    // Keep explicit selectors, including invalid ones, so navigation cannot silently select the default.
+    const hasWorkspace=url.searchParams.has('workspace'),selectors=url.searchParams.getAll('workspace')
+    url.pathname='/configure';url.search=''
+    if(hasWorkspace)for(const value of selectors)url.searchParams.append('workspace',value)
+    else if(workspaceContext.managed&&workspaceContext.discovered&&workspaceContext.items.some(item=>item.id===workspaceContext.activeId))url.searchParams.set('workspace',workspaceContext.activeId)
+  }
   url.hash = workspaceHash()
   if (url.href !== location.href) {
     history[replace ? 'replaceState' : 'pushState'](null, '', url)
@@ -164,6 +170,7 @@ function entryNavigate(page, id = '', options = {}) {
   entryState.role = 'operator'
   S.surface = 'entries'
   operator.drawer = null
+  if(typeof attentionPageChanged==='function')attentionPageChanged()
   if (page !== 'execution') {
     executionView.inspect = null
     executionView.instructions = null
@@ -391,6 +398,7 @@ async function acceptEntryInvite() {
 async function startEntrySession() {
   if (entryState.loading) return
   entryState.loading = true
+  workspaceTransportPending()
   entryState.sessionChecked = false
   entryState.error = null
   if (!entryState.sharedGuide && !entryState.invite && entryState.role === 'user') {
@@ -411,6 +419,7 @@ async function startEntrySession() {
     entryState.sessionChecked = true
     entryState.operator = session.operator === true
     entryState.account = session.account || null
+    workspaceSessionCommit()
     if (session.account?.authenticated && !entryState.invite && location.pathname !== "/usage") entryState.role = "operator"
     render()
     if (entryState.operator && entryState.role !== 'user') {
@@ -424,6 +433,7 @@ async function startEntrySession() {
     entryError(error)
   } finally {
     entryState.loading = false
+    if (workspaceContext.transportPhase==='pending') workspaceTransportBlock(entryState.operator?'workspace_initialization_failed':'workspace_session_required')
     render()
   }
 }

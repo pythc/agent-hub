@@ -1,6 +1,6 @@
 # Agent Hub 优化总待办与阶段计划
 
-此文件是用户已授权逐步推进的**待办、现状映射与验收计划**，不是实现完成清单，也不是运行时任务数据库、授权记录或效果账本。本次清单工作线仅阅读源码与原始规划，未实施新功能、改动运行状态或新跑产品验收。任何未通过当前版本独立评审及实际页面/功能验收的条目均未完成。
+此文件是用户已授权逐步推进的**待办、现状映射与验收计划**，不是实现完成清单，也不是运行时任务数据库、授权记录或效果账本。原始建单记录保留为历史；最新实现、检查点及未验收边界以第 19 节及 PROGRESS.md 首节为准。任何未通过当前版本独立评审及实际页面/功能验收的条目均未完成。
 
 ## 1. 来源、版本与读取完整性
 
@@ -253,3 +253,18 @@ P2 已全部进入总待办，而不是删除或默认永久不做；其中不�
 Master [#11](https://github.com/pythc/agent-hub/issues/11); O01–O49 map exactly to Issues **#12–#60** (`issue = O number + 11`). All remain open. O07 [#18](https://github.com/pythc/agent-hub/issues/18) / draft PR #61 now has independently reviewed four-axis code and the new simple/readable UI, with current local real-page acceptance and regression evidence in [STATUS_STAGE.md](STATUS_STAGE.md) / [STATUS_ACCEPTANCE.json](STATUS_ACCEPTANCE.json). The exact integrated head `88a7c20` passed ordinary CI (43894922630, three jobs) and container acceptance (43894922522); the separately rejected O08 recovery POST change is unexecuted/pending scope approval; this does not close O07, O08 or the master.
 
 The CI-specific named narrow policy and pinned CLI passed real container acceptance at `ad34ddc0…`, run43892304831: ten boundary checks and thirteen actual container groups. The exact O07 integrated head later passed both ordinary and container checks, as recorded above. The earlier broad policy rejection remains historical and was not bypassed; user subsequently explicitly authorized only the distinct ephemeral-CI profile. O05 [#16](https://github.com/pythc/agent-hub/issues/16) has a reviewed read-only backend and simple team panel on draft PR #62, head `d1685363`; independent actual Runtime/UI checks, 10 screenshots, ordinary three-job CI and container acceptance passed. Its broader queue explanation/fairness/quota work remains open. None of these intermediate results checks a whole Oxx row complete.
+
+
+## 19. 最新集成与开放工作（2026-11-16）
+
+[当前逐工作线进度及完整证据](../increments/PROGRESS.md) 优先于本文件较早的 CI 阻塞快照。原始 O01–O49 编号、优先级、依赖和 Issue 映射不变，所有项目仍 open。
+
+- **G00 已解除旧容器阻塞**：用户后续明确授权的 CI 专用窄策略完成正反向验收。最新已核集成 `c7b34f6c8ab5a8962fd350876daa4717baf97f03`（源码 `589539c`）普通 CI 43927410104 三 job 与容器 43927409932 均成功；没有生产安全设置变更。
+- **O17 部分实现已实际验收**：共享既有 workspace 控制器，三能力页面原始请求绑定、刷新保留请求身份、旧未归属请求隔离。#64 head `9712ca6` 的旧 transport 断言已修复，普通/容器均绿。真实单 Runtime 不支持的显式链接 failclosed；可选多 workspace 是代理模拟，不宣称已实现多租户或真实跨账号隔离。
+- **O05.1/O07/O13/O14/O43.1** 已有分阶段代码、独立 review 与实际云本地页面证据；最新集成五套浏览器全部通过，共 53 图。O43 中文技术词/灰字需按用户要求继续精简并独立重验，不能以 0 页面错误替代。
+- **O18.1** 凭据存在性只读后端 PR #67（远端 `bd684244`），独立 90/90；UI、旧错误边界及真实认证尚未完成。
+- **O09.1** 注意事项只读后端 PR #68（远端 `65b28b79`）独立审查发现嵌套 authority 可能懒写 route，正在修复。相同问题已真实复现于 Trace GET / TaskStatus 的只读验收；尚未复验，不标完成。
+- 当前本地完整 check 1906 passed / 75 failed / 4 skipped；75 个失败与同环境 unchanged-main 完全同名、0 新增、0 EPIPE。云 kernel 的既有隔离限制未降低。GitHub 普通 CI 三 job 则均成功。
+- 原 repository-unknown 恢复 POST 门槛/摘要变更仍因自动审批拒绝而未实施，精确授权待确认；与本次纯只读 GET 缺陷分开。真实 IM、ACP、付费、跨机及公网部署边界仍保留。
+
+下一步：先完成新发现的只读无写入缺陷独立复验；并行修正资源卡文案后真实点击；按小契约推进 O18/O09 的现有界面消费者。每片先提交远端，再独立审查和真实验收，不关闭整个 Oxx 直到其全部退出条件成立。

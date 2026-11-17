@@ -4,6 +4,8 @@ import {BrowserPanel} from './browser.tsx';
 import {ChatSettings} from './chat-settings.tsx';
 import {MemorySettings} from "./memory.tsx";
 import type { mount } from "virtual:configuration-content";
+import type {WorkspaceTransport} from "./workspace-transport.ts";
+export type ConfigurationController = ReturnType<typeof mount>;
 let controller: ReturnType<typeof mount> | undefined;
 let element: HTMLDivElement | undefined;
 let pending: Promise<void> | undefined;
@@ -14,7 +16,7 @@ const active = () =>
   !['#worker-templates','#connectors','#execution-trace'].includes(location.hash) && location.hash !== '#automations' && location.hash !== '#prompts/memory' && !location.hash.startsWith('#plugin/') && (!location.hash.startsWith('#integrations/')||location.hash==='#integrations/tools') && (location.pathname === "/configure" ||
   location.pathname === "/configure/" ||
   location.pathname === "/");
-async function prepare() {
+export async function prepareConfiguration():Promise<ConfigurationController> {
   if (!pending)
     pending = import("virtual:configuration-content")
       .then((module) => {
@@ -30,6 +32,11 @@ async function prepare() {
         throw error;
       });
   await pending;
+  return controller!;
+}
+/** Reuses the same controller even when a capability page is the first entry. */
+export async function getConfigurationTransport():Promise<WorkspaceTransport> {
+  return (await prepareConfiguration()).transport;
 }
 export function Configuration({
   visible,
@@ -58,7 +65,7 @@ export function Configuration({
       if (!controller) return;
     }
     let alive = true;
-    void prepare()
+    void prepareConfiguration()
       .then(() => {
         if (!alive) return;
         setError(false);

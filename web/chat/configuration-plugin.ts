@@ -39,7 +39,7 @@ export function configurationContent(): Plugin {
       const style=document.createElement('style');style.textContent=${JSON.stringify(css.toString())};document.head.append(style);
       const executionAssets=${JSON.stringify(executionAssets)};
       ${configurationScripts.map((name) => (name === "application.js" ? asset(name).replace("void startEntrySession()", "const configurationReady=startEntrySession()") : asset(name))).join("\n")}
-      return {activate(language){lang=language;applyWorkspaceLocation();render()}, language(language){lang=language;render()}, async workspace(){await configurationReady;if(configurationHost.active())workspaceShowPicker()}};
+      return {transport:workspaceBridge(),activate(language){lang=language;applyWorkspaceLocation();render()}, language(language){lang=language;render()}, async workspace(){await configurationReady;if(configurationHost.active())workspaceShowPicker()}};
     }`;
     },
   };

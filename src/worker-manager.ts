@@ -11,8 +11,8 @@ import type {Trigger} from './vendor/dsh-core/index.ts'
 import {bodyDigest} from './sources.ts'
 import type {ToolSpec} from './model.ts'
 const actions=['list','inspect','create','clone','configure','set_prompt','assign','send','pause','resume','cancel','retire','destroy','result','migrate','rebuild'] as const
-export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional(),patch:z.record(z.string(),z.unknown()).optional(),unset:z.array(z.string()).optional(),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
-export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers within the configured policy. Read list for the current revision; mutations require revision and a stable requestId. assign delegates a task; inspect/result return actual state. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. New backend/model applies to new tasks; migrate explicitly hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a current scope manager, fresh task text and workspaceReviewed=true only after reviewing retained artifacts under current permissions. It quarantines old text and starts a new session on the same task/backend/workspace. It never runs until a new authorized follow-up.',inputSchema:{type:'object',properties:{action:{type:'string',enum:actions},requestId:{type:'string'},revision:{type:'integer'},id:{type:'string'},from:{type:'string'},profile:{type:'object'},patch:{type:'object'},unset:{type:'array',items:{type:'string'}},prompt:{type:'string'},text:{type:'string'},discussion:{type:'string'},ticketId:{type:'string'},acceptance:{type:'string'},cancelRunning:{type:'boolean'},workspaceReviewed:{type:'boolean'},waitMs:{type:'integer',minimum:0,maximum:5000}},required:['action'],additionalProperties:false}}]
+export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional(),patch:z.record(z.string(),z.unknown()).optional(),unset:z.array(z.string()).optional(),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),questionId:z.string().min(1).max(1000).optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
+export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers within the configured policy. Read list for the current revision; mutations require revision and a stable requestId. assign delegates a task; inspect/result return actual state. When send answers a pending business question, pass its current attention.id as questionId. This binds the human follow-up once to that question, not an execution permission. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. New backend/model applies to new tasks; migrate explicitly hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a current scope manager, fresh task text and workspaceReviewed=true only after reviewing retained artifacts under current permissions. It quarantines old text and starts a new session on the same task/backend/workspace. It never runs until a new authorized follow-up.',inputSchema:{type:'object',properties:{action:{type:'string',enum:actions},requestId:{type:'string'},revision:{type:'integer'},id:{type:'string'},from:{type:'string'},profile:{type:'object'},patch:{type:'object'},unset:{type:'array',items:{type:'string'}},prompt:{type:'string'},text:{type:'string'},discussion:{type:'string'},ticketId:{type:'string'},questionId:{type:'string'},acceptance:{type:'string'},cancelRunning:{type:'boolean'},workspaceReviewed:{type:'boolean'},waitMs:{type:'integer',minimum:0,maximum:5000}},required:['action'],additionalProperties:false}}]
 export interface RouterContext {discussion:string;trigger?:Trigger;scoped?:ScopeContext;manifest?:ContextManifest}
 interface Delegation {ticketId:string;workerId:string;discussion:string;source:string;actor:string;parentTrigger?:string;mode:'client'|'host'}
 export class WorkerManager {
@@ -50,6 +50,14 @@ export class WorkerManager {
  }
  async call(value:unknown,context?:RouterContext):Promise<any>{
   const input=workerCommandSchema.parse(value),host=this.host
+  if(input.questionId!==undefined){
+   if(input.action!=='send')throw Error('questionId is only valid for send')
+   if(!context?.trigger?.human||context.trigger.meta.delegatedBy)throw Error('Question answer requires a human follow-up')
+   const stored=host.store.triggers.get(context.trigger.id)
+   if(!stored||bodyDigest(stored)!==bodyDigest(context.trigger))throw Error('Question answer requires a recorded human follow-up')
+   const answered=host.store.get<any>('question-answer',bodyDigest([input.ticketId,input.questionId]))
+   if(answered&&answered.triggerId!==context.trigger.id)throw Error('Question is no longer pending')
+  }
   const mandate=context?.trigger?host.routerIngress.authority(context.trigger.id,context.discussion):undefined
   const continuation=context?.trigger&&host.routerIngress.get(context.trigger.id)?.assessment
   if(continuation?.action==='attach'&&(input.action==='assign'||input.action==='send'&&input.ticketId!==continuation.targetTicketId))throw Error('The admitted continuation must use its existing target task')
@@ -123,6 +131,20 @@ export class WorkerManager {
    this.checkContext(a,context,!repositoryEvent)
    if(repositoryEvent)host.scopes.checkTaskEntry(host.scopes.ownership(input.ticketId)!,context!.scoped!.route.entryId,'request')
    const ticket=host.store.tickets.get(input.ticketId)!,origin=host.store.triggers.get(ticket.origin.triggerId)!,previousInputs=ticket.inputs.map(i=>i.id)
+   if(input.questionId!==undefined){
+    const answerKey=bodyDigest([ticket.id,input.questionId])
+    if(ticket.ended||ticket.attention?.id!==input.questionId||host.store.get('question-answer',answerKey))throw Error('Question is no longer pending')
+    if(context!.trigger!.id===ticket.attention.triggerId||context!.trigger!.id===origin.id)throw Error('Question answer requires a human follow-up')
+    const boundary=host.store.get<any>('question-answer-boundary',answerKey)
+    const firstAdmission=host.store.db.prepare("SELECT MIN(seq) AS seq FROM audit WHERE json_extract(body,'$.type')='router.admission' AND json_extract(body,'$.triggerId')=?").get(context!.trigger!.id)?.seq
+    const sourceTime=Date.parse(context!.trigger!.at)
+    // The first admission, not a later re-admission, proves receipt order. Source
+    // time also excludes delayed old messages. Equal timestamps fail closed.
+    if(!boundary||boundary.ticketId!==ticket.id||boundary.questionId!==input.questionId||boundary.questionDigest!==bodyDigest(ticket.attention.question)||!Number.isSafeInteger(boundary.admissionSeq)||!Number.isSafeInteger(boundary.createdAt)||firstAdmission==null||Number(firstAdmission)<=boundary.admissionSeq||!Number.isFinite(sourceTime)||sourceTime<=boundary.createdAt)throw Error('Question answer must follow question creation; send a new reply')
+    // Persist in the same transaction as attach and the command receipt. This records
+    // a business reply only; native approvals and execution authority are unchanged.
+    host.store.put('question-answer',answerKey,{ticketId:ticket.id,questionId:input.questionId,assignmentId:ticket.assignments.at(-1)?.id,triggerId:context!.trigger!.id,actor:context!.trigger!.actor,requestId:input.requestId,answerDigest:bodyDigest(input.text),at:Date.now()})
+   }
    if(context?.scoped){
     if(host.store.deliveries().some(d=>d.ticketId===input.ticketId&&!['sent','dropped'].includes(d.status)))throw Error('Reconcile pending task deliveries before changing the reply entry')
     // CI is evidence for the original task, not a new author or reply owner.

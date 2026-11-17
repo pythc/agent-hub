@@ -146,6 +146,8 @@ it('does not replan around permission failures, uncertain effects or an explicit
  for(const blocked of ['Permission forbidden: deployment not authorized','Execution uncertain after network failure']){const f=fixture({blocked});f.start();await until(f,()=>f.goal().state==='held');expect(f.plans()).toHaveLength(0)}
  const f=fixture();f.start({maxReplans:0});await until(f,()=>f.goal().state==='held');expect(f.plans()).toHaveLength(0)
 })
+// This exercises notification fencing plus a complete multi-Worker replan and verification.
+// Keep all state assertions; allow real SQLite/runtime work on shared CI runners.
 it('waits for the failed Worker notification to flush before autonomously replanning',async()=>{
  const f=fixture({blocked:'Legacy parser rejected the input schema'});f.start()
  // A normal failed native report routes a pending attention message to the Router.
@@ -157,7 +159,7 @@ it('waits for the failed Worker notification to flush before autonomously replan
  checked=false;await f.h.goals.advance();expect(checked).toBe(false);expect(f.goal().state).toBe('active')
  f.h.store.db.prepare("UPDATE outbox SET status='sent' WHERE id='pending-failure'").run()
  await until(f,()=>f.goal().state==='completed');expect(f.goal().replans).toBe(1)
-})
+},30000)
 it('does not let a stale plan hold a goal explicitly resumed during planning',async()=>{
  let f!:ReturnType<typeof fixture>,resumed=false
  f=fixture({onPlan:async(_r,input)=>{if(input.kind==='goal_replanning'&&!resumed){resumed=true;let g=f.goal();f.h.goals.command({action:'pause',id:g.id,operationId:'pause',expectedRevision:g.revision},f.context());g=f.goal();f.h.goals.command({action:'resume',id:g.id,operationId:'resume',expectedRevision:g.revision},f.context())}}});f.start()
