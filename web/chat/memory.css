@@ -14,3 +14,9 @@
 @media(max-width:700px){.memory-settings .memory-edit textarea{font-size:var(--roppo-font-input)}.memory-settings .memory-actions button{min-height:40px}.memory-settings .memory-delete{flex-wrap:wrap;gap:8px 20px}}
 
 .memory-settings .memory-provenance{margin:8px 0 0;font-size:14px;font-weight:500;line-height:1.6;color:var(--c-text);overflow-wrap:anywhere}
+
+.memory-settings .memory-category{font-size:14px;line-height:1.6;font-weight:600;margin:16px 0 0}
+.memory-settings .memory-details{font-size:14px;line-height:1.6;margin-top:8px;overflow-wrap:anywhere}
+.memory-settings .memory-details summary{cursor:pointer;min-height:32px;width:fit-content}
+.memory-settings .memory-details p{margin:6px 0}
+.memory-settings .memory-edit select{background:var(--c-bg);color:var(--c-text);font:inherit;padding:8px;border:1px solid var(--c-line);border-radius:7px}

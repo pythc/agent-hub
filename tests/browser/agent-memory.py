@@ -59,7 +59,9 @@ with sync_playwright() as p:
     memory = page.get_by_role('region', name='记忆', exact=True)
     expect(memory.locator('.memory-note')).to_have_count(4)
     expect(settings_nav.get_by_role('button', name='记忆', exact=True)).to_have_attribute('aria-current', 'page')
-    expect(memory.locator('input,select,details')).to_have_count(0)
+    expect(memory.locator('input,select')).to_have_count(0)
+    expect(memory.locator('details')).to_have_count(4)
+    expect(memory.locator('details[open]')).to_have_count(0)
     expect(memory.get_by_role('switch')).to_have_count(0)
     for row in memory.locator('.memory-note').all():
         assert row.get_by_role('button').all_text_contents() == ['修改', '删除']
@@ -71,7 +73,8 @@ with sync_playwright() as p:
     note.get_by_role('button', name='修改', exact=True).click()
     editor = note.get_by_role('textbox', name='记忆内容', exact=True)
     expect(editor).to_be_focused()
-    expect(note.locator('textarea,input,select')).to_have_count(1)
+    expect(note.locator('textarea,input,select')).to_have_count(2)
+    expect(note.get_by_label('分类', exact=True)).to_have_value('preference')
     editor.fill('不保存的修改')
     note.get_by_role('button', name='取消', exact=True).click()
     expect(note.locator('.memory-content')).to_have_text(original_note['content'])
@@ -83,7 +86,7 @@ with sync_playwright() as p:
     saved = next(item for item in context.request.get(api).json()['items'] if item['id'] == f['chatPreference'])
     assert saved['learning']['condition'] == original_note['learning']['condition']
     assert saved['sources'] == original_note['sources']
-    check('one-field editing persists content and preserves source and applicability; cancellation restores focus')
+    check('editing persists content and category while preserving source and applicability; cancellation restores focus')
 
     removable = memory.locator('[data-memory-id="' + f['chatTentative'] + '"]')
     removable.get_by_role('button', name='删除', exact=True).click()

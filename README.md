@@ -65,6 +65,8 @@ Up to **10 files per message, 25 MiB each**. Understanding a particular format d
 
 Start with a task, then express preferences naturally as you go. Roppo can retain useful preferences and working context for later tasks. Saved memories live in **Settings**, with just **Edit** and **Delete** when you need to adjust them.
 
+Memories are grouped as preferences, facts, project decisions, or methods. Use Edit to change a category. Details shows the saved time and audience; a newer linked task record prompts you to check the memory. Categories never grant permission or change task state.
+
 ![Saved memories with Edit and Delete controls in Settings, shown in Chinese](docs/images/memory-settings-light.png)
 
 Give your Router and Workers their own names, models and tools. Use **Behavior rules** for shared preferences and role instructions, and preview the assembled instructions before saving. Chat display and clearing built-in Chat memory and context also live in Settings.
