@@ -12,6 +12,7 @@ export const configurationScripts = [
   "entry-configure.js",
   "task-contract-card.js",
   "task-decisions-card.js",
+  "task-permissions-card.js",
   "operator-workspace.js",
   "control-center.js",
   "deployments.js",

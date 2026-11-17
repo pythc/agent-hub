@@ -44,12 +44,16 @@ export class RouterScopes {
  nativeId(t:Trigger){return String(t.meta.chat??t.meta.scope??t.threads[0]?.id??'')}
  entry(t:Trigger){return this.bindings().find(b=>b.sourceId===t.source&&b.nativeId===this.nativeId(t))}
  sourceActive(b:EntryBinding){const s=this.config.sources.find(s=>s.id===b.sourceId);return !!(b.active&&this.store.get<any>('source-entry-state',b.id)?.available!==false&&s?.enabled&&this.registry.allowsScope(s,b.nativeId))}
- assertTrigger(t:Trigger){
-  if(this.store.get('source-invalid-trigger',t.id))throw Error('Source content or membership changed; a fresh authorized input is required')
+ triggerRestriction(t:Trigger):'input_changed'|'entry_unavailable'|'member_unavailable'|undefined {
+  if(this.store.get('source-invalid-trigger',t.id))return 'input_changed'
   if(!this.enabled())return
   const entry=this.entry(t)
-  if(!entry||!this.sourceActive(entry))throw Error('Entry is unassigned or unavailable')
-  if(this.store.get<any>('source-member-state',stableDigest([entry.id,t.actor.id]))?.available===false)throw Error('Actor is no longer available in this entry')
+  if(!entry||!this.sourceActive(entry))return 'entry_unavailable'
+  if(this.store.get<any>('source-member-state',stableDigest([entry.id,t.actor.id]))?.available===false)return 'member_unavailable'
+ }
+ assertTrigger(t:Trigger){
+  const reason=this.triggerRestriction(t)
+  if(reason)throw Error({input_changed:'Source content or membership changed; a fresh authorized input is required',entry_unavailable:'Entry is unassigned or unavailable',member_unavailable:'Actor is no longer available in this entry'}[reason])
  }
  epoch(tenantId:string){return this.store.get<number>('tenant-epoch',tenantId)??0}
  bump(tenantId:string){this.store.put('tenant-epoch',tenantId,this.epoch(tenantId)+1)}
