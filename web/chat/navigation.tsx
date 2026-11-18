@@ -97,6 +97,7 @@ export function FeatureNavigation({
         Icon: Plug,
         current: configuring && hash.startsWith("connections"),
       },
+      {href:"/configure#environment",label:L("Current environment", "当前环境"),Icon:Activity,current:configuring&&hash==='environment'},
       {href:"/configure#connectors",label:L("Connectors", "连接器"),Icon:Plug,current:configuring&&hash==='connectors'},
       {
         href: "/configure#integrations/market",
