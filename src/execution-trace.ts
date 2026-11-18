@@ -121,19 +121,33 @@ export class ExecutionTrace {
   }
   return {events,visibility:this.visibility(host),cursor:rows.length>query.limit?Number(page.at(-1)!.seq):head,head,more:rows.length>query.limit,at:Date.now()}
  }
+ // Bind repository receipts and their ownership links, not the wall-clock
+ // observedAt or aggregate counts. Kept private: raw receipt contents never leave
+ // this projection. This is a current-state fence, not a monotonic ABA journal.
+ private effectObservation(host:Runtime,ticketId:string){
+  const rows=(kind:string)=>host.store.db.prepare('SELECT id,body FROM records WHERE kind=? ORDER BY id').all(kind).map(r=>({id:String(r.id),value:JSON.parse(String(r.body))}))
+  const grants=rows('merge-grant').filter(r=>r.value.ticketId===ticketId),grantIds=new Set(grants.map(r=>r.id))
+  return {
+   pr:rows('pr-delivery').filter(r=>r.value.ticketId===ticketId||r.value.id===ticketId||r.id.startsWith(ticketId+':')),
+   review:rows('review-action').filter(r=>r.value.ticketId===ticketId),
+   grants,merges:rows('merge-attempt').filter(r=>grantIds.has(r.id)),
+   replyOwners:rows('router-reply-owner').filter(r=>r.value.taskIds?.includes(ticketId)),
+  }
+ }
  private task(host:Runtime,ticket:Ticket):TraceTask {
   const run=host.store.get<Run>('run',ticket.id),approvals=host.store.list<any>('approval').filter(a=>a.ticketId===ticket.id&&a.status==='pending'&&a.expiresAt>Date.now())
   const jobs=host.store.db.prepare("SELECT id,state,kind,attempts,next_at FROM jobs WHERE json_extract(payload,'$.ticketId')=? ORDER BY id").all(ticket.id)
   const deliveries=host.store.deliveries().filter(d=>d.ticketId===ticket.id||host.store.get<{taskIds?:string[]}>('router-reply-owner',d.id)?.taskIds?.includes(ticket.id)),receipts=host.toolConnections.receipts(ticket.id),work=host.work.list(ticket.id),browser=host.store.list<any>('browser-receipt').filter(r=>r.ticketId===ticket.id)
   const workflow=host.store.list<any>('workflow-action').filter(r=>r.ticketId===ticket.id),problem=classify(run,ticket)
-  const unknown=run?.phase==='uncertain'||problem==='outcome_unknown'||jobs.some(j=>j.state==='uncertain')||deliveries.some(d=>d.status==='uncertain'||d.status==='sending')||receipts.some(r=>r.state==='uncertain'||r.state==='running')||work.some(w=>w.state==='interrupted')||browser.some(r=>r.state!=='complete')||workflow.some(r=>['uncertain','applying'].includes(r.state))
+  const status=projectTaskStatus(host,ticket)
+  const unknown=status.effects.state==='unknown'||status.delivery.state==='uncertain'||run?.phase==='uncertain'||problem==='outcome_unknown'||jobs.some(j=>j.state==='uncertain')||deliveries.some(d=>d.status==='uncertain'||d.status==='sending')||receipts.some(r=>r.state==='uncertain'||r.state==='running')||work.some(w=>w.state==='interrupted')||browser.some(r=>r.state!=='complete')||workflow.some(r=>['uncertain','applying'].includes(r.state))
   const round=host.store.list<any>('goal-verification').filter(v=>v.ticketIds?.includes(ticket.id)).at(-1)
   const acceptance=round?{state:enumState(round.state),passed:round.checks?.filter((c:any)=>c.verdict==='passed').length??0,failed:round.checks?.filter((c:any)=>c.verdict==='failed').length??0,insufficient:round.checks?.filter((c:any)=>c.verdict==='insufficient').length??0}:null
   const state=ticket.ended?ticket.ended.outcome==='stopped'?'cancelled':'ended':unknown?'uncertain':approvals.length?'waiting':ticket.attention?'waiting':run&&['running','starting','background','human','merging','delivering'].includes(run.phase)?run.phase:enumState(ticket.assignments.at(-1)?.report?.state,'queued')
   const code=host.store.list<any>('project-commit').filter(r=>r.ticketId===ticket.id).at(-1),commitRef=typeof code?.head==='string'&&/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(code.head)?code.head:undefined
   const evidence:TraceTask['evidence']={commit:commitRef?'recorded':'unverified',...(commitRef?{commitRef}:{}),tests:typeof code?.test?.exit==='number'?code.test.exit===0?'passed':'failed':'unverified',deployment:'unverified',external:unknown?'uncertain':receipts.length||browser.length||deliveries.some(d=>d.status==='sent')?'receipts_present':'none'}
   const held=!!host.store.get('context-rebuild',ticket.id)||!!host.store.get('router-migration',ticket.id)||host.scopes.ownership(ticket.id)?.state==='held'
-  const observed=stableDigest({ticket,run,approvals:approvals.map(({id,status,expiresAt})=>({id,status,expiresAt})),jobs,deliveries:deliveries.map(({id,status,attempts})=>({id,status,attempts})),receipts:receipts.map(({id,state})=>({id,state})),work:work.map(({id,state})=>({id,state})),browser:browser.map(({id,state})=>({id,state})),workflow:workflow.map(({id,state})=>({id,state})),held,code,ownership:host.scopes.ownership(ticket.id),routing:host.store.get('task-routing',ticket.id),context:host.store.get('task-context',ticket.id),continuation:host.store.get('task-continuation',ticket.id),round:round&&{id:round.id,state:round.state,checks:round.checks}})
+  const observed=stableDigest({effectObservation:this.effectObservation(host,ticket.id),ticket,run,approvals:approvals.map(({id,status,expiresAt})=>({id,status,expiresAt})),jobs,deliveries:deliveries.map(({id,status,attempts})=>({id,status,attempts})),receipts:receipts.map(({id,state})=>({id,state})),work:work.map(({id,state})=>({id,state})),browser:browser.map(({id,state})=>({id,state})),workflow:workflow.map(({id,state})=>({id,state})),held,code,ownership:host.scopes.ownership(ticket.id),routing:host.store.get('task-routing',ticket.id),context:host.store.get('task-context',ticket.id),continuation:host.store.get('task-continuation',ticket.id),round:round&&{id:round.id,state:round.state,checks:round.checks}})
   const scheduled=jobs.filter(j=>j.kind==='execute'&&j.state==='pending'&&Number.isSafeInteger(j.next_at)&&Number(j.next_at)>Date.now()).map(j=>Number(j.next_at))
   const blocker=projectExecutionBlocker(problem,unknown,scheduled.length?Math.min(...scheduled):undefined,jobs.some(j=>j.kind==='execute'&&j.state==='pending'))
   const actions:TraceTask['actions']=['inspect']
@@ -143,7 +157,7 @@ export class ExecutionTrace {
   if((!blocker||['manual','after_repair'].includes(blocker.retryPolicy.mode))&&!ticket.ended&&!unknown&&!held&&!approvals.length&&!ticket.attention&&run?.threadId&&['idle','interrupted'].includes(run.phase)&&canRetry(ticket)&&!host.executionActive(ticket.id)&&!jobs.some(j=>j.state==='running')&&!work.some(w=>['running','starting'].includes(w.state))&&!workflow.some(w=>!['applied','declined','stale','observed'].includes(w.state))&&!host.workflows.unsettled(ticket.id)){
    try{if(host.model.describe?.(run.threadId).resume&&this.authorized(host,ticket,run))actions.push('resume_session')}catch{/* Preserve backend and session identity fences. */}
   }
-  const projected:TraceTask={blocker,status:projectTaskStatus(host,ticket),id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
+  const projected:TraceTask={blocker,status,id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
   return {...projected,recovery:recoveryManifest(host.store,projected)}
  }
  private readAllowed(host:Runtime,ticket:Ticket){

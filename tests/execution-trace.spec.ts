@@ -369,3 +369,57 @@ it('does not hide pending approval or held delivery behind an in-progress effect
  host.store.put('approval','approval-mixed',{id:'approval-mixed',ticketId:ticket.id,status:'expired',expiresAt:0})
  expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.recovery!.nextSafeAction).not.toBe('wait_for_current_work')
 })
+
+it.each(['pr-delivery','review-action','merge-attempt'])('fences recovery with authoritative %s uncertainty and fresh observations',async kind=>{
+ const {host,trace}=fixture(),ticket=task(host),retry=vi.spyOn(host,'retry')
+ const before=command(trace,ticket.id,'resume_session','before-effect')
+ const key=kind==='pr-delivery'?ticket.id+':pr':'repository-effect'
+ if(kind==='merge-attempt')host.store.put('merge-grant',key,{ticketId:ticket.id,head:'SECRET_HEAD'})
+ const record={...(kind==='review-action'?{ticketId:ticket.id}:{}),phase:'uncertain',detail:'SECRET_EFFECT_DETAIL'}
+ host.store.put(kind,key,record)
+ const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!
+ expect(current).toMatchObject({unknownEffects:true,next:'reconcile',status:{effects:{state:'unknown'}},recovery:{nextSafeAction:'reconcile_effects'}})
+ expect(current.actions).not.toContain('resume_session');expect(current.actions).toEqual(expect.arrayContaining(['inspect','read_history','cancel']))
+ expect(JSON.stringify(current)).not.toContain('SECRET_')
+ await expect(trace.recover(before)).rejects.toThrow('trace_changed')
+ const uncertain=command(trace,ticket.id,'resume_session','uncertain-effect')
+ await expect(trace.recover(uncertain)).rejects.toThrow('trace_reconcile_required')
+ // Aggregate state/count remain unchanged, but the evidence basis changed.
+ host.store.put(kind,key,{...record,detail:'changed private evidence'})
+ await expect(trace.recover(uncertain)).rejects.toThrow('trace_changed')
+ const stillUnknown=command(trace,ticket.id,'resume_session','before-resolution')
+ const phase=kind==='pr-delivery'?'draft':kind==='review-action'?'resolved':'merged'
+ host.store.put(kind,key,{...record,phase})
+ await expect(trace.recover(stillUnknown)).rejects.toThrow('trace_changed')
+ expect(trace.snapshot({ticketId:ticket.id}).tasks[0]!.actions).toContain('resume_session')
+ const resolved=command(trace,ticket.id,'resume_session','before-clear')
+ host.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind,key)
+ await expect(trace.recover(resolved)).rejects.toThrow('trace_changed')
+ expect(retry).not.toHaveBeenCalled()
+ await expect(trace.recover(command(trace,ticket.id,'resume_session','fresh-clear'))).resolves.toMatchObject({status:'resumed'})
+ expect(retry).toHaveBeenCalledExactlyOnceWith(ticket.id)
+})
+it('binds merge ownership changes without invalidating observations for unrelated receipts or reads',async()=>{
+ const {host,trace}=fixture(),ticket=task(host),retry=vi.spyOn(host,'retry')
+ host.store.put('merge-grant','merge',{ticketId:ticket.id,head:'head-one'})
+ host.store.put('merge-attempt','merge',{phase:'merged'})
+ const before=command(trace,ticket.id,'resume_session','ownership')
+ const state=()=>JSON.stringify(host.store.db.prepare('SELECT * FROM records ORDER BY kind,id').all())
+ const saved=state()
+ expect(command(trace,ticket.id,'resume_session').observed).toBe(before.observed);expect(state()).toBe(saved)
+ host.store.put('review-action','other',{ticketId:'unrelated',phase:'uncertain'})
+ expect(command(trace,ticket.id,'resume_session').observed).toBe(before.observed)
+ host.store.put('merge-grant','merge',{ticketId:ticket.id,head:'head-two'})
+ await expect(trace.recover(before)).rejects.toThrow('trace_changed')
+ const changed=command(trace,ticket.id,'resume_session','relinked')
+ host.store.put('merge-grant','merge',{ticketId:'unrelated',head:'head-two'})
+ await expect(trace.recover(changed)).rejects.toThrow('trace_changed');expect(retry).not.toHaveBeenCalled()
+})
+
+it('does not turn an in-progress repository receipt into a blanket recovery ban',()=>{
+ const {host,trace}=fixture(),ticket=task(host)
+ host.store.put('pr-delivery',ticket.id+':pr',{phase:'creating'})
+ const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!
+ expect(current.status.effects.state).toBe('in_progress');expect(current.unknownEffects).toBe(false)
+ expect(current.actions).toContain('resume_session')
+})
