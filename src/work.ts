@@ -10,6 +10,8 @@ import {hostPrivateFiles} from './private-files.ts'
 
 export interface WorkOwner {leaseId?:string;ticketId:string;assignmentId:string;cwd:string;sandbox:'read-only'|'workspace-write';agentId?:string;depth:number;network?:boolean}
 export interface WorkItem extends WorkOwner {
+ schedulerReleasedAt?:number;
+ schedulerBackendId?:string;
  id:string;kind:'shell'|'agent';state:'starting'|'running'|'completed'|'failed'|'cancelled'|'interrupted';
  createdAt:number;endedAt?:number;pid?:number;command?:string;prompt?:string;threadId?:string;
  notify:'auto'|'held'|'sent'|'collected'|'dropped';deadline?:number;result?:unknown;exitCode?:number|null;error?:string
@@ -50,9 +52,20 @@ export class WorkManager {
    this.put({...item,state:'interrupted',endedAt:Date.now(),error:'Host restarted; inspect the retained output before repeating work'})
   }
   this.recovered=(async()=>{
-   const shells=interrupted.filter(w=>w.kind==='shell');if(!shells.length)return
+   const recovery=this.list().filter(w=>w.state==='interrupted'&&!w.schedulerReleasedAt)
+   const release=(item:WorkItem)=>{const current=this.store.get<WorkItem>('work',item.id);if(current?.state==='interrupted'&&!current.schedulerReleasedAt)this.put({...current,schedulerReleasedAt:Date.now()})}
+   // Agent activations belong to the previous host process; none can still invoke
+   // this new host's managed tools. Keep their uncertain outputs, not a phantom slot.
+   for(const item of recovery.filter(w=>w.kind==='agent'))release(item)
+   const shells=recovery.filter(w=>w.kind==='shell');if(!shells.length)return
    for(let n=0;n<35;n++){
-    const waiting=shells.filter(w=>{if(existsSync(join(this.directory,w.id+'.result.json')))return false;if(!w.pid)return true;try{process.kill(w.pid,0);return true}catch{return false}})
+    const waiting=shells.filter(w=>{
+     // A dead runner PID (or its result file) cannot prove its descendants
+     // stopped: the lock monitor lived in that runner. Probe the POSIX group;
+     // never send a termination signal to a potentially reused PID/group.
+     if(!w.pid||process.platform==='win32')return true
+     try{process.kill(-w.pid,0);return true}catch(error:any){if(error.code==='ESRCH'){release(w);return false}return true}
+    })
     if(!waiting.length)return
     await new Promise(r=>setTimeout(r,100))
    }

@@ -1,3 +1,5 @@
+import {schedulerAdmission} from './scheduler-admission.ts'
+import {orderSchedulerJobs,observeSchedulerJob,recordSchedulerAdmission,type SchedulerFairness} from './scheduler-order.ts'
 import {validateTaskAssignment,bindTaskAssignmentLease,validateAssignmentLease,restrictAssignmentExecution} from './task-assignment-contract.ts'
 import {begin as beginWorkerAttempt,observe as observeWorkerEvent,isCurrent as currentWorkerAttempt,isDeliverable as deliverableWorkerEvent,type WorkerAttempt,type WorkerEventReceipt} from './async-worker-inbox.ts'
 import {ApiUsage} from './api-usage.ts'
@@ -94,6 +96,8 @@ export class Runtime {
   readonly watchdog:HostWatchdog
   get isPaused(){return this.paused}
   get activeExecutions(){return this.controllers.size}
+  private modelReservations=new Map<string,{ticketId:string;backendId:string}>()
+  private schedulerReservations=new Map<string,{ticketId:string;backendId:string}>()
   schedulerStatus(){return schedulerStatus(this,[...this.runningJobs.keys()],[...this.controllers.keys()])}
   executionActive(id:string){return this.controllers.has(id)}
   interruptForWatchdog(id:string){this.controllers.get(id)?.abort(Error('Watchdog recovery requested'))}
@@ -447,7 +451,7 @@ export class Runtime {
     if(onActive)request.onActive=control=>onActive({...control,...(control.refresh?{refresh:(instructions:string)=>control.refresh!(appendAgentPrompt(instructions,options.prompt,options.persona))}:{})})
     request=this.delegation.restrict(request)
     if(assignmentOwner&&context.ticketId){
-      const backendId=request.backendId??profile?.backend??this.config.execution.roles[role]??this.config.execution.backend
+      const backendId=request.threadId?(this.model instanceof BackendRegistry?this.model.describe(request.threadId).id:this.store.get<{id:string}>('backend-binding',request.threadId)?.id??request.backendId??profile?.backend??this.config.execution.roles[role]??this.config.execution.backend):request.backendId??profile?.backend??this.config.execution.roles[role]??this.config.execution.backend
       const effective=restrictAssignmentExecution(this,context.ticketId,{backendId,tools:(request.tools??[]).map(t=>t.name),options:request.options??{},sandbox:request.sandbox??assignmentOwner.sandbox,network:assignmentOwner.network??this.config.work.network})
       request={...request,options:effective.options,sandbox:effective.sandbox,tools:request.tools?.filter(t=>effective.tools.includes(t.name))}
       assignmentOwner.sandbox=effective.sandbox;assignmentOwner.network=effective.network
@@ -475,7 +479,14 @@ export class Runtime {
     for(let attempt=0;;attempt++){
       enforceBudget()
       this.usage.attempt(activity,attempt,'running')
-      try{if(assignmentOwner){validateTaskAssignment(this,assignmentOwner.ticketId);if(!validateAssignmentLease(this,assignmentOwner))throw Error('Assignment lease is no longer current')}this.delegation.beforeActivation(request);const result=await this.model.run({...request,onUsage:value=>{this.usage.record(activity,attempt,value);const g=project();if(g?.project?.policy.budget)this.goals.holdBudget(g);request.onUsage?.(value)},model:threadId?undefined:request.model??(role==='router'?this.config.execution.router?.model??this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;this.store.put('model-session',id,{threadId:id,cwd:request.cwd,ephemeral:request.ephemeral??false,activity,...context,scopeId,contextId:manifest?.id,at:Date.now()});request.onThread?.(id)}});this.usage.attempt(activity,attempt,'completed');this.usage.finish(activity,'completed');this.activity.finish(activity,'completed');return result}
+      try{if(assignmentOwner){
+        validateTaskAssignment(this,assignmentOwner.ticketId);if(!validateAssignmentLease(this,assignmentOwner))throw Error('Assignment lease is no longer current')
+        const backendId=threadId?(this.model instanceof BackendRegistry?this.model.describe(threadId).id:this.store.get<{id:string}>('backend-binding',threadId)?.id??request.backendId??profile?.backend??this.config.execution.roles[role]??this.config.execution.backend):request.backendId??profile?.backend??this.config.execution.roles[role]??this.config.execution.backend
+        const quota=schedulerAdmission(this,{ticketId:assignmentOwner.ticketId,backendId,excludeRun:!assignmentOwner.agentId,excludeWorkId:assignmentOwner.agentId},[...this.schedulerReservations.values(),...this.modelReservations.values()])
+        if(!quota.allowed)throw Error('Scheduler resource quota: '+quota.blockers.map(b=>b.dimension+':'+b.code).join(', '))
+        this.modelReservations.set(activity,{ticketId:assignmentOwner.ticketId,backendId})
+        if(assignmentOwner.agentId){const item=this.store.get<WorkItem>('work',assignmentOwner.agentId);if(item)this.store.put('work',item.id,{...item,schedulerBackendId:backendId})}
+      }this.delegation.beforeActivation(request);const result=await this.model.run({...request,onUsage:value=>{this.usage.record(activity,attempt,value);const g=project();if(g?.project?.policy.budget)this.goals.holdBudget(g);request.onUsage?.(value)},model:threadId?undefined:request.model??(role==='router'?this.config.execution.router?.model??this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;this.store.put('model-session',id,{threadId:id,cwd:request.cwd,ephemeral:request.ephemeral??false,activity,...context,scopeId,contextId:manifest?.id,at:Date.now()});request.onThread?.(id)}});this.usage.attempt(activity,attempt,'completed');this.usage.finish(activity,'completed');this.activity.finish(activity,'completed');return result}
       catch(error){
         this.usage.attempt(activity,attempt,request.signal?.aborted?'interrupted':'failed')
         if(error instanceof ContextBudgetExceeded){this.store.put('context-rebuild',context.ticketId??activity,{...context,activity,threadId,scopeId,state:'held',reason:error.code,receipt:error.receipt,at:Date.now()});throw error}
@@ -485,7 +496,7 @@ export class Runtime {
         await new Promise(resolve=>setTimeout(resolve,Math.min(10000,1000*2**attempt)))
       }
     }
-    }catch(error){this.usage.finish(activity,request.signal?.aborted?'interrupted':'failed');this.activity.finish(activity,request.signal?.aborted?'interrupted':'failed');throw error}
+    }catch(error){this.usage.finish(activity,request.signal?.aborted?'interrupted':'failed');this.activity.finish(activity,request.signal?.aborted?'interrupted':'failed');throw error}finally{this.modelReservations.delete(activity)}
   }
   stopProject(g:import('./router-goals.ts').RouterGoal,reason:string){
     void this.projectCode.stop(g.id)
@@ -656,15 +667,54 @@ export class Runtime {
   start(): void {
     this.timer = setInterval(() => { void this.tick().catch(error => this.store.audit({ type: 'host.error', message: String(error) })) }, 150)
   }
-  private dispatchWorker(ticketId:string,reserve:boolean):{profile:WorkerProfile;reserve:boolean}|undefined {
+  private dispatchWorker(ticketId:string,reserve:boolean,commit=true):{profile:WorkerProfile;reserve:boolean}|undefined {
     const assigned=this.store.get<{workerId:string}>('worker-assignment',ticketId)?.workerId
     const pool=workerProfiles(this.config).filter(w=>(!assigned||w.id===assigned)&&(!w.state||w.state==='enabled'||w.state==='retiring'&&(assigned===w.id||this.store.get<Run>('run',ticketId)?.workerId===w.id))),busy=new Set(this.store.list<Run>('run').filter(r=>r.ticketId!==ticketId&&(['starting','running'].includes(r.phase)||r.phase==='background'&&this.work.active(r.ticketId,r.assignmentId).length>0)).map(r=>r.workerId).filter(Boolean))
     const cursor=this.store.get<number>('worker-pool','cursor')??0,rotated=pool.map((_,i)=>pool[(cursor+i)%pool.length]!)
     const previous=this.store.get<Run>('run',ticketId)?.workerId
     const profile=(previous&&!busy.has(previous)?pool.find(w=>w.id===previous):undefined)??rotated.find(w=>!busy.has(w.id))
-    if(profile){this.store.put('worker-pool','cursor',(pool.findIndex(w=>w.id===profile.id)+1)%pool.length);return {profile,reserve:false}}
+    if(profile){if(commit)this.store.put('worker-pool','cursor',(pool.findIndex(w=>w.id===profile.id)+1)%pool.length);return {profile,reserve:false}}
     if(reserve&&pool.length)return {profile:pool.find(w=>w.id===previous)??rotated[0]!,reserve:true}
     return undefined
+  }
+  schedulerQuota(ticketId:string){
+    const run=this.store.get<Run>('run',ticketId),workerId=this.store.get<{workerId:string}>('worker-assignment',ticketId)?.workerId??run?.workerId
+    const backendId=(run?.threadId?this.store.get<{id:string}>('backend-binding',run.threadId)?.id??run.backendId:undefined)??workerProfiles(this.config).find(w=>w.id===workerId)?.backend??this.dispatchWorker(ticketId,false,false)?.profile.backend
+    return backendId?schedulerAdmission(this,{ticketId,backendId},[...this.schedulerReservations.values(),...this.modelReservations.values()]):undefined
+  }
+  schedulerResourceSnapshot(){
+    const ticketIds=new Set([...this.store.jobs().filter(j=>j.kind==='execute').map(j=>(j.payload as {ticketId:string}).ticketId),...this.store.list<Run>('run').filter(r=>['starting','running','background','uncertain','interrupted'].includes(r.phase)).map(r=>r.ticketId)])
+    const results=[]
+    for(const ticketId of ticketIds){const result=this.schedulerQuota(ticketId);if(result)results.push(result)}
+    return results
+  }
+  schedulerDecision(job:Job){
+    const payload=job.payload as {ticketId?:string;discussion?:string;triggerId?:string},ticketId=payload?.ticketId
+    if(['cancel','cleanup'].includes(job.kind))return {reason:'control'}
+    if(job.state!=='pending')return {reason:job.state==='uncertain'?'uncertain':'not_pending'}
+    if(job.nextAt>Date.now())return {reason:'retry_delay'}
+    if(this.paused)return {reason:'paused'}
+    if(ticketId&&!this.scopes.taskRunnable(ticketId))return {reason:'authority_held'}
+    if(ticketId){const ticket=this.store.tickets.get(ticketId),source=ticket&&this.config.sources.find(s=>s.id===ticket.mandate.actor.source);if(!ticket||!source?.enabled||!this.store.get('worker-assignment',ticketId)&&!source.allowedActors.includes(ticket.mandate.actor.id)&&!source.allowedBots.includes(ticket.mandate.actor.id))return {reason:'authority_held'}}
+    if(ticketId&&['start','execute'].includes(job.kind)){
+      const goal=this.goals.forTask(ticketId)
+      if(goal?.project&&!['active','waiting'].includes(goal.state))return {reason:'project_held'}
+      if(!this.webhooks.taskExecutionAllowed(ticketId))return {reason:'external_wait'}
+      if(this.watchdog.recovering(ticketId))return {reason:'recovery'}
+      if(this.config.execution.router?.mode==='host'&&!this.store.get('worker-assignment',ticketId))return {reason:'routing_ownership'}
+    }
+    const discussion=['router','router-followup','router-batch','router-scheduled-followup'].includes(job.kind)?payload.discussion:job.kind==='router-admit'&&payload.triggerId?this.routerIngress.get(payload.triggerId)?.discussion:undefined
+    if(discussion&&(this.routingDiscussions.has(discussion)||this.controllers.has('router:'+discussion)))return {reason:'discussion_serialization'}
+    const routing=schedulerRoutingKind(job.kind),followup=schedulerFollowupSlot(this,job),keys=[...this.runningJobs.keys()]
+    const workers=keys.filter(id=>!schedulerRoutingKey(id)).length,reserved=this.store.list<Run>('run').filter(r=>r.phase==='background'&&r.ticketId!==ticketId&&!this.controllers.has(r.ticketId)&&this.work.active(r.ticketId,r.assignmentId).length).length
+    if(routing?keys.filter(schedulerRoutingKey).length>=4:workers+reserved>=workerProfiles(this.config).length+(followup?1:0))return {reason:routing?'routing_capacity':reserved?'background_capacity':'worker_capacity'}
+    if(job.kind==='execute'&&ticketId&&this.controllers.has(ticketId))return {reason:'task_running'}
+    if(ticketId&&['human','delivering','merging','uncertain'].includes(this.store.get<Run>('run',ticketId)?.phase??''))return {reason:'task_held'}
+    const dispatch=job.kind==='execute'&&ticketId?this.dispatchWorker(ticketId,followup,false):undefined
+    if(job.kind==='execute'&&!dispatch)return {reason:'worker_busy'}
+    const quota=dispatch&&ticketId?schedulerAdmission(this,{ticketId,backendId:(this.store.get<Run>('run',ticketId)?.threadId?this.store.get<{id:string}>('backend-binding',this.store.get<Run>('run',ticketId)!.threadId!)?.id??this.store.get<Run>('run',ticketId)?.backendId:undefined)??dispatch.profile.backend},[...this.schedulerReservations.values(),...this.modelReservations.values()]):undefined
+    if(quota&&!quota.allowed)return {reason:'resource_quota',quota}
+    return {reason:'eligible',dispatch,quota}
   }
   async tick(): Promise<void> {
     if (this.ticking || this.closing) return
@@ -693,8 +743,10 @@ export class Runtime {
       this.engine.evaluateDue()
       reconsiderRouterFollowups(this)
       for(const id of this.liveInputs.keys())void this.deliverLiveInputs(id)
-      const interactive=(job:Job)=>schedulerInteractiveJob(this.store,job)
-      for (const job of this.store.jobs().sort((a,b)=>Number(interactive(b))-Number(interactive(a)))) {
+      const fairness=this.store.get<SchedulerFairness>('scheduler-fairness','current')??{routing:0,worker:0}
+      for (const job of orderSchedulerJobs(this.store,this.store.jobs(),this.config.scheduler.interactiveBurst,fairness)) {
+        const decision=this.schedulerDecision(job)
+        observeSchedulerJob(this.store,job,decision.reason)
         const payload = job.payload as any
         if(['start','execute'].includes(job.kind)){
           const g=this.goals.forTask(payload.ticketId)
@@ -723,16 +775,14 @@ export class Runtime {
         const serialRouter=!!routerDiscussion
         if(routerDiscussion&&(this.routingDiscussions.has(routerDiscussion)||this.controllers.has('router:'+routerDiscussion)))continue
         if(this.store.db.prepare('SELECT state FROM jobs WHERE id=?').get(job.id)?.state!=='pending')continue
-        const followupSlot=schedulerFollowupSlot(this,job)
-        const isRouting=schedulerRoutingKey
-        const workers=[...this.runningJobs.keys()].filter(id=>!isRouting(id)).length
-        const reserved=this.store.list<Run>('run').filter(r=>r.phase==='background'&&r.ticketId!==payload.ticketId&&!this.controllers.has(r.ticketId)&&this.work.active(r.ticketId,r.assignmentId).length).length
-        if(routing?[...this.runningJobs.keys()].filter(isRouting).length>=4:workers+reserved>=workerProfiles(this.config).length+(followupSlot?1:0))continue
-        if (job.kind === 'execute' && this.controllers.has(payload.ticketId)) continue
-        if (this.paused || (payload.ticketId && ['human','delivering','merging'].includes(this.store.get<Run>('run', payload.ticketId)?.phase??''))) continue
-        const dispatch=job.kind==='execute'?this.dispatchWorker(payload.ticketId,followupSlot):undefined
-        if(job.kind==='execute'&&!dispatch)continue
-        this.store.jobState(job.id, 'running')
+        if(decision.reason!=='eligible')continue
+        const dispatch=decision.dispatch
+        this.store.atomic(()=>{
+          if(dispatch)this.store.put('worker-pool','cursor',(workerProfiles(this.config).findIndex(w=>w.id===dispatch.profile.id)+1)%workerProfiles(this.config).length)
+          recordSchedulerAdmission(this.store,job,this.config.scheduler.interactiveBurst)
+          this.store.jobState(job.id, 'running')
+        })
+        if(dispatch)this.schedulerReservations.set(job.id,{ticketId:payload.ticketId,backendId:dispatch.profile.backend})
         if(serialRouter)this.routingDiscussions.add(routerDiscussion!)
         const task = this.perform(job,dispatch).catch(error => {
           this.store.jobState(job.id, 'failed', String(error))
@@ -743,7 +793,7 @@ export class Runtime {
             const ticket = this.store.tickets.get(payload.ticketId)
             if (ticket && !ticket.ended) this.reportWork(ticket.id, { state: 'blocked', summary: String(error).slice(0,500),question:'Work could not start. Inspect the task and retry.' })
           }
-        }).finally(() => { this.runningJobs.delete(job.id);if(serialRouter)this.routingDiscussions.delete(routerDiscussion!) })
+        }).finally(() => { this.runningJobs.delete(job.id);this.schedulerReservations.delete(job.id);if(serialRouter)this.routingDiscussions.delete(routerDiscussion!) })
         this.runningJobs.set(job.id, task)
       }
       if(!this.paused)this.agentMemory.tick()

@@ -130,7 +130,10 @@ export class Store implements Repositories {
   }
   enqueue(id: string, kind: string, payload: unknown): void {
     const filtered=this.bodyFilter?.('job',id,payload)??payload
-    this.db.prepare('INSERT OR IGNORE INTO jobs(id,kind,payload,state) VALUES(?,?,?,?)').run(id, kind, JSON.stringify(filtered),filtered===payload?'pending':'blocked')
+    this.atomic(()=>{
+      const inserted=this.db.prepare('INSERT OR IGNORE INTO jobs(id,kind,payload,state) VALUES(?,?,?,?)').run(id, kind, JSON.stringify(filtered),filtered===payload?'pending':'blocked')
+      if(inserted.changes){const refs=filtered as {ticketId?:string;triggerId?:string}|null;this.put('scheduler-job',id,{jobId:id,ticketId:refs?.ticketId,triggerId:refs?.triggerId,enqueuedAt:Date.now()})}
+    })
   }
   jobs(): Job[] {
     return this.db.prepare("SELECT * FROM jobs WHERE state='pending' AND next_at<=? ORDER BY rowid").all(Date.now())

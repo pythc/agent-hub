@@ -103,6 +103,8 @@ export function stateForOrigin(state: any, url: string) {
 
 export class BrowserManager {
   private sessions = new Map<string, Session>();
+  private queuedActions = 0;
+  private activeActions = 0;
   private opening = new Map<string, Promise<Session>>();
   private calls = new Map<
     string,
@@ -259,8 +261,21 @@ export class BrowserManager {
       this.authorizeProfile(s.profileId, principal.user, principal.workerId);
     return s;
   }
+  /** Read only: sessions reserve capacity before driver initialization and until close completes. */
+  browserCapacity() {
+    const sessions = [...this.sessions.values()], used = sessions.filter(s => s.ready).length;
+    const enabled = this.host.config.browser.enabled && !this.closing;
+    return {enabled, limit:this.host.config.browser.maxSessions, used, reserved:sessions.length-used,
+      queuedActions:this.queuedActions, activeActions:this.activeActions,
+      waitReason:this.queuedActions>0?'session_serialization' as const:null,
+      admission:!enabled?'disabled' as const:sessions.length>=this.host.config.browser.maxSessions?'at_capacity' as const:'available' as const};
+  }
   private enqueue<T>(s: Session, action: () => Promise<T>): Promise<T> {
-    const next = s.queue.catch(() => {}).then(action);
+    this.queuedActions++;
+    const next = s.queue.catch(() => {}).then(async () => {
+      this.queuedActions--;this.activeActions++;
+      try {return await action()} finally {this.activeActions--}
+    });
     s.queue = next.catch(() => {});
     return next;
   }

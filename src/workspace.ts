@@ -7,10 +7,14 @@ import type { SourceConfig, Config } from './config.ts'
 
 /** Code writes use a separate checkout; non-repository analysis needs only its configured read-only directory. */
 const exec=promisify(execFile)
+export function workspaceTarget(config:Config,source:SourceConfig,ticketId:string):string {
+ if(source.sandbox==='read-only'||source.workspace?.mode==='source')return source.cwd
+ return join(config.stateDir,'work',createHash('sha256').update(ticketId).digest('hex').slice(0,20))
+}
 export async function prepareWorkspace(config: Config, source: SourceConfig, ticketId: string,signal?:AbortSignal): Promise<string> {
   if (source.sandbox === 'read-only'||source.workspace?.mode==='source') return realpathSync(source.cwd)
   const suffix = createHash('sha256').update(ticketId).digest('hex').slice(0,20)
-  const directory = join(config.stateDir, 'work', suffix)
+  const directory = workspaceTarget(config,source,ticketId)
   if(source.workspace?.mode==='directory'||!source.workspace&&source.kind!=='github'&&!source.repository){
     mkdirSync(directory,{recursive:true})
     const prepared=join(directory,'.superagent-prepared')

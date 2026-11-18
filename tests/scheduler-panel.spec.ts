@@ -10,6 +10,7 @@ function fixture(){
   constructor(readonly tagName:string,readonly className='',text=''){this.textContent=text}
   setAttribute(key:string,value:string){this.attributes[key]=value}
   append(...children:Element[]){this.children.push(...children)}
+  replaceChildren(...children:Element[]){this.children=children;this.textContent=''}
   getClientRects(){return [1]}
  }
  const timers:Array<()=>void>=[],microtasks:Array<()=>void>=[],calls:any[]=[],document={hidden:false},workspaceContext={epoch:1,activeId:'team-a'},S={authed:true,draft:{untouched:true}}
@@ -91,4 +92,25 @@ for(const [name,change]of [
 ] as const)it('rejects '+name+' and preserves a valid last snapshot',async()=>{
  const f=fixture(),root=f.mount();await f.flush();const invalid=snapshot();change(invalid);f.context.api=async()=>invalid;await f.get('schedulerRefresh()')
  expect(root.dataset.state).toBe('stale');expect(root.schedulerFields.values['occupancy.jobs'].textContent).toBe('7')
+})
+
+const admission=()=>({schema:1,interactiveBurst:2,reasons:[{code:'worker_busy',count:2},{code:'eligible',count:1}],resources:[{kind:'workspace',limit:null,used:1,reserved:0,available:null}],browser:{enabled:true,limit:1,used:1,reserved:0,queuedActions:0,activeActions:0,waitReason:null,admission:'at_capacity'},waits:{windowMs:3600000,interactive:{samples:2,p50Ms:20,p95Ms:30,maxMs:40},background:{samples:0,p50Ms:null,p95Ms:null,maxMs:null},unknown:3}})
+const content=(node:any):string=>[node.textContent,...node.children.map(content)].join(' ')
+it('renders bounded aggregate admission and observed waits inside the existing native details',async()=>{
+ const f=fixture();f.context.api=async()=>({...snapshot(),admission:{...admission(),secret:'PRIVATE_PATH'}});const root=f.mount();await f.flush();const body=content(root.schedulerFields.admission)
+ for(const word of ['Worker busy','Workspace resources','Not recorded','At capacity, not a capacity waiting queue','Observed waits','Samples','20','30','Unknown waits: 3','not an SLA'])expect(body).toContain(word)
+ expect(body).not.toContain('PRIVATE');expect(f.calls).toEqual([]);expect(root.schedulerFields.details.tagName).toBe('details');expect(root.schedulerFields.details.attributes).not.toHaveProperty('open');expect(f.S.draft).toEqual({untouched:true})
+})
+it('renders legacy admission as not recorded and strips extra IDs from aggregate projections',async()=>{
+ const f=fixture(),root=f.mount();await f.flush();expect(content(root.schedulerFields.admission)).toContain('Not recorded')
+ const a:any=admission();a.resources[0].id='PRIVATE_PATH';a.browser.user='PRIVATE_USER';a.waits.interactive.raw='PRIVATE';f.context.input={...snapshot(),admission:a};expect(JSON.stringify(f.get('schedulerSnapshot(input)'))).not.toContain('PRIVATE')
+})
+it('rejects invalid admission fields and retains the last observation',async()=>{
+ const changes=[(a:any)=>a.schema=2,(a:any)=>a.reasons[0].code='PRIVATE',(a:any)=>a.reasons[0].code='toString',(a:any)=>a.resources[0].used=-1,(a:any)=>a.resources[0].kind='PRIVATE',(a:any)=>a.browser.waitReason='PRIVATE',(a:any)=>a.browser.queuedActions=.5,(a:any)=>a.waits.windowMs=1,(a:any)=>a.waits.interactive.p95Ms='10']
+ for(const change of changes){const f=fixture();f.context.api=async()=>({...snapshot(),admission:admission()});const root=f.mount();await f.flush();const before=content(root.schedulerFields.admission),bad=admission();change(bad);f.context.api=async()=>({...snapshot(),admission:bad});await f.get('schedulerRefresh()');expect(root.dataset.state).toBe('stale');expect(content(root.schedulerFields.admission)).toBe(before);expect(content(root)).not.toContain('PRIVATE')}
+})
+
+it('distinguishes aggregate resources by safe stable references while accepting older rows without references',()=>{
+ const f=fixture(),a:any=admission();a.resources.push({...a.resources[0],ref:'resource-123456abcdef'});f.context.input={...snapshot(),admission:a};const safe=f.get('schedulerSnapshot(input)');expect(safe.admission.resources[1].ref).toBe('resource-123456abcdef');expect(safe.admission.resources[0].ref).toBeUndefined()
+ for(const ref of ['/private/path','PRIVATE_ID','resource-<script>',123]){a.resources[1].ref=ref;f.context.input={...snapshot(),admission:a};expect(()=>f.get('schedulerSnapshot(input)')).toThrow('scheduler_admission_invalid')}
 })

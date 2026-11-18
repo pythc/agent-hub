@@ -52,6 +52,26 @@ function workerName(id:string|undefined,language:'en'|'zh-CN'){
  return worker
 }
 function StageIcon({stage}:{stage:TraceStage}){const Icon=stage==='approval'?ShieldQuestion:stage==='acceptance'||stage==='test'?FileCheck2:stage==='commit'?GitCommitHorizontal:stage==='tool'?Wrench:stage==='run'?Terminal:stage==='result'?CheckCircle2:stage==='assignment'?ArrowRight:Clock3;return <Icon size={16} aria-hidden="true"/>}
+export function TaskQueueSummary({value,language='en'}:{value:unknown;language?:'en'|'zh-CN'}){
+ const L=(en:string,zh:string)=>language==='zh-CN'?zh:en
+ const labels:Record<string,[string,string]>={control:['Host control','主机控制'],uncertain:['Outcome needs checking','结果待核查'],not_pending:['Not pending','非待执行状态'],retry_delay:['Retry delay','等待重试时间'],paused:['Scheduling paused','调度暂停'],authority_held:['Authority held','授权暂挂'],project_held:['Project held','项目暂挂'],external_wait:['External work','等待外部工作'],recovery:['Recovery pending','等待恢复'],routing_ownership:['Router ownership','Router 归属'],discussion_serialization:['Conversation serialization','会话串行等待'],routing_capacity:['Router capacity','Router 容量'],background_capacity:['Background capacity','后台容量'],worker_capacity:['Worker capacity','Worker 容量'],task_running:['Task already running','任务已在运行'],task_held:['Task held','任务暂挂'],worker_busy:['Worker busy','Worker 忙碌'],resource_quota:['Resource quota','资源配额'],eligible:['Eligible, not a start guarantee','符合条件，不保证立即开始'],context_unavailable:['Context unavailable','上下文不可用']}
+ const read=()=>{
+  const own=(v:unknown,key:string):unknown=>{if(!v||typeof v!=='object'||Array.isArray(v))return undefined;const d=Object.getOwnPropertyDescriptor(v,key);return d&&Object.hasOwn(d,'value')?d.value:undefined},count=(v:unknown):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0,nullable=(v:unknown):v is number|null=>v===null||count(v)
+  try{
+   const reason=own(value,'reason'),waitMs=own(value,'waitMs'),raw=own(value,'resources')
+   if(own(value,'schema')!==1||typeof reason!=='string'||!Object.hasOwn(labels,reason)||!nullable(waitMs)||!Array.isArray(raw)||raw.length>1000)return null
+   const resources:{kind:'project'|'backend'|'workspace';ref:string;limit:number|null;used:number;reserved:number;available:number|null;blocker:'limit_reached'|'identity_unknown'|null}[]=[]
+   for(let i=0;i<raw.length;i++){const r=Object.getOwnPropertyDescriptor(raw,String(i))?.value,kind=own(r,'kind'),ref=own(r,'ref'),limit=own(r,'limit'),used=own(r,'used'),reserved=own(r,'reserved'),available=own(r,'available'),blocker=own(r,'blocker');if(!['project','backend','workspace'].includes(kind as string)||typeof ref!=='string'||!/^resource-[a-f0-9]{12}$/.test(ref)||!nullable(limit)||!count(used)||!count(reserved)||!nullable(available)||![null,'limit_reached','identity_unknown'].includes(blocker as string|null))return null;resources.push({kind:kind as 'project'|'backend'|'workspace',ref,limit,used,reserved,available,blocker:blocker as 'limit_reached'|'identity_unknown'|null})}
+   return {reason,waitMs,resources}
+  }catch{return null}
+ }
+ const data=read(),unknown=L('Not recorded','未记录'),row=(name:string,value:ReactNode)=><div><dt>{name}</dt><dd>{value}</dd></div>
+ return <details className="trace-records"><summary>{L('Queue and resource limits','排队与资源限制')}</summary><div className="trace-records-body">{data?<>
+  <dl className="trace-facts">{row(L('Current reason','当前原因'),L(...labels[data.reason]!))}{row(L('Waited (ms)','已等待（毫秒）'),data.waitMs??unknown)}</dl>
+  {data.resources.map((r,i)=><section key={i}><h4>{r.kind==='project'?L('Project','项目'):r.kind==='backend'?L('Backend','后端'):L('Workspace','工作区')} · {r.ref}</h4><dl className="trace-facts">{row(L('Limit','上限'),r.limit??unknown)}{row(L('In use','已使用'),r.used)}{row(L('Reserved','已预留'),r.reserved)}{row(L('Available','可用'),r.available??unknown)}{row(L('Restriction','限制'),r.blocker==='limit_reached'?L('Limit reached','已达上限'):r.blocker==='identity_unknown'?L('Resource identity unverified','资源身份未核实'):L('No restriction recorded','未记录限制'))}</dl></section>)}
+ </>:<p>{unknown}</p>}</div></details>
+}
+
 export function TaskAssignmentSummary({value,language='en'}:{value:unknown;language?:'en'|'zh-CN'}){
  const L=(en:string,zh:string)=>language==='zh-CN'?zh:en
  const read=()=>{
@@ -200,6 +220,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     review_configuration:L('Review the current backend configuration; do not switch accounts to bypass the problem.','请核对当前后端配置，不要通过切换账号绕过问题。'),
     inspect:L('Inspect current state before choosing a recovery action.','先核对当前状态，再选择恢复操作。'),
    })[task.blocker.resolution]}{task.blocker.retryPolicy.notBefore?<span>{L(' Scheduled retry no earlier than: ',' 已有重试计划不早于：')}{new Date(task.blocker.retryPolicy.notBefore).toLocaleString()}</span>:null}</p>:null}
+   <TaskQueueSummary value={task.queue} language={language}/>
    <TaskAssignmentSummary value={task.assignment} language={language}/>
    <AsyncInboxSummary value={task.asyncInbox} language={language}/>
    <RecoverySummary task={task} language={language}/>

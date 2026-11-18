@@ -59,6 +59,33 @@ function schedulerResetScope(){
  const scope=schedulerScope();if(scope===schedulerView.scope)return
  Object.assign(schedulerView,{scope,data:null,busy:false,failed:false,lastRead:0,request:schedulerView.request+1})
 }
+const schedulerReasonLabels={control:['Host control','主机控制'],uncertain:['Outcome needs checking','结果待核查'],not_pending:['Not pending','非待执行状态'],retry_delay:['Retry delay','等待重试时间'],paused:['Scheduling paused','调度暂停'],authority_held:['Authority held','授权暂挂'],project_held:['Project held','项目暂挂'],external_wait:['External work','等待外部工作'],recovery:['Recovery pending','等待恢复'],routing_ownership:['Router ownership','Router 归属'],discussion_serialization:['Conversation serialization','会话串行等待'],routing_capacity:['Router capacity','Router 容量'],background_capacity:['Background capacity','后台容量'],worker_capacity:['Worker capacity','Worker 容量'],task_running:['Task already running','任务已在运行'],task_held:['Task held','任务暂挂'],worker_busy:['Worker busy','Worker 忙碌'],resource_quota:['Resource quota','资源配额'],eligible:['Eligible, not a start guarantee','符合条件，不保证立即开始'],context_unavailable:['Context unavailable','上下文不可用']}
+function schedulerAdmission(value){
+ if(value===undefined)return null
+ const count=v=>Number.isSafeInteger(v)&&v>=0,nullable=v=>v===null||count(v),fail=()=>{throw Error('scheduler_admission_invalid')},pick=(v,keys)=>Object.fromEntries(keys.map(k=>[k,v[k]]))
+ if(!value||value.schema!==1||!count(value.interactiveBurst)||!Array.isArray(value.reasons)||value.reasons.length>1000||!Array.isArray(value.resources)||value.resources.length>1000)fail()
+ const reasons=value.reasons.map(r=>{if(!r||!Object.hasOwn(schedulerReasonLabels,r.code)||!count(r.count))fail();return pick(r,['code','count'])})
+ const resources=value.resources.map(r=>{if(!r||!['project','backend','workspace'].includes(r.kind)||!nullable(r.limit)||!count(r.used)||!count(r.reserved)||!nullable(r.available)||(r.ref!==undefined&&(typeof r.ref!=='string'||!/^resource-[a-f0-9]{12}$/.test(r.ref))))fail();return pick(r,['kind','ref','limit','used','reserved','available'])})
+ const b=value.browser;if(!b||typeof b.enabled!=='boolean'||!['limit','used','reserved','queuedActions','activeActions'].every(k=>count(b[k]))||![null,'session_serialization'].includes(b.waitReason)||!['available','at_capacity','disabled'].includes(b.admission))fail()
+ const w=value.waits;if(!w||w.windowMs!==3600000||!count(w.unknown))fail()
+ const stat=v=>{if(!v||!count(v.samples)||!['p50Ms','p95Ms','maxMs'].every(k=>nullable(v[k])))fail();return pick(v,['samples','p50Ms','p95Ms','maxMs'])}
+ return {schema:1,interactiveBurst:value.interactiveBurst,reasons,resources,browser:pick(b,['enabled','limit','used','reserved','queuedActions','activeActions','waitReason','admission']),waits:{windowMs:3600000,interactive:stat(w.interactive),background:stat(w.background),unknown:w.unknown}}
+}
+function schedulerAdmissionPaint(node,data){
+ node.replaceChildren(el('h3','',L('Admission and resources','准入与资源')))
+ if(!data){node.append(el('p','',L('Not recorded','未记录')));return}
+ const missing=L('Not recorded','未记录'),list=el('dl','scheduler-extra'),row=(label,value)=>{const cell=el('div');cell.append(el('dt','',label),el('dd','',String(value??missing)));list.append(cell)},word=pair=>L(...pair)
+ row(L('Interactive burst limit','交互突发上限'),data.interactiveBurst)
+ for(const r of data.reasons)row(word(schedulerReasonLabels[r.code]),r.count)
+ node.append(list)
+ for(const r of data.resources){const title=word({project:['Project resources','项目资源'],backend:['Backend resources','后端资源'],workspace:['Workspace resources','工作区资源']}[r.kind]);node.append(el('h4','',title+(r.ref?' · '+r.ref:'')));const dl=el('dl','scheduler-extra');for(const [k,en,zh]of [['limit','Limit','上限'],['used','In use','已使用'],['reserved','Reserved','已预留'],['available','Available','可用']]){const cell=el('div');cell.append(el('dt','',L(en,zh)),el('dd','',String(r[k]??missing)));dl.append(cell)}node.append(dl)}
+ const b=data.browser,browser=el('dl','scheduler-extra');node.append(el('h4','',L('Browser capacity','浏览器容量')))
+ for(const [k,en,zh]of [['limit','Session limit','会话上限'],['used','Ready sessions','已就绪会话'],['reserved','Initializing sessions','初始化占位'],['activeActions','Active serial actions','进行中的串行操作'],['queuedActions','Queued serial actions','排队的串行操作']]){const cell=el('div');cell.append(el('dt','',L(en,zh)),el('dd','',String(b[k])));browser.append(cell)}node.append(browser,el('p','',word({available:['Capacity available','容量可用'],at_capacity:['At capacity, not a capacity waiting queue','容量已满，不代表存在容量等待队列'],disabled:['Browser disabled','浏览器已禁用']}[b.admission])))
+ if(b.waitReason)node.append(el('p','',L('Actions wait for the same session’s preceding action.','操作等待同一会话的前序操作。')))
+ node.append(el('h4','',L('Observed waits · past hour','实测等待 · 过去一小时')))
+ for(const [key,en,zh]of [['interactive','Interactive','交互'],['background','Background','后台']]){const st=data.waits[key],dl=el('dl','scheduler-extra');node.append(el('h4','',L(en,zh)));for(const [k,label]of [['samples',L('Samples','样本数')],['p50Ms','P50 (ms)'],['p95Ms','P95 (ms)'],['maxMs',L('Maximum (ms)','最大值（毫秒）')]]){const cell=el('div');cell.append(el('dt','',label),el('dd','',String(k!=='samples'&&st.samples===0?missing:st[k]??missing)));dl.append(cell)}node.append(dl)}
+ node.append(el('p','',L('Unknown waits: ','未知等待：')+data.waits.unknown),el('p','',L('Small samples are not predictive. These observations are not an SLA or a start-time promise.','少量样本不具预测性，实测记录不是 SLA 或开始时间承诺。')))
+}
 function schedulerSnapshot(value){
  const counts=(item,keys)=>item&&keys.every(key=>Number.isSafeInteger(item[key])&&item[key]>=0)
  const occupancy=['jobs','routingJobs','workerJobs','controllers','backgroundReservations','activeManagedWork'],workers=['configured','enabled','paused','retiring','idleEnabled'],queue=['ready','delayed','blocked','uncertain']
@@ -70,7 +97,7 @@ function schedulerSnapshot(value){
   value.workers.idleEnabled>value.workers.enabled||value.routing.admittedButWorkerCountedJobs>value.occupancy.workerJobs||value.interactive.eligibleQueued>value.queue.ready)throw Error('scheduler_status_invalid')
  // Retain only the public aggregate fields, even when an older host sends extras.
  const pick=(item,keys)=>Object.fromEntries(keys.map(key=>[key,item[key]]))
- return {schema:1,observedAt:value.observedAt,paused:value.paused,occupancy:pick(value.occupancy,occupancy),workers:pick(value.workers,workers),queue:pick(value.queue,queue),routing:pick(value.routing,['countedLimit','admittedButWorkerCountedJobs']),interactive:pick(value.interactive,['additionalLimit','eligibleQueued','activeReservedExecutions','mode'])}
+ return {admission:schedulerAdmission(value.admission),schema:1,observedAt:value.observedAt,paused:value.paused,occupancy:pick(value.occupancy,occupancy),workers:pick(value.workers,workers),queue:pick(value.queue,queue),routing:pick(value.routing,['countedLimit','admittedButWorkerCountedJobs']),interactive:pick(value.interactive,['additionalLimit','eligibleQueued','activeReservedExecutions','mode'])}
 }
 function schedulerVisible(){
  const root=schedulerView.root
@@ -89,6 +116,7 @@ function schedulerPaint(){
  fields.paused.hidden=!data?.paused;fields.paused.textContent=L('Existing work may still be running.','已有工作可能仍在继续。')
  fields.metrics.hidden=!data;fields.details.hidden=!data
  if(!data)return
+ schedulerAdmissionPaint(fields.admission,data.admission)
  for(const [key,node]of Object.entries(fields.values)){const [group,name]=key.split('.');node.textContent=String(data[group][name])}
  fields.interactive.textContent=data.interactive.mode==='existing_session'?L('An existing conversation may use at most one additional slot. Access and other scheduling checks still apply.','已有会话最多可使用一个额外名额，仍须通过权限及其他调度检查。'):L('Some conversation replies may use at most one additional slot. Access and other scheduling checks still apply.','部分会话回复最多可使用一个额外名额，仍须通过权限及其他调度检查。')
 }
@@ -122,9 +150,9 @@ function schedulerPanel(){
   ['occupancy.routingJobs','Counted Router work','计入 Router 限额的工作'],['occupancy.workerJobs','Other active work','其他正在处理的工作'],['occupancy.controllers','Active execution controls','活动执行控制'],
   ['occupancy.activeManagedWork','Managed work in progress','正在处理的受管工作'],['routing.countedLimit','Router counting limit','Router 计数上限'],['routing.admittedButWorkerCountedJobs','Router work counted elsewhere','计入其他工作一侧的 Router 工作'],
   ['interactive.eligibleQueued','Conversation work meeting the extra-slot rule','符合额外名额规则的会话工作'],['interactive.activeReservedExecutions','Recorded use of the extra slot','记录中使用额外名额的执行']])metric(extra,key,en,zh)
- const interactive=el('p');details.append(summary,explanation,interactive,extra)
+ const interactive=el('p'),admission=el('div');details.append(summary,explanation,interactive,extra,admission)
  const heading=add(el('div','scheduler-heading'),add(el('div'),title,state),refresh)
- root.append(heading,time,failure,paused,metrics,details);root.schedulerFields={state,time,refresh,failure,paused,metrics,details,values,interactive};schedulerView.root=root
+ root.append(heading,time,failure,paused,metrics,details);root.schedulerFields={state,time,refresh,failure,paused,metrics,details,values,interactive,admission};schedulerView.root=root
  queueMicrotask(()=>{schedulerPaint();if(!schedulerView.lastRead||Date.now()-schedulerView.lastRead>=5000)void schedulerRefresh()})
  return root
 }
