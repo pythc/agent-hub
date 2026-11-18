@@ -1,8 +1,9 @@
+import {operatorArtifactRegistration,type ArtifactRegistration} from './artifact-registry.ts'
 import {randomUUID} from 'node:crypto'
 import type {Runtime} from './runtime.ts'
 import type {ArtifactReference,WorkspaceViewArtifactReference} from './artifact-reference.ts'
 import {enabledView,viewArtifactReference} from './workspace-view-package.ts'
-export type ArtifactCatalogEntry={reference:ArtifactReference|WorkspaceViewArtifactReference;label:{en:string;'zh-CN':string}}
+export type ArtifactCatalogEntry={reference:ArtifactReference|WorkspaceViewArtifactReference;label:{en:string;'zh-CN':string};registration?:Extract<ArtifactRegistration,{domain:'operator_workspace'}>}
 export interface ArtifactCatalog {schema:1;items:ArtifactCatalogEntry[];truncated:boolean;nextCursor:string|null}
 type Position={kind:'goal'|'view';after:string}
 type Cursor={position:Position;expires:number}
@@ -27,7 +28,7 @@ export function artifactCatalog(host:Runtime,cursor?:string):ArtifactCatalog {
   const rows=host.store.db.prepare("SELECT id FROM records WHERE kind='goal-artifact' AND id>? ORDER BY id LIMIT ?").all(position.after,scanSize+1) as {id:string}[]
   for(const row of rows.slice(0,scanSize)){
    position={kind:'goal',after:row.id}
-   try{const reference=host.artifacts.describe(row.id);items.push({reference,label:{en:reference.name,'zh-CN':reference.name}})}catch{}
+   try{const reference=host.artifacts.describe(row.id);items.push({reference,registration:operatorArtifactRegistration(reference),label:{en:reference.name,'zh-CN':reference.name}})}catch{}
    if(items.length===pageSize)return finish(position)
   }
   if(rows.length>scanSize)return finish(position)
@@ -37,7 +38,7 @@ export function artifactCatalog(host:Runtime,cursor?:string):ArtifactCatalog {
  const refs=host.config.viewPlugins.filter(ref=>ref.enabled&&ref.id>position.after).sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0)
  for(const ref of refs.slice(0,scanSize)){
   position={kind:'view',after:ref.id}
-  try{const pkg=enabledView(host.config,ref.id);items.push({reference:viewArtifactReference(pkg),label:pkg.manifest.label})}catch{}
+  try{const pkg=enabledView(host.config,ref.id);const reference=viewArtifactReference(pkg);items.push({reference,registration:operatorArtifactRegistration(reference),label:pkg.manifest.label})}catch{}
   if(items.length===pageSize)return finish(position)
  }
  return finish(refs.length>scanSize?position:null)
