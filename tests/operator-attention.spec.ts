@@ -242,11 +242,11 @@ it('classifies native user input as a question rather than a permission and reje
 })
 it('uses the real read-only acceptance verifier for fresh project review and marks changed evidence stale without writes',async()=>{
  const f=fixture(),ticket=await task(f),goal=projectReview(f,ticket)
- goal.state='active';goal.project!.integration='build';goal.nodes![0]!.state='passed';f.host.store.put('router-goal',goal.id,goal)
+ goal.state='active';goal.project!.integration='build';goal.project!.base='0'.repeat(40);goal.project!.policy={testCommand:'SECRET_COMMAND'};goal.nodes![0]!.state='passed';f.host.store.put('router-goal',goal.id,goal)
  expect(f.host.verification.capture(ticket.id,{state:'ready',summary:'SECRET_ACCEPTED_REPORT'},'SECRET_ACCEPTED_REPLY')).toBe(true)
  f.host.store.put('run',ticket.id,{...f.host.store.get<Run>('run',ticket.id)!,phase:'idle'})
  const delivery=f.host.store.get<{id:string}>('goal-delivery',ticket.id)!
- f.host.store.put('project-commit',delivery.id,{id:delivery.id,goalId:goal.id,ticketId:ticket.id,head:'a'.repeat(40),parents:[],test:{command:'SECRET_COMMAND',exit:0,output:'SECRET_OUTPUT'}})
+ f.host.store.put('project-commit',delivery.id,{id:delivery.id,goalId:goal.id,ticketId:ticket.id,head:'a'.repeat(40),parents:[goal.project!.base],test:{command:'SECRET_COMMAND',exit:0,output:'SECRET_OUTPUT'}})
  const round=f.host.verification.ensure(goal);round.state='passed';f.host.store.put('goal-verification',round.id,round)
  goal.finalRoundId=round.id;goal.state='needs_input';goal.project!.review={...goal.project!.review!,roundId:round.id,deliveryId:delivery.id,head:'a'.repeat(40)};f.host.store.put('router-goal',goal.id,goal)
  const before=dbState(f),result=f.projection.snapshot()
