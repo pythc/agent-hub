@@ -9,3 +9,7 @@ Historical bundle and runtime requests remain unavailable. Existing bundle/runti
 UI hook tests cover captured-workspace routing, fixed identity, refresh/retry, late responses, invalid route/payloads and lease invalidation. Real browser visuals and keyboard/mobile acceptance are still unverified.
 
 Automated tests use real package builds, isolated runtimes and HTTP requests to cover upgrade/rollback, fixed identity, missing/tampered objects, ID mismatch, revocation, workspace isolation, directory symlinks, authentication, method/query validation and rejection of historical execution. Full-suite baseline comparison and exact-head remote checks/review are recorded in the PR. Real IM, browser visual/mobile/keyboard/animation acceptance remain deferred and unverified. Issue #43 stays open; #11 remains 7/49.
+
+## Package file read boundary
+
+Package manifest, bundle and optional license bytes are validated and read through one non-following, non-blocking file descriptor. Only regular files under the existing byte limits are accepted; reads allocate at most the recorded size plus one byte, and reject length, size or timestamp changes before returning. Symlink substitution and FIFO files fail closed without a writer wait. Package digest and code checksum verification remain unchanged. This does not grant history execution, extend retention, or add any externally visible route. Historical manifest tampering and symlinked `plugins` parents also have direct regression tests.
