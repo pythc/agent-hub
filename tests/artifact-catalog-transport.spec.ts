@@ -28,3 +28,9 @@ it('catalog uses scoped transport, rejects late responses after teardown, and re
  for(const mode of ['unmount','switchContext'] as const){const p=pageFixture();p.render();p.flush();expect(p.calls[0].url).toBe('/workspaces/studio/artifact-catalog');const pending=p.pending.shift();p[mode]();const count=p.writes.length;pending.resolve({schema:1,items:[],truncated:false});await tick();expect(p.writes.length).toBe(count);expect(p.rootFetch).not.toHaveBeenCalled()}
  const p=pageFixture();p.render();p.flush();p.pending.shift().reject(Error('SECRET'));await tick();expect(JSON.stringify(p.render())).not.toContain('SECRET');p.replay();expect(p.calls[0].signal.aborted).toBe(true);expect(p.calls[1].signal.aborted).toBe(false);p.pending.shift().resolve({schema:1,items:[],truncated:false});await tick();expect(JSON.stringify(p.render())).toContain('No visible artifacts yet.')
 })
+
+it('withholds unsupported managed View navigation while preserving fixed file links',async()=>{
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve({schema:1,truncated:false,items:[{reference:{kind:'workspace-view',id:'board'},label:{en:'Board','zh-CN':'看板'}},{reference:{kind:'goal-artifact',id:'a'.repeat(64)},label:{en:'File','zh-CN':'文件'}}]});await tick()
+ let tree=JSON.stringify(p.render());expect(tree).not.toContain('#plugin/board');expect(tree).toContain('managed workspace is not supported');expect(tree).toContain('#artifact/'+'a'.repeat(64))
+ p.workspace.context.managed=false;tree=JSON.stringify(p.render());expect(tree).toContain('#plugin/board')
+})

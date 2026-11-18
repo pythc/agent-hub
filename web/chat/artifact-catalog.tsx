@@ -5,7 +5,7 @@ import {parseArtifactCatalog} from './artifact-catalog-model.ts'
 import {ArtifactReferenceDetails} from './artifact-reference-details.tsx'
 import './worker-templates.css'
 export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
- const {binding,contextKey,readSignal}=useWorkspaceTransport()
+ const {binding,context,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh
  const [result,setResult]=useState<{contextKey:string;value:ArtifactCatalog}|null>(null),[error,setError]=useState(false),[loading,setLoading]=useState(true),[revision,setRevision]=useState(0)
  useEffect(()=>{
@@ -28,7 +28,7 @@ export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
   {value&&!value.items.length?<p>{L('No visible artifacts yet.','暂无可见产物。')}</p>:null}
   {value?.items.map(({reference,label})=><article className="template-review" key={reference.kind+':'+reference.id}>
    <h2>{label[language]}</h2>
-   <a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#plugin/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current enabled view','打开当前启用的视图')}</a>
+   {reference.kind==='workspace-view'&&context.managed?<p>{L('Opening a view in a managed workspace is not supported here. Package metadata remains read-only.','此处暂不支持打开托管工作区中的视图，仅展示只读包信息。')}</p>:<a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#plugin/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current enabled view','打开当前启用的视图')}</a>}
    <ArtifactReferenceDetails reference={reference} current={reference.kind==='goal-artifact'&&reference.availability==='unavailable'?'unavailable':'unchecked'} L={L}/>
   </article>)}
  </section>
