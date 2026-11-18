@@ -3,7 +3,7 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {randomUUID} from 'node:crypto'
 import {gzipSync,gunzipSync} from 'node:zlib'
-import {it,expect,afterEach} from 'vitest'
+import {it,expect,afterEach,vi} from 'vitest'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
 import {PluginMarket,marketBlockers} from '../src/plugin-market.ts'
@@ -168,4 +168,90 @@ it('retains repository and execution-plugin uncertainty fences across marketplac
  expect(marketBlockers(f.host()).map(b=>b.kind)).toEqual(expect.arrayContaining(['backend-effects','repository-publications','repository-merges','repository-reviews']))
  for(const [kind,id] of [['backend-plugin-tool','native'],['pr-delivery','draft'],['merge-attempt','merge'],['review-action','review']])store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind!,id!)
  expect(marketBlockers(f.host())).toEqual([])
+})
+
+async function sourceUpgrade(){
+ const f=await fixture();await f.execute('install','test-connector');await f.execute('activate','test-connector')
+ const config=configSchema.parse(f.host().config)
+ for(const id of ['alpha','beta'])config.sources.push(configSchema.shape.sources.element.parse({id,kind:'markettest',cwd:f.root,enabled:false,options:{channels:[id]}}))
+ await f.rebuild(config)
+ return f
+}
+it('preflights every existing source and rejects incompatible activation before pause, rebuild or configuration writes',async()=>{
+ const f=await sourceUpgrade(),beforeRequests=f.github.requests.length
+ await f.github.add('source','1.1.0',{configSchema:{type:'object',required:['options'],properties:{options:{type:'object',required:['newRequired'],properties:{newRequired:{type:'string'}}}}}})
+ f.github.changed();await f.market.catalogs({url:f.catalog().url})
+ const installPlan=f.market.plan({action:'install',pluginId:'test-connector',catalogId:f.catalog().id,revision:f.market.snapshot().revision})
+ expect(installPlan.sourceCompatibility).toEqual({state:'not_checked',code:'download_required',connections:[]})
+ await f.market.execute(installPlan.id,randomUUID(),f.rebuild)
+ const h=f.host(),pause=vi.spyOn(h,'pauseForConfiguration'),rebuild=vi.fn(),config=JSON.stringify(h.settings.current()),requests=f.github.requests.length
+ const plan=f.market.plan({action:'activate',pluginId:'test-connector',revision:f.market.snapshot().revision})
+ expect(plan.sourceCompatibility).toEqual({state:'blocked',code:'connections_incompatible',connections:[{id:'alpha',compatible:false},{id:'beta',compatible:false}]})
+ await expect(f.market.execute(plan.id,randomUUID(),rebuild)).rejects.toMatchObject({code:'source_compatibility_blocked'})
+ expect(pause).not.toHaveBeenCalled();expect(rebuild).not.toHaveBeenCalled();expect(JSON.stringify(h.settings.current())).toBe(config)
+ expect(f.github.requests).toHaveLength(requests);expect(requests).toBeGreaterThan(beforeRequests)
+ // Simulate completion of the separate controlled configuration repair.
+ // Ordinary updateSettings correctly refuses source deployment changes.
+ const repairedConfig=configSchema.parse({...h.config,sources:h.config.sources.map(s=>s.kind==='markettest'?{...s,options:{...s.options,newRequired:'configured'}}:s)})
+ h.store.put('settings','current',{...h.settings.current(),revision:h.settings.current().revision+1,config:repairedConfig})
+ await f.rebuild(repairedConfig)
+ await expect(f.market.execute(plan.id,randomUUID(),rebuild)).rejects.toMatchObject({code:'market_conflict'})
+ const repaired=f.market.plan({action:'activate',pluginId:'test-connector',revision:f.market.snapshot().revision})
+ expect(repaired.sourceCompatibility?.state).toBe('passed')
+ await f.market.execute(repaired.id,randomUUID(),f.rebuild)
+ expect(f.host().sourceRegistry.packages.find(p=>p.manifest.kind==='markettest')!.manifest.version).toBe('1.1.0')
+})
+it('rechecks package bytes at execution and reports safe local failures without pausing',async()=>{
+ const f=await sourceUpgrade();await f.github.add('source','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install','test-connector')
+ const plan=f.market.plan({action:'activate',pluginId:'test-connector',revision:f.market.snapshot().revision})
+ expect(plan.sourceCompatibility?.state).toBe('passed')
+ const item=f.market.snapshot().installed.find(p=>p.id==='test-connector')!,path=join(f.host().config.stateDir,'plugins','objects',item.selected.digest,'plugin.mjs')
+ writeFileSync(path,'SECRET_TAMPER')
+ const pause=vi.spyOn(f.host(),'pauseForConfiguration'),rebuild=vi.fn()
+ await expect(f.market.execute(plan.id,randomUUID(),rebuild)).rejects.toMatchObject({code:'source_compatibility_blocked'})
+ const fresh=f.market.plan({action:'activate',pluginId:'test-connector',revision:f.market.snapshot().revision})
+ expect(fresh.sourceCompatibility?.code).toBe('package_unavailable');expect(JSON.stringify(fresh.sourceCompatibility)).not.toMatch(/SECRET|plugins\/objects/)
+ expect(pause).not.toHaveBeenCalled();expect(rebuild).not.toHaveBeenCalled()
+})
+it('rechecks revision after asynchronous pause before committing activation',async()=>{
+ const f=await sourceUpgrade();await f.github.add('source','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install','test-connector')
+ const h=f.host(),previous=marketState(h.store).installed[0]?.active?.digest,plan=f.market.plan({action:'activate',pluginId:'test-connector',revision:f.market.snapshot().revision}),rebuild=vi.fn()
+ const original=h.pauseForConfiguration.bind(h)
+ vi.spyOn(h,'pauseForConfiguration').mockImplementation(async()=>{const paused=await original();h.settings.save(h.settings.current().revision,{effort:'medium'});return paused})
+ await expect(f.market.execute(plan.id,randomUUID(),rebuild)).rejects.toThrow('Configuration changed')
+ expect(rebuild).not.toHaveBeenCalled();expect(marketState(h.store).installed[0]?.active?.digest).toBe(previous);expect(h.store.get('plugin-market-activation','current')).toBeUndefined()
+})
+it('checks rollback schemas and exact declared identity, state protocol and permissions',async()=>{
+ const f=await sourceUpgrade();await f.github.add('source','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install','test-connector');await f.execute('activate','test-connector')
+ const h=f.host(),state=marketState(h.store),item=state.installed.find(p=>p.id==='test-connector')!
+ const plan=()=>f.market.plan({action:'rollback',pluginId:item.id,revision:f.market.snapshot().revision})
+ expect(plan().sourceCompatibility?.state).toBe('passed')
+ const source=h.config.sources.find(s=>s.id==='alpha')!;source.options.channels=[]
+ expect(plan().sourceCompatibility).toMatchObject({state:'blocked',code:'connections_incompatible'})
+ source.options.channels=['alpha']
+ const original=structuredClone(item.previous!)
+ item.previous={...original,version:'9.9.9'};h.store.put('plugin-market','current',state)
+ expect(plan().sourceCompatibility?.code).toBe('identity_mismatch')
+ item.previous={...original,permissions:[...original.permissions,'source.deliver']};h.store.put('plugin-market','current',state)
+ expect(plan().sourceCompatibility?.code).toBe('identity_mismatch')
+ item.previous=original;h.store.put('plugin-market','current',state)
+ h.store.put('plugin-installation','alpha',{pluginId:'test-connector',stateVersion:99})
+ expect(plan().sourceCompatibility?.code).toBe('state_version_mismatch')
+})
+it('rejects changed package bytes after pause without committing references',async()=>{
+ const f=await sourceUpgrade();await f.github.add('source','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install','test-connector')
+ const h=f.host(),before=JSON.stringify(marketState(h.store)),settings=JSON.stringify(h.settings.current()),plan=f.market.plan({action:'activate',pluginId:'test-connector',revision:f.market.snapshot().revision}),rebuild=vi.fn()
+ const original=h.pauseForConfiguration.bind(h)
+ vi.spyOn(h,'pauseForConfiguration').mockImplementation(async()=>{const paused=await original();writeFileSync(join(h.config.stateDir,'plugins','objects',plan.target!.digest,'plugin.mjs'),'changed');return paused})
+ await expect(f.market.execute(plan.id,randomUUID(),rebuild)).rejects.toMatchObject({code:'source_compatibility_blocked'})
+ expect(rebuild).not.toHaveBeenCalled();expect(JSON.stringify(marketState(h.store))).toBe(before);expect(JSON.stringify(h.settings.current())).toBe(settings)
+ expect(h.store.get('plugin-market-activation','current')).toBeUndefined()
+})
+it('fails closed on an invalid target schema without returning validator diagnostics',async()=>{
+ const f=await sourceUpgrade();await f.github.add('source','1.1.0',{configSchema:{type:'SECRET_INVALID_SCHEMA_TYPE'}});f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install','test-connector')
+ const plan=f.market.plan({action:'activate',pluginId:'test-connector',revision:f.market.snapshot().revision})
+ expect(plan.sourceCompatibility?.code).toBe('schema_invalid');expect(JSON.stringify(plan.sourceCompatibility)).not.toContain('SECRET_INVALID')
+ const pause=vi.spyOn(f.host(),'pauseForConfiguration')
+ await expect(f.market.execute(plan.id,randomUUID(),vi.fn())).rejects.toMatchObject({code:'source_compatibility_blocked'})
+ expect(pause).not.toHaveBeenCalled()
 })

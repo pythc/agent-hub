@@ -1,3 +1,4 @@
+import {Ajv2020} from 'ajv/dist/2020.js'
 import {randomUUID} from 'node:crypto'
 import {mkdtempSync,rmSync,readFileSync,mkdirSync} from 'node:fs'
 import {join} from 'node:path'
@@ -10,7 +11,7 @@ import {readPluginPackage,installPluginPackage,type PluginManifest} from './plug
 import {readViewPackage,installViewPackage,type ViewManifest} from './workspace-view-package.ts'
 import {PluginGitHub,githubLocation} from './plugin-github.ts'
 import {extractPluginArchive} from './plugin-archive.ts'
-import {compatible,compareVersion,latestCompatible,marketId,type CatalogPlugin,type InstalledPlugin,type MarketOperation,type MarketPlan,type MarketRelease} from './plugin-market-contract.ts'
+import {compatible,compareVersion,latestCompatible,marketId,type CatalogPlugin,type InstalledPlugin,type MarketOperation,type MarketPlan,type MarketRelease,type SourceCompatibility} from './plugin-market-contract.ts'
 import {marketState,objectDirectory,applyMarketConfig,recoverMarket,type ManagedMarketState,type MarketActivation} from './plugin-market-state.ts'
 
 export class MarketError extends Error {constructor(readonly code:string,message:string,readonly status=409){super(message)}}
@@ -84,6 +85,31 @@ export class PluginMarket {
       this.persist(state);return this.snapshot()
     }finally{this.busy=false}
   }
+  private sourceCompatibility(installed:InstalledPlugin,target:MarketRelease):SourceCompatibility {
+    const host=this.host(),connections=host.config.sources.filter(s=>s.kind===installed.kind)
+    const blocked=(code:SourceCompatibility['code']):SourceCompatibility=>({state:'blocked',code,connections:connections.map(s=>({id:s.id,compatible:false}))})
+    let pkg:ReturnType<typeof readPluginPackage>
+    try{pkg=readPluginPackage(objectDirectory(host.config,target.digest),target.digest)}catch{return blocked('package_unavailable')}
+    const manifest=pkg.manifest
+    if(manifest.id!==installed.id||manifest.kind!==installed.kind||manifest.version!==target.version||JSON.stringify(packagePermissions(manifest))!==JSON.stringify([...target.permissions].sort()))return blocked('identity_mismatch')
+    if(installed.stateVersion!==manifest.stateVersion||connections.some(s=>{const previous=host.store.get<{pluginId:string;stateVersion:number}>('plugin-installation',s.id);return previous&&(previous.pluginId!==manifest.id||previous.stateVersion!==manifest.stateVersion)}))return blocked('state_version_mismatch')
+    try{
+      // Match SourceRegistry validation exactly. No custom plugin code or any
+      // coercion/default/removal that could mutate the operator's configuration.
+      const validate=new Ajv2020({strict:false,validateFormats:false}).compile(manifest.configSchema)
+      const results=connections.map(source=>({id:source.id,compatible:validate(source)===true}))
+      return {state:results.every(r=>r.compatible)?'passed':'blocked',code:results.every(r=>r.compatible)?'declared_compatible':'connections_incompatible',connections:results}
+    }catch{return blocked('schema_invalid')}
+  }
+  private requireSourceCompatibility(plan:MarketPlan,state=marketState(this.host().store)){
+    if(!['activate','enable','rollback'].includes(plan.action))return
+    const installed=state.installed.find(p=>p.id===plan.pluginId)
+    if(installed?.category!=='source')return
+    const target=plan.action==='rollback'?installed.previous:installed.selected
+    if(!target||target.digest!==plan.target?.digest||target.version!==plan.target.version)throw new MarketError('market_conflict','Plugin target changed. Review the operation again.')
+    const assessment=this.sourceCompatibility(installed,target)
+    if(assessment.state!=='passed')throw new MarketError('source_compatibility_blocked','Source plugin declaration check failed: '+assessment.code)
+  }
   plan(value:unknown){
     if(this.busy)throw new MarketError('market_busy','Another plugin operation is running')
     const input=marketPlanInput.parse(value),host=this.host(),state=marketState(host.store)
@@ -110,6 +136,8 @@ export class PluginMarket {
     if(['disable','uninstall'].includes(input.action)&&connections.length)throw new MarketError('plugin_in_use','This connector still has configured connections: '+connections.join(', '))
     const restart=input.action!=='install'&&(installed?.category==='source')&&input.action!=='ignore'
     const plan:MarketPlan={id:randomUUID(),action:input.action,pluginId:input.pluginId,catalogId:input.catalogId,revision:state.revision,settingsRevision:host.settings.current().revision,expiresAt:Date.now()+600000,plugin,origin,target,permissionsAdded:(target?.permissions??[]).filter(p=>!installed?.active?.permissions.includes(p)),restart,connections}
+    if(input.action==='install'&&plugin?.category==='source')plan.sourceCompatibility={state:'not_checked',code:'download_required',connections:[]}
+    else if(installed?.category==='source'&&target&&['activate','enable','rollback'].includes(input.action))plan.sourceCompatibility=this.sourceCompatibility(installed,target)
     host.store.put('plugin-market-plan',plan.id,plan);return {...plan,blockers:restart?marketBlockers(host):[]}
   }
   private check(plan:MarketPlan){
@@ -121,7 +149,7 @@ export class PluginMarket {
     if(replay){if(replay.planId!==planId)throw new MarketError('request_id_conflict','This request ID belongs to another operation');return replay}
     if(this.busy)throw new MarketError('market_busy','Another plugin operation is running')
     const plan=host.store.get<MarketPlan>('plugin-market-plan',planId);if(!plan)throw Error('Unknown plugin operation plan')
-    this.check(plan);this.busy=true
+    this.check(plan);this.requireSourceCompatibility(plan);this.busy=true
     let op:MarketOperation={id:requestId,planId,pluginId:plan.pluginId,action:plan.action,state:plan.action==='install'?'downloading':'activating',at:Date.now()}
     const save=(state:MarketOperation['state'],error?:string)=>{op={...op,state,error};this.host().store.put('plugin-market-operation',requestId,op)}
     save(op.state)
@@ -164,7 +192,7 @@ export class PluginMarket {
         if(plan.action==='uninstall')state.installed=state.installed.filter(p=>p.id!==item!.id)
         else if(plan.action==='disable')item.enabled=false
         else {const target=plan.action==='rollback'?item.previous!:item.selected;if(item.active?.digest!==target.digest)item.previous=item.active;item.active=target;item.selected=target;item.enabled=true}
-        if(plan.restart){await this.activateSource(state,op,rebuild);save('complete')}
+        if(plan.restart){await this.activateSource(state,op,rebuild,plan);save('complete')}
         else {this.commitView(state);save('complete')}
       }
       this.host().store.audit({type:'plugin.market.operation',id:op.id,pluginId:op.pluginId,action:op.action,state:op.state})
@@ -186,13 +214,15 @@ export class PluginMarket {
     // View refs are read at each bundle/data request; no running model or source is restarted.
     host.config.viewPlugins=next.viewPlugins
   }
-  private async activateSource(state:ManagedMarketState,operation:MarketOperation,rebuild:Rebuild){
+  private async activateSource(state:ManagedMarketState,operation:MarketOperation,rebuild:Rebuild,plan:MarketPlan){
     const host=this.host(),blockers=marketBlockers(host)
     if(blockers.length)throw new MarketError('plugin_waiting_for_idle','Activation is waiting for: '+blockers.map(b=>b.kind+' ('+b.count+')').join(', '))
+    this.check(plan);this.requireSourceCompatibility(plan)
     const paused=await host.pauseForConfiguration(),previous=marketState(host.store),settings=host.settings.current()
     let committed=false
     try{
       if(marketBlockers(host).length)throw new MarketError('plugin_waiting_for_idle','New work arrived. Retry activation when the host is idle.')
+      this.check(plan);this.requireSourceCompatibility(plan)
       const next=configSchema.parse(host.config);applyMarketConfig(next,state)
       const journal:MarketActivation={id:operation.id,previous,settings,paused,installations:host.store.list('plugin-installation')}
       host.store.atomic(()=>{host.store.put('plugin-market-activation','current',journal);this.persist(state);host.store.put('settings','current',{revision:settings.revision+1,at:new Date().toISOString(),config:next})});committed=true
