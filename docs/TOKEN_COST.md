@@ -66,3 +66,34 @@ node --import tsx examples/router-cost-acceptance.ts .local/cost-stop . stop
 Use fresh directories. These commands use the real configured Codex subscription and consume tokens. They create isolated state and synthetic local messages; no external messaging connector is opened. The stop case needs the platform's managed process sandbox (Seatbelt on macOS, bubblewrap on Linux).
 
 Back up the existing deployment and wait for active work to drain before upgrading. Native migration is lazy and stays on the original thread; configuration, browser profiles, credentials and Roppo task history are retained. An additive `native-context` record tracks successful migration. Failed or interrupted compaction leaves it unmarked and does not start the task turn. Do not infer compatibility with every older CLI from this one verified version. A rollback keeps the native history and its compaction summary; restore a state backup only deliberately, since doing so can replay effects performed after that backup.
+
+### Project retries and incomplete attempt receipts
+
+The existing project cost gate now checks each ended model attempt, even while
+its enclosing call remains `running` between retries. A failed, completed or
+interrupted attempt with no usage receipt, or without a token field whose
+configured rate is positive, makes the remaining project cost unknown. The
+existing pre-retry budget check holds the project before another model call;
+it does not select another backend or grant new permissions.
+
+A complete failed-attempt receipt may still permit the existing retry policy.
+Current running attempts retain their streaming behavior: partial updates alone
+do not make them terminal. Legacy call-level settlement remains checked when
+attempt metadata is absent. Explicit zero token counts are valid. Missing
+zero-priced fields do not create an unknown charge; if both configured rates are
+zero, absent token receipts do not create an unknown monetary charge. Cached,
+reasoning and total-token counters do not substitute for required input/output
+counts. Repeated snapshots still replace the same attempt/usage-ID entry rather
+than charging it twice.
+
+A late complete receipt can repair the cost calculation but does not automatically
+resume a held project or replay a model request. Existing explicit recovery and
+current authority checks remain required. This is an estimate using the existing
+configured rates, not a provider invoice, a reservation algorithm, or an absolute
+spend ceiling across already-running parallel calls. No new pricing or automatic
+budget increase is introduced.
+
+Local regression coverage exercises the production Runtime retry loop with a
+controlled model: incomplete ended receipts prevent a second call, complete
+receipts and zero-priced missing output preserve retries, and late data does not
+release a held goal. No real provider or chargeable call is used.
