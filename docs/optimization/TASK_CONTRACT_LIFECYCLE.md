@@ -1,0 +1,17 @@
+# Immutable task agreements and explicit replacement (O01)
+
+`router_goal start` can capture bounded `details.nonGoals`, `details.inputs` and `details.deadline` only as exact excerpts from the current explicit human request. These fields belong to the immutable GoalContract and accompany execution, replanning and acceptance inputs. They do not add tool grants. Deadline is requested text, not a parsed timer, automatic expiry or another form of time budget. Existing project budget remains its separate configured estimate/enforcement mechanism.
+
+A changed objective uses a new explicitly authorized goal with `supersedes: {goalId, expectedRevision}`. It never edits the previous contract or copies its successful acceptance into the new goal. The source goal and replacement are linked in both directions; the original request, objective and acceptance criteria remain preserved. New-object validation precedes durable cancellation. The replacement transaction makes old queued wakes and unfinished reviews stale and withdraws attributable pending notices. Only after commit are execution controllers, tool connections and live approvals interrupted and old tickets stopped. Replaying the same operation ID completes interrupted cleanup without creating another goal; different content under that ID is rejected.
+
+Runtime gates reject work attached to a replaced goal even in the commit-to-interrupt crash window. Deterministic assignment receipts recover a local task whose creation committed before its goal pointer; receipt, origin, Worker assignment and scope ownership must agree. Startup completes cancellation before automatic recovery. Old original human turns cannot continue calling tools or publish delayed replies merely because their original source message still exists. Pending notices/results are withdrawn, not sent; sending and uncertain deliveries retain their actual state and are not represented as externally recalled. An already initiated effect cannot be retroactively undone by this operation.
+
+Replacement raises the database compatibility floor to 17 in the same transaction. Older binaries must refuse that state; restore refuses a pre-17 snapshot or an older replacement chain. Ordinary metadata-only starts do not raise this floor. Roll back with forward repair or offline reconciliation, not by restoring an older authority chain.
+
+Late abort-ignoring model results are bounded and archived as stale transcript entries under the old task’s existing history/cleanup boundary, not delivered or accepted.
+
+The existing task drawer shows captured details and a separately authorized previous agreement. Missing legacy fields remain unrecorded; unavailable or deleted predecessor content is not reconstructed from summaries. Historical content requires current route/source permissions, reciprocal links, and matching immutable creation receipts. Goal control revision, reviewed plan revision and contract identity remain distinct; no synthetic universal contract version is invented. The card uses literal text and native details, no network requests or mutation controls.
+
+## Verification boundaries
+
+Use the lifecycle, task-contract-view/card, goal verification/replanning and runtime regression tests, plus exact-head CI and container acceptance. Real browser visual/keyboard/narrow/reduced-motion checks and real IM/ACP/provider effects are not implied by these fixtures. No new external execution backend, cross-machine migration, public deployment or main-branch merge is part of O01.

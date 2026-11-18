@@ -1,6 +1,9 @@
 import {isAbsolute,normalize} from 'node:path'
 import {z} from 'zod'
 
+export const goalDetailsSchema=z.object({nonGoals:z.array(z.string().min(1).max(4000)).max(30).optional(),inputs:z.array(z.string().min(1).max(4000)).max(30).optional(),deadline:z.string().min(1).max(1000).optional()}).strict()
+export type GoalDetails=z.infer<typeof goalDetailsSchema>
+
 const id=z.string().min(1).max(200)
 export const skillRefSchema=z.object({id,version:z.number().int().positive()}).strict()
 export const evidencePath=z.string().min(1).max(1000).refine(

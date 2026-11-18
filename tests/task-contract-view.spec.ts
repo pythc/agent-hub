@@ -14,18 +14,18 @@ import type {TaskContinuation} from '../src/task-context.ts'
 import type {RouterRoute} from '../src/router-scope.ts'
 const roots:string[]=[],hosts:Runtime[]=[],observers:Store[]=[],servers:Awaited<ReturnType<typeof serve>>[]=[]
 afterEach(async()=>{vi.restoreAllMocks();vi.unstubAllGlobals();for(const s of servers.splice(0)){s.server.closeAllConnections();await new Promise<void>(done=>s.server.close(()=>done()))}for(const h of hosts.splice(0))await h.close();for(const s of observers.splice(0))s.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
-async function fixture(managed=true){
+async function fixture(managed=true,details?:{nonGoals?:string[];inputs?:string[];deadline?:string}){
  const root=mkdtempSync(join(tmpdir(),'task-contract-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),port:0,acceptMode:'auto',work:{sandboxDriver:'disabled',autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice']}]})
  const model={run:vi.fn(async()=>{throw Error('No model calls permitted')}),history:vi.fn(async()=>{throw Error('No history calls permitted')})},host=new Runtime(config,{model});hosts.push(host)
  host.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',contextBytes:128000,managers:[JSON.stringify(['local','alice'])],workerIds:['one'],sourceIds:['local'],backendIds:['codex']}})
  host.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'topic',history:'group'})
- const received=host.receive('local','alice',{id:'human',thread:'topic',scope:'topic',text:'Continuously analyze and verify a result. Never deploy. SECRET_RAW_PROMPT',addressed:true}) as {triggerId:string}
+ const received=host.receive('local','alice',{id:'human',thread:'topic',scope:'topic',text:'Continuously analyze and verify a result. Never deploy. Use report.txt. By Friday. SECRET_RAW_PROMPT',addressed:true}) as {triggerId:string}
  const trigger=host.store.triggers.get(received.triggerId)!,context=host.scopes.context(trigger,'local:topic')!
  const result=await host.manager.call({action:'assign',id:'one',revision:0,requestId:'task',text:JSON.stringify({kind:'goal_node',instruction:'SECRET_MACHINE_INSTRUCTION',authorizationScope:'SECRET_RAW_SCOPE'})},{discussion:'local:topic',trigger,scoped:context})
  const ticket=host.store.tickets.get(result.ticketId)!
  let goal:RouterGoal|undefined
- if(managed){goal=host.goals.command({action:'start',operationId:'goal',expectedRevision:0,objective:'Produce a concise analysis',authorizationQuote:'Continuously analyze and verify',criteria:[{id:'analysis',description:'Explain the relevant findings',files:['analysis.md'],documents:['document-1'],check:{kind:'text_contains',path:'analysis.md',text:'SECRET_EXPECTED_CONTENT'}}],nodes:[{id:'analyze',title:'Analyze',instruction:'SECRET_NODE_INSTRUCTION',workerId:'one',criterionIds:['analysis']}]},context)as RouterGoal;goal.taskIds=[ticket.id];goal.nodes![0]!.ticketId=ticket.id;host.store.put('router-goal',goal.id,goal)}
+ if(managed){goal=host.goals.command({action:'start',operationId:'goal',expectedRevision:0,...(details?{details}:{}),objective:'Produce a concise analysis',authorizationQuote:'Continuously analyze and verify',criteria:[{id:'analysis',description:'Explain the relevant findings',files:['analysis.md'],documents:['document-1'],check:{kind:'text_contains',path:'analysis.md',text:'SECRET_EXPECTED_CONTENT'}}],nodes:[{id:'analyze',title:'Analyze',instruction:'SECRET_NODE_INSTRUCTION',workerId:'one',criterionIds:['analysis']}]},context)as RouterGoal;goal.taskIds=[ticket.id];goal.nodes![0]!.ticketId=ticket.id;host.store.put('router-goal',goal.id,goal)}
  const read=()=>taskContractView(host,ticket.id,1000),save=(next:RouterGoal)=>host.store.put('router-goal',next.id,next)
  return {root,host,model,trigger,context,ticket,goal,read,save}
 }
@@ -130,4 +130,30 @@ it('serves the additive field on the existing protected GET with retained routes
  const headers={authorization:'Bearer '+readFileSync(s.tokenPath,'utf8').trim()},path=s.url+'/entry-workspace/task/'+encodeURIComponent(f.ticket.id),before=db(f.host.store),changes=f.host.store.db.prepare('SELECT total_changes() AS n').get()!.n
  expect((await fetch(path)).status).toBe(401);const response=await fetch(path,{headers});expect(response.status).toBe(200);expect(await response.json()).toMatchObject({id:f.ticket.id,contractView:{schema:1,readOnly:true,availability:'available'}})
  expect(db(f.host.store)).toEqual(before);expect(f.host.store.db.prepare('SELECT total_changes() AS n').get()!.n).toBe(changes)
+})
+
+it('shows only captured exact-source contract detail and never invents legacy deadline or inputs',async()=>{
+ const f=await fixture(true,{nonGoals:['Never deploy.'],inputs:['Use report.txt.'],deadline:'By Friday.'})
+ expect(f.read().details).toEqual({nonGoals:['Never deploy.'],inputs:['Use report.txt.'],deadline:'By Friday.'})
+ const before=db(f.host.store);f.read();expect(db(f.host.store)).toEqual(before)
+ const g=f.host.store.get<RouterGoal>('router-goal',f.goal!.id)!
+ g.contract!.details={nonGoals:['invented permission']};f.save(g)
+ expect(f.read().availability).toBe('unavailable')
+ const legacy=await fixture();expect(legacy.read().details).toBeUndefined()
+ const partial=await fixture(true,{nonGoals:[]});expect(partial.read().details).toEqual({nonGoals:[],inputs:null,deadline:null})
+})
+it('separately authenticates replacement history and redacts mismatched, deleted or altered predecessors',async()=>{
+ const f=await fixture(),original=f.goal!,current={...original,supersedes:'goal-previous'}
+ const old={...original,id:'goal-previous',state:'cancelled' as const,supersededBy:original.id,objective:'Earlier implementation',contract:{...original.contract!,objective:'Earlier implementation'},taskIds:[]}
+ f.host.store.put('router-goal',old.id,old)
+ f.host.store.put('goal-receipt','previous',{goalId:old.id,result:old})
+ f.save(current)
+ const receipt=creation(f);f.host.store.put('goal-receipt',original.id.slice(5),{...receipt,result:{...receipt.result,supersedes:old.id}})
+ expect(f.read().lineage).toMatchObject({state:'current',previousState:'available',previous:{objective:'Earlier implementation'}})
+ f.host.store.put('router-goal',old.id,{...old,actor:'other'})
+ expect(f.read().lineage).toEqual({state:'current',previousState:'unavailable',previous:null})
+ f.host.store.put('router-goal',old.id,{...old,contract:{...old.contract,objective:'FORGED'}})
+ expect(JSON.stringify(f.read())).not.toContain('FORGED');expect(f.read().lineage?.previousState).toBe('unavailable')
+ f.host.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run('router-goal',old.id)
+ expect(f.read().lineage?.previousState).toBe('unavailable')
 })

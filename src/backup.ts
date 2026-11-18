@@ -9,7 +9,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import {readRevocations} from './router-memory.ts'
 import {configSchema,type Config} from './config.ts'
 import {managedFiles,recoverManagedFiles,prepareManagedFiles,validateManagedSnapshot,atomicPrivateFile} from './managed-config.ts'
-import {MAX_DB_SCHEMA,WEBHOOK_REHEARSAL_DB_SCHEMA} from './store.ts'
+import {MAX_DB_SCHEMA,WEBHOOK_REHEARSAL_DB_SCHEMA,GOAL_REPLACEMENT_DB_SCHEMA} from './store.ts'
 const hash=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex')
 const digest=(text:string)=>createHash('sha256').update(text).digest('hex')
 function captureManaged(state:string){const files=managedFiles(state);if(existsSync(files.journal))throw Error('Setup is changing; retry backup after configuration recovery');return {connections:existsSync(files.connections)?readFileSync(files.connections,'utf8'):undefined,secrets:existsSync(files.secrets)?readFileSync(files.secrets,'utf8'):undefined}}
@@ -99,6 +99,9 @@ export async function restoreState(config:Config,directory:string){
    const live=new DatabaseSync(currentPath,{readOnly:true}),old=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
    try{
     const liveSchema=Number(live.prepare('PRAGMA user_version').get()!.user_version)
+    if(liveSchema>=GOAL_REPLACEMENT_DB_SCHEMA&&verified.schema<GOAL_REPLACEMENT_DB_SCHEMA)throw Error('Downgrade cannot preserve goal contract replacement')
+    const replacements=(db:DatabaseSync)=>db.prepare("SELECT id,json_extract(body,'$.supersedes') AS previous,json_extract(body,'$.supersededBy') AS next FROM records WHERE kind='router-goal' AND (json_extract(body,'$.supersedes') IS NOT NULL OR json_extract(body,'$.supersededBy') IS NOT NULL) ORDER BY id").all()
+    if(liveSchema>=GOAL_REPLACEMENT_DB_SCHEMA&&JSON.stringify(replacements(live))!==JSON.stringify(replacements(old)))throw Error('Goal contract replacement advanced after backup; reconcile before restore')
     if(liveSchema>=WEBHOOK_REHEARSAL_DB_SCHEMA&&verified.schema<WEBHOOK_REHEARSAL_DB_SCHEMA)throw Error('Downgrade cannot preserve Webhook rehearsal requirements')
     if(liveSchema>=13&&verified.schema<13)throw Error('Downgrade cannot preserve code project reviews and commits')
     if(liveSchema>=9&&verified.schema<9)throw Error('Downgrade cannot preserve Webhook continuation and key protocols')
