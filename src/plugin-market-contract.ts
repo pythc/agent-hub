@@ -34,9 +34,10 @@ export interface InstalledPlugin {
 }
 export interface MarketState {format:1;revision:number;catalogs:MarketCatalog[];installed:InstalledPlugin[]}
 export type MarketAction='install'|'activate'|'disable'|'enable'|'rollback'|'uninstall'|'ignore'
+export interface SourceCompatibility {state:'passed'|'blocked'|'not_checked';code:'declared_compatible'|'download_required'|'package_unavailable'|'identity_mismatch'|'state_version_mismatch'|'schema_invalid'|'connections_incompatible';connections:{id:string;compatible:boolean}[]}
 export interface MarketPlan {
   id:string;action:MarketAction;pluginId:string;catalogId?:string;revision:number;settingsRevision:number;expiresAt:number;
-  plugin?:CatalogPlugin;origin?:MarketOrigin;target?:MarketRelease;permissionsAdded:string[];restart:boolean;connections:string[];
+  plugin?:CatalogPlugin;origin?:MarketOrigin;target?:MarketRelease;permissionsAdded:string[];restart:boolean;connections:string[];sourceCompatibility?:SourceCompatibility;
 }
 export interface MarketOperation {id:string;planId:string;pluginId:string;action:MarketAction;state:'downloading'|'verifying'|'installed'|'activating'|'complete'|'failed'|'interrupted';at:number;error?:string}
 export const HOST_VERSION='0.10.0'
