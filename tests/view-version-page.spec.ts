@@ -41,7 +41,7 @@ it('keeps the fixed route inside the workspace owner and disables the legacy roo
  const main=readFileSync(new URL('../web/chat/main.tsx',import.meta.url),'utf8'),catalog=readFileSync(new URL('../web/chat/artifact-catalog.tsx',import.meta.url),'utf8')
  expect(main).toContain("hash.startsWith('artifact-view-version/')")
  expect(main).toContain('||scopedViewRoute||viewVersionRoute;')
- expect(main).toContain('useWorkspaceViews(!scopedViewRoute&&!catalogRoute&&!viewVersionRoute)')
+ expect(main).toContain('useWorkspaceViews(!environmentRoute&&!scopedViewRoute&&!catalogRoute&&!viewVersionRoute)')
  expect(main).toContain('viewVersionRoute?<ViewVersionPage key={hash} selection={hash.slice(22)}')
  expect(catalog).toContain("'#artifact-view-version/'+reference.id+'/'+reference.version")
 })

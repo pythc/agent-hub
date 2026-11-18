@@ -54,6 +54,7 @@ import {lazy,Suspense} from "react";
 const PluginMarketplace=lazy(()=>import("./plugin-marketplace.tsx").then(m=>({default:m.PluginMarketplace})));
 const AutomationWorkspace=lazy(()=>import("./automations.tsx").then(m=>({default:m.AutomationWorkspace})));
 const WorkerTemplates=lazy(()=>import("./worker-templates.tsx").then(m=>({default:m.WorkerTemplates})));
+const LocalDiagnostics=lazy(()=>import("./local-diagnostics.tsx").then(m=>({default:m.LocalDiagnostics})));
 const ConnectorManagement=lazy(()=>import("./connector-management.tsx").then(m=>({default:m.ConnectorManagement})));
 const ArtifactCatalogPage=lazy(()=>import("./artifact-catalog.tsx").then(m=>({default:m.ArtifactCatalogPage})));
 const ArtifactResult=lazy(()=>import("./artifact-result.tsx").then(m=>({default:m.ArtifactResult})));
@@ -889,16 +890,17 @@ function Chat(p: ChatProps) {
   const hash = route.split("#")[1] ?? "tasks";
   const automationRoute=configuring&&hash==='automations';
   const templatesRoute=configuring&&hash==='worker-templates';
+  const environmentRoute=configuring&&hash==='environment';
   const connectorsRoute=configuring&&hash==='connectors';
   const traceRoute=configuring&&hash==='execution-trace';
   const catalogRoute=configuring&&hash==='artifacts';
   const viewVersionRoute=configuring&&hash.startsWith('artifact-view-version/');
   const scopedViewRoute=configuring&&hash.startsWith('artifact-view/');
   const artifactRoute=configuring&&hash.startsWith('artifact/');
-  const capabilityRoute=templatesRoute||connectorsRoute||traceRoute||artifactRoute||catalogRoute||scopedViewRoute||viewVersionRoute;
+  const capabilityRoute=environmentRoute||templatesRoute||connectorsRoute||traceRoute||artifactRoute||catalogRoute||scopedViewRoute||viewVersionRoute;
   const marketRoute=configuring&&(hash==='integrations'||hash.startsWith('integrations/'));
   const marketTools=hash==='integrations'||hash==='integrations/tools';
-  const views=useWorkspaceViews(!scopedViewRoute&&!catalogRoute&&!viewVersionRoute);
+  const views=useWorkspaceViews(!environmentRoute&&!scopedViewRoute&&!catalogRoute&&!viewVersionRoute);
   const pluginId=configuring&&hash.startsWith('plugin/')?hash.slice(7):null;
   const currentView=views.find(view=>view.id===pluginId);
   const pageNames: Record<string, string> = {
@@ -908,6 +910,7 @@ function Chat(p: ChatProps) {
     attention: L("Needs your attention", "待处理"),
     automations: L("Event automations", "事件自动化"),
     "worker-templates": L("Worker templates", "Worker 模板"),
+    environment: L("Current environment", "当前环境"),
     connectors: L("Connectors", "连接器"),
     "execution-trace": L("Task progress", "任务进展"),
     artifact: L("File version", "文件版本"),
@@ -1429,7 +1432,7 @@ function Chat(p: ChatProps) {
             </header>
             {marketRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading plugins…","正在加载插件…")}</div>}><PluginMarketplace route={hash} language={lang}/></Suspense>:null}
             {automationRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading automations…","正在加载自动化…")}</div>}><AutomationWorkspace language={lang}/></Suspense>:null}
-            {capabilityRoute?<WorkspaceTransportOwner language={lang}><Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading workspace…","正在加载工作区…")}</div>}>{templatesRoute?<WorkerTemplates language={lang}/>:connectorsRoute?<ConnectorManagement language={lang}/>:catalogRoute?<ArtifactCatalogPage language={lang}/>:viewVersionRoute?<ViewVersionPage key={hash} selection={hash.slice(22)} language={lang}/>:scopedViewRoute?<ScopedWorkspaceView key={hash} id={hash.slice(14)} dark={dark} language={lang}/>:artifactRoute?<ArtifactResult key={hash} id={hash.slice(9)} language={lang}/>:<ExecutionTrace language={lang}/>}</Suspense></WorkspaceTransportOwner>:null}
+            {capabilityRoute?<WorkspaceTransportOwner language={lang}><Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading workspace…","正在加载工作区…")}</div>}>{environmentRoute?<LocalDiagnostics language={lang}/>:templatesRoute?<WorkerTemplates language={lang}/>:connectorsRoute?<ConnectorManagement language={lang}/>:catalogRoute?<ArtifactCatalogPage language={lang}/>:viewVersionRoute?<ViewVersionPage key={hash} selection={hash.slice(22)} language={lang}/>:scopedViewRoute?<ScopedWorkspaceView key={hash} id={hash.slice(14)} dark={dark} language={lang}/>:artifactRoute?<ArtifactResult key={hash} id={hash.slice(9)} language={lang}/>:<ExecutionTrace language={lang}/>}</Suspense></WorkspaceTransportOwner>:null}
             <Configuration
               visible={configuring&&!capabilityRoute&&!automationRoute&&!pluginId&&(!marketRoute||marketTools)}
               route={route}

@@ -1,3 +1,4 @@
+import {LocalDiagnostics,LocalDiagnosticError} from './local-diagnostics.ts'
 import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
 import {ConnectorManagement,ConnectorError} from './connector-management.ts'
@@ -64,6 +65,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const onboarding=new Onboarding(()=>runtime,options.configurationPreview===true)
   const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
   async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=(async()=>{await delegationServer?.close();delegationServer=undefined;await runtime.close()})()}await closingRuntime}
+  const localDiagnostics=new LocalDiagnostics(()=>runtime)
   const market=new PluginMarket(()=>runtime,options.pluginGitHub)
   const templates=new WorkerTemplates(()=>runtime),connectors=new ConnectorManagement(()=>runtime),trace=new ExecutionTrace(()=>runtime)
   async function rebuild(config:Config,activationId?:string){
@@ -81,7 +83,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
     if(error instanceof ConnectorError){send(response,error.status,{code:error.code,error:error.code,...(error.issues?.length?{issues:error.issues}:{})});return}
-    if(error instanceof WorkerTemplateError||error instanceof TraceError){send(response,error.status,{code:error.code,error:error.code});return}
+    if(error instanceof WorkerTemplateError||error instanceof TraceError||error instanceof LocalDiagnosticError){send(response,error.status,{code:error.code,error:error.code});return}
     if(error instanceof DeploymentError){send(response,error.status,{code:error.code,error:error.message});return}
     if(error instanceof MarketError){if(error.code==='market_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof WebhookError){send(response,error.status,{code:error.code});return}
@@ -245,6 +247,13 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(path==='/api/worker-templates/remove'){send(res,200,templates.remove(input));return}
       if(path==='/api/worker-templates/create'){send(res,200,await templates.create(input));return}
       send(res,404,{code:'not_found'});return
+    }
+    if(path==='/api/local-diagnostics'||path==='/api/local-diagnostics/probe'){
+      requireCurrentOperator(req)
+      if(new URL(req.url!,requestOrigin).search!==''){send(res,400,{code:'local_diagnostics_query_invalid'});return}
+      if(req.method==='GET'&&path==='/api/local-diagnostics'){send(res,200,localDiagnostics.snapshot());return}
+      if(req.method==='POST'&&path==='/api/local-diagnostics/probe'){send(res,200,await localDiagnostics.check(await operatorBody(req),()=>requireCurrentOperator(req)));return}
+      send(res,405,{code:'method_not_allowed'});return
     }
     if(path==='/api/connectors'||path.startsWith('/api/connectors/')){
       requireCurrentOperator(req)

@@ -103,7 +103,9 @@ export async function probeSandbox(driver:SandboxDriver,codex:string){
   const launch=sandboxCommand({sandboxDriver:driver,codex,cwd,scratch,privatePaths:hostPrivateFiles(),sandbox:'read-only',network:false,command:process.platform==='win32'?'echo agenthub-sandbox-probe':'printf agenthub-sandbox-probe'})
   const env=Object.fromEntries(['PATH','USER','LOGNAME','LANG','LC_ALL','SYSTEMROOT','SystemRoot'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]!]))
   Object.assign(env,{HOME:scratch,TMPDIR:scratch,TMP:scratch,TEMP:scratch})
-  const result=await promisify(execFile)(launch.command,launch.args,{cwd,env,timeout:10000,maxBuffer:64000,encoding:'utf8'})
+  // A diagnostic must not wait indefinitely for a child that ignores SIGTERM.
+  // execFile completes after child close, before the temporary tree is removed.
+  const result=await promisify(execFile)(launch.command,launch.args,{cwd,env,timeout:10000,killSignal:'SIGKILL',maxBuffer:64000,encoding:'utf8'})
   if(result.stdout.trim()!=='agenthub-sandbox-probe')throw Error('Unexpected sandbox probe output')
   return {driver,commandsEnabled:true,verified:true,platform:process.platform}
  }catch(error:any){
