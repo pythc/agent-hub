@@ -5,7 +5,7 @@ import {parseArtifactCatalog} from './artifact-catalog-model.ts'
 import {ArtifactReferenceDetails} from './artifact-reference-details.tsx'
 import './worker-templates.css'
 export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
- const {binding,context,contextKey,readSignal}=useWorkspaceTransport()
+ const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh
  const [cursor,setCursor]=useState<string|null>(null),[history,setHistory]=useState<(string|null)[]>([])
  const [result,setResult]=useState<{contextKey:string;value:ArtifactCatalog}|null>(null),[error,setError]=useState(false),[loading,setLoading]=useState(true),[revision,setRevision]=useState(0)
@@ -30,7 +30,7 @@ export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
   <nav aria-label={L('Artifact pages','产物分页')}><button type="button" disabled={loading||!history.length} onClick={()=>{setResult(null);setLoading(true);setCursor(history.at(-1)!);setHistory(history.slice(0,-1))}}>{L('Previous page','上一页')}</button><button type="button" disabled={loading||!value?.nextCursor} onClick={()=>{if(!value?.nextCursor)return;setResult(null);setLoading(true);setHistory([...history,cursor]);setCursor(value.nextCursor)}}>{L('Next page','下一页')}</button></nav>
   {value?.items.map(({reference,label})=><article className="template-review" key={reference.kind+':'+reference.id}>
    <h2>{label[language]}</h2>
-   {reference.kind==='workspace-view'&&context.managed?<p>{L('Opening a view in a managed workspace is not supported here. Package metadata remains read-only.','此处暂不支持打开托管工作区中的视图，仅展示只读包信息。')}</p>:<a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#plugin/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current enabled view','打开当前启用的视图')}</a>}
+   <a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#artifact-view/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current workspace view','打开当前工作区视图')}</a>
    <ArtifactReferenceDetails reference={reference} current={reference.kind==='goal-artifact'&&reference.availability==='unavailable'?'unavailable':'unchecked'} L={L}/>
   </article>)}
  </section>
