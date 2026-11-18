@@ -1,4 +1,4 @@
-import {it,expect,afterEach} from 'vitest'
+import {it,expect,afterEach,vi} from 'vitest'
 import {mkdtempSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -9,6 +9,7 @@ import type {MessageBatch,ScheduledRun} from '../src/router-proactive.ts'
 import {stableDigest} from '../src/sources.ts'
 import {readFileSync} from 'node:fs'
 import {serve} from '../src/server.ts'
+import {request as httpRequest} from 'node:http'
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
 async function until(h:Runtime,p:()=>boolean){for(let n=0;n<400;n++){await h.tick();await new Promise(r=>setTimeout(r,2));if(p())return}throw Error('Did not settle: '+JSON.stringify({b:h.store.list('router-batch'),runs:h.store.list('router-schedule-run'),jobs:h.store.db.prepare('SELECT id,state,error FROM jobs').all()}))}
@@ -361,4 +362,103 @@ it('does not send a restored clarification without its decision context',async()
  f.h.store.put('router-reply-owner','router-clarify:legacy',{discussion:'local:g1-topic',triggerId:trigger.id,inputs:[trigger.id]})
  await f.h.flush()
  expect(f.h.store.deliveries().find(d=>d.id==='router-clarify:legacy')?.status).toBe('dropped')
+})
+
+const quiet={timezone:'UTC',start:'23:00',end:'01:00'}
+async function quietRun(){
+ const f=fixture(),anchor=f.receive('Authorize the scheduled inspection');await until(f.h,()=>f.calls.length===1)
+ f.enable({quietHours:quiet});f.plan(anchor.triggerId);f.advance(1001)
+ await until(f.h,()=>f.h.store.deliveries().some(d=>d.text==='Router verified result'&&d.status==='pending'))
+ await f.h.flush()
+ const message=f.h.store.deliveries().find(d=>d.text==='Router verified result')!,run=runs(f.h)[0]!
+ return {f,anchor,message,run}
+}
+it('runs scheduled work normally but durably defers its notification across restart without replacing the outbox identity',async()=>{
+ const {f,message}=await quietRun()
+ expect(f.calls.some(r=>r.role==='worker')).toBe(true)
+ expect(f.h.store.deliveries().filter(d=>d.channel.address.routerInbox).every(d=>d.status==='sent')).toBe(true)
+ expect(f.h.store.deliveries().find(d=>d.id===message.id)).toMatchObject({status:'pending',attempts:0,nextAt:Date.parse('2026-11-07T01:00:00Z')})
+ await f.h.close();hosts.splice(hosts.indexOf(f.h),1)
+ const h=new Runtime(f.config,{model:f.model,clock:f.now});hosts.push(h)
+ await h.flush();expect(h.store.outbox.status(message.id)).toBe('pending')
+ f.advance(3600000);await h.flush();expect(h.store.outbox.status(message.id)).toBe('sent')
+ await h.flush();expect(h.store.deliveries().filter(d=>d.id===message.id)).toHaveLength(1)
+})
+it('reevaluates changed windows immediately, preserving failed-delivery backoff and old clients settings',async()=>{
+ const {f,message}=await quietRun()
+ f.enable();expect(f.h.proactive.controls('team').quietHours).toEqual(quiet)
+ f.enable({quietHours:{timezone:'UTC',start:'02:00',end:'03:00'}});await f.h.flush();expect(f.h.store.outbox.status(message.id)).toBe('sent')
+ const {f:g,message:second}=await quietRun()
+ g.h.store.deliveryFailed(second.id,2,'fixture transient')
+ const retry=g.h.store.deliveries().find(d=>d.id===second.id)!.nextAt
+ await g.h.flush();g.enable({quietHours:null});await g.h.flush()
+ expect(g.h.store.deliveries().find(d=>d.id===second.id)).toMatchObject({status:'pending',attempts:2,nextAt:retry})
+})
+it.each(['cancel','revoke'])('withdraws deferred output on %s even while its nextAt remains in the future',async action=>{
+ const {f,message,run,anchor}=await quietRun()
+ // Completed work still has a separately cancellable notification.
+ f.h.store.put('router-schedule-run',run.id,{...f.h.store.get<ScheduledRun>('router-schedule-run',run.id)!,state:'completed'})
+ expect(f.h.proactive.snapshot('team').runs[0]!.pendingNotifications).toBe(true)
+ if(action==='cancel')f.command('run.cancel',{id:run.id},run.revision)
+ else {const b=f.h.scopes.binding(run.spec.entryId);f.h.store.put('entry-binding',b.id,{...b,revision:b.revision+1})}
+ await f.h.flush();expect(f.h.store.outbox.status(message.id)).toBe('dropped')
+ f.enable({quietHours:null});await f.h.flush();expect(f.h.store.outbox.status(message.id)).toBe('dropped')
+})
+it('does not change pause semantics or replay uncertain external deliveries',async()=>{
+ const {f,message}=await quietRun(),plan=f.h.proactive.snapshot('team').schedules[0]!
+ f.command('schedule.pause',{id:plan.id},plan.revision);f.enable({quietHours:null});await f.h.flush();expect(f.h.store.outbox.status(message.id)).toBe('sent')
+ const {f:g,message:second}=await quietRun();g.h.store.deliveryFailed(second.id,1,'ambiguous',true);g.enable({quietHours:null});await g.h.flush()
+ expect(g.h.store.deliveries().find(d=>d.id===second.id)?.status).toBe('uncertain')
+})
+it('never delays direct human or mixed-input replies, and malformed retained policy is conservatively deferred',async()=>{
+ const {f,message,anchor}=await quietRun(),scheduledOwner=f.h.store.get<any>('router-reply-owner',message.id)
+ const human=f.h.store.triggers.get(anchor.triggerId)!
+ for(const [id,inputs] of [['human-only',[human.id]],['mixed',[...scheduledOwner.inputs,human.id]]] as const){
+  f.h.store.outbox.send({id,kind:'reply',text:'Direct answer',channel:human.channel!})
+  f.h.store.put('router-reply-owner',id,{...scheduledOwner,discussion:'local:g1-topic',triggerId:human.id,inputs:[...inputs]})
+ }
+ await f.h.flush();expect(f.h.store.outbox.status('human-only')).toBe('sent');expect(f.h.store.outbox.status('mixed')).toBe('sent')
+ f.h.store.put('router-proactive-settings','team',{...f.h.proactive.controls('team'),quietHours:{timezone:'invalid',start:'no',end:'no'}})
+ await f.h.flush();expect(f.h.store.outbox.status(message.id)).toBe('pending')
+})
+it('does not deliver a deferred notification after its retained owner is removed',async()=>{
+ const {f,message}=await quietRun();f.h.store.db.prepare("DELETE FROM records WHERE kind='router-reply-owner' AND id=?").run(message.id)
+ f.enable({quietHours:null});await f.h.flush();expect(f.h.store.outbox.status(message.id)).toBe('dropped')
+})
+it('rejects a quiet-hours update if the operator logs out while the body is streaming',async()=>{
+ const f=fixture();f.config.port=0;const api=await serve(f.h)
+ try{
+  clearInterval((f.h as unknown as {timer:ReturnType<typeof setInterval>}).timer)
+  const post=(path:string,body:unknown,cookie?:string)=>new Promise<{status:number;cookie?:string}>((resolve,reject)=>{
+   const req=httpRequest(api.url+path,{method:'POST',agent:false,headers:{origin:api.url,'content-type':'application/json',...(cookie?{cookie}:{})}},res=>{res.resume();res.on('end',()=>resolve({status:res.statusCode!,cookie:res.headers['set-cookie']?.[0]?.split(';')[0]}))});req.on('error',reject);req.end(JSON.stringify(body))
+  })
+  const paired=await post('/pair',{code:new URL(api.operatorUrl).hash.slice('#pair='.length)});expect(paired.status).toBe(200)
+  const cookie=paired.cookie!,text=JSON.stringify({action:'settings.put',scopeId:'team',operationId:'slow-quiet',expectedRevision:0,settings:{enabled:false,quietHours:quiet}})
+  let arrived!:()=>void;const started=new Promise<void>(r=>{arrived=r});api.server.on('request',req=>{if(req.url==='/router-proactive')req.once('data',arrived)})
+  let req!:ReturnType<typeof httpRequest>;const response=new Promise<number>((resolve,reject)=>{req=httpRequest(api.url+'/router-proactive',{method:'POST',agent:false,headers:{cookie,origin:api.url,'content-type':'application/json','content-length':Buffer.byteLength(text)}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode!))});req.on('error',reject)})
+  req.write(text.slice(0,1));await started;expect((await post('/logout',{},cookie)).status).toBe(200);req.end(text.slice(1));expect(await response).toBe(401)
+  expect(f.h.proactive.controls('team')).toMatchObject({revision:0});expect(f.h.proactive.controls('team').quietHours).toBeUndefined()
+ }finally{api.server.closeAllConnections();await new Promise<void>(r=>api.server.close(()=>r()))}
+})
+it('avoids empty write transactions for unchanged quiet delay and ordinary retry backoff',async()=>{
+ const {f,message}=await quietRun(),owner=f.h.store.get<any>('router-reply-owner',message.id)
+ const atomic=vi.spyOn(f.h.store,'atomic')
+ try{
+  f.h.proactive.notificationDelay(f.h.store.deliveries().find(d=>d.id===message.id)!,owner)
+  expect(atomic).not.toHaveBeenCalled()
+  f.enable({quietHours:null});await f.h.flush()
+  const pending={...message,id:'future-retry',status:'pending',nextAt:Date.now()+60000}
+  f.h.store.outbox.send(pending);f.h.store.db.prepare('UPDATE outbox SET next_at=? WHERE id=?').run(pending.nextAt,pending.id)
+  atomic.mockClear();expect(f.h.proactive.notificationDelay(pending,owner)).toEqual({nextAt:pending.nextAt,quiet:false})
+  expect(atomic).not.toHaveBeenCalled()
+ }finally{atomic.mockRestore()}
+})
+it('cancelling a scheduled dependency withdraws a mixed pending reply but not an independent human reply',async()=>{
+ const {f,message,anchor,run}=await quietRun(),owner=f.h.store.get<any>('router-reply-owner',message.id),human=f.h.store.triggers.get(anchor.triggerId)!
+ for(const [id,inputs] of [['cancel-mixed',[...owner.inputs,human.id]],['independent-human',[human.id]]] as const){
+  f.h.store.outbox.send({id,kind:'reply',text:'Reply',channel:human.channel!})
+  f.h.store.put('router-reply-owner',id,{...owner,triggerId:human.id,inputs:[...inputs]})
+ }
+ f.command('run.cancel',{id:run.id},run.revision);await f.h.flush()
+ expect(f.h.store.outbox.status('cancel-mixed')).toBe('dropped');expect(f.h.store.outbox.status('independent-human')).toBe('sent')
 })
