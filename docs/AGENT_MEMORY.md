@@ -96,3 +96,38 @@ MEMORY_SEMANTIC_DIR=/tmp/agenthub-semantic-acceptance \
 ```
 
 第二条默认需要 Model2Vec 0.10.0 与 Potion 权重。BGE 复跑时设置 `MEMORY_EMBEDDING_ENGINE=transformers`、`MEMORY_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5`，并选择装有 Transformers / PyTorch 的解释器与对应权重目录。适配器仅用于合成数据验收，绑定 loopback；其统计及故障注入接口没有鉴权，不应作为生产 embedding 服务。原生模型崩溃脚本使用 POSIX 进程组。
+
+### Temporary preference lifetime conservation (O27 partial)
+
+Automatic extraction replaces an existing preference only when the discussion,
+condition text, and absolute `expiresAt` are exactly equal. A missing condition is
+an empty condition; a missing expiry is a standing preference, not a wildcard.
+Different conditions or lifetimes coexist rather than superseding each other.
+The host does not infer that one natural-language condition contains another.
+An inferred proposal aimed at an explicit or protected preference retains its
+replacement target and is rejected by the existing inference guard, rather than
+being converted into an independent active contradiction.
+
+Deduplication and extraction operation identities include the absolute expiry.
+Existing facts supplied to extraction and consolidation include their declared
+expiry (or null for standing facts). Consolidation requires equal lifetimes and
+copies that exact expiry into the merged fact: it never computes a new TTL from
+completion time. Incompatible model-proposed merges are rejected. Existing
+source revision, expiry, generation and policy checks still apply while waiting
+for model output.
+
+The final automatic acceptance boundary also checks scope, entry, owner,
+condition, discussion and expiry for persisted extracted/consolidated/experience
+replacement candidates. An incompatible legacy candidate is archived as not
+applied, retaining its proposed relationship and leaving the target untouched.
+This does not rewrite old facts or resurrect preferences already superseded by
+an earlier version. Explicit authorized remember/confirm/edit operations retain
+their existing authority to correct preferences and their lifetimes; this rule
+only constrains automatic learning.
+
+Local fake-model regressions cover standing plus temporary preferences, expiry
+and restart, distinct lifetimes with identical content, compatible and malicious
+cross-lifetime consolidation, legacy candidate settlement, changes while waiting,
+normal permanent corrections and inference guards. No live model/provider calls
+or browser acceptance were performed for this increment. This is not general
+semantic conflict resolution or completion of all O27 interaction work.

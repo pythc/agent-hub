@@ -1,4 +1,4 @@
-import {it,expect,afterEach} from 'vitest'
+import {it,expect,afterEach,vi} from 'vitest'
 import {mkdtempSync,rmSync,copyFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {backup} from 'node:sqlite'
@@ -10,7 +10,7 @@ import type {MemoryFact} from '../src/router-memory.ts'
 import type {EmbedMemory} from '../src/memory-vectors.ts'
 import type {RerankMemory} from '../src/memory-rerank.ts'
 const hosts:Runtime[]=[],roots:string[]=[]
-afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
+afterEach(async()=>{vi.restoreAllMocks();for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
 function fixture(output?:(input:any,request:ModelRequest)=>unknown|Promise<unknown>,embed?:EmbedMemory,rerank?:RerankMemory){
  const root=mkdtempSync(join(tmpdir(),'agent-memory-'));roots.push(root);let now=Date.now(),seq=0,h!:Runtime
  const calls:ModelRequest[]=[]
@@ -567,4 +567,78 @@ it('learns sourced failure lessons directly, deduplicates them and never treats 
  expect(f.h.goals.get(g.id)?.state).toBe('held')
  await f.restart();expect(f.h.memory.fact(pending.id)?.state).toBe('active')
  f.h.store.requireCodeProjectSchema();expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(14)
+})
+
+
+it.each(['condition','expiry'] as const)('keeps automatic %s exceptions alongside the standing preference',async dimension=>{
+ const expires=Date.now()+86400000
+ const f=fixture(input=>({memories:[decision(input,input.existing.length?{action:'update',target:0,content:'Provide detailed reports',condition:dimension==='condition'?'Project B':'Project A',expiresAt:dimension==='expiry'?new Date(expires).toISOString():null}:{content:'Keep reports brief',condition:'Project A'})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const first=f.send('Keep reports brief for Project A');await f.learn();const standing=f.h.agentMemory.applicable(first)[0]!
+ const next=f.send('Provide detailed reports for this exception');await f.learn()
+ expect(f.h.memory.fact(standing.id)?.state).toBe('active')
+ expect(f.h.agentMemory.applicable(next).map(x=>x.content).sort()).toEqual(['Keep reports brief','Provide detailed reports'])
+ await f.restart();expect(f.h.agentMemory.applicable(f.context(next.trigger.id))).toHaveLength(2)
+ if(dimension==='expiry'){
+  vi.spyOn(Date,'now').mockReturnValue(expires+1)
+  expect(f.h.agentMemory.applicable(f.context(next.trigger.id)).map(x=>x.id)).toEqual([standing.id])
+  await f.restart();expect(f.h.agentMemory.applicable(f.context(next.trigger.id)).map(x=>x.id)).toEqual([standing.id])
+ }
+})
+it('does not deduplicate or reuse an extraction operation across distinct expiry declarations',async()=>{
+ const expiry=Date.now()+86400000
+ const f=fixture(input=>({memories:[decision(input,{expiresAt:new Date(expiry).toISOString()}),decision(input,{expiresAt:new Date(expiry+3600000).toISOString()})],topics:[]}));f.configure({writeMode:'adaptive'})
+ const c=f.send('Prefer conclusions first with separately declared time limits');await f.learn()
+ expect(f.h.agentMemory.applicable(c).map(x=>x.expiresAt).sort()).toEqual([expiry,expiry+3600000])
+ expect(f.h.agentMemory.applicable(c).every(x=>!x.replaces?.length)).toBe(true)
+})
+it('preserves the common expiry on a consolidated preference through restart and expiry',async()=>{
+ const expiresAt=Date.now()+86400000,f=fixture(()=>({merges:[{indices:[0,1],content:'Prefer concise Go reports'}]})),c=f.send()
+ const extra={kind:'preference',expiresAt,learning:{inferred:false,condition:'Go project'}}
+ f.remember(c,'Prefer concise Go reports',extra);f.remember(c,'Prefer concise Go project reports',extra)
+ expect(await f.h.agentMemory.consolidate(c)).toMatchObject({proposed:1})
+ const merged=f.h.agentMemory.applicable(c);expect(merged).toHaveLength(1);expect(merged[0]!.expiresAt).toBe(expiresAt)
+ const input=JSON.parse(f.calls[0]!.input);expect(input.memories.every((x:any)=>x.expiresAt===expiresAt)).toBe(true)
+ await f.restart();expect(f.h.agentMemory.applicable(f.context(c.trigger.id))[0]!.expiresAt).toBe(expiresAt)
+ vi.spyOn(Date,'now').mockReturnValue(expiresAt+1)
+ expect(f.h.agentMemory.applicable(f.context(c.trigger.id))).toEqual([])
+})
+it('does not propose cross-expiry consolidation or make a model call for incompatible lifetimes',async()=>{
+ const f=fixture(()=>({merges:[{indices:[0,1],content:'Prefer concise Go reports'}]})),c=f.send(),expiry=Date.now()+86400000
+ for(const expiresAt of [undefined,expiry,expiry+1000])f.remember(c,'Prefer concise Go reports',{kind:'preference',expiresAt})
+ expect(await f.h.agentMemory.consolidate(c)).toMatchObject({status:'no_candidates'})
+ expect(f.calls).toHaveLength(0);expect(f.h.agentMemory.applicable(c)).toHaveLength(3)
+})
+it('rejects a cross-expiry model merge even when each lifetime has eligible peers',async()=>{
+ const expiry=Date.now()+86400000,f=fixture(()=>({merges:[{indices:[0,2],content:'Prefer concise Go reports'}]})),c=f.send()
+ for(const expiresAt of [undefined,undefined,expiry,expiry])f.remember(c,'Prefer concise Go reports',{kind:'preference',expiresAt})
+ const before=f.h.agentMemory.applicable(c).map(x=>[x.id,x.revision,x.expiresAt])
+ await expect(f.h.agentMemory.consolidate(c)).rejects.toThrow('incompatible_merge_kinds')
+ expect(f.h.agentMemory.applicable(c).map(x=>[x.id,x.revision,x.expiresAt])).toEqual(before)
+})
+it('leaves explicit authorized lifetime edits available',()=>{
+ const f=fixture(),c=f.send('Keep this preference until tomorrow'),fact=f.remember(c,'Prefer concise reports',{kind:'preference'}),expiresAt=Date.now()+86400000
+ const edited=f.h.memory.command(c,{action:'remember',operationId:'explicit-expiry',id:fact.id,expectedRevision:fact.revision,subject:fact.subject,content:fact.content,sourceIds:fact.sources.map(s=>s.id),kind:'preference',candidate:false,expiresAt},true) as MemoryFact
+ expect(edited.expiresAt).toBe(expiresAt);expect(edited.id).toBe(fact.id)
+})
+
+it.each(['extracted','consolidated'] as const)('archives legacy %s candidates instead of silently superseding a standing preference on restart',async origin=>{
+ const f=fixture(),c=f.send(),standing=f.remember(c,'Keep reports brief',{kind:'preference',learning:{inferred:false,condition:'All projects'}})
+ const candidate=f.h.memory.command(c,{action:'remember',operationId:'legacy-candidate',expectedRevision:0,subject:standing.subject,content:'Detailed today',sourceIds:standing.sources.map(s=>s.id),kind:'preference',candidate:true,origin,learning:{inferred:false,condition:'Today only'},expiresAt:Date.now()+86400000,replaces:[{id:standing.id,revision:standing.revision}]},true) as MemoryFact
+ await f.restart();f.h.agentMemory.settleNotes(f.context(c.trigger.id))
+ expect(f.h.memory.fact(standing.id)).toMatchObject({state:'active',revision:standing.revision})
+ expect(f.h.memory.fact(candidate.id)).toMatchObject({archived:true,replaces:[{id:standing.id,revision:standing.revision}]})
+ expect(f.h.agentMemory.applicable(f.context(c.trigger.id)).map(x=>x.id)).toEqual([standing.id])
+})
+it.each(['expiry','revision'] as const)('rejects consolidation when source %s changes while the model is waiting',async change=>{
+ let resolve!: (value:unknown)=>void,entered!:()=>void
+ const ready=new Promise<void>(r=>{entered=r}),result=new Promise(r=>{resolve=r}),expiry=Date.now()+86400000
+ const f=fixture(()=>{entered();return result}),c=f.send(),extra={kind:'preference',expiresAt:expiry}
+ const first=f.remember(c,'Prefer concise Go reports',extra);f.remember(c,'Prefer concise Go project reports',extra)
+ const pending=f.h.agentMemory.consolidate(c);await ready
+ if(change==='expiry')vi.spyOn(Date,'now').mockReturnValue(expiry+1)
+ else f.h.memory.command(c,{action:'remember',operationId:'changed-during-consolidation',id:first.id,expectedRevision:first.revision,subject:first.subject,content:'Changed explicit preference',sourceIds:first.sources.map(s=>s.id),kind:'preference',candidate:false,expiresAt:expiry},true)
+ resolve({merges:[{indices:[0,1],content:'Prefer concise Go reports'}]})
+ await expect(pending).rejects.toThrow()
+ expect(f.h.store.list<MemoryFact>('memory-fact')).toHaveLength(2)
+ expect(f.h.store.list<MemoryFact>('memory-fact').every(x=>x.expiresAt===expiry&&x.state==='active')).toBe(true)
 })
