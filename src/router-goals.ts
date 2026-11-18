@@ -1,3 +1,4 @@
+import {projectIntegrationSummary} from './project-integration-summary.ts'
 import {z} from 'zod'
 import {startCodeProject,type GoalProject,type CodeReceipt} from './project-code.ts'
 import {projectBudget} from './project-budget.ts'
@@ -243,6 +244,7 @@ export class RouterGoals {
    if(g.state!=='needs_input'||review.state!=='pending')throw Error('This project review is closed')
    const round=this.host.store.get<VerificationRound>('goal-verification',review.roundId)
    const node=g.nodes!.find(n=>n.id===p.integration)!,d=this.host.store.get<GoalDelivery>('goal-delivery',node.ticketId!)
+   if(d){const code=this.host.projectCode.receipt(d.id);if(code)this.host.projectCode.validateReceipt(g,node,code)}
    if(!round||round.state!=='passed'||!this.host.verification.current(round,g)||d?.id!==review.deliveryId||this.host.projectCode.receipt(d.id)?.head!==review.head)throw Error('The reviewed commit or its evidence changed')
    if(decision==='return'&&!feedback?.trim())throw Error('Describe the requested change')
    p.reviewWaitMs+=Math.max(0,this.now()-review.at)
@@ -289,7 +291,7 @@ export class RouterGoals {
   const p=g.project,review=p?.review
   if(!p||!review)return
   const code=this.host.projectCode.receipt(review.deliveryId)
-  return {id:review.id,goalId:g.id,title:g.title,base:p.base,head:review.head,state:review.state,test:code?.test,diffStat:code?.diffStat,diff:code?.diff,budget:this.budget(g)}
+  return {id:review.id,goalId:g.id,title:g.title,base:p.base,head:review.head,state:review.state,integration:projectIntegrationSummary(g,code?.ticketId??'',code,this.host.projectCode.validateReceipt.bind(this.host.projectCode)),sharedFiles:p.ownership?.sharedFiles??[],test:code?.test,diffStat:code?.diffStat,diff:code?.diff,budget:this.budget(g)}
  }
  private advanceRemote(g:RouterGoal,n:GoalNode){
   if(!n.delegationId||n.state==='passed'||n.state==='held')return

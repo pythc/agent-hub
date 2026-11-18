@@ -292,10 +292,32 @@ function workflowOutcome(p){
   const states={pending:['Awaiting approval','待确认'],applying:['Submitting change…','正在提交'],applied:['Written and verified','已写入并回读'],declined:['Declined','已拒绝'],stale:['The issue changed. A new proposal is needed.','事项已变化，需要重新提案'],uncertain:['The write outcome is still unknown','写入结果仍待核对'],observed:['Target state observed. Writer unconfirmed.','已回读目标状态，写入方未确认']}
   return p.view.label+' · '+L(...states[p.state])+(p.receipt?' · '+p.receipt.revision:'')
 }
+function readProjectIntegration(value){
+ const own=(v,k)=>{if(!v||typeof v!=='object'||Array.isArray(v))return undefined;const d=Object.getOwnPropertyDescriptor(v,k);return d&&Object.hasOwn(d,'value')?d.value:undefined},sha=v=>typeof v==='string'&&/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(v),states=['passed','failed','unverified']
+ try{
+  const role=own(value,'role'),ownership=own(value,'ownership'),head=own(value,'head'),count=own(value,'sharedFileCount'),lockfiles=own(value,'defaultLockfiles'),legacy=own(value,'legacyTest'),complete=own(value,'complete'),owner=own(value,'ownerWorkerId'),raw=own(value,'checks')
+  if(own(value,'schema')!==1||!['integration','contributor'].includes(role)||!['checked','blocked','legacy_unknown','unverified'].includes(ownership)||!(head===null||sha(head))||!Number.isSafeInteger(count)||count<0||typeof lockfiles!=='boolean'||!states.includes(legacy)||typeof complete!=='boolean'||!(owner===null||typeof owner==='string'&&owner.length>0&&owner.length<=1000)||!Array.isArray(raw)||raw.length!==3)return null
+  const checks=[]
+  for(let i=0;i<3;i++){const item=Object.getOwnPropertyDescriptor(raw,String(i))?.value,kind=own(item,'kind'),state=own(item,'state'),at=own(item,'head');if(!['build','start','business'].includes(kind)||checks.some(c=>c.kind===kind)||!states.includes(state)||!(at===null||sha(at)))return null;checks.push({kind,state:ownership==='checked'&&head&&at===head?state:'unverified'})}
+  return {role,ownership,head,count,lockfiles,legacy,checks,complete:complete&&role==='integration'&&ownership==='checked'&&!!head&&legacy==='passed'&&checks.every(c=>c.state==='passed')}
+ }catch{return null}
+}
+function projectIntegrationCard(value,sharedFiles){
+ const data=readProjectIntegration(value),body=el('div'),label=state=>state==='passed'?L('Passed','通过'):state==='failed'?L('Failed','失败'):L('Not recorded','未记录')
+ if(!data){body.append(el('p','',L('Not recorded','未记录')));return detail(L('Integration evidence','集成证据'),body)}
+ body.append(el('p','',data.role==='integration'?L('Integration responsibility, not additional permission','集成责任，不构成额外权限'):L('Contributor responsibility, not additional permission','贡献责任，不构成额外权限')))
+ body.append(el('p','',L('Protected shared files: ','受保护的共享文件：')+data.count),el('p','',data.ownership==='checked'?L('Ownership checked','归属已核对'):data.ownership==='blocked'?L('Ownership blocked','归属检查受阻'):L('Ownership unverified','归属未核实')))
+ if(data.ownership==='checked'&&Array.isArray(sharedFiles)&&sharedFiles.length===data.count&&sharedFiles.length<=1000&&sharedFiles.every(p=>typeof p==='string'&&p.length>0&&p.length<=1000&&!/^[\\/]|^[a-z]:/i.test(p)&&!p.split(/[\\/]/).some(x=>x==='..'||x==='.'||x==='')&&!/[\x00-\x1f]/.test(p))){const list=el('ul');for(const path of sharedFiles)list.append(el('li','',path));body.append(list)}
+ body.append(el('p','',data.lockfiles?L('Default lockfiles are protected','默认锁文件受保护'):L('Default lockfile protection not recorded','默认锁文件保护未记录')))
+ for(const kind of ['build','start','business']){const stage=data.checks.find(c=>c.kind===kind);body.append(el('p','',L(...{build:['Build','构建'],start:['Start readiness','启动就绪'],business:['Business checks','业务验证']}[kind])+' · '+label(stage.state)))}
+ body.append(el('p','',L('Legacy combined test','旧综合测试')+' · '+label(data.legacy)),el('p','',data.complete?L('Same-commit integration evidence complete','同提交集成证据完整'):L('Integration evidence incomplete','集成证据不完整')))
+ return detail(L('Integration evidence','集成证据'),body)
+}
 function projectReviewCard(review,editable) {
   const card = add(el('article','attention-item'),el('h3','',review.title),
     el('code','',review.head),el('p','',L('Base commit','起始提交')+' '+review.base),
-    el('p','',L('Passed','测试通过')+' · '+review.test.command))
+    el('p','',L('Combined test','综合测试')+' · '+(review.test.exit===0?L('Passed','通过'):typeof review.test.exit==='number'?L('Failed','失败'):L('Result not recorded','结果未记录'))+' · '+review.test.command))
+  card.append(projectIntegrationCard(review.integration?.head===review.head?review.integration:undefined,review.sharedFiles))
   if(editable){card.id='attention-project-'+review.id;card.tabIndex=-1}const status=attentionStatusRows('project_review',review.id);if(status)card.append(status)
   if(review.diffStat)card.append(el('pre','message',review.diffStat))
   if(review.diff?.text)card.append(detail(review.diff.truncated?L('Patch preview (truncated)','补丁预览（已截断）'):L('View changes','查看改动'),el('pre','message',review.diff.text)))

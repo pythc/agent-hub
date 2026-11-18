@@ -52,6 +52,27 @@ function workerName(id:string|undefined,language:'en'|'zh-CN'){
  return worker
 }
 function StageIcon({stage}:{stage:TraceStage}){const Icon=stage==='approval'?ShieldQuestion:stage==='acceptance'||stage==='test'?FileCheck2:stage==='commit'?GitCommitHorizontal:stage==='tool'?Wrench:stage==='run'?Terminal:stage==='result'?CheckCircle2:stage==='assignment'?ArrowRight:Clock3;return <Icon size={16} aria-hidden="true"/>}
+function readProjectIntegration(value:unknown){
+ const own=(v:any,k:string):any=>{if(!v||typeof v!=='object'||Array.isArray(v))return undefined;const d=Object.getOwnPropertyDescriptor(v,k);return d&&Object.hasOwn(d,'value')?d.value:undefined},sha=(v:unknown)=>typeof v==='string'&&/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(v),states=['passed','failed','unverified']
+ try{
+  const role=own(value,'role'),ownership=own(value,'ownership'),head=own(value,'head'),count=own(value,'sharedFileCount'),lockfiles=own(value,'defaultLockfiles'),legacy=own(value,'legacyTest'),complete=own(value,'complete'),owner=own(value,'ownerWorkerId'),raw=own(value,'checks')
+  if(own(value,'schema')!==1||!['integration','contributor'].includes(role)||!['checked','blocked','legacy_unknown','unverified'].includes(ownership)||!(head===null||sha(head))||!Number.isSafeInteger(count)||count<0||typeof lockfiles!=='boolean'||!states.includes(legacy)||typeof complete!=='boolean'||!(owner===null||typeof owner==='string'&&owner.length>0&&owner.length<=1000)||!Array.isArray(raw)||raw.length!==3)return null
+  const checks:{kind:string;state:string}[]=[]
+  for(let i=0;i<3;i++){const item=Object.getOwnPropertyDescriptor(raw,String(i))?.value,kind=own(item,'kind'),state=own(item,'state'),at=own(item,'head');if(!['build','start','business'].includes(kind)||checks.some(c=>c.kind===kind)||!states.includes(state)||!(at===null||sha(at)))return null;checks.push({kind,state:ownership==='checked'&&head&&at===head?state:'unverified'})}
+  return {role,ownership,head,count,lockfiles,legacy,checks,complete:complete&&role==='integration'&&ownership==='checked'&&!!head&&legacy==='passed'&&checks.every(c=>c.state==='passed')}
+ }catch{return null}
+}
+export function ProjectIntegrationEvidence({value,language='en'}:{value:unknown;language?:'en'|'zh-CN'}){
+ const L=(en:string,zh:string)=>language==='zh-CN'?zh:en,data=readProjectIntegration(value),label=(state:string)=>state==='passed'?L('Passed','通过'):state==='failed'?L('Failed','失败'):L('Not recorded','未记录')
+ return <details className="trace-records"><summary>{L('Integration evidence','集成证据')}</summary><div className="trace-records-body">{data?<>
+  <p>{data.role==='integration'?L('Integration responsibility, not additional permission','集成责任，不构成额外权限'):L('Contributor responsibility, not additional permission','贡献责任，不构成额外权限')}</p>
+  <p>{data.ownership==='checked'?L('Ownership checked','归属已核对'):data.ownership==='blocked'?L('Ownership blocked','归属检查受阻'):L('Ownership unverified','归属未核实')}</p><p>{L('Protected shared files: ','受保护的共享文件：')}{data.count}</p><p>{data.lockfiles?L('Default lockfiles are protected','默认锁文件受保护'):L('Default lockfile protection not recorded','默认锁文件保护未记录')}</p>
+  {data.head?<p>{L('Commit','提交')} · {data.head.slice(0,12)}</p>:null}
+  <dl className="trace-facts">{['build','start','business'].map(kind=><div key={kind}><dt>{kind==='build'?L('Build','构建'):kind==='start'?L('Start readiness','启动就绪'):L('Business checks','业务验证')}</dt><dd>{label(data.checks.find(c=>c.kind===kind)!.state)}</dd></div>)}</dl>
+  <p>{L('Legacy combined test','旧综合测试')} · {label(data.legacy)}</p><p>{data.complete?L('Same-commit integration evidence complete','同提交集成证据完整'):L('Integration evidence incomplete','集成证据不完整')}</p>
+ </>:<p>{L('Not recorded','未记录')}</p>}</div></details>
+}
+
 export function TaskQueueSummary({value,language='en'}:{value:unknown;language?:'en'|'zh-CN'}){
  const L=(en:string,zh:string)=>language==='zh-CN'?zh:en
  const labels:Record<string,[string,string]>={control:['Host control','主机控制'],uncertain:['Outcome needs checking','结果待核查'],not_pending:['Not pending','非待执行状态'],retry_delay:['Retry delay','等待重试时间'],paused:['Scheduling paused','调度暂停'],authority_held:['Authority held','授权暂挂'],project_held:['Project held','项目暂挂'],external_wait:['External work','等待外部工作'],recovery:['Recovery pending','等待恢复'],routing_ownership:['Router ownership','Router 归属'],discussion_serialization:['Conversation serialization','会话串行等待'],routing_capacity:['Router capacity','Router 容量'],background_capacity:['Background capacity','后台容量'],worker_capacity:['Worker capacity','Worker 容量'],task_running:['Task already running','任务已在运行'],task_held:['Task held','任务暂挂'],worker_busy:['Worker busy','Worker 忙碌'],resource_quota:['Resource quota','资源配额'],eligible:['Eligible, not a start guarantee','符合条件，不保证立即开始'],context_unavailable:['Context unavailable','上下文不可用']}
@@ -220,6 +241,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     review_configuration:L('Review the current backend configuration; do not switch accounts to bypass the problem.','请核对当前后端配置，不要通过切换账号绕过问题。'),
     inspect:L('Inspect current state before choosing a recovery action.','先核对当前状态，再选择恢复操作。'),
    })[task.blocker.resolution]}{task.blocker.retryPolicy.notBefore?<span>{L(' Scheduled retry no earlier than: ',' 已有重试计划不早于：')}{new Date(task.blocker.retryPolicy.notBefore).toLocaleString()}</span>:null}</p>:null}
+   <ProjectIntegrationEvidence value={task.projectIntegration} language={language}/>
    <TaskQueueSummary value={task.queue} language={language}/>
    <TaskAssignmentSummary value={task.assignment} language={language}/>
    <AsyncInboxSummary value={task.asyncInbox} language={language}/>

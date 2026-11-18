@@ -168,8 +168,9 @@ export class GoalVerification {
    const citeIds=(values:string[])=>[...new Set([...values,...semanticAncestors.filter(cr=>cr.ancestors.has(n.id)).map(cr=>cr.id)])]
    if(g.project){
     if(!code?.head||code.error)throw Error('Accepted project commit is missing')
+    this.host.projectCode.validateReceipt(g,n,code)
     if(!node&&n.id===g.project.integration)finalCommit=code.head
-    add({kind:'execution',ticketId:n.ticketId,key:'project-commit',content:JSON.stringify({base:g.project.base,head:code.head,parents:code.parents,test:code.test,diffStat:code.diffStat,diff:code.diff}),criterionIds:citeIds(ids)})
+    add({kind:'execution',ticketId:n.ticketId,key:'project-commit',content:JSON.stringify({base:g.project.base,head:code.head,parents:code.parents,ownership:code.ownership,stages:code.stages,test:code.test,diffStat:code.diffStat,diff:code.diff}),criterionIds:citeIds(ids)})
    }
    add({kind:'execution',ticketId:n.ticketId,key:'host-execution',content:this.execution(n.ticketId),criterionIds:citeIds(ids)})
    // Final acceptance needs the same immutable failure observation the planner

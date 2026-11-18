@@ -123,3 +123,16 @@ it('preserves task assignment permissions and refuses older contract or lease po
  await expect(restoreState(config,revisionBackup)).rejects.toThrow('Task assignment contracts advanced')
  const final=new Store(file);try{expect(final.get('task-assignment-current','task')).toMatchObject({digest:'next'})}finally{final.close()}
 })
+
+it('fences project responsibility downgrade and receipt removal across restore',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-integration-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
+ const file=join(config.stateDir,'state.sqlite'),legacy=new Store(file);legacy.requireTaskAssignmentSchema();legacy.close()
+ const old=join(root,'old');await backupState(config,old)
+ const current=new Store(file);current.requireCodeProjectSchema();current.put('project-commit','d',{id:'d',goalId:'g',ticketId:'t',parents:[],head:'a'.repeat(40)});current.close()
+ await expect(restoreState(config,old)).rejects.toThrow('Downgrade cannot preserve project integration')
+ const captured=join(root,'captured');await backupState(config,captured);expect(verifyBackup(captured).schema).toBe(20);await restoreState(config,captured)
+ const removed=new Store(file);removed.db.prepare("DELETE FROM records WHERE kind='project-commit' AND id='d'").run();removed.close()
+ await expect(restoreState(config,captured)).rejects.toThrow('Project integration responsibility or evidence advanced')
+ const reread=new Store(file);try{expect(reread.get('project-commit','d')).toBeUndefined();expect(reread.db.prepare('PRAGMA user_version').get()!.user_version).toBe(20)}finally{reread.close()}
+})

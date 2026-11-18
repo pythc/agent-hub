@@ -1,3 +1,4 @@
+import {validSharedPath} from './project-ownership.ts'
 import {httpDeploymentSchema} from './http-deployment.ts'
 import {backendPackageReferences} from './backends/plugin-contract.ts'
 import {delegationConfigSchema} from './delegation/contract.ts'
@@ -14,6 +15,12 @@ import {viewPluginsSchema} from './workspace-view-package.ts'
 
 const projectPolicy=z.object({
   testCommand:z.string().trim().min(1).max(16000),
+  stages:z.object({
+    buildCommand:z.string().trim().min(1).max(16000),
+    businessCommand:z.string().trim().min(1).max(16000),
+    startCheck:z.object({command:z.string().trim().min(1).max(16000).refine(value=>value.startsWith('exec '),'Start-check requires an exec foreground service; do not daemonize'),url:z.string().refine(value=>{try{const u=new URL(value);return u.protocol==='http:'&&['127.0.0.1','[::1]'].includes(u.hostname)&&!u.username&&!u.password&&!u.hash}catch{return false}},'Use a literal loopback HTTP URL'),timeoutMs:z.number().int().min(100).max(300000)}).strict(),
+  }).strict().optional(),
+  sharedFiles:z.array(z.string().refine(validSharedPath,'Use an exact repository-relative path')).max(256).optional(),
   budget:z.object({
     maxMinutes:z.number().positive().max(43200).optional(),
     cost:z.object({maxUsd:z.number().positive(),inputUsdPerMillion:z.number().nonnegative(),outputUsdPerMillion:z.number().nonnegative()}).strict().optional(),
