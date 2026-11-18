@@ -25,12 +25,22 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve))
 
 const descriptor=(id='a'.repeat(64))=>({id,name:'report.pdf',version:1,bytes:2,sha256:'b'.repeat(64),mediaType:'application/pdf',availability:'retained'})
 it('catalog uses scoped transport, rejects late responses after teardown, and retries after failure',async()=>{
- for(const mode of ['unmount','switchContext'] as const){const p=pageFixture();p.render();p.flush();expect(p.calls[0].url).toBe('/workspaces/studio/artifact-catalog');const pending=p.pending.shift();p[mode]();const count=p.writes.length;pending.resolve({schema:1,items:[],truncated:false});await tick();expect(p.writes.length).toBe(count);expect(p.rootFetch).not.toHaveBeenCalled()}
- const p=pageFixture();p.render();p.flush();p.pending.shift().reject(Error('SECRET'));await tick();expect(JSON.stringify(p.render())).not.toContain('SECRET');p.replay();expect(p.calls[0].signal.aborted).toBe(true);expect(p.calls[1].signal.aborted).toBe(false);p.pending.shift().resolve({schema:1,items:[],truncated:false});await tick();expect(JSON.stringify(p.render())).toContain('No visible artifacts yet.')
+ for(const mode of ['unmount','switchContext'] as const){const p=pageFixture();p.render();p.flush();expect(p.calls[0].url).toBe('/workspaces/studio/artifact-catalog');const pending=p.pending.shift();p[mode]();const count=p.writes.length;pending.resolve({schema:1,items:[],truncated:false,nextCursor:null});await tick();expect(p.writes.length).toBe(count);expect(p.rootFetch).not.toHaveBeenCalled()}
+ const p=pageFixture();p.render();p.flush();p.pending.shift().reject(Error('SECRET'));await tick();expect(JSON.stringify(p.render())).not.toContain('SECRET');p.replay();expect(p.calls[0].signal.aborted).toBe(true);expect(p.calls[1].signal.aborted).toBe(false);p.pending.shift().resolve({schema:1,items:[],truncated:false,nextCursor:null});await tick();expect(JSON.stringify(p.render())).toContain('No visible artifacts on this page.')
 })
 
 it('withholds unsupported managed View navigation while preserving fixed file links',async()=>{
- const p=pageFixture();p.render();p.flush();p.pending.shift().resolve({schema:1,truncated:false,items:[{reference:{kind:'workspace-view',id:'board'},label:{en:'Board','zh-CN':'看板'}},{reference:{kind:'goal-artifact',id:'a'.repeat(64)},label:{en:'File','zh-CN':'文件'}}]});await tick()
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve({schema:1,truncated:false,nextCursor:null,items:[{reference:{kind:'workspace-view',id:'board'},label:{en:'Board','zh-CN':'看板'}},{reference:{kind:'goal-artifact',id:'a'.repeat(64)},label:{en:'File','zh-CN':'文件'}}]});await tick()
  let tree=JSON.stringify(p.render());expect(tree).not.toContain('#plugin/board');expect(tree).toContain('managed workspace is not supported');expect(tree).toContain('#artifact/'+'a'.repeat(64))
  p.workspace.context.managed=false;tree=JSON.stringify(p.render());expect(tree).toContain('#plugin/board')
+})
+
+function nodes(tree:any):any[]{return !tree||typeof tree!=='object'?[]:[tree,...Object.values(tree.props??{}).flatMap(v=>Array.isArray(v)?v.flatMap(nodes):nodes(v))]}
+it('pages through captured workspace binding and refresh restarts after an expired cursor',async()=>{
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve({schema:1,items:[],truncated:true,nextCursor:'a'.repeat(36)});await tick()
+ const click=(label:string)=>nodes(p.render()).find(n=>n.type==='button'&&n.props.children===label).props.onClick()
+ click('Next page');p.render();p.flush();expect(p.calls.at(-1).url).toBe('/workspaces/studio/artifact-catalog?cursor='+'a'.repeat(36))
+ p.pending.shift().reject(Error('catalog_cursor_expired'));await tick();expect(JSON.stringify(p.render())).toContain('restart from the first page')
+ click('Refresh');p.render();p.flush();expect(p.calls.at(-1).url).toBe('/workspaces/studio/artifact-catalog')
+ p.pending.shift().resolve({schema:1,items:[],truncated:true,nextCursor:'b'.repeat(36)});await tick();click('Next page');p.render();p.flush();p.pending.shift().resolve({schema:1,items:[],truncated:false,nextCursor:null});await tick();click('Previous page');p.render();p.flush();expect(p.calls.at(-1).url).toBe('/workspaces/studio/artifact-catalog');expect(p.rootFetch).not.toHaveBeenCalled()
 })
