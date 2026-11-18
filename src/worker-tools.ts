@@ -1,3 +1,4 @@
+import {assertAssignmentTool,validateAssignmentLease,assertAssignmentLeaseCapability} from './task-assignment-contract.ts'
 import {observe as observeWorkerEvent,isCurrent as currentWorkerAttempt,type WorkerAttempt} from './async-worker-inbox.ts'
 import {eventWaitSchema} from './webhook-continuations.ts'
 import type {TaskContinuation} from './task-context.ts'
@@ -49,6 +50,9 @@ export class WorkerTools {
   read(()=>this.host.delegation.guardWorker(owner.ticketId,name))
   if(attempt&&!read(()=>currentWorkerAttempt(this.host,attempt)))throw Error('Worker attempt has ended')
   if(!read(()=>this.host.validWork(owner)))throw Error('Assignment capability has ended')
+  if(!read(()=>validateAssignmentLease(this.host,owner)))throw Error('Assignment workspace lease has ended')
+  read(()=>assertAssignmentTool(this.host,owner.ticketId,name))
+  read(()=>assertAssignmentLeaseCapability(this.host,owner,name))
   const allowed=this.host.store.get<any>('run',owner.ticketId)?.agentOptions?.tools
   if(allowed&&!allowed.includes(name))throw Error('Tool is disabled for this Worker')
   const definition=workerDefinitions.find(d=>d.name===name);if(!definition)throw Error('Unknown worker tool')
@@ -58,6 +62,9 @@ export class WorkerTools {
    await this.host.refreshWork(owner)
   }
   if(attempt&&!read(()=>currentWorkerAttempt(this.host,attempt)))throw Error('Worker attempt has ended')
+  if(!read(()=>validateAssignmentLease(this.host,owner)))throw Error('Assignment workspace lease has ended')
+  read(()=>assertAssignmentTool(this.host,owner.ticketId,name))
+  read(()=>assertAssignmentLeaseCapability(this.host,owner,name))
   const continuation=this.host.store.get<TaskContinuation>('task-continuation',owner.ticketId)
   if(continuation&&name==='superagent_job'&&continuation.priorJobs.includes(args.id))throw Error('Prior job body is quarantined; use retained effect identities')
   if(continuation&&['superagent_ack','superagent_review','superagent_follow'].includes(name))throw Error('Rebuilt task requires Router review for prior channels and source history')

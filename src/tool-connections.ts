@@ -1,3 +1,4 @@
+import {assertAssignmentConnection,validateAssignmentLease,assertAssignmentLeaseCapability} from './task-assignment-contract.ts'
 import {ProcessSource} from './plugin-process.ts'
 import {OperationError,type Operation} from './operation-errors.ts'
 import type {TaskContinuation} from './task-context.ts'
@@ -58,6 +59,9 @@ export class ToolConnections {
   receipts(ticketId?:string){return this.host.store.list<Receipt>('tool-receipt').filter(r=>!ticketId||r.ticketId===ticketId).map(({result,fingerprint,...r})=>({...r,resource:'tool-call/'+r.id}))}
   private allowed(owner:WorkOwner,id:string){
     if(this.closing||!this.host.validWork(owner))throw Error('Assignment capability has ended')
+    if(!validateAssignmentLease(this.host,owner))throw Error('Assignment workspace lease has ended')
+    assertAssignmentConnection(this.host,owner.ticketId,id)
+    assertAssignmentLeaseCapability(this.host,owner,undefined,id)
     const grant=this.host.store.get<any>('run',owner.ticketId)?.agentOptions?.toolConnections??[]
     const connection=this.host.config.toolConnections[id]
     if(!grant.includes(id)||!connection?.enabled)throw Error('Tool connection is not enabled for this Worker')

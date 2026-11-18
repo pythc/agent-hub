@@ -1,6 +1,6 @@
 import {RecoveryPackageExport} from './recovery-package-export.tsx'
 import {RecoverySummary} from './recovery-summary.tsx'
-import {useEffect,useRef,useState} from 'react'
+import {useEffect,useRef,useState,type ReactNode} from 'react'
 import {Activity,ArrowRight,Check,CheckCircle2,Clock3,FileCheck2,GitCommitHorizontal,History,LoaderCircle,RefreshCw,ShieldQuestion,Square,Terminal,Wrench} from 'lucide-react'
 import type {TraceEvent,TraceTask,TraceStage,TraceState} from '../../src/execution-trace.ts'
 import {readTaskStatus,type StatusState} from './execution-status-view.ts'
@@ -52,6 +52,48 @@ function workerName(id:string|undefined,language:'en'|'zh-CN'){
  return worker
 }
 function StageIcon({stage}:{stage:TraceStage}){const Icon=stage==='approval'?ShieldQuestion:stage==='acceptance'||stage==='test'?FileCheck2:stage==='commit'?GitCommitHorizontal:stage==='tool'?Wrench:stage==='run'?Terminal:stage==='result'?CheckCircle2:stage==='assignment'?ArrowRight:Clock3;return <Icon size={16} aria-hidden="true"/>}
+export function TaskAssignmentSummary({value,language='en'}:{value:unknown;language?:'en'|'zh-CN'}){
+ const L=(en:string,zh:string)=>language==='zh-CN'?zh:en
+ const read=()=>{
+  const own=(v:unknown,key:string):unknown=>{if(!v||typeof v!=='object'||Array.isArray(v))return undefined;const field=Object.getOwnPropertyDescriptor(v,key);return field&&Object.hasOwn(field,'value')?field.value:undefined}
+  const text=(v:unknown,max=4000):v is string=>typeof v==='string'&&v.length>0&&v.length<=max
+  const count=(v:unknown):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0
+  const list=(v:unknown):string[]|null=>{if(!Array.isArray(v)||v.length>1000)return null;const out:string[]=[];for(let i=0;i<v.length;i++){const item=Object.getOwnPropertyDescriptor(v,String(i))?.value;if(!text(item))return null;out.push(item)}return out}
+  try{
+   const objective=own(value,'objective'),inputCount=own(value,'inputCount'),dependencyCount=own(value,'dependencyCount'),tools=list(own(value,'tools')),connections=list(own(value,'connections')),workspace=own(value,'workspace'),budget=own(value,'budget'),createdAt=own(value,'createdAt'),blocker=own(value,'blocker')
+   const access=own(workspace,'access'),network=own(workspace,'network'),leaseCount=own(workspace,'leaseCount')
+   if(own(value,'schema')!==1||!text(objective,100000)||!count(inputCount)||!count(dependencyCount)||!tools||!connections||!['read-only','workspace-write'].includes(access as string)||own(workspace,'scope')!=='whole_root'||typeof network!=='boolean'||!count(leaseCount)||!count(createdAt)||createdAt>8640000000000000||!budget||typeof budget!=='object'||Array.isArray(budget)||blocker!==undefined&&!text(blocker))return null
+   const limits:Record<string,number>={}
+   for(const key of ['timeoutMs','maxSteps','maxToolCalls','maxOutputTokens']){const v=own(budget,key);if(Object.hasOwn(budget,key)){if(!count(v)||v===0)return null;limits[key]=v}}
+   let contract:null|{key:string;version:number;digest:string;inputs:string[];outputs:string[];acceptance:string[]}=null
+   if(Object.hasOwn(value as object,'interface')){const v=own(value,'interface'),inputs=list(own(v,'inputs')),outputs=list(own(v,'outputs')),acceptance=list(own(v,'acceptance')),version=own(v,'version'),digest=own(v,'digest');if(!text(own(v,'key'))||!count(version)||!text(digest,64)||!/^([a-f0-9]{64})$/.test(digest)||!inputs||!outputs||!acceptance)return null;contract={key:own(v,'key') as string,version,digest,inputs,outputs,acceptance}}
+   return {objective,inputCount,dependencyCount,tools,connections,access:access as string,network,leaseCount,limits,contract,createdAt,blocker:typeof blocker==='string'?blocker:null}
+  }catch{return null}
+ }
+ const data=read(),unknown=L('Not recorded','未记录'),unconfigured=L('Not configured','未配置')
+ const blockerLabels:Record<string,string>={
+  assignment_contract_interface_superseded:L('The collaboration interface was replaced. This assignment cannot use the old version.','协作接口已替代，此派工不能继续使用旧版本。'),
+  required_capability_unavailable:L('A required capability is unavailable.','所需能力当前不可用。'),
+  capability_changed:L('Available capabilities changed after dispatch.','派工后的可用能力已变更。'),
+  backend_changed:L('The execution backend changed after dispatch.','派工后的执行后端已变更。'),
+  basis_changed:L('The assignment basis changed.','派工依据已变更。'),
+  initial_input_changed:L('The initial input changed after dispatch.','派工后的初始输入已变更。'),
+  dependency_not_independently_accepted:L('A dependency has not passed independent acceptance.','依赖尚未通过独立验收。'),
+  authority_ended:L('The authority for this assignment ended.','此派工的授权已结束。'),
+ }
+ const row=(label:string,content:ReactNode)=><div><dt>{label}</dt><dd>{content}</dd></div>
+ const items=(values:string[])=>values.length?<ul>{values.map((v,i)=><li key={i}>{v}</li>)}</ul>:L('None recorded','已记录为空')
+ return <details className="trace-records"><summary>{L('Assignment agreement at dispatch','派工时约定')}</summary><div className="trace-records-body">{data?<>
+  <p>{data.objective}</p><dl className="trace-facts">{row(L('Inputs','输入'),data.inputCount)}{row(L('Dependencies','依赖'),data.dependencyCount)}{row(L('Recorded at','记录时间'),new Date(data.createdAt).toLocaleString(language,{timeZone:'UTC',timeZoneName:'short'}))}</dl>
+  {data.contract?<dl className="trace-facts">{row(L('Interface name','接口名称'),data.contract.key)}{row(L('Interface version','接口版本'),data.contract.version)}{row(L('Interface fingerprint','接口指纹'),data.contract.digest.slice(0,12))}</dl>:null}
+  <dl className="trace-facts">{row(L('Interface inputs','接口输入'),data.contract?items(data.contract.inputs):unknown)}{row(L('Interface outputs','接口输出'),data.contract?items(data.contract.outputs):unknown)}{row(L('Acceptance requirements','验收要求'),data.contract?items(data.contract.acceptance):unknown)}</dl>
+  <dl className="trace-facts">{row(L('Tool ceiling','工具权限上限'),items(data.tools))}{row(L('Connection ceiling','连接权限上限'),items(data.connections))}</dl><p>{L('These limits do not grant additional permission.','这些上限不构成额外授权。')}</p>
+  <dl className="trace-facts">{row(L('Workspace access','工作区访问'),data.access==='read-only'?L('Read only','只读'):L('Workspace write','工作区可写'))}{row(L('Workspace scope','工作区范围'),L('Whole root, not individual files','整个根目录，非文件粒度'))}{row(L('Managed workspace network','受管工作区网络'),data.network?L('Allowed','允许'):L('Disabled','禁用'))}{row(L('Workspace leases','工作区租约'),data.leaseCount===0?L('Awaiting start · no lease acquired','待启动 · 未获得租约'):data.leaseCount)}</dl><p>{L('Workspace network policy does not describe provider network access.','工作区网络策略不代表模型服务方的联网状态。')}</p>
+  <dl className="trace-facts">{row(L('Timeout (ms)','超时（毫秒）'),data.limits.timeoutMs??unconfigured)}{row(L('Step limit','步骤上限'),data.limits.maxSteps??unconfigured)}{row(L('Tool-call limit','工具调用上限'),data.limits.maxToolCalls??unconfigured)}{row(L('Output token limit','输出 token 上限'),data.limits.maxOutputTokens??unconfigured)}</dl><p>{L('Unconfigured is not unlimited or a cost guarantee.','未配置不表示无限，也不构成费用承诺。')}</p>
+  {data.blocker?<p>{Object.hasOwn(blockerLabels,data.blocker)?blockerLabels[data.blocker]:L('Assignment restriction recorded','已记录派工限制')}</p>:null}
+ </>:<p>{unknown}</p>}</div></details>
+}
+
 export function AsyncInboxSummary({value,language='en'}:{value:unknown;language?:'en'|'zh-CN'}){
  const L=(en:string,zh:string)=>language==='zh-CN'?zh:en
  const read=()=>{
@@ -158,6 +200,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     review_configuration:L('Review the current backend configuration; do not switch accounts to bypass the problem.','请核对当前后端配置，不要通过切换账号绕过问题。'),
     inspect:L('Inspect current state before choosing a recovery action.','先核对当前状态，再选择恢复操作。'),
    })[task.blocker.resolution]}{task.blocker.retryPolicy.notBefore?<span>{L(' Scheduled retry no earlier than: ',' 已有重试计划不早于：')}{new Date(task.blocker.retryPolicy.notBefore).toLocaleString()}</span>:null}</p>:null}
+   <TaskAssignmentSummary value={task.assignment} language={language}/>
    <AsyncInboxSummary value={task.asyncInbox} language={language}/>
    <RecoverySummary task={task} language={language}/>
    <RecoveryPackageExport task={task} language={language}/>

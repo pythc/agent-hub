@@ -1,3 +1,4 @@
+import {currentTaskAssignment,reviseTaskAssignment,type AssignmentSpec} from '../src/task-assignment-contract.ts'
 import {mkdtempSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -8,7 +9,7 @@ import {begin,observe,isCurrent,isDeliverable} from '../src/async-worker-inbox.t
 import type {RouterGoal} from '../src/router-goals.ts'
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{vi.restoreAllMocks();for(const host of hosts.splice(0))await host.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
-async function fixture(managed=false){
+async function fixture(managed=false,legacyAssignment=false,assignment?:AssignmentSpec){
  const root=mkdtempSync(join(tmpdir(),'async-worker-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),acceptMode:'auto',work:{sandboxDriver:'disabled',autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice']}]})
  const model={run:vi.fn(async()=>{throw Error('No model call permitted by unit fixture')})}
@@ -17,8 +18,23 @@ async function fixture(managed=false){
  host.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'topic',history:'group'})
  const incoming=host.receive('local','alice',{id:'human',thread:'topic',scope:'topic',text:'Continuously analyze the supplied material. Never deploy.',addressed:true})as {triggerId:string}
  const context=host.scopes.context(host.store.triggers.get(incoming.triggerId)!,'local:topic')!
- const assigned=await host.manager.call({action:'assign',id:'one',revision:0,requestId:'work',text:'Analyze material'},{discussion:'local:topic',trigger:context.trigger,scoped:context})
- const ticketId=assigned.ticketId,assignmentId=host.store.tickets.get(ticketId)!.assignments.at(-1)!.id
+ let ticketId:string
+ if(legacyAssignment){
+  // Recreate the pre-contract Engine delegation path, rather than downgrading
+  // a current manager assignment or deleting its schema-19 authority records.
+  const id='delegation:legacy-work',trigger={...context.trigger,id,threads:[{source:'local',id}],meta:{...context.trigger.meta,delegatedBy:'router',parentTrigger:context.trigger.id},channel:{source:'local',thread:id,address:{routerInbox:'local:topic'}}}
+  host.store.put('router-delegation',id,{parentTrigger:context.trigger.id,discussion:'local:topic'})
+  host.engine.receive(trigger)
+  const decision=host.engine.decide(id,{kind:'accept',title:'Analyze material',scope:'Analyze material',reason:'Legacy Router delegation'})
+  if(!decision.ticketId)throw Error('Legacy task was not accepted')
+  ticketId=decision.ticketId
+  host.store.put('worker-assignment',ticketId,{ticketId,workerId:'one',discussion:'local:topic',source:'local',actor:'alice',parentTrigger:context.trigger.id,mode:'host'})
+  host.scopes.own(ticketId,context,'codex')
+ }else{
+  const assigned=await host.manager.call({action:'assign',id:'one',revision:0,requestId:'work',text:'Analyze material',assignment},{discussion:'local:topic',trigger:context.trigger,scoped:context})
+  ticketId=assigned.ticketId
+ }
+ const assignmentId=host.store.tickets.get(ticketId)!.assignments.at(-1)!.id
  host.engine.assignmentStarted(ticketId,assignmentId)
  let goal:RouterGoal|undefined
  if(managed){goal=host.goals.command({action:'start',operationId:'goal',expectedRevision:0,objective:'Analyze material',authorizationQuote:'Continuously analyze',criteria:[{id:'a',description:'Analysis',files:['analysis.md']}],nodes:[{id:'work',title:'Analyze',instruction:'Analyze material',workerId:'one',criterionIds:['a']}]},context)as RouterGoal;goal.taskIds=[ticketId];goal.nodes![0]!.ticketId=ticketId;host.store.put('router-goal',goal.id,goal)}
@@ -123,7 +139,8 @@ it('does not let current-pointer advancement alter immutable old receipts or sou
  expect(receipt).toMatchObject({occurredAt:null,sourceSequence:null,source:'host_progress_observation'})
 })
 it('rolls schema 18 activation barrier back if begin fails to persist its current pointer',async()=>{
- const f=await fixture(),version=()=>Number(f.host.store.db.prepare('PRAGMA user_version').get()!.user_version),before=version()
+ const f=await fixture(false,true),version=()=>Number(f.host.store.db.prepare('PRAGMA user_version').get()!.user_version),before=version()
+ expect(f.host.store.get('task-assignment-contract',f.ticketId)).toBeUndefined()
  expect(before).toBeLessThan(18)
  const original=f.host.store.put.bind(f.host.store),failure=vi.spyOn(f.host.store,'put').mockImplementation((kind,id,value)=>{if(kind==='async-worker-current')throw Error('pointer write failed');return original(kind,id,value)})
  expect(()=>begin(f.host,f.ticketId,f.assignmentId)).toThrow('pointer write failed')
@@ -153,4 +170,25 @@ it('allows completed goal evidence delivery, rejects changed plan or forged rece
  expect(isDeliverable(f.host,{...receipt,payloadDigest:'f'.repeat(64)})).toBe(false)
  f.host.store.put('router-goal',f.goal!.id,{...f.goal!,state:'completed',planRevision:1})
  expect(isDeliverable(f.host,receipt)).toBe(false)
+})
+
+it('fences a pending applied result when a real second assignment advances the shared interface version',async()=>{
+ const shared={key:'delivery',version:1,inputs:['material'],outputs:['analysis'],acceptance:['supported by evidence']},f=await fixture(false,false,{interface:shared}),attempt=begin(f.host,f.ticketId,f.assignmentId)
+ const receipt=observe(f.host,attempt,{kind:'result',payload:'pending result'},()=>{})
+ expect(receipt.basis.taskAssignmentDigest).toBe(currentTaskAssignment(f.host,f.ticketId)!.digest);expect(isDeliverable(f.host,receipt)).toBe(true)
+ await f.host.manager.call({action:'assign',id:'one',revision:0,requestId:'version-two',text:'Analyze material',assignment:{interface:{...shared,version:2}}},{discussion:'local:topic',trigger:f.context.trigger,scoped:f.context})
+ expect(isDeliverable(f.host,receipt)).toBe(false)
+})
+it('fences a pending result after an explicit immutable assignment revision, while retaining the old receipt',async()=>{
+ const f=await fixture(),attempt=begin(f.host,f.ticketId,f.assignmentId),receipt=observe(f.host,attempt,{kind:'result',payload:'old accepted result'},()=>{}),old=currentTaskAssignment(f.host,f.ticketId)!
+ expect(isDeliverable(f.host,receipt)).toBe(true)
+ reviseTaskAssignment(f.host,f.ticketId,'one',{discussion:'local:topic',trigger:f.context.trigger,scoped:f.context},{kind:'migration',commandId:'migration-receipt-fence',fingerprint:'retained-operation-fingerprint',expectedDigest:old.digest})
+ expect(isDeliverable(f.host,receipt)).toBe(false)
+ expect(f.host.store.get('async-worker-event',receipt.id)).toMatchObject({id:receipt.id,disposition:'applied',basis:{taskAssignmentDigest:old.digest}})
+})
+it('normalizes missing legacy assignment digest only when no assignment contract exists',async()=>{
+ const f=await fixture(false,true)
+ const attempt=begin(f.host,f.ticketId,f.assignmentId);delete attempt.basis.taskAssignmentDigest;f.host.store.put('async-worker-attempt',attempt.id,attempt)
+ const receipt=observe(f.host,attempt,{kind:'result',payload:'legacy completed result'},()=>{})
+ expect(receipt.disposition).toBe('applied');expect(isDeliverable(f.host,receipt)).toBe(true)
 })

@@ -1,3 +1,4 @@
+import {assignmentSpecSchema,previewTaskAssignment,commitTaskAssignment,assignmentContractView,currentTaskAssignment,reviseTaskAssignment} from './task-assignment-contract.ts'
 import {checkWorkerAdmission} from './backend-admission.ts'
 import {z} from 'zod'
 import {taskView,allowNewTaskInputs,type TaskContinuation} from './task-context.ts'
@@ -12,9 +13,9 @@ import type {Run} from './store.ts'
 import type {Trigger} from './vendor/dsh-core/index.ts'
 import {bodyDigest} from './sources.ts'
 import type {ToolSpec} from './model.ts'
-const actions=['list','inspect','create','clone','configure','set_prompt','assign','send','pause','resume','cancel','retire','destroy','result','migrate','rebuild'] as const
-export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional().describe('Full Worker profile for create; backend is a connection ID returned by list.'),patch:workerProfileSchema.partial().optional().describe('Fields to change for configure, or overrides for clone. Omitted fields are retained.'),unset:z.array(z.string()).optional().describe('Optional profile fields to remove so connection defaults apply. Cannot remove id or backend.'),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),questionId:z.string().min(1).max(1000).optional(),acceptance:z.string().max(10000).optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
-export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers for the authorized task autonomously. Read list for the current revision, allowed connections, options, tools and per-Worker permissions. Do not ask for separate approval to create or configure a Worker within this task and policy. Prefer one Worker owning the task end to end. Mutations require the latest revision and a stable requestId. create uses profile. clone uses from, a new id and optional patch; Personal Chat owners may manage shared Workers; external scope managers must clone shared Workers before changing them. Deleting a Worker removes its current contact, while retaining historical messages. configure uses id and patch. When send answers a pending business question, pass its current attention.id as questionId. This binds the human follow-up once to that question, not an execution permission. assign delegates a task; inspect/result return actual state. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. Backend/model changes apply to new tasks; migrate hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a scope manager, fresh text and workspaceReviewed=true after reviewing retained artifacts. It quarantines old text and starts a new session on the same task/backend/workspace; it runs only after a new authorized follow-up.',inputSchema:z.toJSONSchema(workerCommandSchema,{target:'draft-7',io:'input'})}]
+const actions=['list','inspect','create','clone','configure','set_prompt','preview_assign','assign','send','pause','resume','cancel','retire','destroy','result','migrate','rebuild'] as const
+export const workerCommandSchema=z.object({action:z.enum(actions),requestId:z.string().min(1).max(200).optional(),revision:z.number().int().min(0).optional(),id:z.string().optional(),from:z.string().optional(),profile:workerProfileSchema.optional().describe('Full Worker profile for create; backend is a connection ID returned by list.'),patch:workerProfileSchema.partial().optional().describe('Fields to change for configure, or overrides for clone. Omitted fields are retained.'),unset:z.array(z.string()).optional().describe('Optional profile fields to remove so connection defaults apply. Cannot remove id or backend.'),prompt:z.string().max(64000).optional(),text:z.string().min(1).max(100000).optional(),discussion:z.string().min(1).max(300).optional(),ticketId:z.string().optional(),questionId:z.string().min(1).max(1000).optional(),acceptance:z.string().max(10000).optional(),assignment:assignmentSpecSchema.optional(),cancelRunning:z.boolean().optional(),workspaceReviewed:z.boolean().optional(),waitMs:z.number().int().min(0).max(5000).optional()}).strict()
+export const managementSpecs:ToolSpec[]=[{type:'function',name:'worker_manage',description:'Manage Workers for the authorized task autonomously. Read list for the current revision, allowed connections, options, tools and per-Worker permissions. Do not ask for separate approval to create or configure a Worker within this task and policy. Prefer one Worker owning the task end to end. Mutations require the latest revision and a stable requestId. create uses profile. clone uses from, a new id and optional patch; Personal Chat owners may manage shared Workers; external scope managers must clone shared Workers before changing them. Deleting a Worker removes its current contact, while retaining historical messages. configure uses id and patch. When send answers a pending business question, pass its current attention.id as questionId. This binds the human follow-up once to that question, not an execution permission. preview_assign reads the effective task responsibility, shared interface, dependencies, permissions, budget and workspace policy without creating work. Use id and optional assignment; assign commits the same specification and rechecks authority. Interface text never grants permission. assign delegates a task; inspect/result return actual state. pause stops future scheduling; retire drains existing work; destroy requires cancelRunning for active tasks. Backend/model changes apply to new tasks; migrate hands an idle task to the new backend. rebuild prepares a budget or permission-held task. Permission rebuild requires a scope manager, fresh text and workspaceReviewed=true after reviewing retained artifacts. It quarantines old text and starts a new session on the same task/backend/workspace; it runs only after a new authorized follow-up.',inputSchema:z.toJSONSchema(workerCommandSchema,{target:'draft-7',io:'input'})}]
 
 export interface RouterContext {discussion:string;trigger?:Trigger;scoped?:ScopeContext;manifest?:ContextManifest}
 interface Delegation {ticketId:string;workerId:string;discussion:string;source:string;actor:string;parentTrigger?:string;mode:'client'|'host'}
@@ -73,6 +74,7 @@ export class WorkerManager {
  }
  async call(value:unknown,context?:RouterContext):Promise<any>{
   const input=workerCommandSchema.parse(value),host=this.host
+  if(input.assignment&&!['assign','preview_assign'].includes(input.action))throw Error('assignment is only valid for assign or preview_assign')
   if(input.questionId!==undefined){
    if(input.action!=='send')throw Error('questionId is only valid for send')
    if(!context?.trigger?.human||context.trigger.meta.delegatedBy)throw Error('Question answer requires a human follow-up')
@@ -84,10 +86,11 @@ export class WorkerManager {
   const mandate=context?.trigger?host.routerIngress.authority(context.trigger.id,context.discussion):undefined
   const continuation=context?.trigger&&host.routerIngress.get(context.trigger.id)?.assessment
   if(continuation?.action==='attach'&&(input.action==='assign'||input.action==='send'&&input.ticketId!==continuation.targetTicketId))throw Error('The admitted continuation must use its existing target task')
-  if(mandate?.strength==='inferred'&&!['list','inspect','result','assign','send'].includes(input.action))throw Error('Inferred work cannot change Worker configuration or stop tasks')
+  if(mandate?.strength==='inferred'&&!['list','inspect','result','preview_assign','assign','send'].includes(input.action))throw Error('Inferred work cannot change Worker configuration or stop tasks')
   if(input.action==='list')return this.list(context)
+  if(input.action==='preview_assign'){if(!input.id)throw Error('Select a Worker');return previewTaskAssignment(host,input.id,context??{discussion:input.discussion??'operator'},input.assignment)}
   if(input.action==='inspect'||input.action==='result'){
-   if(input.ticketId){const a=host.store.get<Delegation>('worker-assignment',input.ticketId);this.checkContext(a,context);const until=Date.now()+(input.waitMs??0);while(Date.now()<until&&!host.store.tickets.get(input.ticketId)?.ended&&!['blocked','failed'].includes(host.store.tickets.get(input.ticketId)?.assignments.at(-1)?.report?.state??''))await new Promise(r=>setTimeout(r,Math.min(100,until-Date.now())));this.checkContext(a,context);const raw=host.store.tickets.get(input.ticketId);if(!raw)throw Error('Unknown task');const ticket=taskView(host.store,raw);return {assignment:a,run:host.store.get('run',input.ticketId),report:ticket.assignments.at(-1)?.report,attention:ticket.attention,ended:ticket.ended}}
+   if(input.ticketId){const a=host.store.get<Delegation>('worker-assignment',input.ticketId);this.checkContext(a,context);const until=Date.now()+(input.waitMs??0);while(Date.now()<until&&!host.store.tickets.get(input.ticketId)?.ended&&!['blocked','failed'].includes(host.store.tickets.get(input.ticketId)?.assignments.at(-1)?.report?.state??''))await new Promise(r=>setTimeout(r,Math.min(100,until-Date.now())));this.checkContext(a,context);const raw=host.store.tickets.get(input.ticketId);if(!raw)throw Error('Unknown task');const ticket=taskView(host.store,raw);return {assignment:a,taskAssignment:assignmentContractView(host,input.ticketId),run:host.store.get('run',input.ticketId),report:ticket.assignments.at(-1)?.report,attention:ticket.attention,ended:ticket.ended}}
    const w=this.list(context).workers.find(w=>w.id===input.id);if(!w)throw Error('Unknown Worker');return w
   }
   if(context?.scoped&&!['assign','send'].includes(input.action)&&!host.scopes.canManage(context.scoped))throw Error('Worker configuration requires a scope manager')
@@ -145,8 +148,9 @@ export class WorkerManager {
    host.store.put('worker-assignment',decision.ticketId,assignment)
    if(context?.trigger)for(const ref of origin.threads)if(ref.source===source.id)host.engine.followForContext(decision.ticketId,ref)
    if(context?.scoped){const owner=host.scopes.own(decision.ticketId,context.scoped,worker.backend);if(context.manifest)host.store.put('task-context',decision.ticketId,{manifest:{...context.manifest,taskOwners:[...context.manifest.taskOwners,{id:decision.ticketId,epoch:owner.ownerEpoch,dataRevision:owner.dataRevision??1}]}})}
+   commitTaskAssignment(host,decision.ticketId,worker.id,context??{discussion},input.assignment)
    if(context?.trigger)host.chat.delegated(key,context.trigger.id,decision.ticketId,worker.id,input.text+(input.acceptance?'\n'+input.acceptance:''))
-   return complete({...assignment,status:'queued',revision:host.settings.current().revision})
+   return complete({...assignment,taskAssignment:assignmentContractView(host,decision.ticketId),status:'queued',revision:host.settings.current().revision})
   })
   if(input.action==='send')return host.store.atomic(()=>{
    if(!input.ticketId||!input.text)throw Error('Task and text required')
@@ -204,6 +208,7 @@ export class WorkerManager {
   if(input.action==='rebuild')return host.store.atomic(()=>{
    if(!input.ticketId)throw Error('Task required')
    const a=host.store.get<Delegation>('worker-assignment',input.ticketId),run=host.store.get<Run>('run',input.ticketId),held=host.store.get<any>('context-rebuild',input.ticketId),saved=host.store.get<{manifest:ContextManifest}>('task-context',input.ticketId)
+   const priorAssignment=currentTaskAssignment(host,input.ticketId)
    const narrowed=held?.reason==='context_permissions_changed'
    this.checkContext(a,context,true,narrowed)
    if(!run||!held||!['context_budget_exceeded','context_permissions_changed'].includes(held.reason)||!['idle','uncertain','interrupted'].includes(run.phase))throw Error('Rebuild requires a stopped task held by context validation')
@@ -211,7 +216,7 @@ export class WorkerManager {
    if(!narrowed&&saved)host.memory.validate(saved.manifest)
    if(run.threadId)host.model.describe?.(run.threadId)
    if(host.memory.cleanup.blocked('run',input.ticketId,run))throw Error('Deleted task history cannot be rebuilt')
-   if(host.activity.list().some(c=>c.ticketId===input.ticketId&&c.state==='running')||host.work.list(input.ticketId).some(w=>['starting','running'].includes(w.state))||host.toolConnections.receipts(input.ticketId).some(r=>r.state!=='complete')||host.store.deliveries().some(d=>d.ticketId===input.ticketId&&['sending','uncertain'].includes(d.status)))throw Error('Reconcile running or uncertain effects before rebuilding')
+   if(host.store.list<any>('approval').some(a=>a.ticketId===input.ticketId&&a.status==='pending')||host.activity.list().some(c=>c.ticketId===input.ticketId&&c.state==='running')||host.work.list(input.ticketId).some(w=>['starting','running'].includes(w.state))||host.toolConnections.receipts(input.ticketId).some(r=>r.state!=='complete')||host.store.deliveries().some(d=>d.ticketId===input.ticketId&&['sending','uncertain'].includes(d.status)))throw Error('Reconcile running or uncertain effects before rebuilding')
    const handoff={ticketId:input.ticketId,previousThread:run.threadId,backendId:run.backendId,model:run.model,reason:held.reason,effects:host.work.list(input.ticketId).map(w=>({id:w.id,kind:w.kind,state:w.state,exitCode:w.exitCode})),toolReceipts:host.toolConnections.receipts(input.ticketId),at:Date.now()}
    host.store.put('context-handoff',key,handoff)
    if(narrowed){
@@ -226,6 +231,7 @@ export class WorkerManager {
    }
    const {threadId,turnId,result,error,toolsDigest,toolsVersion,...remaining}=run
    host.store.put('run',input.ticketId,{...remaining,phase:'idle',rebuild:key})
+   if(priorAssignment)reviseTaskAssignment(host,input.ticketId,a!.workerId,context??{discussion:priorAssignment.authority.discussion,trigger:priorAssignment.authority.parentTrigger?host.store.triggers.get(priorAssignment.authority.parentTrigger):undefined},{kind:'rebuild',commandId:key,fingerprint,expectedDigest:priorAssignment.digest})
    host.store.put('context-rebuild',input.ticketId,{...held,state:'awaiting_followup',handoff:key})
    return complete({ticketId:input.ticketId,status:'awaiting_followup',previousThread:threadId,handoff:key})
   })
@@ -235,9 +241,12 @@ export class WorkerManager {
    const run=host.store.get<Run>('run',input.ticketId),target=profiles.find(w=>w.id===a.workerId)
    if(!run||run.phase!=='idle'||!target)throw Error('Migration requires an idle task and its configured Worker')
    verifyBackend(target.backend)
+   const priorAssignment=currentTaskAssignment(host,input.ticketId)
+   if(host.activity.list().some(c=>c.ticketId===input.ticketId&&c.state==='running')||host.work.list(input.ticketId).some(w=>['starting','running'].includes(w.state))||host.toolConnections.receipts(input.ticketId).some(r=>r.state!=='complete')||host.store.list<any>('approval').some(a=>a.ticketId===input.ticketId&&a.status==='pending')||host.store.deliveries().some(d=>d.ticketId===input.ticketId&&['pending','held','sending','uncertain'].includes(d.status)))throw Error('Reconcile running or uncertain effects before migrating')
    host.store.put('worker-migration',key,{...a,from:run,to:target,at:Date.now()})
    const {threadId,turnId,model,backendId,backendKind,toolsDigest,toolsVersion,...remaining}=run
    host.store.put('run',input.ticketId,{...remaining,migration:key})
+   if(priorAssignment)reviseTaskAssignment(host,input.ticketId,a.workerId,context??{discussion:priorAssignment.authority.discussion,trigger:priorAssignment.authority.parentTrigger?host.store.triggers.get(priorAssignment.authority.parentTrigger):undefined},{kind:'migration',commandId:key,fingerprint,expectedDigest:priorAssignment.digest})
    // The next explicit follow-up reopens the existing logical task. Never silently rerun it.
    return complete({ticketId:input.ticketId,migration:key,status:'awaiting_followup',previousThread:threadId})
   })

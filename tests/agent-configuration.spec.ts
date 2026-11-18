@@ -58,6 +58,7 @@ it('manages Workers idempotently and delegates without invoking an extra Router 
  await ticks(h,()=>calls.length===2&&!!h.store.tickets.get(task.ticketId)?.ended)
  expect(calls[1]!.threadId).toBe(calls[0]!.threadId??'thread-1')
  await h.manager.call({action:'configure',revision:1,requestId:'change',id:'one',patch:{model:'other',effort:'low'}})
+ await h.flush() // A migration may not race a pending result delivery.
  const migrated=await h.manager.call({action:'migrate',revision:2,requestId:'migration',ticketId:task.ticketId})
  expect(migrated.previousThread).toBe('thread-1')
  await h.manager.call({action:'send',revision:2,requestId:'continue-migration',ticketId:task.ticketId,text:'Check prior result once'})

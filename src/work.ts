@@ -8,7 +8,7 @@ import type {Config} from './config.ts'
 import {projectWorkspace} from './project-code.ts'
 import {hostPrivateFiles} from './private-files.ts'
 
-export interface WorkOwner {ticketId:string;assignmentId:string;cwd:string;sandbox:'read-only'|'workspace-write';agentId?:string;depth:number;network?:boolean}
+export interface WorkOwner {leaseId?:string;ticketId:string;assignmentId:string;cwd:string;sandbox:'read-only'|'workspace-write';agentId?:string;depth:number;network?:boolean}
 export interface WorkItem extends WorkOwner {
  id:string;kind:'shell'|'agent';state:'starting'|'running'|'completed'|'failed'|'cancelled'|'interrupted';
  createdAt:number;endedAt?:number;pid?:number;command?:string;prompt?:string;threadId?:string;
