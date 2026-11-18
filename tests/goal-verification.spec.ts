@@ -1,3 +1,4 @@
+import {artifactCatalog} from '../src/artifact-catalog.ts'
 import {stableDigest} from '../src/sources.ts'
 import * as XLSX from 'xlsx'
 import AdmZip from 'adm-zip'
@@ -703,5 +704,30 @@ it('does not reconcile a pending revocation ledger when reading artifact metadat
   expect(f.h.store.get('memory-revocation-head','current')).toBeUndefined()
   expect(response.status).toBe(404);expect(await response.json()).toEqual({code:'artifact_unavailable'})
   expect(readFileSync(ledger,'utf8')).toBe(bytes)
+ }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
+})
+
+
+it('enumerates only current operator artifact versions without side effects and enforces HTTP authority',async()=>{
+ const f=fixture(),g=f.start();writeFileSync(join(f.root,'catalog.pdf'),'first')
+ const first=f.h.artifacts.evidence(g,'build','fixture',f.root,'catalog.pdf',[]).artifact!
+ writeFileSync(join(f.root,'catalog.pdf'),'second')
+ const second=f.h.artifacts.evidence(g,'build','fixture',f.root,'catalog.pdf',[]).artifact!
+ f.h.store.put('asset','private-upload',{kind:'chat-upload',id:'private-upload',name:'PRIVATE',state:'ready'})
+ const before=f.h.store.db.prepare('SELECT total_changes() AS n').get()!.n
+ const catalog=artifactCatalog(f.h)
+ expect(catalog.items.map(i=>i.reference.id).sort()).toEqual([first.id,second.id].sort())
+ expect(JSON.stringify(catalog)).not.toContain('PRIVATE');expect(JSON.stringify(catalog)).not.toContain(f.root)
+ expect(f.h.store.db.prepare('SELECT total_changes() AS n').get()!.n).toBe(before)
+ f.h.config.port=0;const http=await serve(f.h),headers={connection:'close',authorization:'Bearer '+readFileSync(http.tokenPath,'utf8').trim()}
+ try{
+  expect((await fetch(http.url+'/artifact-catalog')).status).toBe(401)
+  const response=await fetch(http.url+'/artifact-catalog',{headers});expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toContain('no-store');expect(await response.json()).toEqual(catalog)
+  expect((await fetch(http.url+'/artifact-catalog',{headers,method:'POST'})).status).toBe(405)
+  f.h.store.put('router-goal',g.id,{...g,bindingRevision:g.bindingRevision-1});expect(artifactCatalog(f.h).items).toEqual([])
+  f.h.store.put('router-goal',g.id,g)
+  const binding=f.h.scopes.binding.bind(f.h.scopes);f.h.scopes.binding=(id:string)=>({...binding(id),privateActor:'private'})
+  expect(artifactCatalog(f.h).items).toEqual([]);f.h.scopes.binding=binding
+  f.h.memory.cleanup.apply(planHistory(f.h.store,f.config.stateDir,'team','catalog-erase',Date.now()));expect(artifactCatalog(f.h).items).toEqual([])
  }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
 })

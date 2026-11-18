@@ -1,3 +1,4 @@
+import {artifactCatalog} from '../src/artifact-catalog.ts'
 import {mkdtempSync,readFileSync,writeFileSync,rmSync,symlinkSync,renameSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
@@ -145,4 +146,13 @@ it('projects verified package identity across relocation, upgrade and rollback w
  expect(viewCatalog(host.config)[0]).toMatchObject({available:false});expect(viewCatalog(host.config)[0]).not.toHaveProperty('reference')
  expect(()=>enabledView(host.config,ref.id,ref.version)).toThrow('checksum')
  host.config.viewPlugins[0]!.enabled=false;expect(viewCatalog(host.config)).toEqual([])
+})
+
+it('catalog includes only verified enabled view packages and never treats current package metadata as a snapshot',async()=>{
+ const root=directory(),host=fixture(root),pkg=await pack(root)
+ host.config.viewPlugins=[{id:'example-view',directory:pkg.directory,digest:pkg.digest,enabled:true}]
+ expect(artifactCatalog(host).items).toEqual([{reference:viewArtifactReference(pkg),label:manifest.label}])
+ host.config.viewPlugins[0]!.enabled=false;expect(artifactCatalog(host).items).toEqual([])
+ host.config.viewPlugins[0]!.enabled=true;writeFileSync(join(pkg.directory,'view.js'),pkg.code+'//tampered')
+ expect(artifactCatalog(host).items).toEqual([])
 })

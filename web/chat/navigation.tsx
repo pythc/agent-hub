@@ -54,6 +54,7 @@ export function FeatureNavigation({
         Icon: MessageSquare,
         current: !configuring,
       },
+      {href:"/configure#artifacts",label:L("Artifacts", "产物目录"),Icon:Library,current:configuring&&(hash==='artifacts'||hash.startsWith('artifact/'))},
       ...views.map(view=>({href:'/configure#plugin/'+view.id,label:view.label,Icon:LayoutDashboard,current:configuring&&hash==='plugin/'+view.id})),
       {
         href: "/configure#tasks/history",
