@@ -1,4 +1,4 @@
-import {artifactCatalog} from './artifact-catalog.ts'
+import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
 import {ConnectorManagement,ConnectorError} from './connector-management.ts'
 import {ExecutionTrace,TraceError} from './execution-trace.ts'
@@ -355,7 +355,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='GET'&&path==='/router-proactive/state'){send(res,200,runtime.proactive.snapshot(new URL(req.url!,'http://localhost').searchParams.get('scopeId')??''));return}
     if(path==='/artifact-catalog'){
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
-      send(res,200,artifactCatalog(runtime));return
+      const params=new URL(req.url!,'http://localhost').searchParams
+      if([...params.keys()].some(key=>key!=='cursor')||params.getAll('cursor').length>1){send(res,400,{code:'invalid_catalog_query'});return}
+      const cursor=params.get('cursor')??undefined
+      if(cursor!==undefined&&!/^[a-f0-9-]{36}$/.test(cursor)){send(res,400,{code:'catalog_cursor_expired'});return}
+      try{send(res,200,artifactCatalog(runtime,cursor))}catch(error){if(error instanceof ArtifactCatalogCursorError){send(res,400,{code:'catalog_cursor_expired'});return}throw error}return
     }
     if(path.startsWith('/goal-artifact-versions/')){
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}

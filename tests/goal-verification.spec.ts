@@ -722,6 +722,8 @@ it('enumerates only current operator artifact versions without side effects and 
  f.h.config.port=0;const http=await serve(f.h),headers={connection:'close',authorization:'Bearer '+readFileSync(http.tokenPath,'utf8').trim()}
  try{
   expect((await fetch(http.url+'/artifact-catalog')).status).toBe(401)
+  expect((await fetch(http.url+'/artifact-catalog?cursor=invalid',{headers})).status).toBe(400)
+  expect((await fetch(http.url+'/artifact-catalog?extra=x',{headers})).status).toBe(400)
   const response=await fetch(http.url+'/artifact-catalog',{headers});expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toContain('no-store');expect(await response.json()).toEqual(catalog)
   expect((await fetch(http.url+'/artifact-catalog',{headers,method:'POST'})).status).toBe(405)
   f.h.store.put('router-goal',g.id,{...g,bindingRevision:g.bindingRevision-1});expect(artifactCatalog(f.h).items).toEqual([])
