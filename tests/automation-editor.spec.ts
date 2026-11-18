@@ -6,7 +6,7 @@ const draft:AutomationDraft={triggerId:'local:approval',authorizationQuote:'Plea
 
 it('turns the simple form into one Worker task with declared acceptance evidence',()=>{
   const command=webhookGrantSchema.parse(automationCommand(draft,'operation',1000));
-  expect(command).toMatchObject({triggerId:draft.triggerId,authorizationQuote:draft.authorizationQuote,operationId:'operation',expiresAt:86401000,maxConcurrent:1,eventTypes:['ci.failed','ci.retried']});
+  expect(command).toMatchObject({triggerId:draft.triggerId,authorizationQuote:draft.authorizationQuote,operationId:'operation',receiving:false,expiresAt:86401000,maxConcurrent:1,eventTypes:['ci.failed','ci.retried']});
   expect(command.template.nodes).toHaveLength(1);
   expect(command.template.nodes[0]).toMatchObject({workerId:'one',criterionIds:['result'],instruction:draft.objective});
   expect(command.template.criteria[0]).toMatchObject({description:draft.acceptance,check:{kind:'file_exists',path:'result.json'}});

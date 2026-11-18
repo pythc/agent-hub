@@ -260,3 +260,9 @@ Inbox 全局最多保留 1000 条尚待处理事件，单次原始请求最多 6
 独立监听器只绑定 loopback。公网可在它前面使用受控 HTTPS 反向代理/隧道，管理端口保持私有。本次临时 Cloudflare 隧道用于合成数据实测，TLS 在 Cloudflare 终止，不是生产保密保证。当前没有离线云端存储中继：宿主离线时公网应返回失败，由上游重投；本机已 ACK 的 Inbox 则可重启恢复。不要把临时隧道当成生产 SLA 或无限离线容量。
 
 P2/P3 的本次实现、故障注入、真实模型与公网平台验证结果见 [验收与自查记录](WEBHOOK_P2_P3_REVIEW_2026-11-09.md)。
+
+### Safe initial reception
+
+Grant creation accepts optional `receiving: false` to atomically create an authorized endpoint that rejects incoming events before inbox insertion. The operator UI uses this safe initial state: preview a sample with the existing dry-run action, then explicitly start reception. Omitted `receiving` retains the existing API default (`true`); changing it under the same creation operation ID is a conflict. Retrying creation returns the current grant and never re-enables a stopped or revoked endpoint.
+
+Dry-run validates the declared event and current authorization without creating an inbox item, task, model call, or callback. It does not verify a real platform, transport signature, or external normalizer. Starting reception rechecks approval, binding, policy, and expiry. Stopping reception blocks new intake only: it does not cancel previously accepted queue items or running work. Grant creation, control, and dry-run HTTP requests recheck the current operator after reading the request body.

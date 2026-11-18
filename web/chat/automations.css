@@ -78,3 +78,5 @@
 @media(max-width:400px){.automation-page{padding-inline:16px}.automation-field-pair{grid-template-columns:1fr;gap:0}.automation-detail-top .automation-actions{margin-left:0}.automation-tabs{gap:22px}}
 
 .automation-receiver-setup{max-width:440px;text-align:left}.automation-receiver-setup p{font-size:14px;line-height:1.7;margin:12px 0}.automation-empty .automation-receiver-setup{margin-top:0}
+
+.automation-editor>fieldset{border:0;min-width:0;padding:0;margin:0}
