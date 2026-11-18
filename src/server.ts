@@ -443,6 +443,13 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
         if(req.method==='GET'){send(res,200,{conversations:runtime.chat.list(owner,query.get('archived')==='true')});return}
         if(req.method==='POST'){send(res,201,runtime.chat.create(owner));return}
       }
+      const versionAttachment=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})\/attachments\/([a-f0-9-]{36})\/versions\/([a-f0-9]{64})$/)
+      if(versionAttachment){
+        if(!['GET','HEAD'].includes(req.method??'')){send(res,405,{code:'method_not_allowed'});return}
+        const {file,content}=runtime.chat.uploads.downloadVersion(versionAttachment[1]!,owner,versionAttachment[2]!,versionAttachment[3]!)
+        res.writeHead(200,{'content-type':'application/octet-stream','content-length':content.length,'content-disposition':'attachment; filename="attachment"; filename*=UTF-8\'\''+encodeURIComponent(file.name),'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"})
+        res.end(req.method==='HEAD'?undefined:content);return
+      }
       const attachment=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})\/attachments(?:\/([a-f0-9-]{36}))?$/)
       if(attachment){
         const conversationId=z.string().uuid().parse(attachment[1]),id=attachment[2]?z.string().uuid().parse(attachment[2]):undefined

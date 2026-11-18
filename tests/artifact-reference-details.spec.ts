@@ -26,7 +26,7 @@ it('displays all three reference kinds without inventing links, authorization or
  }
  expect(render(file,'available')).toContain('retained bytes')
  expect(render(view,'available')).toContain('not a runtime snapshot')
- expect(render(attachment)).toContain('not an immutable version resolver')
+ expect(render(attachment)).toContain('never replaced by newer bytes')
 })
 it('does not imply legacy uploads or missing references have immutable history',()=>{
  expect(render({...attachment,version:null,sha256:null})).toContain('Not recorded')
