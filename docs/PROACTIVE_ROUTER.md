@@ -79,3 +79,12 @@ Windows use local wall time, inclusive start and exclusive end, including midnig
 A completed scheduled run with an unsent notification remains explicitly cancellable through `run.cancel`; cancellation invalidates pending delivery on flush. Pausing a schedule still affects future occurrences only and does not withdraw an already authorized run's result. Cancellation cannot undo an already-started external send. The page remains the existing host management surface, not a new workspace selector. Automated local fixtures cover delivery, restart, policy changes, cancellation, authority changes, DST and interrupted UI requests; real-platform delivery and browser visual checks are not asserted by these fixtures.
 
 A mixed human/scheduled reply is exempt from quiet-hours delay, not from its scheduled dependency's authorization. Cancelling that run withdraws the whole still-pending mixed reply; an independent human reply remains deliverable. Unchanged delay metadata and unchanged retry clocks do not open write transactions during polling.
+
+## Four-layer scheduled-work status
+
+The management page separates the plan, trigger, execution and external
+notification. Recorded queue/start times are distinct from the due instant;
+missing old observations stay unknown. Offline accumulation still coalesces to
+one latest occurrence, and overlapping runs are skipped. An outbox send result
+is labelled sent, not recipient-confirmed delivery. See
+[scheduled-work lifecycle and acceptance scope](optimization/SCHEDULE_LIFECYCLE.md).

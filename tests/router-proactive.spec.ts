@@ -462,3 +462,56 @@ it('cancelling a scheduled dependency withdraws a mixed pending reply but not an
  f.command('run.cancel',{id:run.id},run.revision);await f.h.flush()
  expect(f.h.store.outbox.status('cancel-mixed')).toBe('dropped');expect(f.h.store.outbox.status('independent-human')).toBe('sent')
 })
+
+it('records one coalesced occurrence for ten due times and preserves queue/start clocks across restart',async()=>{
+ const f=fixture(),anchor=f.receive('Authorize a ten-period recovery');await until(f.h,()=>f.calls.length===1)
+ const p=f.plan(anchor.triggerId,{timing:{kind:'interval',intervalSeconds:60,startAt:new Date(f.now()+1000).toISOString()}}),first=Date.parse(p.timing.startAt)
+ f.advance(541001)
+ expect(f.h.proactive.snapshot('team').schedules[0]!.lifecycle.state).toBe('due')
+ f.h.proactive.tick();const recorded=runs(f.h)[0]!
+ expect(recorded).toMatchObject({firstDueAt:first,scheduledAt:first+540000,queuedAt:f.now(),triggerKind:'scheduled',state:'queued'})
+ expect(recorded.startedAt).toBeUndefined()
+ for(let n=0;n<5;n++)f.h.proactive.tick()
+ expect(runs(f.h)).toHaveLength(1);expect(runs(f.h)[0]).toEqual(recorded)
+ const queued=f.h.proactive.snapshot('team').runs[0]!.lifecycle
+ expect(queued.trigger).toMatchObject({backlog:'coalesced',firstDueAt:first,dueAt:first+540000})
+ expect(queued.execution).toMatchObject({queuedAt:f.now(),startedAt:null})
+ await f.h.close();hosts.splice(hosts.indexOf(f.h),1);f.advance(500)
+ const h=new Runtime(f.config,{model:f.model,clock:f.now});hosts.push(h)
+ await until(h,()=>runs(h)[0]?.state==='completed')
+ expect(runs(h)).toHaveLength(1);expect(runs(h)[0]).toMatchObject({id:recorded.id,queuedAt:recorded.queuedAt,startedAt:f.now(),firstDueAt:first})
+ const start=runs(h)[0]!.startedAt;f.advance(50);h.proactive.beforeTurn(recorded.triggerId!);expect(runs(h)[0]!.startedAt).toBe(start)
+ expect(f.calls.filter(r=>JSON.parse(r.input).schedule)).toHaveLength(1)
+})
+it('does not record a start when a queued plan revision is paused before dispatch',async()=>{
+ const f=fixture(),anchor=f.receive('Authorize queued work');await until(f.h,()=>f.calls.length===1)
+ const plan=f.plan(anchor.triggerId);f.advance(1001);f.h.proactive.tick()
+ const run=runs(f.h)[0]!;expect(run.queuedAt).toBe(f.now())
+ f.command('schedule.pause',{id:plan.id},plan.revision)
+ await until(f.h,()=>runs(f.h)[0]?.state==='failed')
+ expect(runs(f.h)[0]!.startedAt).toBeUndefined()
+ expect(f.h.proactive.snapshot('team').schedules[0]!.lifecycle).toMatchObject({state:'paused',nextDueAt:null})
+ expect(f.h.proactive.snapshot('team').runs[0]!.lifecycle.execution.startedAt).toBeNull()
+})
+it('marks explicit manual runs without consuming the future occurrence and skips overlap without fake queue timestamps',async()=>{
+ const f=fixture(),anchor=f.receive('Authorize manual checks');await until(f.h,()=>f.calls.length===1)
+ const plan=f.plan(anchor.triggerId),future=plan.nextAt
+ f.command('schedule.run',{id:plan.id},plan.revision)
+ expect(runs(f.h)[0]).toMatchObject({triggerKind:'manual',firstDueAt:f.now(),scheduledAt:f.now(),queuedAt:f.now()})
+ expect(f.h.proactive.snapshot('team').schedules[0]!.nextAt).toBe(future)
+ f.command('schedule.run',{id:plan.id},plan.revision)
+ const skipped=runs(f.h).find(r=>r.state==='skipped')!
+ expect(skipped).toBeDefined();expect(skipped.queuedAt).toBeUndefined();expect(skipped.startedAt).toBeUndefined()
+})
+it('reads external delivery uncertainty independently without mutating runs, queues or audit',async()=>{
+ const {f,message,run}=await quietRun()
+ f.h.store.db.prepare('UPDATE outbox SET status=? WHERE id=?').run('uncertain',message.id)
+ const capture=()=>JSON.stringify({records:f.h.store.db.prepare('SELECT * FROM records ORDER BY kind,id').all(),jobs:f.h.store.db.prepare('SELECT * FROM jobs ORDER BY id').all(),outbox:f.h.store.db.prepare('SELECT * FROM outbox ORDER BY id').all(),audit:f.h.store.db.prepare('SELECT * FROM audit').all()})
+ const before=capture(),view=f.h.proactive.snapshot('team').runs.find(r=>r.id===run.id)!
+ expect(view.lifecycle.delivery).toEqual({state:'unknown',messages:1,recipientReadback:'not_observed'})
+ expect(view.lifecycle.execution.state).not.toBe('failed');expect(capture()).toBe(before)
+ // An internal Router report is not a recipient-facing confirmation.
+ f.h.store.put('router-reply-owner', 'internal-only',{inputs:[run.triggerId]})
+ f.h.store.outbox.send({id:'internal-only',kind:'reply',text:'private report',channel:{...message.channel,address:{...message.channel.address,routerInbox:'true'}}})
+ expect(f.h.proactive.snapshot('team').runs.find(r=>r.id===run.id)!.lifecycle.delivery.messages).toBe(1)
+})
