@@ -1,3 +1,4 @@
+import {createRecoveryPackage} from './recovery-package.ts'
 import {recoveryManifest,type RecoveryManifest} from './recovery-manifest.ts'
 import {createHash} from 'node:crypto'
 import {z} from 'zod'
@@ -178,6 +179,18 @@ export class ExecutionTrace {
   // GET observation must not materialize missing routes through nested authority checks.
   // Recovery calls task() directly and retains its existing execution semantics.
   return host.scopes.readOnly(()=>({at:Date.now(),revision:host.settings.current().revision,visibility:this.visibility(host),cursor:this.head(host),total:all.length,offset:query.offset,more:query.offset+query.limit<all.length,tasks:all.slice(query.offset,query.offset+query.limit).map(t=>this.task(host,t))}))
+ }
+ exportRecoveryPackage(value:unknown){
+  const input=z.object({ticketId:id,revision:z.number().int().nonnegative(),observed:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(value),host=this.host()
+  return host.scopes.readOnly(()=>{
+   if(!visible(host,input.ticketId))throw new TraceError('trace_task_missing',404)
+   const ticket=host.store.tickets.get(input.ticketId)!
+   if(!this.readAllowed(host,ticket))throw new TraceError('trace_action_unavailable',403)
+   const current=this.task(host,ticket)
+   if(input.revision!==current.revision)throw new TraceError('trace_settings_conflict')
+   if(input.observed!==current.observed)throw new TraceError('trace_changed')
+   return createRecoveryPackage(current)
+  })
  }
  async recover(value:unknown):Promise<RecoveryResult>{
   const input=traceRecoverySchema.parse(value),host=this.current(),key=stableDigest(['execution-trace',input.requestId]),fingerprint=stableDigest(input)

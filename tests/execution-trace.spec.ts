@@ -1,3 +1,4 @@
+import {request as httpRequest} from 'node:http'
 import {mkdtempSync,rmSync,readFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
@@ -198,6 +199,7 @@ it('hides cleaned history and rejects direct trace access and cached receipts af
  expect(trace.snapshot().tasks).toEqual([]);expect(trace.events({limit:200}).events.some(e=>e.ticketId===ticket.id)).toBe(false)
  expect(()=>trace.events({ticketId:ticket.id})).toThrow('trace_task_missing');expect(()=>trace.snapshot({ticketId:ticket.id})).toThrow('trace_task_missing')
  expect(trace.events().visibility).not.toBe(visibility);await expect(trace.recover(history)).rejects.toThrow('trace_task_missing')
+ expect(()=>trace.exportRecoveryPackage({ticketId:ticket.id,revision:history.revision,observed:history.observed})).toThrow('trace_task_missing')
  expect(host.activity.list().find(a=>a.id===call)).toBeDefined()
 })
 it('supports an offline hook rollback without deleting authoritative state or retained evidence',()=>{
@@ -422,4 +424,75 @@ it('does not turn an in-progress repository receipt into a blanket recovery ban'
  const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!
  expect(current.status.effects.state).toBe('in_progress');expect(current.unknownEffects).toBe(false)
  expect(current.actions).toContain('resume_session')
+})
+
+it('exports only a fresh authorized redacted diagnostic package without reading sessions or writing state',()=>{
+ const {host,trace,history}=fixture(),ticket=task(host),current=trace.snapshot({ticketId:ticket.id}).tasks[0]!
+ const input={ticketId:ticket.id,revision:current.revision,observed:current.observed}
+ const changes=()=>Number(host.store.db.prepare('SELECT total_changes() AS count').get()!.count),before=changes()
+ const database=()=>JSON.stringify(host.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>{
+  const name=String(row.name);if(!/^[a-z_0-9]+$/.test(name))throw Error('Unexpected fixture table')
+  return [name,host.store.db.prepare('SELECT * FROM '+name).all()]
+ }),(_,value)=>typeof value==='bigint'?String(value):value instanceof Uint8Array?Array.from(value):value)
+ const baseline=database()
+ const data=trace.exportRecoveryPackage(input),text=JSON.stringify(data)
+ expect(text).not.toMatch(/SECRET_|fixture-session|worker-1|sessionRef|cursor|observed|revision/)
+ expect(text).not.toContain(ticket.id);expect(text).not.toContain(host.config.stateDir)
+ expect(changes()).toBe(before);expect(database()).toBe(baseline);expect(history).not.toHaveBeenCalled()
+ expect(trace.exportRecoveryPackage(input).payload.taskAlias).not.toBe(data.payload.taskAlias)
+ expect(()=>trace.exportRecoveryPackage({...input,revision:input.revision+1})).toThrow('trace_settings_conflict')
+ host.store.put('pr-delivery',ticket.id+':branch',{id:ticket.id,phase:'uncertain'})
+ expect(()=>trace.exportRecoveryPackage(input)).toThrow('trace_changed')
+ const latest=trace.snapshot({ticketId:ticket.id}).tasks[0]!
+ expect(trace.exportRecoveryPackage({...input,observed:latest.observed}).payload).toMatchObject({unknownEffects:true,nextSafeAction:'reconcile_effects'})
+ host.config.sources[0]!.allowedActors=[]
+ expect(()=>trace.exportRecoveryPackage({...input,observed:latest.observed})).toThrow('trace_action_unavailable')
+})
+it('protects diagnostic export HTTP with operator, origin and strict selector/body checks',async()=>{
+ const {host,trace}=fixture(),ticket=task(host),server=await serve(host)
+ try{
+  clearInterval((host as unknown as {timer:ReturnType<typeof setInterval>}).timer)
+  const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!,input={ticketId:ticket.id,revision:current.revision,observed:current.observed}
+  const endpoint=server.url+'/api/execution-trace/recovery-package',token=readFileSync(server.tokenPath,'utf8').trim(),headers={'content-type':'application/json',authorization:'Bearer '+token}
+  expect((await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(input)})).status).toBe(401)
+  expect((await fetch(endpoint,{method:'POST',headers:{...headers,origin:'https://untrusted.invalid'},body:JSON.stringify(input)})).status).toBe(403)
+  for(const query of ['workspace=other','source=other','unknown=true'])expect((await fetch(endpoint+'?'+query,{method:'POST',headers,body:JSON.stringify(input)})).status).toBe(400)
+  expect((await fetch(endpoint,{method:'POST',headers,body:JSON.stringify({...input,workspace:'other'})})).status).toBe(400)
+  const result=await fetch(endpoint,{method:'POST',headers,body:JSON.stringify(input)})
+  expect(result.status).toBe(200);expect(await result.json()).toMatchObject({payload:{format:'agent-hub-recovery-diagnostic',replayAllowed:false}})
+ }finally{server.server.closeAllConnections();await new Promise<void>(resolve=>server.server.close(()=>resolve()));await server.closeRuntime();hosts.splice(hosts.indexOf(host),1)}
+})
+
+it('does not install projection hooks on the first export after a host replacement',()=>{
+ const f=fixture();let active=f.host
+ const trace=new ExecutionTrace(()=>active)
+ const next=new Runtime({...f.config,stateDir:join(f.root,'replacement-state')},{model:f.model});hosts.push(next)
+ const ticket=task(next);active=next
+ const database=()=>JSON.stringify([next.store.db.prepare('SELECT * FROM sqlite_master ORDER BY name').all(),next.store.db.prepare('SELECT kind,id,body FROM records ORDER BY kind,id').all(),next.store.db.prepare('SELECT * FROM audit ORDER BY seq').all()])
+ const before=database(),changes=next.store.db.prepare('SELECT total_changes() AS n').get()!.n
+ expect(()=>trace.exportRecoveryPackage({ticketId:ticket.id,revision:next.settings.current().revision,observed:'0'.repeat(64)})).toThrow('trace_changed')
+ expect(database()).toBe(before);expect(next.store.db.prepare('SELECT total_changes() AS n').get()!.n).toBe(changes)
+})
+it('rejects a partially streamed export after the real operator session is logged out',async()=>{
+ const {host,trace}=fixture(),ticket=task(host),server=await serve(host)
+ try{
+  clearInterval((host as unknown as {timer:ReturnType<typeof setInterval>}).timer)
+  const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!,text=JSON.stringify({ticketId:ticket.id,revision:current.revision,observed:current.observed})
+  const post=(path:string,body:unknown,cookie?:string)=>new Promise<{status:number;cookie?:string}>((resolve,reject)=>{
+   const req=httpRequest(server.url+path,{method:'POST',agent:false,headers:{origin:server.url,'content-type':'application/json',...(cookie?{cookie}:{})}},res=>{res.resume();res.on('end',()=>resolve({status:res.statusCode!,cookie:res.headers['set-cookie']?.[0]?.split(';')[0]}))});req.on('error',reject);req.end(JSON.stringify(body))
+  })
+  const paired=await post('/pair',{code:new URL(server.operatorUrl).hash.slice('#pair='.length)})
+  expect(paired.status).toBe(200)
+  const cookie=paired.cookie!
+  let arrived!:()=>void;const started=new Promise<void>(resolve=>{arrived=resolve})
+  server.server.on('request',req=>{if(req.url==='/api/execution-trace/recovery-package')req.once('data',arrived)})
+  let request!:ReturnType<typeof httpRequest>
+  const response=new Promise<{status:number;body:string}>((resolve,reject)=>{
+   request=httpRequest(server.url+'/api/execution-trace/recovery-package',{method:'POST',agent:false,headers:{cookie,origin:server.url,'content-type':'application/json','content-length':Buffer.byteLength(text)}},res=>{let body='';res.on('data',chunk=>{body+=chunk});res.on('end',()=>resolve({status:res.statusCode!,body}))});request.on('error',reject)
+  })
+  request.write(text.slice(0,1));await started
+  expect((await post('/logout',{},cookie)).status).toBe(200)
+  request.end(text.slice(1))
+  const result=await response;expect(result.status).toBe(401);expect(result.body).not.toContain('agent-hub-recovery-diagnostic')
+ }finally{server.server.closeAllConnections();await new Promise<void>(resolve=>server.server.close(()=>resolve()));await server.closeRuntime();hosts.splice(hosts.indexOf(host),1)}
 })

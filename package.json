@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "tsx src/cli.ts",
+    "verify-recovery-package": "node --import tsx/esm src/recovery-package-cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && npm run typecheck:chat && npm run typecheck:views",
     "check": "npm run typecheck && npm test",
