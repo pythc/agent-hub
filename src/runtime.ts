@@ -1,3 +1,4 @@
+import {begin as beginWorkerAttempt,observe as observeWorkerEvent,isCurrent as currentWorkerAttempt,isDeliverable as deliverableWorkerEvent,type WorkerAttempt,type WorkerEventReceipt} from './async-worker-inbox.ts'
 import {ApiUsage} from './api-usage.ts'
 
 import {chatStatusTool} from './chat-status.ts'
@@ -301,6 +302,9 @@ export class Runtime {
   async deliverLiveInputs(ticketId:string):Promise<void> {
     const live=this.liveInputs.get(ticketId),control=live?.control
     if(!live||!control||!live.accepting||this.paused||this.closing||Date.now()<live.retryAt)return
+    const attemptId=this.store.get<{attemptId:string}>('async-worker-current',ticketId)?.attemptId,attempt=attemptId?this.store.get<WorkerAttempt>('async-worker-attempt',attemptId):undefined
+    // New scoped input belongs to a new basis, not an ACK on the old activation.
+    if(attempt&&!currentWorkerAttempt(this,attempt))return
     if(live.delivery)return live.delivery
     const ticket=this.store.tickets.get(ticketId)
     if(!ticket||ticket.ended||runningAssignment(ticket)?.id!==live.assignmentId||this.store.get<Run>('run',ticketId)?.phase!=='running')return
@@ -313,6 +317,7 @@ export class Runtime {
     const text=JSON.stringify({kind:'source_inputs',ticketId,assignmentId:live.assignmentId,inputs:inputs.map(i=>i.kind==='trigger'?{...i,event:this.store.triggers.get(i.triggerId)}:i)})
     const consume=()=>{
       const current=this.store.tickets.get(ticketId)
+      if(attempt&&!currentWorkerAttempt(this,attempt))return
       if(this.closing||!live.accepting||live.control!==control||this.controllers.get(ticketId)?.signal.aborted||!current||current.ended||runningAssignment(current)?.id!==live.assignmentId)return
       this.store.atomic(()=>{this.engine.inputsDelivered(ticketId,live.assignmentId,ids);this.engine.inputsRead(ticketId,ids)})
       for(const input of inputs)if(!live.inputs.some(i=>i.id===input.id))live.inputs.push(input)
@@ -357,8 +362,20 @@ export class Runtime {
       }
     })
   }
+  private bindWorkerEventMessages(receipt:WorkerEventReceipt,previous:Set<string>,previousGoalDelivery?:string|null){
+    for(const message of this.store.deliveries())if(!previous.has(message.id)&&message.ticketId===receipt.ticketId)this.store.put('async-worker-message',message.id,{ticketId:receipt.ticketId,eventId:receipt.id,attemptId:receipt.attemptId})
+    const delivery=this.store.get<GoalDelivery>('goal-delivery',receipt.ticketId)
+    if(previousGoalDelivery!==undefined&&delivery?.id!==previousGoalDelivery&&delivery?.assignmentId===receipt.assignmentId&&!this.store.get('async-worker-delivery',delivery.id))this.store.put('async-worker-delivery',delivery.id,{ticketId:receipt.ticketId,eventId:receipt.id,attemptId:receipt.attemptId})
+  }
+  private workerMessageEvent(messageId:string,ticketId?:string){
+    const ref=this.store.get<{ticketId:string;eventId:string;attemptId:string}>('async-worker-message',messageId)
+    if(!ref)return undefined // Legacy provenance was not captured.
+    const event=this.store.get<WorkerEventReceipt>('async-worker-event',ref.eventId),task=ticketId?this.store.tickets.get(ticketId):undefined
+    if(ref.ticketId!==ticketId||!task||event?.ticketId!==ticketId||event.attemptId!==ref.attemptId||!deliverableWorkerEvent(this,event)||task.ended?.by==='human'||task.assignments.at(-1)?.id!==event.assignmentId||this.store.get<{attemptId:string}>('async-worker-current',ticketId!)?.attemptId!==ref.attemptId)return false
+    return {eventId:ref.eventId,attemptId:ref.attemptId}
+  }
   previewPrompt(input:import('./execution-prompts.ts').PromptPreviewInput,config=this.config){return previewInstructions(config,input,this.scopes.enabled())}
-  acceptGoalDelivery(delivery:GoalDelivery){this.store.atomic(()=>{if(this.store.get('goal-release',delivery.id))return;this.reportWork(delivery.ticketId,delivery.report,delivery.reply,true);this.store.put('goal-release',delivery.id,{id:delivery.id,goalId:delivery.goalId,ticketId:delivery.ticketId,triggerId:delivery.triggerId,at:Date.now()})})}
+  acceptGoalDelivery(delivery:GoalDelivery){this.store.atomic(()=>{if(this.store.get('goal-release',delivery.id))return;const before=new Set(this.store.deliveries().map(d=>d.id));this.reportWork(delivery.ticketId,delivery.report,delivery.reply,true);const ref=this.store.get<{eventId:string}>('async-worker-delivery',delivery.id),event=ref?this.store.get<WorkerEventReceipt>('async-worker-event',ref.eventId):undefined;if(event?.ticketId===delivery.ticketId&&event.assignmentId===delivery.assignmentId)this.bindWorkerEventMessages(event,before);this.store.put('goal-release',delivery.id,{id:delivery.id,goalId:delivery.goalId,ticketId:delivery.ticketId,triggerId:delivery.triggerId,at:Date.now()})})}
   goalEvidenceBudget(goal:RouterGoal){
     const scope=this.scopes.scope(goal.scopeId).contextBytes,id=this.config.execution.router?.backend??this.config.execution.roles.router??this.config.execution.backend,backend=this.config.backends[id]
     return backend&&backend.kind!=='codex'&&backend.kind!=='plugin'?Math.min(scope,backend.maxContextBytes):scope
@@ -753,7 +770,7 @@ export class Runtime {
         this.engine.assignmentStarted(ticketId, assignmentId)
         this.store.enqueue('execute:' + assignmentId + ':initial', 'execute', { ticketId, assignmentId })
       }
-      else if (job.kind === 'execute') await this.execute(ticket, assignmentId,dispatch)
+      else if (job.kind === 'execute') await this.execute(ticket, assignmentId,dispatch,job.id)
     }
     this.store.jobState(job.id, 'done')
   }
@@ -794,7 +811,7 @@ export class Runtime {
     if(scoped)this.memory.ingest(scoped)
     const controller=new AbortController(),key='router:'+discussion
     const authorizedMessage=(m:any)=>{
-      if(this.replacedTask(m.ticketId))return false
+      if(this.replacedTask(m.ticketId)||this.workerMessageEvent(m.id,m.ticketId)===false)return false
       const owner=this.taskAuthority(m.ticketId)
       if(this.store.get<TaskContinuation>('task-continuation',m.ticketId)?.priorMessages.includes(m.id))return false
       if(!owner?.parentTrigger||owner.discussion!==discussion||!scoped&&this.store.get<{actor:string}>('worker-assignment',m.ticketId)?.actor!==trigger.actor.id)return false
@@ -932,7 +949,8 @@ export class Runtime {
         if(output.reply.trim()&&trigger.channel&&this.proactive.notify(triggerId)){
           const id='router-reply:'+(messageId?bodyDigest([discussion,output.reply,[...readMessages].sort()]):job.id)
           const inputs=[...authorityInputs]
-          this.store.put('router-reply-owner',id,{discussion,triggerId,inputs,...(source.kind==='delegation'?{reportReads:Object.fromEntries(readReports)}:{}),...(packet?{manifest:packet.manifest,taskIds:packet.manifest.taskOwners.map(t=>t.id)}:{})})
+          const workerEvents=[...readMessages].flatMap(id=>{const ref=this.store.get<{eventId:string}>('async-worker-message',id);return ref?[ref.eventId]:[]})
+          this.store.put('router-reply-owner',id,{discussion,triggerId,inputs,workerEvents,...(source.kind==='delegation'?{reportReads:Object.fromEntries(readReports)}:{}),...(packet?{manifest:packet.manifest,taskIds:packet.manifest.taskOwners.map(t=>t.id)}:{})})
           this.store.outbox.send({id,channel:trigger.channel,kind:'reply',text:output.reply})
         }
       })
@@ -1071,7 +1089,7 @@ export class Runtime {
     if(decision.action==='stop'&&decision.targetTicketId&&ids.includes(decision.targetTicketId))this.engine.decide(triggerId,{kind:'stop',ticketId:decision.targetTicketId,reason:decision.reason})
     }finally{this.controllers.delete(key)}
   }
-  private async execute(ticket: Ticket, assignmentId: string,dispatch?:{profile:WorkerProfile;reserve:boolean}): Promise<void> {
+  private async execute(ticket: Ticket, assignmentId: string,dispatch?:{profile:WorkerProfile;reserve:boolean},causeJobId?:string): Promise<void> {
     ticket=this.replanning.executionView(taskView(this.store,ticket))
     const configuredSource = this.sources.get(ticket.mandate.actor.source)!.config
     const delegatedTask=this.delegation.forTicket(ticket.id)
@@ -1092,12 +1110,32 @@ export class Runtime {
     this.liveInputs.set(ticket.id,live)
     const run: Run = { ...saved, ticketId: ticket.id, assignmentId, cwd: saved?.cwd ?? source.cwd, phase: 'starting',...(dispatch?{workerId:dispatch.profile.id,interactiveReserve:dispatch.reserve}:{}) }
     this.store.put('run', ticket.id, run)
-    const persist = () => {
+    let eventAttempt:WorkerAttempt|undefined
+    const persist = (committed=false) => {
+      const current=this.store.tickets.get(ticket.id)
+      if(!current||this.memory.cleanup.blocked('ticket',ticket.id,current)||latestAssignment(current)?.id!==assignmentId)return
+      if(eventAttempt&&this.store.get<{attemptId:string}>('async-worker-current',ticket.id)?.attemptId!==eventAttempt.id)return
+      if(eventAttempt&&!committed&&!currentWorkerAttempt(this,eventAttempt))return
       const stored=this.store.get<Run>('run',ticket.id)
+      if(stored&&stored.assignmentId!==assignmentId)return
       if(stored?.agentOptions)run.agentOptions=stored.agentOptions
       if (stored?.phase === 'human') run.phase = 'human'
       this.store.put('run', ticket.id, run)
     }
+    // Retire only this activation after new authorized input invalidates its basis.
+    // Do not accept its output or consume the new input; queue a fresh activation.
+    const continueChangedInput=()=>this.store.atomic(()=>{
+      const attempt=eventAttempt,current=this.store.tickets.get(ticket.id)
+      if(!attempt||controller.signal.aborted||!current||current.ended||latestAssignment(current)?.id!==assignmentId||this.store.get<{attemptId:string}>('async-worker-current',ticket.id)?.attemptId!==attempt.id)return
+      const source=this.sources.get(current.mandate.actor.source)?.config
+      if(!source||!this.validWork({ticketId:ticket.id,assignmentId,cwd:run.cwd,sandbox:source.sandbox,depth:0,network:false}))return
+      const pending=taskView(this.store,current).undelivered
+      if(!pending.length)return
+      this.engine.turnEnded(ticket.id,assignmentId)
+      this.work.turnEnded(ticket.id,assignmentId)
+      run.phase='idle';persist(true)
+      this.queueInputs(this.store.tickets.get(ticket.id)!,latestAssignment(current)!)
+    })
     try {
       await this.work.recovered
       const projectGoal=this.goals.forTask(ticket.id),projectNode=projectGoal?.project&&projectGoal.nodes?.find(n=>n.ticketId===ticket.id)
@@ -1121,36 +1159,41 @@ export class Runtime {
       const toolsChanged=!!saved?.threadId&&(run.toolsVersion!==5||run.toolsDigest!==toolsDigest)
       if(!this.validWork(owner))throw Error('Assignment authority ended before model execution')
       this.work.turnStarted(ticket.id,assignmentId)
+      const attempt=eventAttempt=beginWorkerAttempt(this,ticket.id,assignmentId,causeJobId)
       const result = await this.runModel({
         activity:{ticketId:ticket.id,workerId:run.workerId,sourceId:source.id,triggerId:ticket.origin.triggerId},
         role:'worker',options:agentOptions,backendId:saved?.rebuild?saved.backendId:dispatch?.profile.backend,onBackend:id=>{run.backendId=id;run.backendKind=this.model instanceof BackendRegistry?this.model.definition(id).kind:'custom';persist()},
         model:saved?.threadId?undefined:saved?.rebuild?saved.model:dispatch?.profile.model??(this.config.execution.workers?undefined:this.config.models.worker),
         title: ticket.title, cwd: run.cwd, sandbox: source.sandbox, threadId: saved?.threadId, schema: delegated?.mode==='client'?{...reportSchema,properties:{...reportSchema.properties,handbacks:{...reportSchema.properties.handbacks,maxItems:0}}}:reportSchema,archiveOnComplete:true,
         instructions,
-        managed:true,privateState:this.config.stateDir,attachments:this.chat.uploads.taskPaths(ticket.id),tools:specs,onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),
+        managed:true,privateState:this.config.stateDir,attachments:this.chat.uploads.taskPaths(ticket.id),tools:specs,onTool:(name,args)=>this.workerTools.call(owner,name,args,attempt),onCapabilities:cap=>{if(currentWorkerAttempt(this,attempt))this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap})},
         input: JSON.stringify({...(toolsChanged?{toolsChanged:{notice:'This activation has updated tools and schemas. Reassess earlier capability blockers using the current tool definitions before asking for user intervention. Continue the retained task; do not repeat completed effects.',tools:specs.map(({name,description})=>({name,description}))}}:{}),...(saved?.rebuild?{handoff:this.store.get('context-handoff',saved.rebuild),notice:'Explicit context rebuild. This is the same task and reviewed workspace. Only the current authorized mandate and permitted inputs are included. Retained effect identities prevent duplicate execution; old text is quarantined when permissions changed.'}:{}), ...(saved?.migration?{migration:this.store.get('worker-migration',saved.migration),notice:'Continue this logical task in a new backend session. Inspect prior results and artifacts; never repeat completed effects blindly.'}:{}),sourceContext, mandate: ticket.mandate, connectionCheck:this.connectionCheck(ticket.origin.triggerIds.map(id=>this.store.triggers.get(id)).filter((t):t is Trigger=>!!t)), relatedThreads:ticket.follows, ...(!saved ? { origin: ticket.origin.triggerIds.map(id => this.store.triggers.get(id)) } : {}), inputs: inputs.map(i => i.kind === 'trigger' ? { ...i, event: this.store.triggers.get(i.triggerId) } : i) }),
         signal: controller.signal,
-        onHumanRequest:request=>{if(!this.validWork(owner))return Promise.reject(Error('Assignment authority ended before approval'));return this.approvals.request(ticket.id,request)},
-        onActive:control=>{this.controls.set(ticket.id,control);this.controlRevisions.set(ticket.id,promptRevision);live.control=control;live.offered.clear();live.retryAt=0},
+        onHumanRequest:request=>{if(!currentWorkerAttempt(this,attempt)||!this.validWork(owner))return Promise.reject(Error('Assignment authority ended before approval'));return this.approvals.request(ticket.id,request)},
+        onActive:control=>{if(!currentWorkerAttempt(this,attempt))return;this.controls.set(ticket.id,control);this.controlRevisions.set(ticket.id,promptRevision);live.control=control;live.offered.clear();live.retryAt=0},
         onProgress:event=>{
-          this.store.put('progress',ticket.id,{ticketId:ticket.id,at:Date.now(),event})
+          // Liveness belongs to each genuine callback, not the deduplicated envelope.
+          if(currentWorkerAttempt(this,attempt))this.store.put('progress',ticket.id,{ticketId:ticket.id,at:Date.now(),event})
+          observeWorkerEvent(this,attempt,{kind:'progress',payload:event},()=>{
           if(event==='thread/waitingForWriter'){run.waitingForWriter=true;persist()}
-        },
+        })},
         onThread: id => { delete run.error;run.toolsVersion=5;run.toolsDigest=toolsDigest; run.waitingForWriter=false; run.threadId = id; persist() },
         onModel:model=>{run.model=model;persist()},
-        onTurn: id => { run.turnId = id; run.phase = 'running'; this.store.put('prompt-use',id,{ticketId:ticket.id,threadId:run.threadId,revision:promptRevision,digest:digest(instructions),at:Date.now()});persist() },
+        onTurn: id => { if(!currentWorkerAttempt(this,attempt))return;run.turnId = id; run.phase = 'running'; this.store.put('prompt-use',id,{ticketId:ticket.id,threadId:run.threadId,revision:promptRevision,digest:digest(instructions),at:Date.now()});persist() },
       })
       live.accepting=false
       await live.delivery
       let current = this.store.tickets.get(ticket.id)
-      if (controller.signal.aborted || !current || current.ended || latestAssignment(current)?.id !== assignmentId) {
+      if (controller.signal.aborted || !current || current.ended || latestAssignment(current)?.id !== assignmentId || !currentWorkerAttempt(this,attempt)) {
+        observeWorkerEvent(this,attempt,{kind:'result',payload:result.text,nativeTurnId:result.turnId},()=>{})
         const replaced=this.store.list<RouterGoal>('router-goal').find(g=>g.supersededBy&&this.goals.taskIdsForGoal(g).includes(ticket.id))
         // Retain late evidence under the old task's existing history/cleanup boundary,
         // never as a report, acceptance result, output or message for its successor.
-        if(replaced&&current&&!this.memory.cleanup.blocked('ticket',ticket.id,current)&&!this.memory.cleanup.blocked('router-goal',replaced.id,replaced)){
+        if(current&&!this.memory.cleanup.blocked('ticket',ticket.id,current)&&(!replaced||!this.memory.cleanup.blocked('router-goal',replaced.id,replaced))){
           const id='late-goal:'+stableDigest([ticket.id,assignmentId,result.turnId])
-          this.store.put('transcript',id,{ticketId:ticket.id,assignmentId,goalId:replaced.id,contractHash:stableDigest(replaced.contract),threadId:result.threadId,turnId:result.turnId,status:'stale',reason:'goal_contract_replaced',text:result.text.slice(0,128000),truncated:result.text.length>128000,at:Date.now(),revision:promptRevision})
+          this.store.put('transcript',id,{ticketId:ticket.id,assignmentId,...(replaced?{goalId:replaced.id,contractHash:stableDigest(replaced.contract)}:{}),attemptId:attempt.id,threadId:result.threadId,turnId:result.turnId,status:'stale',reason:replaced?'goal_contract_replaced':'async_worker_event_archived',text:result.text.slice(0,128000),truncated:result.text.length>128000,at:Date.now(),revision:promptRevision})
         }
+        continueChangedInput()
         return
       }
       const output = report.parse(JSON.parse(result.text))
@@ -1173,7 +1216,7 @@ export class Runtime {
       if(delegated?.mode==='host'&&['ready','dropped'].includes(output.state)){
         await awaitRouterFollowups(this,ticket.id,controller.signal)
         current=this.store.tickets.get(ticket.id)
-        if(controller.signal.aborted||!current||current.ended||latestAssignment(current)?.id!==assignmentId)return
+        if(controller.signal.aborted||!current||current.ended||latestAssignment(current)?.id!==assignmentId||!currentWorkerAttempt(this,attempt)){observeWorkerEvent(this,attempt,{kind:'result',payload:result.text,nativeTurnId:result.turnId},()=>{});continueChangedInput();return}
         if(context)this.memory.validateWorkerTurn(ticket.id,context.manifest)
       }
       if(output.state==='ready'&&this.workflows.unsettled(ticket.id)){
@@ -1183,11 +1226,14 @@ export class Runtime {
       if(this.webhooks.continuations.pending(ticket.id,assignmentId)&&!['failed','blocked','dropped'].includes(output.state)){output.state='waiting';output.question=null}
       if(this.browser.waiting(ticket.id,assignmentId)&&output.state==='ready'){output.state='waiting';output.question=null;output.reply=''}
       const extraInputs=taskView(this.store,current).undelivered.filter(id=>!inputs.some(i=>i.id===id)).length>0
+      if(!currentWorkerAttempt(this,attempt)){observeWorkerEvent(this,attempt,{kind:'result',payload:result.text,nativeTurnId:result.turnId},()=>{});continueChangedInput();return}
       const handoff=['blocked','failed','dropped'].includes(output.state)||!extraInputs&&(output.state==='ready'||!!output.question)
       if(handoff)await this.work.handoff(ticket.id,assignmentId)
+      if(!currentWorkerAttempt(this,attempt)){observeWorkerEvent(this,attempt,{kind:'result',payload:result.text,nativeTurnId:result.turnId},()=>{});continueChangedInput();return}
       const background=!handoff&&this.work.active(ticket.id,assignmentId).length>0
       if(background)this.work.turnEnded(ticket.id,assignmentId)
-      this.store.atomic(() => {
+      observeWorkerEvent(this,attempt,{kind:['blocked','failed'].includes(output.state)?'blocked':'result',payload:result.text,nativeTurnId:result.turnId},receipt=>{
+        const previousMessages=new Set(this.store.deliveries().map(d=>d.id)),previousGoalDelivery=this.store.get<GoalDelivery>('goal-delivery',ticket.id)?.id??null
         this.engine.inputsDelivered(ticket.id, assignmentId, inputs.map(i => i.id))
         this.engine.inputsRead(ticket.id, inputs.map(i => i.id))
         const inputChanged=context&&this.memory.validateWorkerTurn(ticket.id,context.manifest)
@@ -1209,19 +1255,22 @@ export class Runtime {
         const question=pending&&!handoff?null:output.question
         const failed=['blocked','failed'].includes(output.state)
         this.reportWork(ticket.id, { state:background?'progress':pending&&!handoff?'waiting':output.state, summary: background?'Managed background work is running. '+output.summary:output.summary, question,...(question&&askedBy?{askedBy}:{}), ...(!pending && answerId ? { answers: answerId } : {}) },!pending||failed?(output.reply||(failed?output.summary:undefined)):undefined)
-        run.phase = background?'background':'idle'; run.threadId = result.threadId; run.result = output.reply; persist()
+        run.phase = background?'background':'idle'; run.threadId = result.threadId; run.result = output.reply; persist(true)
         const updated = this.store.tickets.get(ticket.id)!
         if (pending&&(!handoff||superseded)) this.queueInputs(updated, latestAssignment(updated)!)
+        this.bindWorkerEventMessages(receipt,previousMessages,previousGoalDelivery)
       })
       if(this.store.tickets.get(ticket.id)?.ended)await this.work.endAssignment(ticket.id,assignmentId)
     } catch (error) {
       const current = this.store.tickets.get(ticket.id)
       if (!controller.signal.aborted && current && !current.ended && latestAssignment(current)?.id === assignmentId) {
+        if(eventAttempt&&!currentWorkerAttempt(this,eventAttempt)){observeWorkerEvent(this,eventAttempt,{kind:'blocked',payload:String(error).slice(0,500),nativeTurnId:run.turnId??null},()=>{});continueChangedInput();return}
         await this.work.handoff(ticket.id,assignmentId)
         run.phase = 'uncertain'; run.error = String(error).slice(0, 500)
         persist()
         const humanInputs=inputs.filter((i):i is Extract<TicketInput,{kind:'trigger'}>=>i.kind==='trigger'&&!!i.human&&!i.context)
-        this.reportWork(ticket.id, { state: 'blocked', summary: run.error, question: 'Execution could not be confirmed. Review task records and the actual outcome before continuing.',...(humanInputs.length===1?{askedBy:humanInputs[0]!.triggerId}:{}) })
+        const apply=(receipt?:WorkerEventReceipt)=>{const previousMessages=new Set(this.store.deliveries().map(d=>d.id));this.reportWork(ticket.id, { state: 'blocked', summary: run.error!, question: 'Execution could not be confirmed. Review task records and the actual outcome before continuing.',...(humanInputs.length===1?{askedBy:humanInputs[0]!.triggerId}:{}) });if(receipt)this.bindWorkerEventMessages(receipt,previousMessages)}
+        if(eventAttempt){const receipt=observeWorkerEvent(this,eventAttempt,{kind:'blocked',payload:run.error,nativeTurnId:run.turnId??null},apply);if(receipt.disposition==='archived')continueChangedInput()}else apply()
       }
     } finally {
       live.accepting=false
@@ -1232,7 +1281,8 @@ export class Runtime {
       this.approvals.cancel(ticket.id)
       this.controllers.delete(ticket.id)
       if (controller.signal.aborted && this.store.get<Run>('run', ticket.id)?.phase !== 'human') {
-        run.phase = this.closing ? 'interrupted' : 'idle'; persist()
+        run.phase = this.closing ? 'interrupted' : 'idle';
+        if(!eventAttempt||this.store.get<{attemptId:string}>('async-worker-current',ticket.id)?.attemptId===eventAttempt.id)persist(true)
       }
     }
   }
@@ -1256,12 +1306,13 @@ export class Runtime {
       if(message.status==='sending'||message.status==='uncertain'||message.attempts<3)blocked.add(channel)
       if(this.closing)return
       if (message.status !== 'pending') continue
-      const replyOwner=this.store.get<{goalId?:string;discussion:string;triggerId:string;inputs:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
+      const replyOwner=this.store.get<{goalId?:string;discussion:string;triggerId:string;inputs:string[];workerEvents?:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
       // Old queued derived notices lack the context used to compose them; a
       // current input must recreate them instead of assuming their provenance.
       if((message.id.startsWith('goal-notice:')&&!Array.isArray(replyOwner?.manifests))||(message.id.startsWith('router-clarify:')&&!replyOwner?.manifest)){
         this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'contextUnavailable'});blocked.delete(channel);continue
       }
+      if(replyOwner?.workerEvents?.some(id=>{const receipt=this.store.get<WorkerEventReceipt>('async-worker-event',id);return !receipt||!deliverableWorkerEvent(this,receipt)})){this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'workerEventSuperseded'});blocked.delete(channel);continue}
       if(replyOwner){
         try{const manifests=[...(replyOwner.manifest?[replyOwner.manifest]:[]),...replyOwner.manifests??[]];for(const manifest of manifests)this.memory.validate(manifest);for(const id of replyOwner.inputs)this.routerIngress.authority(id,manifests.length?undefined:replyOwner.discussion)}
         catch{this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'authorizationWithdrawn'});blocked.delete(channel);continue}
@@ -1290,13 +1341,23 @@ export class Runtime {
       const event=ticket?this.store.triggers.get(ticket.origin.triggerId):replyOwner?this.store.triggers.get(replyOwner.triggerId):undefined
       const row=event?.meta.scope??'default'
       if(source.config.listenScopes&&!source.config.listenScopes.includes(String(row))){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
+      const workerEvent=this.workerMessageEvent(message.id,message.ticketId)
+      if(workerEvent===false){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
+      if(message.channel.address.routerInbox){
+        // An internal transfer has no external uncertainty: receipt, enqueue and
+        // outbox acknowledgement commit together, or the pending message remains retryable.
+        try{this.store.atomic(()=>{
+          if(!this.store.deliveryStarted(message.id))return
+          this.store.put('router-inbox',message.id,{...message,...(workerEvent?{workerEvent}:{})})
+          const delegated=message.ticketId&&(this.store.get<any>('task-routing',message.ticketId)??this.store.get<any>('worker-assignment',message.ticketId))
+          if(delegated?.mode==='host'&&delegated.parentTrigger&&!this.store.get('router-cancelled',delegated.parentTrigger)&&this.store.get<any>('router-report-read',delegated.discussion+':'+message.ticketId)?.at!==(ticket||undefined)?.assignments.at(-1)?.report?.at)this.store.enqueue('router:result:'+message.id,'router',{discussion:delegated.discussion,triggerId:delegated.parentTrigger,messageId:message.id,...(workerEvent?{workerEvent}:{})})
+          this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)
+        });blocked.delete(channel)}catch{this.store.audit({type:'router.inbox-retry',id:message.id})}
+        continue
+      }
       if(!this.store.deliveryStarted(message.id))continue
       try {
-        if(message.channel.address.routerInbox){
-          this.store.put('router-inbox',message.id,message)
-          const delegated=message.ticketId&&(this.store.get<any>('task-routing',message.ticketId)??this.store.get<any>('worker-assignment',message.ticketId))
-          if(delegated?.mode==='host'&&delegated.parentTrigger&&!this.store.get('router-cancelled',delegated.parentTrigger)&&this.store.get<any>('router-report-read',delegated.discussion+':'+message.ticketId)?.at!==(ticket||undefined)?.assignments.at(-1)?.report?.at)this.store.enqueue('router:result:'+message.id,'router',{discussion:delegated.discussion,triggerId:delegated.parentTrigger,messageId:message.id})
-        }else if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
+        if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
         this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
       catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
     }
@@ -1395,7 +1456,11 @@ export class Runtime {
   async stop(id: string): Promise<void> {
     if(this.store.get<Run>('run',id)?.phase==='merging')throw Error('A merge has been submitted. Reconcile its outcome before stopping subsequent work.')
     const assignment=this.store.tickets.get(id)&&latestAssignment(this.store.tickets.get(id)!)
-    this.engine.stopTicket(id, 'Stopped by operator')
+    this.store.atomic(()=>{
+      const attempt=this.store.get<{attemptId:string}>('async-worker-current',id)
+      if(attempt)this.store.put('async-worker-revoked',attempt.attemptId,{ticketId:id,attemptId:attempt.attemptId,reason:'operator_stop',at:Date.now()})
+      this.engine.stopTicket(id, 'Stopped by operator')
+    })
     this.toolConnections.cancel(id)
     this.approvals.cancel(id)
     this.controllers.get(id)?.abort()

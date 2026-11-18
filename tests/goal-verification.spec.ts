@@ -105,7 +105,7 @@ it('hands a large versioned workbook to its dependent Worker and keeps earlier r
  writeFileSync(join(f.root,file),makeWorkbook(40));expect(f.h.verification.current(accepted,f.goal())).toBe(false)
  await f.restart();expect(f.h.artifacts.download(versions[1]!.id).artifact.sha256).toBe(opened)
  const backup=join(f.root,'artifact-backup');await backupState(f.config,backup)
- expect(verifyBackup(backup).schema).toBe(12)
+ expect(verifyBackup(backup).schema).toBe(18)
  const copy=new DatabaseSync(join(backup,'state.sqlite'),{readOnly:true})
  try{
   expect(Buffer.from(copy.prepare('SELECT bytes FROM goal_artifact_bytes WHERE id=?').get(versions[1]!.id)!.bytes as Uint8Array)).toEqual(f.h.artifacts.download(versions[1]!.id).bytes)

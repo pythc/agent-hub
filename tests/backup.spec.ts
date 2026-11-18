@@ -92,3 +92,17 @@ it('preserves goal replacement barriers and refuses restoring an earlier version
  await expect(restoreState(config,bound)).rejects.toThrow('Goal contract replacement advanced')
  const reread=new Store(file);try{expect(reread.get('router-goal','new')).toMatchObject({supersededBy:'latest'})}finally{reread.close()}
 })
+
+it('refuses to roll back asynchronous Worker event deduplication receipts',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-worker-inbox-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
+ const file=join(config.stateDir,'state.sqlite'),initial=new Store(file);initial.close()
+ const legacy=join(root,'legacy');await backupState(config,legacy)
+ const current=new Store(file);current.requireAsyncWorkerSchema();current.put('async-worker-attempt','attempt',{ticketId:'ticket',id:'attempt'});current.close()
+ await expect(restoreState(config,legacy)).rejects.toThrow('Downgrade cannot preserve async Worker')
+ const captured=join(root,'captured');await backupState(config,captured);expect(verifyBackup(captured).schema).toBe(18)
+ await restoreState(config,captured)
+ const changed=new Store(file);changed.put('async-worker-event','event',{ticketId:'ticket',attemptId:'attempt',disposition:'applied'});changed.close()
+ await expect(restoreState(config,captured)).rejects.toThrow('Async Worker event receipts advanced')
+ const reread=new Store(file);try{expect(reread.get('async-worker-event','event')).toMatchObject({disposition:'applied'})}finally{reread.close()}
+})
