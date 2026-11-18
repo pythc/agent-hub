@@ -71,3 +71,11 @@ Documentation/behavior references at Octop `bf134dbd379036ce7545c7df1a1da7e381ec
 - [ACP documentation](https://github.com/TencentCloud/Octop/blob/bf134dbd379036ce7545c7df1a1da7e381ece9ff/docs/acp.md): documented session status, permission wait and close workflows.
 
 This original implementation uses Agent Hub's transaction/audit identities and Runtime recovery gates. It does not introduce Octop's runner-tool invocation flow or copy/translate its source, prompts or tests. No SDK/dependency is added by this module. The references establish documented behavior; running Octop/external runners was not part of this acceptance.
+
+## Read-only recovery summary (O11)
+
+The selected task's progress page now exposes its existing RecoveryManifest in an expandable recovery section. It explains the next safe step, whether the original session can currently be inspected, and the retained local tool/acceptance/delivery checkpoint cursors. Imported baseline checkpoints are explicitly distinguished from recorded transitions. Missing checkpoints do not establish that no external action happened.
+
+The UI accepts only schema 1 metadata matching the selected task ID, current settings revision and observation digest. It rejects malformed/duplicate checkpoints, replay permission, inconsistent original-session availability and non-reconciliation guidance for an unknown effect. It copies only safe fixed fields and renders fixed bilingual text; raw identity/digest values, provider content and extra payload fields are not shown. Older snapshots without a manifest render no section; mismatched information asks for refresh rather than displaying stale guidance.
+
+This is presentation of the existing captured-workspace snapshot, not another request, export, backup, restore engine or recovery authorization. Existing task actions and their server-side rechecks remain unchanged. No new controls are enabled by the manifest, and no uncertain effect is replayed. Full external-effect checkpoint coverage and executable restoration remain outside this slice. Automated rendering/validation and original transport/recovery tests are covered; actual browser interaction, narrow-screen/keyboard/reduced-motion and real provider/IM acceptance remain unverified.
