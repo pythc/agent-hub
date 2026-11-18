@@ -52,5 +52,66 @@
     "containerJob": 133395751094,
     "status": "success",
     "applicationCode": "same reviewed runtime and UI as local5356135; later CI fixes and documentation integrated with preserved history"
+  },
+  "currentCloseout": {
+    "date": "2026-11-18",
+    "status": "local_revalidation_passed_pending_exact_head_delivery_gates",
+    "historicalRecordPolicy": "All pre-existing fields above retain their original stage meaning, including the then-pending recovery decision and original browser/CI source versions. This appended object describes the current revalidation; it does not rewrite that history.",
+    "baseHead": "954d090e7364c568a86f66d951751437a05f44e2",
+    "baseTree": "28e2dc8c217c6a1ad1618dec8bb6c1603c5c1b66",
+    "changeScope": "STATUS_STAGE.md and STATUS_ACCEPTANCE.json only; runtime, frontend, tests and CI unchanged",
+    "recoveryPostChange": {
+      "status": "subsequently_authorized_and_delivered",
+      "pr": 99,
+      "merge": "b811e06a4bb199a84707c00665e69367f15d003d",
+      "behavior": "Current projected effects unknown or delivery uncertain fences resume_session; recovery POST recomputes current status and observation. No automatic reconcile or replay."
+    },
+    "checks": [
+      {
+        "command": "npx vitest run tests/execution-status.spec.ts tests/execution-status-view.spec.ts tests/execution-trace.spec.ts tests/recovery-delivery-crash.spec.ts --maxWorkers=1",
+        "files": 4,
+        "passed": 120,
+        "failed": 0,
+        "skipped": 0,
+        "exitCode": 0
+      },
+      {
+        "command": "npm run typecheck",
+        "scope": [
+          "core",
+          "chat",
+          "views"
+        ],
+        "exitCode": 0
+      },
+      {
+        "command": "npm run build:chat",
+        "exitCode": 0,
+        "warning": "Existing ineffective dynamic import warning for configuration.tsx; build succeeded"
+      }
+    ],
+    "coverage": [
+      "finished execution independent from pending/retry delivery",
+      "unknown effects and uncertain delivery never promote overall success or permit blind trace resume",
+      "acceptance freshness and historical passed evidence",
+      "old or unsupported response schema degrades to unknown",
+      "real local Runtime delivery pending/sending SIGKILL with independent synthetic destination ledger"
+    ],
+    "currentLiveBrowser": "not_run; historical browser evidence remains tied to its original source versions",
+    "currentComponentReview": "pending coordinator inspection",
+    "realProvider": "not_tested",
+    "realIm": "not_tested",
+    "realAcp": "not_tested",
+    "remoteReceiptOrReadback": "not_tested; recorded is host evidence only",
+    "fullLocalSuite": "not_run_in_this_documentation_revalidation",
+    "pendingDeliveryGates": [
+      "independent final documentation/component review",
+      "exact final head CI/container as applicable",
+      "development-only merge and authorized Issue #18 closure"
+    ],
+    "issueStateAtHandoff": "open",
+    "masterCompletedAtHandoff": "9/49",
+    "targetAfterAuthorizedClosure": "10/49; not claimed yet",
+    "mainChanged": false
   }
 }
