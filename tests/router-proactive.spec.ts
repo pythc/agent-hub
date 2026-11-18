@@ -457,7 +457,7 @@ it('cancelling a scheduled dependency withdraws a mixed pending reply but not an
  const {f,message,anchor,run}=await quietRun(),owner=f.h.store.get<any>('router-reply-owner',message.id),human=f.h.store.triggers.get(anchor.triggerId)!
  for(const [id,inputs] of [['cancel-mixed',[...owner.inputs,human.id]],['independent-human',[human.id]]] as const){
   f.h.store.outbox.send({id,kind:'reply',text:'Reply',channel:human.channel!})
-  f.h.store.put('router-reply-owner',id,{...owner,triggerId:human.id,inputs:[...inputs]})
+  f.h.store.put('router-reply-owner',id,{...owner,triggerId:human.id,inputs:[...inputs],...(id==='independent-human'?{workerEvents:[]}: {})})
  }
  f.command('run.cancel',{id:run.id},run.revision);await f.h.flush()
  expect(f.h.store.outbox.status('cancel-mixed')).toBe('dropped');expect(f.h.store.outbox.status('independent-human')).toBe('sent')

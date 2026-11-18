@@ -100,8 +100,6 @@ export async function restoreState(config:Config,directory:string){
    try{
     const liveSchema=Number(live.prepare('PRAGMA user_version').get()!.user_version)
     if(liveSchema>=ASYNC_WORKER_DB_SCHEMA&&verified.schema<ASYNC_WORKER_DB_SCHEMA)throw Error('Downgrade cannot preserve async Worker event receipts')
-    const workerEvents=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'async-worker-*' ORDER BY kind,id").all()
-    if(liveSchema>=ASYNC_WORKER_DB_SCHEMA&&JSON.stringify(workerEvents(live))!==JSON.stringify(workerEvents(old)))throw Error('Async Worker event receipts advanced after backup; reconcile before restore')
     if(liveSchema>=GOAL_REPLACEMENT_DB_SCHEMA&&verified.schema<GOAL_REPLACEMENT_DB_SCHEMA)throw Error('Downgrade cannot preserve goal contract replacement')
     const replacements=(db:DatabaseSync)=>db.prepare("SELECT id,json_extract(body,'$.supersedes') AS previous,json_extract(body,'$.supersededBy') AS next FROM records WHERE kind='router-goal' AND (json_extract(body,'$.supersedes') IS NOT NULL OR json_extract(body,'$.supersededBy') IS NOT NULL) ORDER BY id").all()
     if(liveSchema>=GOAL_REPLACEMENT_DB_SCHEMA&&JSON.stringify(replacements(live))!==JSON.stringify(replacements(old)))throw Error('Goal contract replacement advanced after backup; reconcile before restore')
@@ -123,6 +121,9 @@ export async function restoreState(config:Config,directory:string){
      const current=rows(live)
      if(current.length&&JSON.stringify(current)!==JSON.stringify(rows(old)))throw Error('Webhook receipts or callback effects advanced after backup; reconcile before restore')
     }
+    // Preserve the more specific external Webhook history diagnostic when both ledgers advanced.
+    const workerEvents=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'async-worker-*' ORDER BY kind,id").all()
+    if(liveSchema>=ASYNC_WORKER_DB_SCHEMA&&JSON.stringify(workerEvents(live))!==JSON.stringify(workerEvents(old)))throw Error('Async Worker event receipts advanced after backup; reconcile before restore')
     const skillsSchedules=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE (kind='router-schedule' AND json_extract(body,'$.skill.id') IS NOT NULL) OR (kind='router-schedule-run' AND json_extract(body,'$.spec.skill.id') IS NOT NULL) ORDER BY kind,id").all()
     if(JSON.stringify(skillsSchedules(live))!==JSON.stringify(skillsSchedules(old)))throw Error('Saved skill schedule or run advanced after backup; reconcile before restore')
     const head=live.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get(),required=head&&JSON.parse(String(head.body))
