@@ -24,7 +24,9 @@ export const traceRecoverySchema=z.object({ticketId:id,action:z.enum(['inspect',
 type RecoveryInput=z.infer<typeof traceRecoverySchema>
 type RecoveryResult={status:'inspected'|'history_verified'|'history_unavailable'|'resumed'|'cancelled';ticketId:string;replayed:false;at:number;task?:TraceTask}
 interface RecoveryReceipt {fingerprint:string;state:'started'|'completed'|'uncertain';action:RecoveryInput['action'];ticketId:string;at:number;result?:RecoveryResult}
+export interface AsyncInboxSummary {schema:1;received:number;applied:number;archived:number;latest:{kind:'progress'|'blocked'|'result';disposition:'applied'|'archived';observedAt:number}|null}
 export interface TraceTask {
+ asyncInbox?:AsyncInboxSummary
  recovery?:RecoveryManifest
  blocker?:ExecutionBlocker|null
  status:TaskStatusProjection
@@ -158,7 +160,11 @@ export class ExecutionTrace {
   if((!blocker||['manual','after_repair'].includes(blocker.retryPolicy.mode))&&!ticket.ended&&!unknown&&!held&&!approvals.length&&!ticket.attention&&run?.threadId&&['idle','interrupted'].includes(run.phase)&&canRetry(ticket)&&!host.executionActive(ticket.id)&&!jobs.some(j=>j.state==='running')&&!work.some(w=>['running','starting'].includes(w.state))&&!workflow.some(w=>!['applied','declined','stale','observed'].includes(w.state))&&!host.workflows.unsettled(ticket.id)){
    try{if(host.model.describe?.(run.threadId).resume&&this.authorized(host,ticket,run))actions.push('resume_session')}catch{/* Preserve backend and session identity fences. */}
   }
-  const projected:TraceTask={blocker,status,id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
+  const events=host.store.list<{schema:number;ticketId:string;kind:'progress'|'blocked'|'result';disposition:'applied'|'archived';observedAt:number}>('async-worker-event').filter(e=>e.ticketId===ticket.id)
+  const verifiedEvents=events.every(e=>e.schema===1&&['progress','blocked','result'].includes(e.kind)&&['applied','archived'].includes(e.disposition)&&Number.isSafeInteger(e.observedAt)&&e.observedAt>=0&&e.observedAt<=8640000000000000)
+  const last=verifiedEvents?[...events].sort((a,b)=>b.observedAt-a.observedAt)[0]:undefined
+  const asyncInbox:AsyncInboxSummary|undefined=events.length&&verifiedEvents?{schema:1,received:events.length,applied:events.filter(e=>e.disposition==='applied').length,archived:events.filter(e=>e.disposition==='archived').length,latest:last?{kind:last.kind,disposition:last.disposition,observedAt:last.observedAt}:null}:undefined
+  const projected:TraceTask={...(asyncInbox?{asyncInbox}:{}),blocker,status,id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
   return {...projected,recovery:recoveryManifest(host.store,projected)}
  }
  private readAllowed(host:Runtime,ticket:Ticket){

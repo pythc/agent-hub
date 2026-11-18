@@ -19,12 +19,14 @@ it('G13 migrates valid Engine state and replays old source, command and inbox id
   const trigger=host.store.triggers.get('local:once')!,context={discussion:'local:topic',trigger},task=await host.manager.call(command,context)
   for(let i=0;i<100;i++){await host.tick();await new Promise(r=>setTimeout(r,2));if(host.store.tickets.get(task.ticketId)?.ended&&!host.status().active&&!host.store.jobs().length)break}
   await host.flush()
-  const before={tasks:host.store.tickets.list().length,deliveries:host.store.deliveries(),inbox:host.store.list<any>('router-inbox'),calls}
+  const before={tasks:host.store.tickets.list().length,deliveries:host.store.deliveries(),inbox:host.store.list<any>('router-inbox'),calls,workerEvents:host.store.db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'async-worker-*' ORDER BY kind,id").all()}
+  expect(host.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(18)
+  expect(before.workerEvents.length).toBeGreaterThan(0)
   await host.close();host=undefined
   const spec={operationId:'migration-replay',commands:[{action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'tenant',name:'Team',managers:[JSON.stringify(['local','alice'])],workerIds:['one'],sourceIds:['local'],backendIds:['codex']}},{action:'entry.bind',operationId:'bind',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'operator',nativeId:'group'}]}
-  const plan=previewScopeMigration(config,spec);expect(plan.items.filter(i=>i.status==='held')).toHaveLength(0)
+  const plan=previewScopeMigration(config,spec);expect(plan.schema).toBe(18);expect(plan.canApply).toBe(true);expect(plan.items.filter(i=>i.status==='held')).toHaveLength(0)
   await applyScopeMigration(config,spec,plan.fingerprint,{historyReader:async ref=>({id:ref.threadId,turns:[]})})
-  host=new Runtime(config,{model});await host.scopeCommand({action:'migration.activate',operationId:'activate',expectedRevision:1});host.pause(false)
+  host=new Runtime(config,{model});expect(host.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(18);expect(host.store.db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'async-worker-*' ORDER BY kind,id").all()).toEqual(before.workerEvents);await host.scopeCommand({action:'migration.activate',operationId:'activate',expectedRevision:1});host.pause(false)
   expect(host.receive('local','alice',input)).toMatchObject({disposition:'duplicate'})
   const scoped=host.scopes.context(trigger,context.discussion)!
   expect(await host.manager.call(command,{...context,scoped})).toEqual(task)

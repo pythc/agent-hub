@@ -326,7 +326,7 @@ realSandbox('preserves a sequential handoff and approved Git artifacts through b
  const archive=join(f.repo,'backup'),copy=join(f.repo,'restored')
  await backupState(f.config,archive)
  const manifest=verifyBackup(archive)
- expect(manifest.schema).toBe(13);expect(Object.keys(manifest.projectFiles)).toHaveLength(4)
+ expect(manifest.schema).toBe(18);expect(Object.keys(manifest.projectFiles)).toHaveLength(4)
  await restoreState({...f.config,stateDir:copy},archive)
  const clone=new Runtime({...f.config,stateDir:copy})
  try{

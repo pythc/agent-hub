@@ -52,6 +52,28 @@ function workerName(id:string|undefined,language:'en'|'zh-CN'){
  return worker
 }
 function StageIcon({stage}:{stage:TraceStage}){const Icon=stage==='approval'?ShieldQuestion:stage==='acceptance'||stage==='test'?FileCheck2:stage==='commit'?GitCommitHorizontal:stage==='tool'?Wrench:stage==='run'?Terminal:stage==='result'?CheckCircle2:stage==='assignment'?ArrowRight:Clock3;return <Icon size={16} aria-hidden="true"/>}
+export function AsyncInboxSummary({value,language='en'}:{value:unknown;language?:'en'|'zh-CN'}){
+ const L=(en:string,zh:string)=>language==='zh-CN'?zh:en
+ const read=()=>{
+  const own=(v:unknown,key:string):unknown=>{if(!v||typeof v!=='object'||Array.isArray(v))return undefined;const field=Object.getOwnPropertyDescriptor(v,key);return field&&Object.hasOwn(field,'value')?field.value:undefined}
+  const count=(v:unknown):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0
+  try{
+   const received=own(value,'received'),applied=own(value,'applied'),archived=own(value,'archived'),latest=own(value,'latest')
+   if(own(value,'schema')!==1||!count(received)||!count(applied)||!count(archived)||applied+archived!==received)return null
+   if(latest===null)return {received,applied,archived,latest:null}
+   const kind=own(latest,'kind'),disposition=own(latest,'disposition'),observedAt=own(latest,'observedAt')
+   if(!['progress','blocked','result'].includes(kind as string)||!['applied','archived'].includes(disposition as string)||!count(observedAt)||observedAt>8640000000000000||received===0||disposition==='applied'&&applied===0||disposition==='archived'&&archived===0)return null
+   return {received,applied,archived,latest:{kind:kind as 'progress'|'blocked'|'result',disposition:disposition as 'applied'|'archived',observedAt}}
+  }catch{return null}
+ }
+ const inbox=read()
+ return <details className="trace-records"><summary>{L('Async events','异步事件')}</summary><div className="trace-records-body">
+  {inbox?<><dl className="trace-facts"><div><dt>{L('Received','已接收')}</dt><dd>{inbox.received}</dd></div><div><dt>{L('Applied','已采用')}</dt><dd>{inbox.applied}</dd></div><div><dt>{L('Archived only','仅归档')}</dt><dd>{inbox.archived}</dd></div></dl>
+   {inbox.latest?<dl className="trace-facts"><div><dt>{L('Latest event','最近事件')}</dt><dd>{({progress:L('Progress','进展'),blocked:L('Blocked','受阻'),result:L('Result','结果')})[inbox.latest.kind]}</dd></div><div><dt>{L('Handling','处理状态')}</dt><dd>{inbox.latest.disposition==='applied'?L('Applied','已采用'):L('Archived only','仅归档')}</dd></div><div><dt>{L('Recorded at','记录时间')}</dt><dd><time dateTime={new Date(inbox.latest.observedAt).toISOString()}>{new Date(inbox.latest.observedAt).toLocaleString(language,{timeZone:'UTC',timeZoneName:'short'})}</time></dd></div></dl>:<p>{L('Latest event not recorded','最近事件未记录')}</p>}
+   <p>{L('Receiving or applying a result does not mean task acceptance passed.','接收或采用结果不等于任务验收通过。')}</p></>:<p>{L('Not recorded','未记录')}</p>}
+ </div></details>
+}
+
 export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh,word=(names:[string,string])=>names[language==='en'?0:1]
@@ -136,6 +158,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     review_configuration:L('Review the current backend configuration; do not switch accounts to bypass the problem.','请核对当前后端配置，不要通过切换账号绕过问题。'),
     inspect:L('Inspect current state before choosing a recovery action.','先核对当前状态，再选择恢复操作。'),
    })[task.blocker.resolution]}{task.blocker.retryPolicy.notBefore?<span>{L(' Scheduled retry no earlier than: ',' 已有重试计划不早于：')}{new Date(task.blocker.retryPolicy.notBefore).toLocaleString()}</span>:null}</p>:null}
+   <AsyncInboxSummary value={task.asyncInbox} language={language}/>
    <RecoverySummary task={task} language={language}/>
    <RecoveryPackageExport task={task} language={language}/>
    <footer className="trace-task-actions">{task.actions.includes('inspect')?<button disabled={busy} onClick={()=>void recover('inspect')}><RefreshCw size={15}/>{L('Check current state','核对当前状态')}</button>:null}{task.actions.includes('read_history')?<button disabled={busy} onClick={()=>void recover('read_history')}><History size={15}/>{L('Check history','核查历史')}</button>:null}{task.actions.includes('resume_session')?<button className="trace-primary" disabled={busy} onClick={()=>task.blocker?.retryPolicy.mode==='after_repair'?setConfirmResume(JSON.stringify([task.id,task.observed,task.revision])):void recover('resume_session')}><ArrowRight size={15}/>{L('Continue task','继续任务')}</button>:null}{task.actions.includes('cancel')?<button disabled={busy} onClick={()=>setConfirmStop(true)}><Square size={13}/>{L('Stop task','停止任务')}</button>:null}{busy?<span role="status"><LoaderCircle size={15} className="trace-spin"/>{L('Checking…','处理中…')}</span>:null}</footer>

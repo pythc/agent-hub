@@ -1,3 +1,4 @@
+import {observe as observeWorkerEvent,isCurrent as currentWorkerAttempt,type WorkerAttempt} from './async-worker-inbox.ts'
 import {eventWaitSchema} from './webhook-continuations.ts'
 import type {TaskContinuation} from './task-context.ts'
 import {deliverDraft} from './delivery.ts'
@@ -37,15 +38,16 @@ export const workerDefinitions=[
 export const workerSpecs:ToolSpec[]=workerDefinitions.map(d=>({type:'function',name:d.name,description:d.description,inputSchema:d.schema}))
 export class WorkerTools {
  constructor(private host:Runtime){}
- async call(owner:WorkOwner,name:string,value:unknown):Promise<{contentItems:ToolContent[];success:boolean}>{
+ async call(owner:WorkOwner,name:string,value:unknown,attempt?:WorkerAttempt):Promise<{contentItems:ToolContent[];success:boolean}>{
   const run=this.host.store.get<any>('run',owner.ticketId),ticket=this.host.store.tickets.get(owner.ticketId)
   const browser=name==='superagent_browser'?browserToolSchema.safeParse(value):undefined
-  return this.host.activity.tool(name,{ticketId:owner.ticketId,workerId:run?.workerId,agentId:owner.agentId,sourceId:ticket?.mandate.actor.source,triggerId:ticket?.origin.triggerId},()=>this.invoke(owner,name,value),undefined,browser?.success?{action:'browser:'+browser.data.action}:{})
+  return this.host.activity.tool(name,{ticketId:owner.ticketId,workerId:run?.workerId,agentId:owner.agentId,sourceId:ticket?.mandate.actor.source,triggerId:ticket?.origin.triggerId},()=>this.invoke(owner,name,value,attempt),undefined,browser?.success?{action:'browser:'+browser.data.action}:{})
  }
- private async invoke(owner:WorkOwner,name:string,value:unknown):Promise<{contentItems:ToolContent[];success:boolean}>{
+ private async invoke(owner:WorkOwner,name:string,value:unknown,attempt?:WorkerAttempt):Promise<{contentItems:ToolContent[];success:boolean}>{
   const plan=isWorkflowPlan(name,value)
   const read=<T>(fn:()=>T):T=>plan?this.host.scopes.readOnly(()=>this.host.memory.readOnly(fn)):fn()
   read(()=>this.host.delegation.guardWorker(owner.ticketId,name))
+  if(attempt&&!read(()=>currentWorkerAttempt(this.host,attempt)))throw Error('Worker attempt has ended')
   if(!read(()=>this.host.validWork(owner)))throw Error('Assignment capability has ended')
   const allowed=this.host.store.get<any>('run',owner.ticketId)?.agentOptions?.tools
   if(allowed&&!allowed.includes(name))throw Error('Tool is disabled for this Worker')
@@ -55,6 +57,7 @@ export class WorkerTools {
    if(!owner.agentId)await this.host.deliverLiveInputs(owner.ticketId)
    await this.host.refreshWork(owner)
   }
+  if(attempt&&!read(()=>currentWorkerAttempt(this.host,attempt)))throw Error('Worker attempt has ended')
   const continuation=this.host.store.get<TaskContinuation>('task-continuation',owner.ticketId)
   if(continuation&&name==='superagent_job'&&continuation.priorJobs.includes(args.id))throw Error('Prior job body is quarantined; use retained effect identities')
   if(continuation&&['superagent_ack','superagent_review','superagent_follow'].includes(name))throw Error('Rebuilt task requires Router review for prior channels and source history')
@@ -93,7 +96,7 @@ export class WorkerTools {
   else if(name==='superagent_shell')result=await this.host.work.shell(owner,args.command,args.requestId,args.yieldMs)
   else if(name==='superagent_spawn')result=await this.host.work.agent(owner,args.prompt,args.requestId)
   else if(name==='superagent_ack'){if(owner.agentId)throw Error('Subagents cannot contact people');const triggerId=args.triggerId.startsWith('trigger/')?args.triggerId.slice('trigger/'.length):args.triggerId;result=this.host.engine.reply({purpose:'acknowledgement',ticketId:owner.ticketId,triggerId,text:args.text})}
-  else if(name==='superagent_progress'){if(owner.agentId){this.host.store.put('agent-progress',owner.agentId,{ticketId:owner.ticketId,agentId:owner.agentId,summary:args.summary,at:Date.now()})}else this.host.engine.report(owner.ticketId,{state:'progress',summary:args.summary});result={ok:true}}
+  else if(name==='superagent_progress'){if(owner.agentId){this.host.store.put('agent-progress',owner.agentId,{ticketId:owner.ticketId,agentId:owner.agentId,summary:args.summary,at:Date.now()})}else if(attempt)observeWorkerEvent(this.host,attempt,{kind:'progress',payload:JSON.stringify({producer:'progress_tool',summary:args.summary})},()=>{this.host.engine.report(owner.ticketId,{state:'progress',summary:args.summary})});else this.host.engine.report(owner.ticketId,{state:'progress',summary:args.summary});result={ok:true}}
   else if(name==='superagent_publish'){if(owner.agentId||owner.sandbox!=='workspace-write'||!this.host.config.delivery.workerPublish)throw Error('Worker publication is not enabled for this root worker');const ticket=this.host.store.tickets.get(owner.ticketId)!;result=await deliverDraft(this.host,owner.ticketId,ticket.mandate.actor.source,args.title,args.body,owner.assignmentId)}
   else if(name==='superagent_review')result=await this.host.reviews.act(owner,args.triggerId,args.action,args.reason,args.evidenceJobId)
   else if(name==='superagent_job')result=args.action==='read'?this.host.work.read(owner,args.id,args.offset):args.action==='wait'?await this.host.work.wait(owner,args.id,args.yieldMs):await this.host.work.stop(owner,args.id)

@@ -11,7 +11,8 @@ export const EVOLUTION_DB_SCHEMA=14
 export const REFLECTION_DB_SCHEMA=15
 export const WEBHOOK_REHEARSAL_DB_SCHEMA=16
 export const GOAL_REPLACEMENT_DB_SCHEMA=17
-export const MAX_DB_SCHEMA=GOAL_REPLACEMENT_DB_SCHEMA
+export const ASYNC_WORKER_DB_SCHEMA=18
+export const MAX_DB_SCHEMA=ASYNC_WORKER_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
@@ -82,6 +83,7 @@ export class Store implements Repositories {
     return row ? JSON.parse(String(row.body)) as T : undefined
   }
   /** An older verifier would ignore an unknown check and could release a waiting goal. */
+  requireAsyncWorkerSchema(){this.db.exec('PRAGMA user_version='+Math.max(ASYNC_WORKER_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireGoalReplacementSchema(){this.db.exec('PRAGMA user_version='+Math.max(GOAL_REPLACEMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireWorkflowSchema(){this.db.exec('PRAGMA user_version='+Math.max(WORKFLOW_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireCodeProjectSchema(){this.db.exec('PRAGMA user_version='+Math.max(13,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}

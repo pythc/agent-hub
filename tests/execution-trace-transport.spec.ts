@@ -84,3 +84,12 @@ it('requires explicit repair confirmation and invalidates it on settings revisio
  expect(p.calls.at(-1).body).toMatchObject({action:'resume_session',revision:8,repairConfirmed:true})
  p.unmount()
 })
+it('passes async inbox evidence from the selected current task only and refreshes it without extra requests',async()=>{
+ const p=pageFixture(),inbox={schema:1,received:1,applied:1,archived:0,latest:{kind:'progress',disposition:'applied',observedAt:1000}}
+ let view=await selectTask(p,{...task,asyncInbox:inbox});const summary=(tree:any)=>find(tree,n=>typeof n.type==='function'&&n.type.name==='AsyncInboxSummary')
+ expect(summary(view).props.value).toEqual(inbox);const before=p.calls.length;button(view,'Refresh').props.onClick();p.pending.shift().resolve(snapshot([{...task,asyncInbox:{...inbox,received:2,archived:1}}]));await tick();p.pending.shift().resolve(events());await tick();view=p.render();expect(summary(view).props.value.received).toBe(2);expect(p.calls.length-before).toBe(2)
+ button(view,'Refresh').props.onClick();p.pending.shift().resolve(snapshot());await tick();p.pending.shift().resolve(events());await tick();expect(summary(p.render()).props.value).toBeUndefined();expect(p.rootFetch).not.toHaveBeenCalled();p.unmount()
+})
+it('does not apply late async inbox evidence after the owning workspace changes',async()=>{
+ const p=pageFixture();const view=await selectTask(p);button(view,'Refresh').props.onClick();const stale=p.pending.shift(),before=p.writes.length;p.switchContext();stale.resolve(snapshot([{...task,asyncInbox:{schema:1,received:99,applied:99,archived:0,latest:null}}]));await tick();expect(p.writes).toHaveLength(before);expect(p.stateValues().some(v=>v?.tasks?.[0]?.asyncInbox?.received===99)).toBe(false);p.unmount()
+})
