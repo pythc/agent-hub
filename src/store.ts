@@ -9,7 +9,8 @@ export const DELEGATED_GOALS_DB_SCHEMA=11
 export const WORKFLOW_DB_SCHEMA=12
 export const EVOLUTION_DB_SCHEMA=14
 export const REFLECTION_DB_SCHEMA=15
-export const MAX_DB_SCHEMA=REFLECTION_DB_SCHEMA
+export const WEBHOOK_REHEARSAL_DB_SCHEMA=16
+export const MAX_DB_SCHEMA=WEBHOOK_REHEARSAL_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }

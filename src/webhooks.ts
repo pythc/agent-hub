@@ -9,7 +9,8 @@ import type {ScopeContext} from './router-scope.ts'
 import type {Mandate,Trigger} from './vendor/dsh-core/index.ts'
 import {goalCommandSchema,type RouterGoal} from './router-goals.ts'
 import {validateGraph,nodeSchema,skillRefSchema} from './goal-contract.ts'
-import {webhookProtocol} from './webhook-schema.ts'
+import {WEBHOOK_REHEARSAL_DB_SCHEMA} from './store.ts'
+import {webhookProtocol,retainWebhookProtocol} from './webhook-schema.ts'
 import type {VerificationRound} from './goal-verification.ts'
 import {stableDigest} from './sources.ts'
 import {callbackURL,cloudEventSchema,postWebhook,secretFromEnv,signWebhook,verifyWebhook,WebhookError,type CloudEvent} from './webhook-protocol.ts'
@@ -37,7 +38,7 @@ export const webhookGrantSchema=z.object({
  expiresAt:z.number().int().positive(),maxEvents:z.number().int().min(1).max(100000),maxConcurrent:z.number().int().min(1).max(10).default(1),perMinute:z.number().int().min(1).max(600).default(60),
  callback:z.object({url:z.string().url(),secretEnv:env,idempotent:z.literal(true),events:z.array(z.enum(eventTypes)).min(1).max(20).default(['goal.completed','goal.cancelled','goal.needs_input','goal.held']),resultFiles:z.array(z.string().min(1).max(1000)).max(10).default([]),maxAttempts:z.number().int().min(1).max(50).default(12)}).strict(),
 }).strict()
-export type WebhookGrant=z.infer<typeof webhookGrantSchema>&{id:string;version:1;active:boolean;receiving:boolean;deliveryPaused:boolean;scopeId:string;entryId:string;tenantId:string;bindingRevision:number;triggerHash:string;policyHash:string;mandate:Mandate;at:number}
+export type WebhookGrant=z.infer<typeof webhookGrantSchema>&{id:string;version:1;rehearsalRequired?:true;rehearsalEpoch?:number;active:boolean;receiving:boolean;deliveryPaused:boolean;scopeId:string;entryId:string;tenantId:string;bindingRevision:number;triggerHash:string;policyHash:string;mandate:Mandate;at:number}
 export interface WebhookReceipt {id:string;grantId:string;identity:string;fingerprint:string;event:CloudEvent;state:'received'|'dispatched'|'held'|'consumed'|'ignored'|'expired';at:number;goalId?:string;triggerId?:string;error?:string;waitId?:string}
 interface AutomationInput {id:string;grantId:string;receiptId:string;triggerHash:string;commandHash:string;mandate:Mandate}
 export interface WebhookDelivery {id:string;event_id:string;grant_id:string;goal_id:string;state:string;body:string;payload_hash:string;target:string;secret_env:string;attempts:number;next_at:number;created_at:number;error?:string}
@@ -119,12 +120,13 @@ export class Webhooks {
   callbackURL(x.callback.url,this.host.config.webhooks.loopbackCallbackOrigins)
   const outbound=secretFromEnv(x.callback.secretEnv)
   for(const name of x.secretEnvs)if(secretFromEnv(name).equals(outbound))throw new WebhookError(400,'separate_direction_credentials_required')
-  const g:WebhookGrant={...x,id:'hook_'+randomUUID().replaceAll('-',''),version:1,active:true,receiving:x.receiving??true,deliveryPaused:false,scopeId:c.route.scopeId,entryId:c.route.entryId,tenantId:c.route.tenantId,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,triggerHash:stableDigest(t),policyHash:this.policyHash(c,x.protocolVersion===2),mandate,at:this.now()}
+  const g:WebhookGrant={...x,id:'hook_'+randomUUID().replaceAll('-',''),version:1,...(x.receiving===false?{rehearsalRequired:true as const,rehearsalEpoch:0}:{}),active:true,receiving:x.receiving??true,deliveryPaused:false,scopeId:c.route.scopeId,entryId:c.route.entryId,tenantId:c.route.tenantId,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,triggerHash:stableDigest(t),policyHash:this.policyHash(c,x.protocolVersion===2),mandate,at:this.now()}
   this.host.store.atomic(()=>{
    // Enabling the protocol is a one-way schema barrier: older binaries must not
    // silently reopen a database containing executable automation grants.
    if(x.protocolVersion===2)this.requireV2(true)
    else this.host.store.db.exec('PRAGMA user_version='+Math.max(8,Number(this.host.store.db.prepare('PRAGMA user_version').get()!.user_version)))
+   if(g.rehearsalRequired){retainWebhookProtocol(this.host.store.db);this.host.store.db.exec('PRAGMA user_version='+Math.max(WEBHOOK_REHEARSAL_DB_SCHEMA,Number(this.host.store.db.prepare('PRAGMA user_version').get()!.user_version)))}
    this.host.store.put('webhook-grant',g.id,g);this.host.store.put('webhook-command',key,{fingerprint:stableDigest(x),grantId:g.id})
    if(x.skill||x.template.criteria.some(cr=>cr.check?.kind==='xlsx_cell_equals'))this.host.store.requireWorkflowSchema()
    this.host.store.audit({type:'webhook.grant_created',id:g.id,triggerId:t.id,templateHash:stableDigest(g.template),actor:c.actor})
@@ -138,11 +140,11 @@ export class Webhooks {
    if(old){if(old.fingerprint!==stableDigest(x))throw new WebhookError(409,'operation_id_conflict');return old.result}
    const g=this.grant(x.id)
    if(['start_receiving','resume_delivery','retry_delivery'].includes(x.action))this.approved(g)
-   if(x.action==='stop_receiving')g.receiving=false
-   if(x.action==='start_receiving')g.receiving=true
+   if(x.action==='stop_receiving'){g.receiving=false;if(g.rehearsalRequired)this.invalidateRehearsal(g)}
+   if(x.action==='start_receiving'){this.requireRehearsal(g);g.receiving=true}
    if(x.action==='pause_delivery')g.deliveryPaused=true
    if(x.action==='resume_delivery')g.deliveryPaused=false
-   if(x.action==='revoke'){g.active=false;g.receiving=false;g.deliveryPaused=true}
+   if(x.action==='revoke'){g.active=false;g.receiving=false;g.deliveryPaused=true;if(g.rehearsalRequired)this.invalidateRehearsal(g)}
    if(x.action==='retry_delivery'){
     const d=this.delivery(x.deliveryId??'')
     if(!d||d.grant_id!==g.id||!['dead','held'].includes(d.state))throw new WebhookError(409,'delivery_not_retryable')
@@ -173,13 +175,14 @@ export class Webhooks {
   }else verifyWebhook(this.inboundKeys(g).map(secretFromEnv),headers,raw,this.now())
   this.approved(g)
   if(!g.receiving)throw new WebhookError(403,'endpoint_not_receiving')
+  this.requireRehearsal(g)
   let parsed:unknown;try{parsed=JSON.parse(raw.toString('utf8'))}catch{throw new WebhookError(400,'invalid_json')}
   return g.transport?.kind==='github-workflow'?githubWorkflowEvent(parsed,g.transport,g.at,this.now()):cloudEventSchema.parse(parsed)
  }
  async ingest(endpointId:string,headers:Record<string,string|undefined>,raw:Buffer){
   const g=this.grant(endpointId),original=this.authenticate(g,headers,raw)
   let event=original
-  if(g.normalizerSourceId){const source=this.host.sources.get(g.normalizerSourceId);if(!(source instanceof ProcessSource))throw new WebhookError(503,'normalizer_unavailable');const data=await source.invoke('webhook',{schemaVersion:1,event:original});event=cloudEventSchema.parse({...original,data});this.approved(g);if(!this.grant(g.id).receiving)throw new WebhookError(403,'endpoint_not_receiving')}
+  if(g.normalizerSourceId){const source=this.host.sources.get(g.normalizerSourceId);if(!(source instanceof ProcessSource))throw new WebhookError(503,'normalizer_unavailable');const data=await source.invoke('webhook',{schemaVersion:1,event:original});event=cloudEventSchema.parse({...original,data});const current=this.grant(g.id);this.approved(current);if(!current.receiving)throw new WebhookError(403,'endpoint_not_receiving');this.requireRehearsal(current);if(this.rehearsalBasis(current)!==this.rehearsalBasis(g))throw new WebhookError(409,'webhook_rehearsal_required')}
   return this.accept(g,event,stableDigest(original))
  }
  receive(endpointId:string,headers:Record<string,string|undefined>,raw:Buffer){
@@ -307,7 +310,7 @@ export class Webhooks {
   if(g.callback.events.includes(type))this.host.store.db.prepare("INSERT INTO webhook_deliveries(id,event_id,grant_id,goal_id,state,body,payload_hash,target,secret_env,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run('dlv_'+stableDigest([eventId,g.id]),eventId,g.id,goal.id,'pending',body,stableDigest(body),g.callback.url,this.outboundKey(g),this.now())
  }
  delivery(id:string):WebhookDelivery|undefined {return this.host.store.db.prepare('SELECT * FROM webhook_deliveries WHERE id=?').get(id) as unknown as WebhookDelivery|undefined}
- snapshot(){return {configured:!!this.host.config.webhooks,protocol:webhookProtocol(this.host.store.db),waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
+ snapshot(){return {configured:!!this.host.config.webhooks,protocol:webhookProtocol(this.host.store.db),waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id),rehearsal:this.rehearsalStatus(g)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
  flush(){
   if(this.closing||this.host.isPaused)return
   for(const row of this.host.store.db.prepare("SELECT d.id FROM webhook_deliveries d JOIN records g ON g.kind='webhook-grant' AND g.id=d.grant_id WHERE d.state='pending' AND d.next_at<=? AND json_extract(g.body,'$.deliveryPaused')=0 ORDER BY d.created_at LIMIT 20").all(this.now())){
@@ -418,15 +421,45 @@ export class Webhooks {
    const overlapUntil=previous&&x.inbound===current?previous.overlapUntil??0:retained?this.now()+x.overlapSeconds*1000:0
    const result={revision:revision+1,inbound:x.inbound,outbound:x.outbound,previous:retained,overlapUntil}
    this.host.store.put('webhook-keys',g.id,result)
+   if(g.rehearsalRequired){g.receiving=false;this.invalidateRehearsal(g);this.host.store.put('webhook-grant',g.id,g)}
    // Already accepted bodies/targets/IDs are immutable; only retry signing changes.
    this.host.store.db.prepare("UPDATE webhook_deliveries SET secret_env=? WHERE grant_id=? AND state IN ('pending','held','dead')").run(x.outbound,g.id)
    this.host.store.put('webhook-command',key,{fingerprint:stableDigest(x),result});this.host.store.audit({type:'webhook.keys_rotated',id:g.id,revision:result.revision});return result
   })
  }
+ private rehearsalBasis(g:WebhookGrant){
+  const {receiving,deliveryPaused,...rules}=g
+  return stableDigest({version:1,grant:rules,keys:this.host.store.get('webhook-keys',g.id)??null})
+ }
+ private invalidateRehearsal(g:WebhookGrant){
+  g.rehearsalEpoch=(g.rehearsalEpoch??0)+1
+  this.host.store.db.prepare("DELETE FROM records WHERE kind='webhook-rehearsal' AND id=?").run(g.id)
+ }
+ rehearsalStatus(g:WebhookGrant){
+  if(!g.rehearsalRequired)return {required:false,current:false,code:'not_required' as const}
+  const proof=this.host.store.get<{version:number;epoch:number;basis:string}>('webhook-rehearsal',g.id)
+  let current=false
+  try{this.approved(g);current=Number.isSafeInteger(g.rehearsalEpoch)&&g.rehearsalEpoch!>=0&&!!proof&&proof.version===1&&proof.epoch===g.rehearsalEpoch&&proof.basis===this.rehearsalBasis(g)}catch{}
+  return {required:true,current,code:current?'rehearsal_current' as const:proof?'rehearsal_stale' as const:'rehearsal_required' as const}
+ }
+ private requireRehearsal(g:WebhookGrant){if(g.rehearsalRequired&&!this.rehearsalStatus(g).current)throw new WebhookError(409,'webhook_rehearsal_required')}
  dryRun(value:unknown){
-  const x=z.object({id:z.string(),event:cloudEventSchema}).strict().parse(value),g=this.grant(x.id)
-  this.approved(g);this.validateEvent(g,x.event)
-  return {valid:true,effects:'none',mode:g.continuations?.some(r=>r.eventType===x.event.type)?'continuation':'start',template:g.template.title,contractHash:stableDigest(g.template)}
+  // Parse the target separately so an invalid sample cannot retain a previous
+  // success. Never persist the supplied sample, its text, hash, or credentials.
+  const target=z.object({id:z.string()}).passthrough().parse(value),g=this.grant(target.id)
+  try{
+   const input=z.object({id:z.string(),event:z.unknown()}).strict().parse(value),event=cloudEventSchema.parse(input.event)
+   this.approved(g);this.validateEvent(g,event)
+   if(g.rehearsalRequired&&(!Number.isSafeInteger(g.rehearsalEpoch)||g.rehearsalEpoch!<0))throw new WebhookError(409,'webhook_rehearsal_required')
+   if(g.rehearsalRequired)this.host.store.atomic(()=>{
+    if(g.receiving&&!this.rehearsalStatus(g).current){g.receiving=false;this.host.store.put('webhook-grant',g.id,g)}
+    this.host.store.put('webhook-rehearsal',g.id,{version:1,epoch:g.rehearsalEpoch,basis:this.rehearsalBasis(g),at:this.now()})
+   })
+   return {valid:true,effects:'none',localEvidence:g.rehearsalRequired?'recorded':'unchanged',mode:g.continuations?.some(r=>r.eventType===event.type)?'continuation':'start',template:g.template.title,contractHash:stableDigest(g.template)}
+  }catch(error){
+   if(g.rehearsalRequired)this.host.store.atomic(()=>{g.receiving=false;this.invalidateRehearsal(g);this.host.store.put('webhook-grant',g.id,g)})
+   throw error
+  }
  }
  private validateEvent(g:WebhookGrant,event:CloudEvent){
   if(event.source!==g.eventSource||!g.eventTypes.includes(event.type)&&!g.continuations?.some(r=>r.eventType===event.type)||g.subjects&&!g.subjects.includes(event.subject??''))throw new WebhookError(403,'event_outside_grant')

@@ -9,7 +9,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import {readRevocations} from './router-memory.ts'
 import {configSchema,type Config} from './config.ts'
 import {managedFiles,recoverManagedFiles,prepareManagedFiles,validateManagedSnapshot,atomicPrivateFile} from './managed-config.ts'
-import {MAX_DB_SCHEMA} from './store.ts'
+import {MAX_DB_SCHEMA,WEBHOOK_REHEARSAL_DB_SCHEMA} from './store.ts'
 const hash=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex')
 const digest=(text:string)=>createHash('sha256').update(text).digest('hex')
 function captureManaged(state:string){const files=managedFiles(state);if(existsSync(files.journal))throw Error('Setup is changing; retry backup after configuration recovery');return {connections:existsSync(files.connections)?readFileSync(files.connections,'utf8'):undefined,secrets:existsSync(files.secrets)?readFileSync(files.secrets,'utf8'):undefined}}
@@ -99,6 +99,7 @@ export async function restoreState(config:Config,directory:string){
    const live=new DatabaseSync(currentPath,{readOnly:true}),old=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
    try{
     const liveSchema=Number(live.prepare('PRAGMA user_version').get()!.user_version)
+    if(liveSchema>=WEBHOOK_REHEARSAL_DB_SCHEMA&&verified.schema<WEBHOOK_REHEARSAL_DB_SCHEMA)throw Error('Downgrade cannot preserve Webhook rehearsal requirements')
     if(liveSchema>=13&&verified.schema<13)throw Error('Downgrade cannot preserve code project reviews and commits')
     if(liveSchema>=9&&verified.schema<9)throw Error('Downgrade cannot preserve Webhook continuation and key protocols')
     if(liveSchema>=8&&verified.schema<8)throw Error('Downgrade cannot preserve Webhook authorization and delivery ledgers; reconcile before restore')
@@ -110,7 +111,7 @@ export async function restoreState(config:Config,directory:string){
     // or acknowledged external history. All other Webhook records stay protected.
     const webhookRecords=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind GLOB 'webhook-*' AND kind!='webhook-reconciliation' ORDER BY kind,id").all()
     const currentWebhookRecords=webhookRecords(live)
-    if(currentWebhookRecords.length&&JSON.stringify(currentWebhookRecords)!==JSON.stringify(webhookRecords(old)))throw Error('Webhook authorization advanced after backup; reconcile before restore')
+    if((liveSchema>=WEBHOOK_REHEARSAL_DB_SCHEMA||currentWebhookRecords.length)&&JSON.stringify(currentWebhookRecords)!==JSON.stringify(webhookRecords(old)))throw Error('Webhook authorization advanced after backup; reconcile before restore')
     for(const table of ['webhook_inbox','webhook_events','webhook_deliveries','webhook_attempts']){
      const rows=(db:DatabaseSync)=>db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)?db.prepare('SELECT * FROM '+table+' ORDER BY '+(table==='webhook_attempts'?'delivery_id,attempt':'id')).all():[]
      const current=rows(live)
