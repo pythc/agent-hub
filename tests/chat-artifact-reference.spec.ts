@@ -34,6 +34,7 @@ it('records exact streamed bytes as a conversation-scoped version without changi
  h.chat.uploads.remove(c.id,'owner',id)
  const reused=await h.chat.uploads.upload(c.id,'owner',id,{name:'notes.txt',mimeType:'text/plain'},Readable.from([Buffer.from('replacement')]))
  expect(reused.id).toBe(file.id);expect(reused.reference?.id).not.toBe(file.reference?.id)
+ expect(reused.registration?.referenceId).not.toBe(file.registration?.referenceId)
 })
 it('preserves recorded identity after restart and represents legacy digests as unknown without backfill',async()=>{
  const {h,config,model}=fixture(),c=h.chat.create('owner'),id=randomUUID()
@@ -41,6 +42,7 @@ it('preserves recorded identity after restart and represents legacy digests as u
  hosts.splice(hosts.indexOf(h),1);await h.close()
  const reopened=new Runtime(config,{model});hosts.push(reopened)
  expect(reopened.chat.uploads.drafts(c.id,'owner')[0]?.reference).toEqual(file.reference)
+ expect(reopened.chat.uploads.drafts(c.id,'owner')[0]?.registration).toEqual(file.registration)
  const row=reopened.store.get<any>('asset',id);delete row.sha256;row.name='renamed.txt';reopened.store.put('asset',id,row)
  const before=reopened.store.get<any>('asset',id)
  expect(reopened.chat.uploads.drafts(c.id,'owner')[0]).toMatchObject({id,name:'renamed.txt',reference:{id,version:null,sha256:null}})
@@ -105,5 +107,47 @@ it('serves pinned downloads and HEAD only behind current HTTP authorization and 
   writeFileSync(h.chat.uploads.download(c.id,'local-operator',id).path,'changed')
   const denied=await fetch(url,{headers});expect(denied.status).toBe(404);expect(await denied.json()).toMatchObject({code:'attachment_version_unavailable'})
   expect((await fetch(url,{headers,method:'HEAD'})).status).toBe(404)
+ }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
+})
+
+it('projects draft registration from authorized source rows without persisting or globally enumerating it',async()=>{
+ const {h}=fixture(),c=h.chat.create('owner'),other=h.chat.create('other'),id=randomUUID()
+ const file=await h.chat.uploads.upload(c.id,'owner',id,{name:'draft.txt',mimeType:'text/plain'},Readable.from([Buffer.from('draft bytes')]))
+ const expected={schema:1,kind:'chat-attachment',domain:'conversation',conversationId:c.id,id,referenceId:file.reference!.id,version:1,sha256:file.reference!.sha256,retention:'subject_to_history_cleanup',publication:'not_tracked',acceptance:'not_tracked'}
+ expect(file.registration).toEqual(expected)
+ const before=h.store.get<any>('asset',id)
+ expect(before).not.toHaveProperty('registration')
+ expect(h.chat.uploads.drafts(c.id,'owner')[0]!.registration).toEqual(expected)
+ expect(h.store.get('asset',id)).toEqual(before)
+ expect(()=>h.chat.uploads.drafts(c.id,'other')).toThrow()
+ expect(h.chat.uploads.drafts(other.id,'other')).toEqual([])
+ expect(h.chat.uploads.resolve(c.id,'owner',[id])[0]).not.toHaveProperty('registration')
+ const renamed={...before,name:'renamed.txt'};h.store.put('asset',id,renamed)
+ expect(h.chat.uploads.drafts(c.id,'owner')[0]!.registration).toEqual(expected)
+ h.chat.uploads.bind([id],'trigger-test')
+ expect(h.chat.uploads.drafts(c.id,'owner')).toEqual([])
+ expect(h.store.get<any>('asset',id)).not.toHaveProperty('registration')
+})
+it('omits legacy candidates and rechecks cleanup before draft metadata projection',async()=>{
+ const {h}=fixture(),c=h.chat.create('owner'),id=randomUUID()
+ await h.chat.uploads.upload(c.id,'owner',id,{name:'old.txt',mimeType:'text/plain'},Readable.from([Buffer.from('old')]))
+ const row=h.store.get<any>('asset',id);delete row.sha256;h.store.put('asset',id,row)
+ expect(h.chat.uploads.drafts(c.id,'owner')[0]).not.toHaveProperty('registration')
+ h.memory.cleanup.apply(planChatHistory(h.store,h.config.stateDir,'@chat:'+stableDigest('owner'),'registration-clear',Date.now(),[c.id]))
+ expect(()=>h.chat.uploads.drafts(c.id,'owner')).toThrow()
+})
+it('exposes draft candidates only through the existing authenticated conversation HTTP list',async()=>{
+ const {h}=fixture(),c=h.chat.create('local-operator'),other=h.chat.create('other'),id=randomUUID()
+ const file=await h.chat.uploads.upload(c.id,'local-operator',id,{name:'draft.txt',mimeType:'text/plain'},Readable.from([Buffer.from('bytes')]))
+ const http=await serve(h),headers={authorization:'Bearer '+readFileSync(http.tokenPath,'utf8').trim(),connection:'close'},url=http.url+'/api/chat/conversations/'+c.id+'/attachments'
+ try{
+  expect((await fetch(url)).status).toBe(401)
+  const response=await fetch(url,{headers});expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store')
+  expect((await response.json()).attachments[0].registration).toEqual(file.registration)
+  expect((await fetch(http.url+'/api/chat/conversations/'+other.id+'/attachments',{headers})).status).toBe(404)
+  const catalog=await (await fetch(http.url+'/artifact-catalog',{headers})).json()
+  expect(JSON.stringify(catalog)).not.toContain(id);expect(JSON.stringify(catalog)).not.toContain(c.id)
+  h.chat.uploads.remove(c.id,'local-operator',id)
+  expect((await (await fetch(url,{headers})).json()).attachments).toEqual([])
  }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
 })

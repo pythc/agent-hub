@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto'
+import {attachmentArtifactRegistration,type ArtifactRegistration} from './artifact-registry.ts'
 import type {ChatArtifactReference} from './artifact-reference.ts'
 import {constants,closeSync,fstatSync,openSync,readSync,createWriteStream,copyFileSync,mkdirSync,readFileSync,rmSync} from 'node:fs'
 import {dirname,extname,join} from 'node:path'
@@ -8,7 +9,7 @@ import {ChatError} from './chat-errors.ts'
 import {stableDigest} from './sources.ts'
 
 export const chatUploadLimits={maxBytes:25*1024*1024,maxFiles:10}
-export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string;reference?:ChatArtifactReference}
+export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string;reference?:ChatArtifactReference;registration?:Extract<ArtifactRegistration,{kind:'chat-attachment'}>}
 interface Upload {id:string;kind:'chat-upload';conversationId:string;name:string;mimeType:string;bytes:number;path:string;createdAt:number;state:'uploading'|'ready';triggerId?:string;previewType?:string;sha256?:string}
 interface Conversation {id:string;owner:string;discussion:string;archived:boolean}
 
@@ -23,10 +24,12 @@ export class ChatAttachments {
     for(const row of host.store.list<Upload>('asset'))if(row.kind==='chat-upload'&&row.state==='uploading')this.discard(row)
   }
   private discard(row:Upload){rmSync(dirname(row.path),{recursive:true,force:true});this.host.store.db.prepare("DELETE FROM records WHERE kind='asset' AND id=?").run(row.id)}
-  private public(row:Upload):ChatAttachment {
+  private public(row:Upload,includeRegistration=false):ChatAttachment {
     const url='/api/chat/conversations/'+row.conversationId+'/attachments/'+row.id
     const reference:ChatArtifactReference={schema:1,kind:'chat-attachment',id:row.sha256?stableDigest(['chat-attachment-version',row.id,row.sha256]):row.id,version:row.sha256?1:null,sha256:row.sha256??null,visibility:'conversation',retention:'subject_to_history_cleanup',publication:'not_tracked'}
-    return {reference,id:row.id,name:row.name,mimeType:row.mimeType,bytes:row.bytes,url,...(row.previewType?{previewUrl:url+'?preview=1'}:{})}
+    const candidate=includeRegistration?attachmentArtifactRegistration(reference,{conversationId:row.conversationId,uploadId:row.id}):null
+    const registration=candidate?.kind==='chat-attachment'?candidate:undefined
+    return {reference,...(registration?{registration}:{}),id:row.id,name:row.name,mimeType:row.mimeType,bytes:row.bytes,url,...(row.previewType?{previewUrl:url+'?preview=1'}:{})}
   }
   private row(id:string,conversationId:string){
     const row=this.host.store.get<Upload>('asset',id)
@@ -35,7 +38,7 @@ export class ChatAttachments {
   }
   drafts(id:string,owner:string){
     this.conversation(id,owner)
-    return this.host.store.list<Upload>('asset').filter(row=>row.kind==='chat-upload'&&row.conversationId===id&&row.state==='ready'&&!row.triggerId&&!this.host.memory.cleanup.blocked('asset',row.id,row)).map(row=>this.public(row))
+    return this.host.store.list<Upload>('asset').filter(row=>row.kind==='chat-upload'&&row.conversationId===id&&row.state==='ready'&&!row.triggerId&&!this.host.memory.cleanup.blocked('asset',row.id,row)).map(row=>this.public(row,true))
   }
   async upload(conversationId:string,owner:string,id:string,input:{name:string;mimeType:string},body:AsyncIterable<Uint8Array>,authorize:()=>void=()=>{}){
     const conversation=this.conversation(conversationId,owner)
@@ -53,7 +56,7 @@ export class ChatAttachments {
       if(!this.host.store.get('asset',id))throw new ChatError('attachment_missing','Upload was removed.',404)
       row.previewType=previewType(readFileSync(path).subarray(0,12));if(row.previewType)row.mimeType=row.previewType
       row.sha256=hash.digest('hex');row.state='ready';this.host.store.put('asset',id,row)
-      return this.public(row)
+      return this.public(row,true)
     }catch(error){this.discard(row);throw error}
   }
   remove(conversationId:string,owner:string,id:string){
