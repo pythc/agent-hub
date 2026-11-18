@@ -1,3 +1,4 @@
+import {schedulePlanState,scheduledRunLifecycle} from './schedule-lifecycle.ts'
 import {z} from 'zod'
 import {quietHoursSchema,quietUntil} from './notification-quiet-hours.ts'
 import type {Delivery} from './store.ts'
@@ -23,7 +24,7 @@ type Command=z.infer<typeof proactiveCommandSchema>
 type Duty=z.infer<typeof dutySchema>&{scopeId:string;revision:number}
 type Controls=z.infer<typeof settingsSchema>&{scopeId:string;revision:number}
 type Schedule=z.infer<typeof scheduleSchema>&{scopeId:string;revision:number;entryId:string;bindingRevision:number;nextAt?:number;createdAt:number}
-export interface ScheduledRun {goalId?:string;id:string;scheduleId:string;scopeId:string;revision:number;scheduledAt:number;createdAt:number;triggerId?:string;triggerHash?:string;spec:Schedule;state:'queued'|'running'|'waiting'|'completed'|'failed'|'cancelled'|'skipped';taskIds:string[];delivery:'none'|'pending'|'sent'|'failed';reason?:string;finishedAt?:number}
+export interface ScheduledRun {queuedAt?:number;startedAt?:number;firstDueAt?:number;triggerKind?:'scheduled'|'manual';goalId?:string;id:string;scheduleId:string;scopeId:string;revision:number;scheduledAt:number;createdAt:number;triggerId?:string;triggerHash?:string;spec:Schedule;state:'queued'|'running'|'waiting'|'completed'|'failed'|'cancelled'|'skipped';taskIds:string[];delivery:'none'|'pending'|'sent'|'failed';reason?:string;finishedAt?:number}
 export interface MessageBatch {id:string;scopeId:string;entryId:string;discussion:string;actor:string;strength:'explicit'|'inferred';policyVersion:string;settingsRevision:number;triggerIds:string[];firstAt:number;dueAt:number;state:'pending'|'evaluating'|'decided'|'failed';decision?:Intervention;manifest?:ContextManifest;reason?:string}
 export type Intervention=Assessment|{action:'clarify';reason:string;question:string}
 const terminal=new Set(['completed','failed','cancelled','skipped'])
@@ -60,7 +61,7 @@ export class RouterProactive {
   const inScope=(v:{scopeId:string})=>v.scopeId===scopeId
   const visible=(entryId:string)=>context?entryId===context.route.entryId:!this.host.scopes.bindings().find(e=>e.id===entryId)?.privateActor
   const acceptedGoals=context?[]:this.host.goals.snapshot().filter(g=>g.scopeId===scopeId&&g.state==='completed'&&g.finalRoundId&&g.nodes?.every(n=>n.workerId)).map(g=>({id:g.id,title:g.title,skill:g.contract?.skill}))
-  return {skills:this.host.skills.list(scopeId,context),acceptedGoals,settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:this.host.store.list<Schedule>('router-schedule').filter(p=>inScope(p)&&visible(p.entryId)),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r),pendingNotifications:this.pendingNotifications(r)})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
+  return {skills:this.host.skills.list(scopeId,context),acceptedGoals,settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:this.host.store.list<Schedule>('router-schedule').filter(p=>inScope(p)&&visible(p.entryId)).map(p=>({...p,lifecycle:schedulePlanState(p,this.now())})),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r),pendingNotifications:this.pendingNotifications(r),lifecycle:scheduledRunLifecycle(r,this.host.store.deliveries().filter(m=>!m.channel.address.routerInbox&&!!r.triggerId&&(this.host.store.get<{inputs?:string[]}>('router-reply-owner',m.id)?.inputs??[]).includes(r.triggerId)))})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
  }
  private requireManager(scopeId:string,context?:ScopeContext){
   this.host.scopes.scope(scopeId)
@@ -177,7 +178,7 @@ export class RouterProactive {
   return {...mandate,scope:run.spec.prompt}
  }
  assertInputs(ids:string[]){for(const id of ids)this.host.routerIngress.authority(id)}
- beforeTurn(id:string){const r=this.runForTrigger(id);if(r?.state==='queued'){this.authority(id);this.host.store.put('router-schedule-run',r.id,{...r,state:'running'})}}
+ beforeTurn(id:string){const r=this.runForTrigger(id);if(r?.state==='queued'){this.authority(id);this.host.store.put('router-schedule-run',r.id,{...r,state:'running',startedAt:r.startedAt??this.now()})}}
  toolAllowed(triggerId:string,name:string,args:any){
   const run=this.runForTrigger(triggerId);if(!run)return
   if(name==='router_manage')throw Error('Scheduled work cannot create or change standing instructions')
@@ -239,15 +240,15 @@ export class RouterProactive {
     const due=latestDue(p.timing,p.nextAt!,Math.min(now,p.timing.endAt?Date.parse(p.timing.endAt):now))
     const next={...p,nextAt:nextTime(p.timing,Math.max(now,due)+1)}
     // Consume the occurrence before dispatch, in the same transaction as its receipt and job.
-    this.launch(p,due)
+    this.launch(p,due,'',p.nextAt)
     store.put('router-schedule',stableDigest([p.scopeId,p.id]),next)
    })
   }
   this.settleRuns()
  }
- private launch(p:Schedule,scheduledAt:number,suffix=''){
+ private launch(p:Schedule,scheduledAt:number,suffix='',firstDueAt=scheduledAt){
   const store=this.host.store,id=stableDigest([p.scopeId,p.id,p.revision,scheduledAt,suffix]),previous=store.get<ScheduledRun>('router-schedule-run',id);if(previous)return previous
-  const run:ScheduledRun={id,scheduleId:p.id,scopeId:p.scopeId,revision:p.revision,scheduledAt,createdAt:this.now(),spec:p,state:'queued',taskIds:[],delivery:'none'}
+  const run:ScheduledRun={id,scheduleId:p.id,scopeId:p.scopeId,revision:p.revision,scheduledAt,createdAt:this.now(),firstDueAt,triggerKind:suffix.startsWith('manual:')?'manual':'scheduled',spec:p,state:'queued',taskIds:[],delivery:'none'}
   const skip=(reason:string)=>{run.state='skipped';run.reason=reason;run.finishedAt=this.now();store.put('router-schedule-run',id,run);return run}
   if(store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===p.scopeId&&r.scheduleId===p.id&&this.unsettled(r)))return skip('Previous run is still active')
   if(p.timing.endAt&&this.now()>Date.parse(p.timing.endAt))return skip('Schedule end time passed')
@@ -262,7 +263,7 @@ export class RouterProactive {
    const discussion=trigger.source+':'+thread
    store.triggers.save(trigger)
    this.host.scopes.context(trigger,discussion)
-   run.triggerId=trigger.id;run.triggerHash=stableDigest(trigger)
+   run.triggerId=trigger.id;run.triggerHash=stableDigest(trigger);run.queuedAt=this.now()
    store.put('router-schedule-run',id,run)
    store.put('router-admission',trigger.id,{triggerId:trigger.id,discussion,policyVersion:mandate.policyVersion,state:'accepted',reason:'Standing schedule authorization',at:trigger.at,mandate:{...mandate,scope:p.prompt}} satisfies RouterAdmission)
    store.enqueue('router:schedule:'+id,p.skill?'router-skill-run':p.mode==='continue'?'router-scheduled-followup':'router',{discussion,triggerId:trigger.id,runId:id})
@@ -282,7 +283,7 @@ export class RouterProactive {
   this.beforeTurn(r.triggerId)
   const t=this.host.store.triggers.get(r.triggerId)!,a=this.host.routerIngress.get(t.id)!,context=this.host.scopes.contextForTask(t,a.discussion,r.spec.ticketId!)!
   const task=this.host.store.tickets.get(r.spec.ticketId!)
-  if(!task||task.ended){this.host.store.put('router-schedule-run',r.id,{...r,state:'skipped',reason:'Task ended before scheduled follow-up',finishedAt:this.now()});return}
+  if(!task||task.ended){this.host.store.put('router-schedule-run',r.id,{...this.host.store.get<ScheduledRun>('router-schedule-run',r.id)!,state:'skipped',reason:'Task ended before scheduled follow-up',finishedAt:this.now()});return}
   await this.continueTask(r.spec.ticketId!,[t],a.discussion,context,'schedule:'+r.id)
   this.noteTask(t.id,r.spec.ticketId!)
  }
