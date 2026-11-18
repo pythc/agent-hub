@@ -129,8 +129,8 @@ export class EntrySetup {
   host.store.put('entry-plan',plan.id,{sourceId:id,entryId:input.entryId,label:input.name??names[input.entryId],scopes,location:scopes.map(x=>x.label).join(', ')||input.repository,expiresAt:plan.expiresAt})
   return {...plan,changes:[{code:'add_entry',entryId:input.entryId},{code:'reuse_current_backend'},{code:'read_only_workspace'},{code:'explicit_sender_access'}],usage:this.usage(input.entryId)}
  }
- async apply(id:string,rebuild:(config:Config)=>Promise<void>){
-  const label=this.host().store.get<any>('entry-plan',id),receipt=await this.deployment.apply(id,rebuild)
+ async apply(id:string,rebuild:(config:Config)=>Promise<void>,authorize?:()=>void){
+  const label=this.host().store.get<any>('entry-plan',id),receipt=await this.deployment.apply(id,rebuild,authorize)
   if(label){this.host().store.put('entry-label',receipt.sourceId,label);this.choices.delete(label.entryId)}
   return {...receipt,entryId:label?.entryId,usage:label?this.usage(label.entryId,receipt.sourceId):undefined}
  }

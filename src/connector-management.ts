@@ -1,3 +1,5 @@
+import {managedConnections} from './managed-config.ts'
+import {sourceDeployment} from './connector-config.ts'
 import {ProcessSource} from './plugin-process.ts'
 import {FeishuSource} from '../plugins/feishu/feishu.ts'
 import {randomUUID,randomBytes,createHmac} from 'node:crypto'
@@ -180,18 +182,21 @@ export class ConnectorManagement {
     const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
     return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
-   return {id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
+   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
   }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them
   * directly to Onboarding.sourcePlan and returns only its reviewed plan. */
  plan(value:unknown):{revision:number;source:SourceConfig;credentials:Record<string,string>}{
+  return this.buildPlan(value)
+ }
+ private buildPlan(value:unknown,original?:SourceConfig):{revision:number;source:SourceConfig;credentials:Record<string,string>}{
   const input=this.parseDraft(value);this.checkRevision(input.revision)
   const host=this.host(),definition=this.definition(input.kind),fields=definition.setup?.fields
   if(!fields?.length)throw new ConnectorError('connector_unsupported')
   const credentials:Record<string,string>={},supplied=new Set([...Object.keys(input.fields),...Object.keys(input.credentials)])
   if([...supplied].some(key=>!fields.some(f=>f.name===key)))throw new ConnectorError('connector_invalid')
-  const draft:Record<string,unknown>={id:'app-'+randomUUID().slice(0,12),kind:input.kind,label:input.label,allowedActors:[...new Set(input.actors)],cwd:host.config.sources.find(s=>s.kind==='local')?.cwd??host.config.sources[0]!.cwd,sandbox:'read-only',enabled:false,allowedBots:[]}
+  const draft:Record<string,unknown>=original?structuredClone(original):{id:'app-'+randomUUID().slice(0,12),kind:input.kind,label:input.label,allowedActors:[...new Set(input.actors)],cwd:host.config.sources.find(s=>s.kind==='local')?.cwd??host.config.sources[0]!.cwd,sandbox:'read-only',enabled:false,allowedBots:[]}
   const invalid=(field:string,code:ConnectorIssueCode)=>new ConnectorError('connector_invalid',400,this.issues(definition,[{field,code}]))
   for(const field of fields){
    const path=fieldPath(definition,field),credential=Object.values(definition.credentials).includes(path)
@@ -199,7 +204,7 @@ export class ConnectorManagement {
    if(credential){
     if(input.fields[field.name]!==undefined)throw invalid(field.name,'unsupported_field')
     const secret=input.credentials[field.name]
-    if(!secret){if(field.required)throw invalid(field.name,'required');continue}
+    if(!secret){if(field.required&&!(original&&typeof pointer(original,path)==='string'))throw invalid(field.name,'required');continue}
     const name=input.credentialMode==='environment'?secret:'AGENTHUB_SETUP_CONNECTOR_'+randomUUID().replaceAll('-','').toUpperCase()
     if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))throw invalid(field.name,'invalid_environment_reference')
     if(input.credentialMode==='value')credentials[name]=secret
@@ -207,15 +212,47 @@ export class ConnectorManagement {
    }else{
     if(input.credentials[field.name]!==undefined)throw invalid(field.name,'unsupported_field')
     let raw=input.fields[field.name]
+    if(original&&raw===undefined)continue
     if(field.input==='tags'&&typeof raw==='string')raw=raw.split(/[\n,]/).map(s=>s.trim()).filter(Boolean)
     if(field.required&&(raw===undefined||raw===''||Array.isArray(raw)&&!raw.length))throw invalid(field.name,'required')
-    if(raw!==undefined&&raw!=='')setField(draft,path,raw)
+    if(raw!==undefined&&(raw!==''||original))setField(draft,path,raw)
    }
   }
   const parsed=configSchema.shape.sources.element.safeParse(draft);if(!parsed.success)throw new ConnectorError('connector_invalid',400,this.issues(definition,parsed.error.issues.flatMap(issue=>{const path='/'+issue.path.join('/'),field=fields.find(f=>{const target=fieldPath(definition,f);return path===target||path.startsWith(target+'/')});return field?[{field:field.name,code:'invalid_format'}]:[]})))
   const validationConfig=structuredClone(parsed.data),freeze=(value:unknown):void=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value)}};freeze(validationConfig)
   try{host.sourceRegistry.validate(validationConfig)}catch{throw new ConnectorError('connector_invalid',400,this.configurationIssues(definition,validationConfig))}
   return {revision:input.revision,source:parsed.data,credentials}
+ }
+ private repairSource(sourceId:string){
+  const host=this.host(),source=this.source(sourceId),definition=this.definition(source.kind)
+  let managed:SourceConfig|undefined
+  try{managed=managedConnections(host.config.stateDir).sources.find(s=>s.id===sourceId)}catch{throw new ConnectorError('connector_unsupported')}
+  const created=host.store.list<{receipt?:{sourceId?:string}}>('onboarding-deployment').some(r=>r.receipt?.sourceId===sourceId)
+  if(host.startupSourceIds.includes(sourceId)||source.enabled||!managed||!created||stableDigest(sourceDeployment(source))!==stableDigest(sourceDeployment(managed))||!definition.setup?.fields.length||!definition.setup.fields.every(f=>writableField(definition,fieldPath(definition,f))))throw new ConnectorError('connector_unsupported')
+  return source
+ }
+ private repairAvailable(source:SourceConfig){try{this.repairSource(source.id);return true}catch{return false}}
+ repairRead(value:unknown){
+  const input=safeParse(z.object({sourceId:id,revision}).strict(),value);this.checkRevision(input.revision)
+  const source=this.repairSource(input.sourceId),definition=this.definition(source.kind),fields:Record<string,string|string[]>={}
+  for(const field of definition.setup!.fields){const path=fieldPath(definition,field);if(Object.values(definition.credentials).includes(path))continue
+   const value=pointer(source,path);if(typeof value==='string'||Array.isArray(value)&&value.every(v=>typeof v==='string'))fields[field.name]=value
+  }
+  return {sourceId:source.id,revision:input.revision,kind:source.kind,label:source.label??definition.label,fields,enabled:false,credentialAvailability:this.credentialAvailability({source,credentials:{}})}
+ }
+ repairPlan(value:unknown){
+  const input=safeParse(draftSchema.pick({revision:true,fields:true,credentialMode:true}).extend({sourceId:id,credentials:z.record(z.string().max(100),z.string().max(16000)).default({})}).strict(),value)
+  this.checkRevision(input.revision)
+  const host=this.host(),source=this.repairSource(input.sourceId),definition=this.definition(source.kind),fingerprint=this.fingerprint(source),definitionDigest=stableDigest(definition),registry=host.sourceRegistry
+  const {sourceId:_,...draft}=input
+  draft.credentials=Object.fromEntries(Object.entries(input.credentials).filter(([,value])=>value.trim().length))
+  const planned=this.buildPlan({...draft,kind:source.kind,label:source.label??definition.label,actors:source.allowedActors,...(!source.allowedActors.length?{intent:'draft'}:{})},source)
+  const revalidate=()=>{
+   if(this.host()!==host||this.host().sourceRegistry!==registry)throw new ConnectorError('connector_conflict',409)
+   this.checkRevision(input.revision)
+   if(this.fingerprint(this.repairSource(input.sourceId))!==fingerprint||stableDigest(this.definition(source.kind))!==definitionDigest)throw new ConnectorError('connector_conflict',409)
+  }
+  revalidate();return {...planned,revalidate}
  }
  validate(value:unknown){
   try{const plan=this.plan(value);return {valid:true,revision:plan.revision,code:'configuration_valid',networkTested:false,realCall:false,startsDisabled:true,credentialAvailability:this.credentialAvailability(plan)}}

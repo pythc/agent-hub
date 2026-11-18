@@ -56,7 +56,7 @@ import {WebhookError} from './webhook-protocol.ts'
 import {enabledView,viewCatalog,viewArtifactReference,viewVersion} from './workspace-view-package.ts'
 import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 
-export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string)=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
+export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string,startupSourceIds?:readonly string[])=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
   const tokenPath = join(runtime.config.stateDir, 'access-token')
   const connectionFile=join(runtime.config.stateDir,'connection.json')
   const account=new PersonalAccount(runtime.config.stateDir,Date.now,runtime.config.http?.publicOrigin)
@@ -69,9 +69,10 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const market=new PluginMarket(()=>runtime,options.pluginGitHub)
   const templates=new WorkerTemplates(()=>runtime),connectors=new ConnectorManagement(()=>runtime),trace=new ExecutionTrace(()=>runtime)
   async function rebuild(config:Config,activationId?:string){
+    const startupSourceIds=runtime.startupSourceIds
     await stopRuntime()
     if(stopping)throw Error('Host is stopping')
-    const next=await (options.createRuntime?options.createRuntime(configSchema.parse(config),activationId):Runtime.create(configSchema.parse(config),{pluginActivation:activationId}))
+    const next=await (options.createRuntime?options.createRuntime(configSchema.parse(config),activationId,startupSourceIds):Runtime.create(configSchema.parse(config),{pluginActivation:activationId,startupSourceIds}))
     runtime=next;runtimeClosed=false;closingRuntime=undefined;runtime.endpoint=endpoint;delegationServer=runtime.delegation.enabled?await serveDelegation(runtime.delegation,runtime.delegation.preferredPort):undefined;runtime.start()
   }
   let token: string
@@ -113,6 +114,10 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   function requireCurrentOperator(req: IncomingMessage) {
     if(stopping||changing||unavailable)throw new OnboardingError('configuration_busy','The host is changing configuration.',503)
     if(!authorized(req)&&!(account.configured?account.authorized(req):sessions.authorized(req)))throw new AccountError('operator_session_ended','Operator session ended',401)
+  }
+  function requireApplyOperator(req:IncomingMessage){
+    if(stopping||unavailable)throw new OnboardingError('configuration_busy','The host is unavailable.',503)
+    if(!authorized(req)&&!(account.configured?account.authorized(req):sessions.authorized(req)))throw new OnboardingError('operator_session_ended','Operator session ended',401)
   }
   async function operatorBody(req: IncomingMessage) {
     const input=await body(req)
@@ -185,6 +190,12 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='GET'&&path==='/entry-guide'){send(res,200,entries.publicGuide());return}
     if(req.method==='POST'&&path==='/entry-guide'){const input=z.object({invite:z.string().min(20).max(100)}).strict().parse(await body(req));send(res,200,await entries.invitation(input.invite));return}
+    // Session revocation stays available while an apply waits for quiescence.
+    if(req.method==='POST'&&path==='/logout'){
+      if(!authorized(req)&&!browserOperator){send(res,401,{code:'token_required'});return}
+      if(!authorized(req)&&req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
+      if(account.configured)account.logout(req,res);else sessions.logout(req,res);send(res,200,{operator:false});return
+    }
     if(changing||unavailable){send(res,503,{error:'The host is applying configuration. Please try again shortly.',code:unavailable?'setup_recovery_required':'configuration_restarting'});return}
     const operator=authorized(req)||browserOperator
     if(['POST','PATCH','DELETE'].includes(req.method??'')&&!authorized(req)&&browserOperator&&req.headers.origin!==requestOrigin){send(res,403,{code:'same_origin_required'});return}
@@ -261,6 +272,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(path==='/api/connectors'&&req.method==='GET'){send(res,200,connectors.snapshot());return}
       if(req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
       const input=await operatorBody(req)
+      if(path==='/api/connectors/repair/read'){send(res,200,connectors.repairRead(input));return}
+      if(path==='/api/connectors/repair/plan'){const p=connectors.repairPlan(input);send(res,200,onboarding.sourceRepairPlan(p.revision,p.source,p.credentials,p.revalidate));return}
       if(path==='/api/connectors/validate'){send(res,200,connectors.validate(input));return}
       if(path==='/api/connectors/plan'){const planned=connectors.plan(input);send(res,200,onboarding.sourcePlan(planned.revision,planned.source,planned.credentials));return}
       if(path==='/api/connectors/probe'){send(res,200,await connectors.probe(input));return}
@@ -345,7 +358,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(path==='/api/plugin-market/connection/apply'&&req.method==='POST'){
       const input=z.object({id:z.string().uuid()}).strict().parse(await operatorBody(req));changing=true
-      try{send(res,200,await onboarding.apply(input.id,rebuild))}finally{changing=false}return
+      try{send(res,200,await onboarding.apply(input.id,rebuild,()=>requireApplyOperator(req)))}finally{changing=false}return
     }
     if(path==='/api/workspace-views'||path.startsWith('/api/workspace-views/')){
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
@@ -545,7 +558,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/subscription/logout'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.logout(input.account));return}
     if(req.method==='POST'&&path==='/subscription/models'){const input=z.object({account:z.string()}).strict().parse(await body(req));send(res,200,await runtime.subscriptions.models(input.account));return}
     if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(runtime.config.http?.publicOrigin??endpoint),expiresIn:600});return}
-    if(req.method==='POST'&&path==='/logout'){if(account.configured)account.logout(req,res);else sessions.logout(req,res);send(res,200,{operator:false});return}
+
     if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
     if(path==='/entry-workspace/attention'){
       requireCurrentOperator(req)
@@ -572,8 +585,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/model-connections/check'){send(res,200,await onboarding.checkConnection(await body(req)));return}
     if(req.method==='POST'&&path==='/model-connections/models'){send(res,200,await onboarding.models(await body(req)));return}
     if(req.method==='POST'&&(path==='/entry-setup/apply'||path==='/entry-setup/model/apply')){
-      const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));changing=true
-      try{send(res,200,await entries.apply(input.id,rebuild))}finally{changing=false}return
+      const input=z.object({id:z.string().uuid()}).strict().parse(await operatorBody(req));changing=true
+      try{send(res,200,await entries.apply(input.id,rebuild,()=>requireApplyOperator(req)))}finally{changing=false}return
     }
     if(req.method==='POST'&&path==='/entry-setup/install'){const input=z.object({entryId:z.enum(entryIds)}).strict().parse(await body(req));send(res,200,await entries.install(input.entryId));return}
     if(req.method==='GET'&&path==='/entry-setup/client-config'){const id=new URL(req.url!,'http://localhost').searchParams.get('entryId');send(res,200,entries.clientConfig(z.enum(entryIds).parse(id)));return}
@@ -585,8 +598,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/onboarding/plan'){send(res,200,onboarding.plan(await body(req)));return}
     if(req.method==='POST'&&path==='/onboarding/check'){const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));send(res,200,await onboarding.check(input.id));return}
     if(req.method==='POST'&&path==='/onboarding/apply'){
-      const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));if(changing)throw new OnboardingError('configuration_busy','Another setup is being applied.',409);changing=true
-      try{send(res,200,await onboarding.apply(input.id,rebuild))}finally{changing=false}
+      const input=z.object({id:z.string().uuid()}).strict().parse(await operatorBody(req));if(changing)throw new OnboardingError('configuration_busy','Another setup is being applied.',409);changing=true
+      try{send(res,200,await onboarding.apply(input.id,rebuild,()=>requireApplyOperator(req)))}finally{changing=false}
       return
     }
     if(req.method==='POST'&&path==='/decision/probe'){
