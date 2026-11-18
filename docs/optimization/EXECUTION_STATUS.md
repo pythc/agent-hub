@@ -31,6 +31,12 @@ Focused regressions cover independent facets, old assignments, stale/malformed a
 
 Read-only tests compare all database table contents before and after full `trace.snapshot` reads, including artifact bytes, cached workbook observations, jobs, outbox and audit. They use a history-capable synthetic backend and persisted task/goal contexts. Fixtures make no real provider calls, paid inference or external message sends. Exact check results must be bound to the integration commit; these tests do not establish live platform delivery or readback.
 
-## Deferred recovery boundary
+## Recovery gate integration (O08/O11 partial)
 
-This O07 projection does not implement O08 reconciliation or change Runtime retry semantics. A proposed additional POST resume fence for repository-effect uncertainty was rejected by automatic approval review and was not applied. That separate operation-semantics change requires its own resolved authorization and review; display of an unknown effect must not be described as proof that this deferred server-side repair is implemented.
+Execution trace now uses the same read-only status projection when deciding its recovery actions. `effects: unknown` or `delivery: uncertain` sets `unknownEffects`, removes `resume_session`, and makes a fresh recovery POST require reconciliation. POST recomputes the projection; an old observation is rejected before Runtime retry. Existing inspect, history, cancel, authorization and session checks remain intact. `in_progress` alone is not a new blanket prohibition.
+
+The private observation digest additionally binds the relevant `pr-delivery`, `review-action`, `merge-attempt`, `merge-grant` and Router reply ownership records, including record keys and ownership links. Aggregate counts and states alone are insufficient: changing a receipt or grant while keeping its displayed state must require a new observation. Raw evidence is hashed, never returned. Wall-clock `observedAt` is excluded, so repeated reads and unrelated repository receipts do not invalidate a task observation. No write hooks, ledger, schema migration or external requests are added.
+
+This is a **current-state fence**, not a monotonic history/ABA guarantee. A record removed and then restored byte-for-byte (or evidence inserted then removed before the next observation) can reproduce an earlier digest. Complete mutation-history fencing remains deferred. Tests cover uncertainty, changed evidence at equal aggregate status, resolution, deletion requiring a fresh observation, grant reassociation, unchanged reads, unrelated receipts and normal authorized resume through a real Runtime. They do not establish external reconciliation, remote truth, automatic replay safety or completion of O08/O11.
+
+Runtime retry semantics outside this execution-trace recovery endpoint are unchanged. Reconciliation and replay remain separate owner-controlled operations; this increment neither performs them nor adds authority to do so.
