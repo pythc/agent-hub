@@ -50,19 +50,25 @@ export class FeishuSource extends MessageSource {
     const deadline=()=>signal?AbortSignal.any([signal,AbortSignal.timeout(15000)]):AbortSignal.timeout(15000)
     const appId=process.env[this.config.feishu!.appIdEnv??""],secret=process.env[this.config.feishu!.appSecretEnv??""]
     const tokenKey=createHash('sha256').update(JSON.stringify([appId,secret])).digest('hex')
+    const current=()=>this.tokenCredentialKey===tokenKey&&createHash('sha256').update(JSON.stringify([process.env[this.config.feishu!.appIdEnv??''],process.env[this.config.feishu!.appSecretEnv??'']])).digest('hex')===tokenKey
     if(tokenKey!==this.tokenCredentialKey){this.expiresAt=0;this.tokenCredentialKey=tokenKey}
     if(Date.now()>=this.expiresAt){
       if(!appId||!secret)throw Error('Feishu app credentials are not configured')
       const started=performance.now();let ok=false,token:any
       try{const response=await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({app_id:appId,app_secret:secret}),signal:deadline()});token=await response.json();if(!response.ok||token.code!==0||!token.tenant_access_token)throw Error('Feishu tenant authentication failed');ok=true}
       finally{this.report({method:'POST',path:'auth/v3/tenant_access_token/internal',measurement:'http-request',ok,durationMs:performance.now()-started})}
+      if(!current())throw Error('Feishu credentials changed during authentication')
       this.accessToken=token.tenant_access_token;this.expiresAt=Date.now()+Math.max(1,token.expire-60)*1000
     }
+    if(!current())throw Error('Feishu credentials changed during authentication')
+    const accessToken=this.accessToken
     return this.measured(method,path,'http-request',async()=>{
-    const response=await fetch('https://open.feishu.cn/open-apis/'+path,{method,headers:{authorization:'Bearer '+this.accessToken,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:deadline()})
+    const response=await fetch('https://open.feishu.cn/open-apis/'+path,{method,headers:{authorization:'Bearer '+accessToken,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:deadline()})
+    if(!current())throw Error('Feishu credentials changed during request')
     if(path.includes('/resources/')&&response.ok){if(Number(response.headers.get('content-length')??0)>8000000)throw Error('Resource exceeds 8 MB');const data=Buffer.from(await response.arrayBuffer());if(data.length>8000000)throw Error('Resource exceeds 8 MB');return {binary:data.toString('base64'),mimeType:response.headers.get('content-type')}}
     const result=await response.json() as any
-    if(!response.ok||result.code!==0){if(result.code===99991663)this.expiresAt=0;throw Error('Feishu API failed: '+result.code)}
+    if(!current())throw Error('Feishu credentials changed during request')
+    if(!response.ok||result.code!==0){if(result.code===99991663&&current()&&this.accessToken===accessToken)this.expiresAt=0;throw Error('Feishu API failed: '+result.code)}
     if(path==='bot/v3/info')return {bot:result.bot??result.data?.bot}
     return result.data
     })
@@ -82,7 +88,7 @@ export class FeishuSource extends MessageSource {
         const identity={id,type:'bot',verified:true}
         if(key){if(this.credentialFingerprint?.()!==key)throw Error('Feishu credentials changed during identity verification');this.identityCache={key,until:Date.now()+300_000,value:identity}}
         return identity
-      }catch(error){this.identityCache=undefined;throw error}
+      }catch(error){if(!key||this.identityCache?.key===key)this.identityCache=undefined;throw error}
     })()
     this.identityPending={key:key??'',value}
     try{return await value}finally{if(this.identityPending?.value===value)this.identityPending=undefined}

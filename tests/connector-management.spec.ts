@@ -1,3 +1,4 @@
+import {ProcessSource} from '../src/plugin-process.ts'
 import {afterEach,expect,it,vi} from 'vitest'
 import {mkdtempSync,rmSync,readFileSync} from 'node:fs'
 import {join} from 'node:path'
@@ -14,6 +15,7 @@ import {serve} from '../src/server.ts'
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{for(const host of hosts.splice(0))await host.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});delete process.env.CONNECTOR_TEST_TOKEN})
 function fixture(options:ConstructorParameters<typeof ConnectorManagement>[1]={},events=true){
+ process.env.CONNECTOR_TEST_TOKEN='fixture-local-credential'
  const root=mkdtempSync(join(tmpdir(),'connector-management-'));roots.push(root)
  const registry=new SourceRegistry()
  registry.register({apiVersion:1,kind:'fixture-im',label:'Fixture IM',create:c=>new MessageSource(c),scopes:c=>c.options.channels as string[],connection:{scopesPath:'/options/channels',credentials:{TOKEN:'/options/tokenEnv'},validate:c=>{if(!Array.isArray(c.options.channels)||!c.options.channels.length||typeof c.options.team!=='string')throw Error('Invalid fixture fields')},setup:{description:'Fixture app setup',serviceUrl:'http://127.0.0.1:1234/',fields:[{name:'team',label:'Team ID',path:'/options/team',required:true,secret:false},{name:'channels',label:'Channel IDs',path:'/options/channels',input:'tags',required:true,secret:false},{name:'token',label:'Bot credential',path:'/options/tokenEnv',required:true,secret:true}]}}})
@@ -26,7 +28,7 @@ function fixture(options:ConstructorParameters<typeof ConnectorManagement>[1]={}
  return {host,manager,source,probe,draft}
 }
 it('uses registered plugin metadata and keeps definitions, instances and diagnostics separate',()=>{
- const f=fixture(),view=f.manager.snapshot()
+ const f=fixture();delete process.env.CONNECTOR_TEST_TOKEN;const view=f.manager.snapshot()
  expect(view.definitions.find(d=>d.kind==='fixture-im')).toMatchObject({setupAvailable:true,fields:expect.arrayContaining([expect.objectContaining({name:'token',path:'/options/tokenEnv',credential:true})])})
  expect(view.definitions.some(d=>d.kind==='slack')).toBe(false)
  expect(view.instances).toMatchObject([{id:'team',scopeCount:2,configured:true,realCall:{status:'not_tested'},credentialReferences:[{field:'Bot credential',available:false}]}])
@@ -272,4 +274,101 @@ it('keeps accessor and malformed-plugin failures inside fixed HTTP validate and 
   }
   expect(f.source.identity).not.toHaveBeenCalled();expect(f.source.members).not.toHaveBeenCalled();expect(f.host.config.sources).toHaveLength(2)
  }finally{await new Promise<void>(resolve=>http.server.close(()=>resolve()))}
+})
+
+it('invalidates only credential-dependent evidence on rotation without exposing private basis or writing on GET',async()=>{
+ const f=fixture(),authId=randomUUID()
+ await f.probe('configuration');await f.probe('authentication',authId);await f.probe('capabilities')
+ const config=f.host.config.sources.find(s=>s.id==='team')!
+ const other=configSchema.shape.sources.element.parse({...config,id:'other',options:{...config.options,tokenEnv:'CONNECTOR_OTHER_TOKEN'}})
+ f.host.config.sources.push(other);const adapter:import('../src/sources.ts').Source=new MessageSource(other);adapter.identity=vi.fn(async()=>({id:'other',type:'bot',verified:true}));f.host.sources.set('other',adapter)
+ process.env.CONNECTOR_OTHER_TOKEN='other-unchanged'
+ try{
+  await f.manager.probe({sourceId:'other',revision:0,level:'authentication',requestId:randomUUID()})
+  process.env.CONNECTOR_TEST_TOKEN='SECRET_ROTATED_TOKEN'
+  const before=JSON.stringify(f.host.store.db.prepare('SELECT * FROM records ORDER BY kind,id').all()),view=f.manager.snapshot()
+  const team=view.instances.find(s=>s.id==='team')!
+  expect(team.layers.authentication).toMatchObject({status:'stale',code:'credential_changed',current:false})
+  expect(team.layers.capabilities).toMatchObject({status:'stale',code:'credential_changed',current:false})
+  expect(team.layers.capabilities).not.toHaveProperty('checkedCapabilities')
+  expect(team.layers.configuration).toMatchObject({status:'passed',current:true})
+  expect(view.instances.find(s=>s.id==='other')!.layers.authentication).toMatchObject({status:'passed',current:true})
+  expect(JSON.stringify(f.host.store.db.prepare('SELECT * FROM records ORDER BY kind,id').all())).toBe(before)
+  expect(JSON.stringify(view)).not.toMatch(/SECRET_ROTATED|basis|fingerprint|lifecycle/)
+  expect(before).not.toContain('fixture-local-credential');expect(before).not.toContain('other-unchanged')
+  expect(await f.probe('authentication',authId)).toMatchObject({status:'stale',code:'credential_changed'})
+  expect(f.source.identity).toHaveBeenCalledTimes(1)
+  expect(await f.probe('authentication')).toMatchObject({status:'passed'})
+  delete process.env.CONNECTOR_TEST_TOKEN
+  expect(f.manager.snapshot().instances[0]!.layers.configuration).toMatchObject({status:'stale',code:'configuration_changed',current:false})
+  expect(f.manager.snapshot().instances[0]!.layers.authentication).toMatchObject({status:'stale',code:'credential_missing'})
+  const calls=(f.source.identity as any).mock.calls.length
+  expect(await f.probe('authentication')).toMatchObject({status:'stale',code:'credential_missing'})
+  expect(f.source.identity).toHaveBeenCalledTimes(calls)
+ }finally{delete process.env.CONNECTOR_OTHER_TOKEN}
+})
+it('fences an in-flight successful authentication after credential rotation',async()=>{
+ const f=fixture();let release!:(v:any)=>void
+ f.source.identity=vi.fn(()=>new Promise<any>(resolve=>{release=resolve}))
+ const id=randomUUID(),pending=f.probe('authentication',id)
+ process.env.CONNECTOR_TEST_TOKEN='rotated-in-flight';release({id:'old-account',type:'bot',verified:true})
+ expect(await pending).toMatchObject({status:'stale',code:'credential_changed'})
+ expect(await f.probe('authentication',id)).toMatchObject({status:'stale',code:'credential_changed'})
+ expect(f.manager.snapshot().instances[0]!.layers.authentication).toMatchObject({current:false})
+})
+it('invalidates adapter changes and old service lifecycle receipts, including original request retries',async()=>{
+ const f=fixture(),id=randomUUID();await f.probe('authentication',id)
+ const original=f.source.identity
+ f.source.identity=async()=>({id:'changed',type:'bot',verified:true})
+ expect(f.manager.snapshot().instances[0]!.layers.authentication).toMatchObject({status:'stale',code:'adapter_changed',current:false})
+ f.source.identity=original
+ const replacement=new ConnectorManagement(()=>f.host)
+ expect(replacement.snapshot().instances[0]!.layers.authentication).toMatchObject({status:'stale',code:'evidence_lifecycle_changed',current:false})
+ expect(await replacement.probe({sourceId:'team',revision:0,level:'authentication',requestId:id})).toMatchObject({status:'stale',code:'evidence_lifecycle_changed'})
+ expect(f.source.identity).toHaveBeenCalledTimes(1)
+})
+it('never trusts legacy receipts that have no private evidence basis',async()=>{
+ const f=fixture(),id=randomUUID();await f.probe('authentication',id)
+ const record=f.host.store.get<any>('connector-diagnostic',id);delete record.basis;f.host.store.put('connector-diagnostic',id,record)
+ expect(f.manager.snapshot().instances[0]!.layers.authentication).toMatchObject({status:'stale',code:'evidence_lifecycle_changed',current:false})
+ expect(await f.probe('authentication',id)).toMatchObject({status:'stale',code:'evidence_lifecycle_changed'})
+})
+it('binds loaded adapter metadata without rereading packages and refuses untracked credential basis',async()=>{
+ const f=fixture();await f.probe('authentication')
+ const original=f.host.sourceRegistry.connectionDefinitions.bind(f.host.sourceRegistry)
+ const metadata=vi.spyOn(f.host.sourceRegistry,'connectionDefinitions').mockImplementation(()=>original().map(d=>d.kind==='fixture-im'?{...d,pluginId:'fixture-package',version:'2.0.0',digest:'b'.repeat(64)}:d))
+ expect(f.manager.snapshot().instances[0]!.layers.authentication).toMatchObject({status:'stale',code:'adapter_changed'})
+ metadata.mockImplementation(()=>original().map(d=>d.kind==='fixture-im'?{...d,setup:undefined}:d))
+ const count=(f.source.identity as any).mock.calls.length
+ expect(await f.probe('authentication')).toMatchObject({code:'credential_basis_unavailable'})
+ expect(f.source.identity).toHaveBeenCalledTimes(count)
+ expect(f.manager.snapshot().instances[0]!.layers.authentication).toMatchObject({status:'unknown',code:'credential_basis_unavailable',current:false})
+})
+
+it('does not bless rotated credentials while a warm ProcessSource still retains its old launch environment',async()=>{
+ const f=fixture(),config=f.host.config.sources.find(s=>s.id==='team')!
+ const pkg={manifest:{id:'fixture',credentials:{TOKEN:'/options/tokenEnv'},configSchema:{type:'object'},scopesPath:'/options/channels',stateKinds:[]},digest:'a'.repeat(64),directory:'/not-read-by-fixture'} as any
+ const adapter=new ProcessSource(config,pkg,{sandboxDriver:'disabled',codex:'unused',stateDir:f.host.config.stateDir})
+ // Simulate an already launched adapter retaining an older environment. No
+ // subprocess or provider is invoked; the private capture mirrors launch().
+ ;(adapter as any).launchedCredentials=(adapter as any).credentialBasis(process.env)
+ ;(adapter as any).ready=Promise.resolve()
+ adapter.identity=vi.fn(async()=>({id:'cached-old-account',type:'bot',verified:true}))
+ f.host.sources.set('team',adapter)
+ expect(await f.probe('authentication')).toMatchObject({status:'passed'})
+ process.env.CONNECTOR_TEST_TOKEN='new-host-material'
+ expect(adapter.diagnosticCredentialsCurrent()).toBe(false)
+ expect(await f.probe('authentication')).toMatchObject({status:'stale',code:'adapter_restart_required'})
+ expect(adapter.identity).toHaveBeenCalledTimes(1)
+ expect(f.manager.snapshot().instances[0]!.layers.authentication).toMatchObject({current:false,code:'adapter_restart_required'})
+ // A genuinely new adapter instance, not another diagnostic request, is the
+ // restart boundary. Creation here is a local fixture, never an API action.
+ const replacement=new ProcessSource(config,pkg,{sandboxDriver:'disabled',codex:'unused',stateDir:f.host.config.stateDir})
+ replacement.identity=vi.fn(async()=>({id:'new-account',type:'bot',verified:true}));f.host.sources.set('team',replacement)
+ expect(await f.probe('authentication')).toMatchObject({status:'passed'})
+})
+it('does not infer credential refresh safety for an arbitrary cached native adapter',async()=>{
+ const f=fixture(),manager=new ConnectorManagement(()=>f.host)
+ expect(await manager.probe({sourceId:'team',revision:0,level:'authentication',requestId:randomUUID()})).toMatchObject({code:'credential_basis_unavailable'})
+ expect(f.source.identity).not.toHaveBeenCalled()
 })
