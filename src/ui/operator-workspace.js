@@ -1,5 +1,5 @@
 // The expert's operator composition, connected to the existing same-origin host.
-const operator = {work:null,error:false,filter:'all',search:'',menu:false,drawer:null,workflowFeedback:'',answers:{},focus:'',offset:0,historySearch:'',historyState:''}
+const operator = {drawerProof:null,drawerRequest:0,drawerController:null,drawerTracked:false,work:null,error:false,filter:'all',search:'',menu:false,drawer:null,workflowFeedback:'',answers:{},focus:'',offset:0,historySearch:'',historyState:''}
 Object.assign(icons, {
   inbox:'M4 4h16l2 12v4H2v-4L4 4zM2 15h6l2 3h4l2-3h6',
   activity:'M3 12h4l3-8 4 16 3-8h4',cpu:'M5 5h14v14H5zM9 9h6v6H9zM9 1v4m6-4v4m-6 14v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4',
@@ -36,11 +36,144 @@ async function readOperatorWork() {
   try {
     operator.work = await api(operatorWorkPath())
     operator.error = false
+    if(entryState.page==='attention')void readAttentionProjection(operator.attentionView.snapshot?.offset??0)
   } catch (error) {
     if (error.payload?.code === 'workspace_obsolete') return
     operator.error = true
     if (error.status === 401) throw error
   }
+}
+// A transient rendering cache of the existing GET projection, never permission.
+operator.attentionView={bridge:null,unsubscribe:null,key:'',binding:null,request:0,controller:null,snapshot:null,loaded:false,busy:false,failed:false,drawer:null,focus:''}
+const attentionKinds=['task_question','native_question','native_approval','workflow_review','project_review','effect_unknown']
+const attentionStates=['needs_reply','waiting_permission','needs_review','outcome_unknown','expired','unavailable','stale']
+function attentionContextKey(c){return JSON.stringify([c.state,c.managed,c.activeId,c.epoch,c.accountId,c.sessionIsolation])}
+function operatorAuthenticationEnded(error,captured){
+ const now=operator.attentionView.bridge?.context()
+ return error?.status===401&&now?.state==='blocked'&&now.code==='workspace_session_ended'&&now.epoch===captured.epoch+1&&now.managed===captured.managed&&now.activeId===captured.activeId&&now.accountId===captured.accountId&&now.sessionIsolation!==captured.sessionIsolation
+}
+function attentionActive(){return S.authed&&S.surface==='entries'&&entryState.role==='operator'&&entryState.page==='attention'&&(typeof configurationHost==='undefined'||configurationHost.active())}
+function attentionReset(){
+ const v=operator.attentionView;v.request++;v.controller?.abort();v.controller=null;v.snapshot=null;v.loaded=false;v.busy=false;v.failed=false;v.binding=null;v.key=''
+ if(v.drawer){v.drawer=null;const dialog=document.getElementById('operator-task');if(dialog?.open)dialog.close();dialog?.remove()}
+}
+function attentionPageChanged(){
+ discardStaleOperatorTask()
+ const v=operator.attentionView
+ if(!v.bridge&&typeof workspaceBridge==='function'){
+  v.bridge=workspaceBridge()
+  v.unsubscribe=v.bridge.subscribe(()=>{const changed=discardStaleOperatorTask();attentionPageChanged();if(attentionActive()||changed&&operatorTaskHostActive())render()})
+ }
+ const context=v.bridge?.context()
+ if(!attentionActive()||context?.state!=='ready'){attentionReset();return}
+ const key=attentionContextKey(context)
+ if(v.key!==key){attentionReset();v.key=key;try{v.binding=v.bridge.bind(context)}catch{attentionReset();return}}
+ if(!v.loaded&&!v.busy)void readAttentionProjection()
+}
+function attentionCurrent(binding,key){
+ const v=operator.attentionView,c=v.bridge?.context()
+ return attentionActive()&&c?.state==='ready'&&v.binding===binding&&v.key===key&&attentionContextKey(c)===key
+}
+function attentionDTO(value,offset){
+ const integer=n=>Number.isSafeInteger(n)&&n>=0,time=n=>integer(n)&&n<=8.64e15,ref=s=>typeof s==='string'&&s.length>0&&s.length<=500
+ const sources=['Local operator','Feishu','Slack','WeCom','GitHub','HTTP events','Delegated team','Connection']
+ if(value?.schema!==1||value.readOnly!==true||!time(value.observedAt)||!integer(value.total)||value.offset!==offset||value.limit!==25||typeof value.more!=='boolean'||value.more!==(value.offset+value.limit<value.total)||!Array.isArray(value.items)||value.items.length!==Math.min(value.limit,Math.max(0,value.total-value.offset)))throw Error('attention_invalid')
+ const validStates={task_question:['needs_reply','stale'],native_question:['needs_reply','expired','unavailable'],native_approval:['waiting_permission','expired','unavailable'],workflow_review:['needs_review','stale'],project_review:['needs_review','stale'],effect_unknown:['outcome_unknown']}
+ const seen=new Set(),items=value.items.map(item=>{
+  if(!item||!ref(item.id)||!/^([a-z_]+):[a-f0-9]{64}$/.test(item.id)||seen.has(item.id)||!attentionKinds.includes(item.kind)||!attentionStates.includes(item.state)||!validStates[item.kind]?.includes(item.state)||!sources.includes(item.sourceLabel)||!(item.createdAt===null||time(item.createdAt))||!(item.expiresAt===null||time(item.expiresAt))||typeof item.observed!=='string'||!/^[a-f0-9]{64}$/.test(item.observed)||!item.next||!['task','records','workflow','project_review'].includes(item.next.kind)||!ref(item.next.id)||item.taskRef!==undefined&&(!ref(item.taskRef?.id)||item.taskRef.assignmentId!==undefined&&!ref(item.taskRef.assignmentId)))throw Error('attention_invalid')
+  seen.add(item.id)
+  return {id:item.id,kind:item.kind,state:item.state,sourceLabel:item.sourceLabel,createdAt:item.createdAt,expiresAt:item.expiresAt,next:{kind:item.next.kind,id:item.next.id},...(item.taskRef?{taskRef:{id:item.taskRef.id}}:{})}
+ })
+ return {observedAt:value.observedAt,total:value.total,offset:value.offset,limit:value.limit,more:value.more,items}
+}
+async function readAttentionProjection(offset=0,expectedBinding=operator.attentionView.binding,expectedKey=operator.attentionView.key){
+ const v=operator.attentionView
+ if(!attentionActive()||expectedBinding&&!attentionCurrent(expectedBinding,expectedKey))return
+ if(!v.binding){attentionPageChanged();return}
+ if(v.busy)return
+ const binding=v.binding,key=v.key,request=++v.request,controller=new AbortController()
+ v.controller=controller;v.busy=true;v.loaded=true
+ const current=()=>request===v.request&&!controller.signal.aborted&&attentionCurrent(binding,key)
+ try{
+  const raw=await binding.request('/entry-workspace/attention?offset='+offset+'&limit=25',undefined,false,binding.context.activeId,controller.signal)
+  if(!current())return
+  const snapshot=attentionDTO(raw,offset);v.snapshot=snapshot;v.failed=false
+ }catch(error){if(operatorAuthenticationEnded(error,binding.context)){entryError(error);render()}else if(current())v.failed=true}
+ finally{if(request===v.request&&v.binding===binding&&v.key===key){v.busy=false;v.controller=null;if(!attentionCurrent(binding,key))attentionReset();else if(typeof editingProjectReview==='undefined'||!editingProjectReview())render()}}
+}
+function attentionLabel(item){
+ const kinds={task_question:['Task question','任务提问'],native_question:['Execution question','助手提问'],native_approval:['Action confirmation','操作确认'],workflow_review:['External change','外部变更'],project_review:['Project review','项目验收'],effect_unknown:['Operation record','操作记录']}
+ const states={needs_reply:['Needs a reply','需要回复'],waiting_permission:['Waiting for confirmation','等待确认'],needs_review:['Needs review','等待核对'],outcome_unknown:['Outcome unknown','结果待核查'],expired:['Expired','已到期'],unavailable:['Unavailable','暂不可用'],stale:['Changed since the request','事项已变化']}
+ return L(...kinds[item.kind])+' · '+L(...states[item.state])
+}
+function attentionSourceLabel(value){
+ const labels={'Local operator':['Local operator','本地入口'],Feishu:['Feishu','飞书'],Slack:['Slack','Slack'],WeCom:['WeCom','企业微信'],GitHub:['GitHub','GitHub'],'HTTP events':['HTTP events','HTTP 事件'],'Delegated team':['Delegated team','协作团队'],Connection:['Connection','接入来源']}
+ return L(...labels[value])
+}
+function attentionTime(value){return value===null?L('Time not recorded','未记录时间'):new Date(value).toLocaleString(lang==='en'?'en-US':'zh-CN')}
+function attentionCovered(item){
+ if(!['needs_reply','waiting_permission','needs_review'].includes(item.state))return false
+ if(item.next.kind==='workflow')return (operator.work?.workflowActions||[]).some(p=>p.id===item.next.id)
+ if(item.next.kind==='project_review')return (operator.work?.projectReviews||[]).some(p=>p.id===item.next.id)
+ return !!item.taskRef&&(operator.work?.attention||[]).some(t=>t.id===item.taskRef.id)
+}
+function attentionStatusRows(kind,id){
+ const items=operator.attentionView.snapshot?.items.filter(item=>attentionCovered(item)&&(kind==='task'?item.taskRef?.id===id:['workflow','project_review'].includes(kind)&&item.next.kind===kind&&item.next.id===id))||[]
+ return items.length?add(el('ul','attention-status-lines'),...items.map(item=>el('li','',attentionLabel(item)))):null
+}
+function attentionTarget(item){
+ if(item.next.kind==='workflow'&&(operator.work?.workflowActions||[]).some(p=>p.id===item.next.id))return 'attention-workflow-'+item.next.id
+ if(item.next.kind==='project_review'&&(operator.work?.projectReviews||[]).some(p=>p.id===item.next.id))return 'attention-project-'+item.next.id
+ if(item.taskRef&&(operator.work?.attention||[]).some(t=>t.id===item.taskRef.id))return 'attention-'+item.taskRef.id
+ return null
+}
+function openAttentionRecord(item,binding,key){
+ const v=operator.attentionView,currentItem=v.snapshot?.items.find(row=>row.id===item.id);if(!attentionCurrent(binding,key)||!currentItem)return
+ v.focus=document.activeElement?.id||'';clearOperatorTaskView()
+ v.drawer={item:currentItem,observedAt:v.snapshot.observedAt,binding,key};render()
+}
+function closeAttentionRecord(expected=operator.attentionView.drawer){
+ const v=operator.attentionView;if(expected&&v.drawer!==expected)return
+ const focus=v.focus;v.drawer=null
+ const dialog=document.getElementById('operator-task');if(dialog?.open)dialog.close();dialog?.remove()
+ document.getElementById(focus)?.focus({preventScroll:true})
+}
+function attentionRecordDialog(){
+ const v=operator.attentionView,d=v.drawer;if(!d||!attentionCurrent(d.binding,d.key))return null
+ const item=d.item,dialog=el('dialog','attention-record-dialog');dialog.id='operator-task';dialog.setAttribute('aria-labelledby','attention-record-title')
+ const title=el('h2','',attentionLabel(item));title.id='attention-record-title'
+ const body=add(el('div','drawer-body'),title,el('p','',L('Read-only record. No action is taken here.','仅查看记录，不执行操作。')),el('p','',attentionSourceLabel(item.sourceLabel)),el('p','',L('Read at: ','读取于：')+attentionTime(d.observedAt)))
+ if(item.createdAt!==null)body.append(el('p','',L('Requested: ','提出于：')+attentionTime(item.createdAt)))
+ if(item.expiresAt!==null)body.append(el('p','',L('Expires: ','期限：')+attentionTime(item.expiresAt)))
+ if(item.state==='expired')body.append(el('p','',L('This request expired. A fresh request is needed.','此请求已到期，需要重新发起。')))
+ if(item.state==='unavailable')body.append(el('p','',L('This request cannot be answered here.','此请求无法在此处理。')))
+ if(item.state==='stale')body.append(el('p','',L('The original request changed. Review current facts first.','原事项已变化，请先核对当前情况。')))
+ if(item.state==='outcome_unknown')body.append(el('p','',L('Check what happened before repeating any work.','请先核查实际结果，勿直接重复执行。')))
+ const target=attentionTarget(item)
+ if(target)body.append(opButton(L('Find existing item','定位已有事项'),()=>{
+  if(!attentionCurrent(d.binding,d.key))return
+  closeAttentionRecord();const node=document.getElementById(target);node?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});node?.focus({preventScroll:true})
+ },'button'))
+ const records=el('a','button',L('Open all execution records','打开全部执行记录')),url=new URL('/configure#execution-trace',location.origin)
+ if(d.binding.context.managed)url.searchParams.set('workspace',d.binding.context.activeId)
+ records.href=url.href;records.onclick=event=>{if(!attentionCurrent(d.binding,d.key)){event.preventDefault();return}attentionReset()};body.append(records)
+ dialog.append(add(el('div','drawer-header'),el('span','',L('Record details','记录详情')),opButton(L('Close details','关闭详情'),()=>closeAttentionRecord(d),'icon-button','close')),body)
+ dialog.oncancel=event=>{event.preventDefault();closeAttentionRecord(d)}
+ return dialog
+}
+function attentionSupplement(){
+ const v=operator.attentionView,binding=v.binding,key=v.key,box=el('section','attention-supplement');box.setAttribute('aria-label',L('Individual request status','逐项状态'))
+ const snapshot=v.snapshot
+ if(!snapshot){const phase=v.bridge?.context().state,blocked=phase!=='ready'&&phase!=='pending';const text=el('p','',blocked?L('Open an available workspace or sign in again.','请打开可用工作区，或重新登录。'):v.failed?L('Request status is unavailable. Existing items below still work.','暂时无法读取逐项状态，原有事项仍可处理。'):L('Loading request status…','正在读取逐项状态…'));text.setAttribute('role',v.failed?'alert':'status');box.append(text);if(v.failed)box.append(opButton(L('Refresh status','刷新状态'),()=>void readAttentionProjection(0,binding,key),'button'));return box}
+ const time=el('time','attention-observed',L('Read at: ','读取于：')+attentionTime(snapshot.observedAt));time.dateTime=new Date(snapshot.observedAt).toISOString();box.append(time)
+ if(v.failed||operator.error){const error=el('p','attention-update-failed',L('Update failed. Showing records from the time above.','更新失败，显示上述时间读取的记录。'));error.setAttribute('role','alert');box.append(error)}
+ const items=snapshot.items.filter(item=>!attentionCovered(item))
+ for(const [index,item] of items.entries()){
+  const open=opButton(L('View record','查看记录'),()=>openAttentionRecord(item,binding,key),'button');open.id='attention-record-'+index
+  box.append(add(el('article','attention-record-row'),add(el('div'),el('h3','',attentionLabel(item)),el('p','',attentionSourceLabel(item.sourceLabel)+' · '+attentionTime(item.createdAt))),open))
+ }
+ if(snapshot.offset||snapshot.more)box.append(add(el('div','actions'),snapshot.offset?opButton(L('Previous page','上一页'),()=>void readAttentionProjection(Math.max(0,snapshot.offset-snapshot.limit),binding,key),'button'):null,snapshot.more?opButton(L('Next page','下一页'),()=>void readAttentionProjection(snapshot.offset+snapshot.limit,binding,key),'button'):null))
+ return box
 }
 function confirmWorkspaceAction(title, description, label, callback) {
   const dialog = el('dialog', 'workspace-confirm')
@@ -94,7 +227,7 @@ function opTaskTable(tasks) {
   return workspaceTable(
     [L('Task', '任务'), L('Source', '入口'), L('Status', '状态'), L('Updated', '更新')],
     tasks.map(task => {
-      const button = opButton(task.title, () => openOperatorTask(task.id), 'text-button')
+      const button = opButton(task.displayTitle||task.title, () => openOperatorTask(task.id), 'text-button')
       button.id = 'work-' + task.id
       return [
         add(el('div', 'table-title'), opMark(task.entryId), add(el('div'), button,
@@ -106,12 +239,38 @@ function opTaskTable(tasks) {
       ]
     }))
 }
+// UI source attribution only. This neither authorizes nor cancels an action.
+function operatorTaskHostActive(){return S.authed&&S.surface==='entries'&&entryState.role==='operator'&&(typeof configurationHost==='undefined'||configurationHost.active())}
+function operatorTaskProofCurrent(proof){
+ const current=operator.attentionView.bridge?.context()
+ return !!proof&&operatorTaskHostActive()&&entryState.page===proof.page&&current?.state==='ready'&&attentionContextKey(current)===attentionContextKey(proof.context)
+}
+function clearOperatorTaskView(){
+ operator.drawerRequest++;operator.drawerController?.abort();operator.drawerController=null;operator.drawer=null;operator.drawerProof=null;operator.answers={}
+ if(!operator.attentionView.drawer){const dialog=document.getElementById('operator-task');if(dialog?.open)dialog.close();dialog?.remove()}
+}
+function discardStaleOperatorTask(){
+ if(!operator.drawer&&!operator.drawerProof&&!operator.drawerController)return false
+ if(!operatorTaskHostActive()||operator.drawerProof&&!operatorTaskProofCurrent(operator.drawerProof)||operator.drawerTracked&&!operator.drawerProof){clearOperatorTaskView();return true}
+ return false
+}
 async function openOperatorTask(id){
-  operator.focus=document.activeElement?.id||''
-  await entryRun('work-detail',async()=>{operator.drawer=await api('/entry-workspace/task/'+encodeURIComponent(id));operator.answers={}})
+  if(entryState.busy||S.busy)return
+  attentionPageChanged()
+  const context=operator.attentionView.bridge?.context()
+  if(!operatorTaskHostActive()||context?.state!=='ready')return
+  operator.focus=document.activeElement?.id||'';clearOperatorTaskView();operator.drawerTracked=true
+  const proof=Object.freeze({context:Object.freeze({...context}),page:entryState.page}),request=operator.drawerRequest,controller=new AbortController()
+  operator.drawerProof=proof;operator.drawerController=controller
+  const current=()=>request===operator.drawerRequest&&operator.drawerProof===proof&&!controller.signal.aborted&&operatorTaskProofCurrent(proof)
+  await entryRun('work-detail',async()=>{
+   try{const task=await api('/entry-workspace/task/'+encodeURIComponent(id),undefined,false,context.activeId,controller.signal);if(current()){operator.drawer=task;operator.answers={}}}catch(error){if(current()||operatorAuthenticationEnded(error,proof.context))throw error}
+   finally{if(request===operator.drawerRequest){operator.drawerController=null;if(!operatorTaskProofCurrent(proof))clearOperatorTaskView()}}
+  })
 }
 function closeOperatorTask(){
-  operator.drawer=null
+  if(operator.attentionView.drawer){closeAttentionRecord();return}
+  clearOperatorTaskView()
   const dialog=document.getElementById('operator-task');if(dialog?.open)dialog.close();dialog?.remove()
   document.getElementById(operator.focus)?.focus({preventScroll:true})
 }
@@ -126,8 +285,8 @@ function opAttentionCard(task) {
   return add(el('article', 'attention-item'),
     add(el('div', 'item-topline'), opMark(task.entryId, 'small'),
       el('span', '', task.context || entryName(task.entryId)), el('time', '', opTime(task.updatedAt))),
-    add(el('div', 'item-heading'), el('h3', '', task.title), open),
-    el('p', '', task.question || task.summary || label))
+    add(el('div', 'item-heading'), el('h3', '', task.displayTitle||task.title), open),
+    el('p', '', task.question || task.summary || label),attentionStatusRows('task',task.id))
 }
 function workflowOutcome(p){
   const states={pending:['Awaiting approval','待确认'],applying:['Submitting change…','正在提交'],applied:['Written and verified','已写入并回读'],declined:['Declined','已拒绝'],stale:['The issue changed. A new proposal is needed.','事项已变化，需要重新提案'],uncertain:['The write outcome is still unknown','写入结果仍待核对'],observed:['Target state observed. Writer unconfirmed.','已回读目标状态，写入方未确认']}
@@ -137,6 +296,7 @@ function projectReviewCard(review,editable) {
   const card = add(el('article','attention-item'),el('h3','',review.title),
     el('code','',review.head),el('p','',L('Base commit','起始提交')+' '+review.base),
     el('p','',L('Passed','测试通过')+' · '+review.test.command))
+  if(editable){card.id='attention-project-'+review.id;card.tabIndex=-1}const status=attentionStatusRows('project_review',review.id);if(status)card.append(status)
   if(review.diffStat)card.append(el('pre','message',review.diffStat))
   if(review.diff?.text)card.append(detail(review.diff.truncated?L('Patch preview (truncated)','补丁预览（已截断）'):L('View changes','查看改动'),el('pre','message',review.diff.text)))
   if(review.test.output)card.append(detail(L('Test output','测试输出'),el('pre','message',review.test.output)))
@@ -165,7 +325,7 @@ function projectReviewCard(review,editable) {
 function opAttention() {
   const items = operator.work?.attention || []
   const result = [opHeading(L('Needs your attention', '待我处理'), null,
-    opButton(L('Refresh', '刷新'), refreshEntries, 'button', 'refresh'))]
+    opButton(L('Refresh', '刷新'), refreshEntries, 'button', 'refresh')),attentionSupplement()]
   for (const [label, list] of [
     [L('Needs a reply', '需要回复'), items.filter(task => !task.deliveryUncertain && !task.approvalIds?.length)],
     [L('Needs confirmation', '需要确认'), items.filter(task => task.deliveryUncertain || task.approvalIds?.length)]
@@ -180,6 +340,7 @@ function opAttention() {
     for (const p of proposals) {
       const card = add(el('article','attention-item'), el('h3','',p.view.label),
         el('p','',p.view.current.name+' → '+p.next.name), el('small','',p.sourceId+' · '+p.view.account))
+      card.id='attention-workflow-'+p.id;card.tabIndex=-1;const status=attentionStatusRows('workflow',p.id);if(status)card.append(status)
       const decide = decision => entryRun('workflow',async()=>{
         const result=await api('/workflow-actions',{id:p.id,decision})
         operator.workflowFeedback=workflowOutcome(result)
@@ -191,7 +352,7 @@ function opAttention() {
       result.push(card)
     }
   }
-  if (!items.length && !proposals.length && !reviews.length) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
+  if (operator.work&&!operator.error&&!items.length && !proposals.length && !reviews.length && operator.attentionView.snapshot?.total===0&&!operator.attentionView.failed&&!operator.attentionView.busy&&attentionCurrent(operator.attentionView.binding,operator.attentionView.key)) result.push(opEmpty(L('No pending decisions.', '暂无待处理事项。')))
   return result
 }
 function opTasks() {
@@ -342,11 +503,20 @@ function setOperatorMenu(open){
   if(open)document.getElementById('operator-menu-close')?.focus();else toggle?.focus()
 }
 function opTaskDialog(){
+  if(operator.attentionView.drawer)return attentionRecordDialog()
+  discardStaleOperatorTask()
   const task=operator.drawer;if(!task)return null
+  const currentProof=operatorTaskProofCurrent(operator.drawerProof)
   const dialog=el('dialog');dialog.id='operator-task';dialog.setAttribute('aria-labelledby','operator-task-title')
-  const title=el('h2','',task.title);title.id='operator-task-title'
-  const body=add(el('div','drawer-body'),opMark(task.entryId,'large'),title,el('p','',task.context||entryName(task.entryId)),add(el('dl','drawer-meta'),el('dt','',L('State','当前状态')),el('dd','',opTaskLabel(task.state)),el('dt','',L('Source software','来源软件')),el('dd','',entryName(task.entryId)),el('dt','',L('Follow up','后续结果')),el('dd','',L('In the original conversation','返回发起任务的原会话'))),add(el('div','message'),el('small','',L('Original request','原始请求')),el('p','',task.message)))
-  for(const [label,value]of [[L('Assistant needs your input','助手需要你补充'),task.question],[L('Latest progress','最新进展'),task.summary===task.question?'':task.summary],[L('Actual reply','实际回复'),task.result]])if(value)body.append(add(el('div','message'),el('small','',label),el('p','',value)))
+  const title=el('h2','',task.displayTitle||task.title);title.id='operator-task-title'
+  const body=add(el('div','drawer-body'),opMark(task.entryId,'large'),title,task.context?el('p','task-context',task.context):null,add(el('div','task-overview'),el('span','pill neutral',opTaskLabel(task.state)),el('span','task-source',entryName(task.entryId))),add(el('div','message'),el('h3','',L('Your request','你的请求')),el('p','',task.message)))
+  for(const [label,value]of [[L('Needs your attention','需要你处理'),task.question],[L('Latest progress','最新进展'),task.summary===task.question?'':task.summary],[L('Result','结果'),task.result]])if(value)body.append(add(el('div','message'),el('h3','',label),el('p','',value)))
+  if(currentProof&&task.id===operator.drawerProof.taskId&&typeof taskDecisionsCard==='function'){
+    const field=Object.getOwnPropertyDescriptor(task,'decisionRecords')
+    const card=field&&Object.hasOwn(field,'value')?taskDecisionsCard(field.value,operator.drawerProof.taskId):null
+    if(card)body.append(card)
+  }
+  if(currentProof&&typeof taskPermissionsCard==='function'){const field=Object.getOwnPropertyDescriptor(task,'permissions');const card=field&&Object.hasOwn(field,'value')?taskPermissionsCard(field.value,task.id):null;if(card)body.append(card)}
   if(task.resultTruncated)body.append(el('p','flow-help',L('This result is shortened. Read the complete resource in advanced controls.','结果较长，此处已缩短。可在完整任务控制台读取全文。')))
   if(task.deliveryUncertain)body.append(el('p','alert warning',L('Delivery is uncertain. Inspect the original conversation before retrying.','回传结果不确定，请先核对原会话，再决定是否重试。')))
   if(task.acceptedGoal){const link=el('a','button',L('Save as a skill','保存为技能'));link.href='/router-proactive?'+new URLSearchParams({goal:task.acceptedGoal.id,scope:task.acceptedGoal.scopeId});body.append(link)}
@@ -356,11 +526,15 @@ function opTaskDialog(){
     for(const file of task.artifacts){
       const link=el('a','text-button',file.path+' · v'+file.version+' · '+(file.size/1024).toFixed(1)+' KiB · '+file.sha256.slice(0,12))
       link.href='/goal-artifacts/'+encodeURIComponent(file.id)
-      body.append(add(el('p'),link))
+      const details=el('a','text-button',L('Version details','版本详情')),url=new URL('/configure#artifact/'+encodeURIComponent(file.id),location.origin)
+      if(workspaceContext.activeId)url.searchParams.set('workspace',workspaceContext.activeId)
+      details.href=url.pathname+url.search+url.hash
+      body.append(add(el('p'),link,document.createTextNode(' · '),details))
     }
   }
   for(const change of task.workflowActions||[])body.append(el('p','message',workflowOutcome(change)+' · '+change.view.current.name+' → '+change.next.name))
   for(const approval of task.approvals||[])body.append(opApproval(approval))
+  if(typeof taskContractCard==='function')body.append(taskContractCard(currentProof?task.contractView:undefined,task.id))
   if(task.model)body.append(el('p','task-model',L('Execution model: ','执行模型：')+task.model))
   body.append(add(el('div','drawer-actions'),task.sourceUrl?entryLink(L('Open original conversation','打开原讨论'),task.sourceUrl,'button primary'):null,task.canStop?opButton(L('Stop task','停止任务'),()=>controlTaskAction('stop',task.id),'button'):null,task.canRetry?opButton(L('Retry after review','核对后重试'),()=>controlTaskAction('retry',task.id),'button'):null))
 
@@ -458,7 +632,7 @@ document.addEventListener('keydown',event=>{
 const editingProjectReview=()=>[...document.querySelectorAll('textarea[id^="feedback-"]')].some(field=>field===document.activeElement||field.value.trim())
 let operatorPolling=false
 setInterval(async()=>{
-  if(operatorPolling||document.hidden||S.surface!=='entries'||!S.authed||entryState.role!=='operator'||entryState.busy||S.busy||operator.drawer||operator.menu||!['home','attention','activity','active-tasks'].includes(entryState.page))return
+  if(operatorPolling||document.hidden||S.surface!=='entries'||!S.authed||entryState.role!=='operator'||entryState.busy||S.busy||operator.drawer||operator.attentionView.drawer||operator.menu||!['home','attention','activity','active-tasks'].includes(entryState.page))return
   if(entryState.page==='attention'&&editingProjectReview())return
   const page=entryState.page,previous=JSON.stringify([operator.work?.projectReviews,operator.work?.workflowActions,operator.work?.tasks,operator.work?.activeTasks,operator.work?.activeTotal,operator.work?.attention,operator.work?.understanding,operator.work?.paused,operator.work?.active,operator.error])
   operatorPolling=true

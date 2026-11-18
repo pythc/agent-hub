@@ -1,3 +1,4 @@
+import {ApiFailure,ApiNetworkFailure} from './api-failure.ts'
 import {TransientModelError} from '../model.ts'
 
 export class ApiConnectionError extends TransientModelError {
@@ -13,11 +14,13 @@ export class ApiResponseError extends Error {
 }
 
 /** Retain diagnostic identifiers, never provider messages that can echo credentials or prompts. */
-export async function apiResponseError(response:Response,secrets:string[]){
+export async function apiResponseError(response:Response,secrets:string[],signal?:AbortSignal){
  const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let bytes=0
+ const abort=()=>{void reader?.cancel().catch(()=>{})};if(reader)signal?.addEventListener('abort',abort,{once:true})
  if(reader)try{
-  for(;;){const chunk=await reader.read();if(chunk.done)break;bytes+=chunk.value.length;if(bytes>16384)break;chunks.push(chunk.value)}
- }finally{await reader.cancel()}
+  for(;;){signal?.throwIfAborted();const chunk=await reader.read();signal?.throwIfAborted();if(chunk.done)break;bytes+=chunk.value.length;if(bytes>16384)break;chunks.push(chunk.value)}
+ }catch{signal?.throwIfAborted();throw new ApiNetworkFailure('connection_network_failed')}finally{signal?.removeEventListener('abort',abort);await reader.cancel().catch(()=>{});reader.releaseLock()}
+ signal?.throwIfAborted()
  let value:any
  try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{}
  const identifier=(v:unknown)=>typeof v==='string'&&/^[a-zA-Z0-9_.\[\]-]{1,100}$/.test(v)&&!secrets.some(s=>s&&v.includes(s))?v:undefined
@@ -25,6 +28,8 @@ export async function apiResponseError(response:Response,secrets:string[]){
 }
 
 export function apiCheckFailure(error:unknown):{code:string;detail?:string}{
+ if(error instanceof ApiNetworkFailure)return {code:error.code==='connection_network_failed'?'connection_unreachable':error.code}
+ if(error instanceof ApiFailure)return {code:error.code==='model_output_truncated'?'model_output_limit':error.code}
  if(error instanceof ApiResponseError){
   const code=error.status===401?'api_key_rejected':error.status===403?'model_access_denied':error.status===404?'model_not_found':
    error.status===402?'api_quota_exhausted':error.status===429?(/quota|balance|credit/.test(error.code??'')?'api_quota_exhausted':'api_rate_limited'):

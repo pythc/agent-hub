@@ -137,3 +137,7 @@ Roppo 基于 [DeepSeek Super Agent](https://github.com/deepseek-ai/dsh-superagen
 项目采用 [Apache-2.0](LICENSE) 许可证。第三方组件保留各自许可证，包括采用 MIT 的 DeepSeek 核心。感谢 [assistant-ui](https://github.com/assistant-ui/assistant-ui)、[agent-browser](https://github.com/vercel-labs/agent-browser)、React、Vite 和 MCP SDK。[NOTICE](NOTICE) · [第三方许可证](THIRD_PARTY.md)
 
 仓库和 CLI 继续使用 `agent-hub` 名称。
+
+### Worker 配方、连接诊断与执行记录
+
+在 **Worker 模板** 中审阅版本化配方，在 **连接器** 中配置已安装的 IM 来源插件，在 **执行轨迹** 中检查持久任务证据。配方创建的 Worker 默认暂停，新连接默认停用。ACP 出站通过可选执行插件接入；标准 ACP Agent 不满足现有全部准入要求时不能担任受管 Worker。参见[设计、本地验收与回滚说明](docs/increments/DESIGN_AND_ACCEPTANCE.md)。

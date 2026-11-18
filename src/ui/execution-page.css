@@ -260,3 +260,56 @@
  .execution-actor-tabs { width:100%; }
  .execution-page .execution-calls-page .heading-actions { flex-wrap:wrap; }
 }
+/* The existing team settings show scheduler observations without adding controls. */
+.operator-workspace .scheduler-panel { margin:24px 0; padding:22px 24px; border:1px solid var(--border-subtle); border-radius:12px; background:var(--surface); color:var(--text-primary); font-size:14px; line-height:1.6; animation:scheduler-appear 160ms ease-out; }
+.operator-workspace .scheduler-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.operator-workspace .scheduler-heading h2 { font-size:18px; font-weight:600; margin:0 0 5px; }
+.operator-workspace .scheduler-state { font-size:14px; font-weight:500; }
+.operator-workspace .scheduler-panel[data-state=paused] .scheduler-state { color:var(--status-warning); }
+.operator-workspace .scheduler-panel .button { min-height:40px; font-size:14px; flex-shrink:0; }
+.operator-workspace .scheduler-panel button:focus-visible,.operator-workspace .scheduler-details summary:focus-visible { outline:2px solid var(--action); outline-offset:3px; }
+.operator-workspace .scheduler-time { display:block; font-size:14px; color:var(--text-secondary); margin-top:12px; }
+.operator-workspace .scheduler-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin:20px 0 0; }
+.operator-workspace .scheduler-metrics>div { min-width:0; border-left:1px solid var(--border-subtle); padding-left:16px; }
+.operator-workspace .scheduler-metrics>div:first-child { border-left:0; padding-left:0; }
+.operator-workspace .scheduler-panel dt { font-size:14px; color:var(--text-secondary); overflow-wrap:anywhere; }
+.operator-workspace .scheduler-metrics dd { font-size:24px; font-weight:550; line-height:1.4; margin:6px 0 0; font-variant-numeric:tabular-nums; }
+.operator-workspace .scheduler-failure,.operator-workspace .scheduler-paused { font-size:14px; margin:14px 0 0; }
+.operator-workspace .scheduler-failure { color:var(--status-danger); }
+.operator-workspace .scheduler-details { border-top:1px solid var(--border-subtle); margin-top:20px; padding-top:14px; }
+.operator-workspace .scheduler-details summary { cursor:pointer; width:fit-content; border-radius:3px; font-size:14px; }
+.operator-workspace .scheduler-details p { font-size:14px; color:var(--text-secondary); margin:14px 0; }
+.operator-workspace .scheduler-extra { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 26px; margin:18px 0 0; }
+.operator-workspace .scheduler-extra>div { display:flex; align-items:baseline; justify-content:space-between; gap:16px; min-width:0; }
+.operator-workspace .scheduler-extra dd { font-size:14px; margin:0; font-variant-numeric:tabular-nums; }
+.operator-workspace .scheduler-panel [hidden] { display:none!important; }
+@keyframes scheduler-appear { from { opacity:0; transform:translateY(2px); } to { opacity:1; transform:translateY(0); } }
+@media(max-width:700px) { .operator-workspace .scheduler-panel { padding:18px; } .operator-workspace .scheduler-heading { align-items:flex-start; flex-wrap:wrap; } .operator-workspace .scheduler-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px 14px; } .operator-workspace .scheduler-metrics>div:nth-child(odd) { border-left:0; padding-left:0; } .operator-workspace .scheduler-extra { grid-template-columns:1fr; } }
+@media(prefers-reduced-motion:reduce) { .operator-workspace .scheduler-panel,.operator-workspace .scheduler-panel * { animation:none!important; transition:none!important; } }
+/* Read-only usage stays in the current team settings tab; no automatic polling. */
+.operator-workspace .resource-panel { margin:24px 0;padding:22px 24px;border:1px solid var(--border-subtle);border-radius:12px;background:var(--surface);color:var(--text-primary); font-size:14px; line-height:1.6; animation:resource-appear 140ms ease-out; }
+.operator-workspace .resource-heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
+.operator-workspace .resource-heading h2 { font-size:18px; font-weight:600; margin:0 0 4px; }
+.operator-workspace .resource-state { font-size:14px; font-weight:500; }
+.operator-workspace .resource-panel .button { font-size:14px; min-height:40px; }
+.operator-workspace .resource-time { display:block; font-size:14px; color:var(--text-secondary); margin-top:12px; }
+.operator-workspace .resource-metrics { margin:18px 0 10px; }
+.operator-workspace .resource-metrics>div { display:flex;align-items:baseline;gap:16px;flex-wrap:wrap; }
+.operator-workspace .resource-panel dt { font-size:14px; color:var(--text-secondary); overflow-wrap:anywhere; }
+.operator-workspace .resource-metrics dd { font-size:23px; font-weight:550; line-height:1.4; margin:6px 0 0; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.operator-workspace .resource-panel p { font-size:14px; margin:12px 0; }
+.operator-workspace .resource-failure { color:var(--status-danger); }
+.operator-workspace .resource-warning { color:var(--status-warning); }
+.operator-workspace .resource-coverage,.operator-workspace .resource-note { color:var(--text-primary); }
+.operator-workspace .resource-panel .resource-note { margin-top:6px; }
+.operator-workspace .resource-details p { color:var(--text-secondary); }
+.operator-workspace .resource-details { border-top:1px solid var(--border-subtle); margin-top:20px; padding-top:14px; }
+.operator-workspace .resource-details summary { width:fit-content; font-size:14px; cursor:pointer; border-radius:3px; }
+.operator-workspace .resource-extra { display:grid; gap:12px; margin:18px 0 0; }
+.operator-workspace .resource-extra>div { display:flex; justify-content:space-between; align-items:baseline; gap:18px; }
+.operator-workspace .resource-extra dd { font-size:14px; margin:0; font-variant-numeric:tabular-nums; }
+.operator-workspace .resource-panel button:focus-visible,.operator-workspace .resource-details summary:focus-visible { outline:2px solid var(--action); outline-offset:3px; }
+.operator-workspace .resource-panel [hidden] { display:none!important; }
+@keyframes resource-appear { from { opacity:0;transform:translateY(2px); } to { opacity:1;transform:translateY(0); } }
+@media(max-width:700px) { .operator-workspace .resource-panel { padding:18px; } .operator-workspace .resource-heading { align-items:flex-start; } }
+@media(prefers-reduced-motion:reduce) { .operator-workspace .resource-panel,.operator-workspace .resource-panel * { animation:none!important;transition:none!important; } }

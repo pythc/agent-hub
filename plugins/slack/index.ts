@@ -7,6 +7,26 @@ import type {Trigger,OutboundMessage} from '../../src/vendor/dsh-core/index.ts'
 type Request=(method:string,operation:string,input?:Record<string,unknown>)=>Promise<any>
 interface Options {channels:string[];tokenEnv:string;teamId:string;command?:string;apiBase?:string;appTokenEnv?:string}
 const timestamp=(value:unknown)=>typeof value==='string'&&/^\d{10,}\.[0-9]{6}$/.test(value)
+// A successful transport response is not sufficient directory evidence. Missing
+// collections and malformed continuation metadata must fail closed, not become
+// an empty, apparently verified directory.
+function directoryPage(data:any,field:'channels'|'members',seen:Set<string>):{items:any[];next:string}{
+  if(!data||!Array.isArray(data[field]))throw Error('Slack directory response is invalid')
+  const metadata=data.response_metadata
+  if(metadata!==undefined&&(!metadata||typeof metadata!=='object'||Array.isArray(metadata)))throw Error('Slack directory pagination is invalid')
+  // Slack uses null as well as an empty/missing cursor for the final page.
+  const next=metadata?.next_cursor??''
+  if(typeof next!=='string')throw Error('Slack directory pagination is invalid')
+  if(next&&seen.has(next))throw Error('Slack pagination did not advance')
+  if(next)seen.add(next)
+  for(const item of data[field]){
+    const valid=field==='members'
+      ?typeof item==='string'&&item.length>0
+      :item&&typeof item==='object'&&typeof item.id==='string'&&item.id.length>0&&typeof item.is_member==='boolean'
+    if(!valid)throw Error('Slack directory entry is invalid')
+  }
+  return {items:data[field],next}
+}
 export class SlackSource extends MessageSource {
   private socket?:WebSocket
   private pendingEvents:Promise<void>=Promise.resolve()
@@ -41,23 +61,25 @@ export class SlackSource extends MessageSource {
     return this.account
   }
   async probe(){
-    const identity=await this.identity(),choices:any[]=[];let cursor=''
+    const identity=await this.identity(),choices:any[]=[],seen=new Set<string>();let cursor=''
     for(let page=0;page<100;page++){
       const data=await this.api('GET','conversations.list',{limit:100,exclude_archived:true,types:'public_channel,private_channel',...(cursor?{cursor}:{})})
-      for(const channel of data.channels??[])if(channel.is_member)choices.push({id:channel.id,label:channel.name??channel.id})
-      const next=data.response_metadata?.next_cursor??'';if(!next)return {identity,choices}
-      if(next===cursor)throw Error('Slack pagination did not advance');cursor=next
+      const {items,next}=directoryPage(data,'channels',seen)
+      for(const channel of items)if(channel.is_member)choices.push({id:channel.id,label:channel.name??channel.id})
+      if(!next)return {identity,choices}
+      cursor=next
     }
     throw Error('Slack directory exceeds pagination limit')
   }
   async members(channel=this.options.channels[0]!){
     if(!this.allowed(channel))throw Error('Channel is outside connection')
-    const result:any[]=[];let cursor=''
+    const result:any[]=[],seen=new Set<string>();let cursor=''
     for(let page=0;page<100;page++){
       const data=await this.api('GET','conversations.members',{channel,limit:100,...(cursor?{cursor}:{})})
-      for(const id of data.members??[]){const user=await this.api('GET','users.info',{user:id});if(typeof user.user?.is_bot!=='boolean')throw Error('Slack member type is unavailable');result.push({id,name:user.user.real_name??user.user.name,bot:user.user.is_bot})}
-      const next=data.response_metadata?.next_cursor??'';if(!next)return result
-      if(next===cursor)throw Error('Slack pagination did not advance');cursor=next
+      const {items,next}=directoryPage(data,'members',seen)
+      for(const id of items){const user=await this.api('GET','users.info',{user:id});if(typeof user.user?.is_bot!=='boolean')throw Error('Slack member type is unavailable');result.push({id,name:user.user.real_name??user.user.name,bot:user.user.is_bot})}
+      if(!next)return result
+      cursor=next
     }
     throw Error('Slack membership exceeds pagination limit')
   }

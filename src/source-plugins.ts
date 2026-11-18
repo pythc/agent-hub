@@ -6,8 +6,10 @@ import githubPlugin from '../plugins/github/index.ts'
 import feishuPlugin from '../plugins/feishu/index.ts'
 import {WecomSource} from './connectors/wecom.ts'
 import type {Ticket} from './vendor/dsh-core/index.ts'
-import {installPluginPackage,pointer,type PluginPackage} from './plugin-package.ts'
+import {installPluginPackage,pointer,pluginManifestSchema,type PluginPackage} from './plugin-package.ts'
 import {ProcessSource} from './plugin-process.ts'
+import {Ajv2020} from 'ajv/dist/2020.js'
+import type {PluginManifest} from './plugin-package.ts'
 
 /** Plugins are trusted local code, loaded only from explicitly configured files. */
 export interface SourcePlugin {
@@ -16,6 +18,8 @@ export interface SourcePlugin {
   label:string
   validate?(config:SourceConfig):void
   create(config:SourceConfig):Source
+  /** Optional setup metadata shares the packaged source-plugin vocabulary. */
+  connection?:{setup:PluginManifest['setup'];credentials?:Record<string,string>;scopesPath?:string;validate?:(config:SourceConfig)=>void;validateFields?:(config:SourceConfig)=>{field:string;code:'required'|'invalid_format'|'invalid_environment_reference'|'credential_unavailable'|'too_many'|'unsupported_field'}[]}
   observed?(config:SourceConfig):boolean
   authorizeRead?(config:SourceConfig,ticket:Ticket,resource:string):void
   /** Platform membership facts. Host actor/tenant/mandate checks still apply. */
@@ -39,6 +43,11 @@ export class SourceRegistry {
   register(plugin:SourcePlugin){
     if(!plugin||plugin.apiVersion!==1||!/^[a-z][a-z0-9_-]*$/.test(plugin.kind)||typeof plugin.label!=='string'||typeof plugin.create!=='function')throw Error('Invalid source plugin; expected API version 1')
     if(this.plugins.has(plugin.kind))throw Error('Duplicate source plugin: '+plugin.kind)
+    if(plugin.connection){
+      const setup=pluginManifestSchema.shape.setup.safeParse(plugin.connection.setup),credentials=pluginManifestSchema.shape.credentials.safeParse(plugin.connection.credentials??{})
+      if(!setup.success||!credentials.success||plugin.connection.scopesPath&&!pluginManifestSchema.shape.scopesPath.safeParse(plugin.connection.scopesPath).success)throw Error('Invalid source plugin setup metadata')
+      plugin={...plugin,connection:{...plugin.connection,setup:setup.data,credentials:credentials.data}}
+    }
     this.plugins.set(plugin.kind,plugin)
   }
   create(config:SourceConfig){
@@ -50,6 +59,19 @@ export class SourceRegistry {
     return source
   }
   catalog(){return [...this.plugins.values()].map(({kind,label,apiVersion})=>{const pkg=this.packages.find(p=>p.manifest.kind===kind);return pkg?{kind,label,apiVersion:2,pluginId:pkg.manifest.id,version:pkg.manifest.version,digest:pkg.digest,configSchema:pkg.manifest.configSchema,setup:pkg.manifest.setup,methods:pkg.manifest.methods,tools:pkg.manifest.tools,network:pkg.manifest.network}:{kind,label,apiVersion}})}
+  /** Static metadata only: no instance construction, credential reads or remote calls. */
+  connectionDefinitions(){return [...this.plugins.values()].map(plugin=>{
+    const pkg=this.packages.find(p=>p.manifest.kind===plugin.kind)
+    return {kind:plugin.kind,label:plugin.label,...(pkg?{pluginId:pkg.manifest.id,version:pkg.manifest.version,digest:pkg.digest,setup:pkg.manifest.setup,credentials:pkg.manifest.credentials,scopesPath:pkg.manifest.scopesPath,configSchema:pkg.manifest.configSchema,network:pkg.manifest.network}:{setup:plugin.connection?.setup,credentials:plugin.connection?.credentials??{},scopesPath:plugin.connection?.scopesPath,network:!!plugin.connection?.setup?.serviceUrl})}
+  })}
+  validate(config:SourceConfig){
+    const plugin=this.plugins.get(config.kind);if(!plugin)throw Error('Source kind is unavailable')
+    plugin.validate?.(config);plugin.connection?.validate?.(config)
+    const pkg=this.packages.find(p=>p.manifest.kind===config.kind)
+    if(pkg&&!new Ajv2020({strict:false,validateFormats:false}).compile(pkg.manifest.configSchema)(config))throw Error('Source fields do not match the plugin schema')
+  }
+  /** Optional local issue metadata; validation remains authoritative. */
+  validationIssues(config:SourceConfig){return this.plugins.get(config.kind)?.connection?.validateFields?.(config)??[]}
   observed(config:SourceConfig){return config.observed??this.plugins.get(config.kind)?.observed?.(config)??true}
   authorizeRead(config:SourceConfig,ticket:Ticket,resource:string){this.plugins.get(config.kind)?.authorizeRead?.(config,ticket,resource)}
   scopes(config:SourceConfig){return this.plugins.get(config.kind)?.scopes?.(config)}

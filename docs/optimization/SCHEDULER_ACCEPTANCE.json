@@ -1,0 +1,37 @@
+{
+  "issue": 16,
+  "pr": 62,
+  "status": "first_read_only_slice_locally_accepted_whole_issue_open",
+  "sourceHead": "d1685363102f69d0a296e360c81d4ea477a002ff",
+  "sourceNative": "357e4820356ac17ba0f5830debbcc64af74d9205",
+  "ci": {
+    "ordinaryRun": 43899511531,
+    "ordinaryJobsPassed": 3,
+    "containerRun": 43899511380,
+    "passed": true
+  },
+  "localCheck": {
+    "passed": 1623,
+    "failed": 75,
+    "skipped": 4,
+    "failureIdentitiesMatchUnchangedMain": true,
+    "sandboxProcessEPIPE": 1,
+    "log": ".local/scheduler-integrated-check.log",
+    "comparison": ".local/scheduler-failure-comparison.json"
+  },
+  "browser": {
+    "report": ".local/scheduler-root-final/browser-report.json",
+    "screenshots": 10,
+    "pageErrors": 0,
+    "normalRuntimeResponseMocked": false,
+    "faultCases": "separate explicitly labelled browser injections"
+  },
+  "ciPolicyPythonTests": 32,
+  "realProviders": false,
+  "remaining": [
+    "full per-task queue reasons",
+    "fairness measurement and scheduling policy",
+    "broader resource quotas"
+  ],
+  "issueClosed": false
+}

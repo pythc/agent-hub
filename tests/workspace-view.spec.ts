@@ -1,8 +1,9 @@
+import {artifactCatalog} from '../src/artifact-catalog.ts'
 import {mkdtempSync,readFileSync,writeFileSync,rmSync,symlinkSync,renameSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach,it,expect} from 'vitest'
-import {buildViewPackage,readViewPackage,installViewPackage,viewCatalog,enabledView} from '../src/workspace-view-package.ts'
+import {buildViewPackage,readViewPackage,installViewPackage,viewCatalog,enabledView,viewArtifactReference} from '../src/workspace-view-package.ts'
 import {configSchema,loadConfig} from '../src/config.ts'
 import {workspaceViewData} from '../src/workspace-view-data.ts'
 import {pluginCommand} from '../src/plugin-cli.ts'
@@ -94,8 +95,10 @@ it('requires operator auth and current capability/digest, denying tampered or di
   host.config.viewPlugins=[{id:pkg.manifest.id,directory:pkg.directory,digest:pkg.digest,enabled:true}]
   const server=await serve(host);servers.push(()=>new Promise<void>(resolve=>{server.server.closeAllConnections();server.server.close(()=>resolve())}))
   const headers={authorization:'Bearer '+readFileSync(server.tokenPath,'utf8').trim()},base=server.url+'/api/workspace-views',path='/example-view/runtime?digest='+pkg.digest
+  expect((await fetch(base+'/example-view/bundle?digest='+pkg.digest)).status).toBe(401);
   expect((await fetch(base)).status).toBe(401);expect((await fetch(base+path)).status).toBe(401)
   expect(await (await fetch(base,{headers})).json()).toMatchObject({views:[{id:'example-view',available:true}]})
+  expect(await (await fetch(base+'/example-view/bundle?digest='+pkg.digest,{headers})).json()).toMatchObject({reference:viewArtifactReference(pkg),digest:pkg.digest});
   expect((await fetch(base+path,{headers})).status).toBe(200)
   expect((await fetch(base+path+'&offset=-1',{headers})).status).toBe(400)
   expect((await fetch(base+path+'&unknown=1',{headers})).status).toBe(400)
@@ -124,4 +127,32 @@ it('exposes numeric team usage with source filtering and explicit unknown covera
  expect(all.usage).toMatchObject({calls:8,reportedCalls:7,unknownCalls:1,tokens:{inputTokens:75100,outputTokens:1220,totalTokens:76320,cachedInputTokens:48080}})
  expect(selected.usage).toMatchObject({calls:3,reportedCalls:3,unknownCalls:0,tokens:{inputTokens:39000}})
  const text=JSON.stringify(all.usage);expect(text).not.toContain('PRIVATE');expect(text).not.toContain('usage-fixture');expect(text).not.toContain('steps" : {')
+})
+
+it('projects verified package identity across relocation, upgrade and rollback without granting old access',async()=>{
+ const root=directory(),host=fixture(root),v1=await pack(root),v2=await pack(root,'1.1.0')
+ const changedEntry=join(root,'changed.ts');writeFileSync(changedEntry,'document.body.textContent="Changed";')
+ const sameVersion=await buildViewPackage(changedEntry,manifest,join(root,'same-version'))
+ expect(sameVersion.manifest.version).toBe(v1.manifest.version);expect(viewArtifactReference(sameVersion).version).not.toBe(v1.digest)
+ const ref=viewArtifactReference(v1),installed=installViewPackage(v1.directory,join(root,'state'),v1.digest)
+ expect(ref).toEqual({schema:1,kind:'workspace-view',id:'example-view',version:v1.digest,sha256:v1.manifest.codeSha256,visibility:'operator_workspace',retention:'subject_to_plugin_removal',publication:'not_tracked'})
+ expect(viewArtifactReference(installed)).toEqual(ref)
+ const mount=(pkg:typeof v1)=>{host.config.viewPlugins=[{id:pkg.manifest.id,directory:pkg.directory,digest:pkg.digest,enabled:true}]}
+ mount(installed);expect(viewCatalog(host.config)[0]?.reference).toEqual(ref)
+ mount(v2);expect(viewCatalog(host.config)[0]?.reference?.version).not.toBe(ref.version)
+ expect(()=>enabledView(host.config,ref.id,ref.version)).toThrow('unavailable')
+ mount(installed);expect(viewArtifactReference(enabledView(host.config,ref.id,ref.version))).toEqual(ref)
+ writeFileSync(join(installed.directory,'view.js'),'tampered')
+ expect(viewCatalog(host.config)[0]).toMatchObject({available:false});expect(viewCatalog(host.config)[0]).not.toHaveProperty('reference')
+ expect(()=>enabledView(host.config,ref.id,ref.version)).toThrow('checksum')
+ host.config.viewPlugins[0]!.enabled=false;expect(viewCatalog(host.config)).toEqual([])
+})
+
+it('catalog includes only verified enabled view packages and never treats current package metadata as a snapshot',async()=>{
+ const root=directory(),host=fixture(root),pkg=await pack(root)
+ host.config.viewPlugins=[{id:'example-view',directory:pkg.directory,digest:pkg.digest,enabled:true}]
+ expect(artifactCatalog(host).items).toEqual([{reference:viewArtifactReference(pkg),label:manifest.label,registration:{schema:1,kind:'workspace-view',domain:'operator_workspace',id:pkg.manifest.id,version:pkg.digest,sha256:pkg.manifest.codeSha256,retention:'subject_to_plugin_removal',publication:'not_tracked',acceptance:'not_tracked'}}])
+ host.config.viewPlugins[0]!.enabled=false;expect(artifactCatalog(host).items).toEqual([])
+ host.config.viewPlugins[0]!.enabled=true;writeFileSync(join(pkg.directory,'view.js'),pkg.code+'//tampered')
+ expect(artifactCatalog(host).items).toEqual([])
 })

@@ -9,9 +9,11 @@ import {protocolTombstone} from '../history-cleanup.ts'
 import {readResponsesStream,readChatStream,readAnthropicStream} from './stream.ts'
 import {contextProjection,recall,recallSpec} from './context.ts'
 import {providerUsage} from '../model-usage.ts'
-import {ApiConnectionError,ApiOutputLimitError,apiResponseError} from './api-errors.ts'
+import {ApiOutputLimitError,apiResponseError} from './api-errors.ts'
 export {readResponsesStream} from './stream.ts'
 
+import {ApiFailure,ApiNetworkFailure} from './api-failure.ts'
+export {ApiFailure,ApiNetworkFailure} from './api-failure.ts'
 export interface ThreadStore {get<T>(kind:string,id:string):T|undefined;put(kind:string,id:string,value:unknown):void}
 type Call={id:string;name:string;arguments:string}
 type ToolResult={contentItems:ToolContent[];success:boolean}
@@ -37,20 +39,27 @@ export class ApiModel implements Model {
   if(d.kind==='anthropic'){headers['anthropic-version']='2023-06-01';if(credential)headers['x-api-key']=credential}
   else if(credential)headers.authorization='Bearer '+credential
   let response:Response
-  try{response=await fetch(this.endpoint(path),{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.any([signal,AbortSignal.timeout(d.requestTimeoutMs)]),redirect:'error'})}
-  catch(error){signal.throwIfAborted();throw new ApiConnectionError(error instanceof Error&&(error.name==='TimeoutError'||(error.cause as any)?.code==='UND_ERR_CONNECT_TIMEOUT')?'connection_timeout':'connection_unreachable')}
-  if(!response.ok)throw await apiResponseError(response,[credential??'',...Object.values(headers)])
+  const timeout=AbortSignal.timeout(d.requestTimeoutMs),requestSignal=AbortSignal.any([signal,timeout])
+  try{response=await fetch(this.endpoint(path),{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined,signal:requestSignal,redirect:'error'})}
+  catch(error){signal.throwIfAborted();throw new ApiNetworkFailure(timeout.aborted||error instanceof Error&&(error.name==='TimeoutError'||(error.cause as any)?.code==='UND_ERR_CONNECT_TIMEOUT')?'connection_timeout':'connection_network_failed')}
+  if(!response.ok){try{throw await apiResponseError(response,[credential??'',...Object.values(headers)],requestSignal)}catch(error){signal.throwIfAborted();if(timeout.aborted)throw new ApiNetworkFailure('connection_timeout');throw error}}
   const reader=response.body?.getReader();if(!reader)throw Error('Backend response is empty')
-  if(response.headers.get('content-type')?.includes('text/event-stream'))return d.kind==='anthropic'?readAnthropicStream(reader,d.maxContextBytes,signal,onOutput,'anthropic',onUsage):d.kind==='openai-chat'?readChatStream(reader,d.maxContextBytes,signal,onOutput,'chat',onUsage):readResponsesStream(reader,d.maxContextBytes,signal,onOutput,onUsage)
-  if(d.subscription&&body)throw Error('Subscription response must be an event stream')
-  const chunks:Uint8Array[]=[];let bytes=0
-  for(;;){
-   let value:ReadableStreamReadResult<Uint8Array>
-   try{value=await reader.read()}catch{signal.throwIfAborted();throw new TransientModelError('Backend '+this.id+' response connection interrupted')}
-   if(value.done)break;bytes+=value.value.length;if(bytes>d.maxContextBytes){await reader.cancel();throw Error('Backend response size limit exceeded')}chunks.push(value.value)
-  }
-  let value:any;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Backend returned invalid JSON')}
-  if(value.usage)onUsage?.(value.usage);return value
+  try{
+   if(response.headers.get('content-type')?.includes('text/event-stream'))return await (d.kind==='anthropic'?readAnthropicStream(reader,d.maxContextBytes,requestSignal,onOutput,'anthropic',onUsage):d.kind==='openai-chat'?readChatStream(reader,d.maxContextBytes,requestSignal,onOutput,'chat',onUsage):readResponsesStream(reader,d.maxContextBytes,requestSignal,onOutput,onUsage))
+   if(d.subscription&&body)throw Error('Subscription response must be an event stream')
+   const chunks:Uint8Array[]=[];let bytes=0
+   const abort=()=>{void reader.cancel().catch(()=>{})};requestSignal.addEventListener('abort',abort,{once:true})
+   try{for(;;){
+    requestSignal.throwIfAborted()
+    let value:ReadableStreamReadResult<Uint8Array>
+    try{value=await reader.read()}catch{requestSignal.throwIfAborted();throw new ApiNetworkFailure('connection_network_failed')}
+    requestSignal.throwIfAborted()
+    if(value.done)break;bytes+=value.value.length;if(bytes>d.maxContextBytes){await reader.cancel();throw Error('Backend response size limit exceeded')}chunks.push(value.value)
+   }}finally{requestSignal.removeEventListener('abort',abort)}
+   let value:any;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Error('Backend returned invalid JSON')}
+
+   if(value.usage)onUsage?.(value.usage);return value
+  }catch(error){signal.throwIfAborted();if(timeout.aborted)throw new ApiNetworkFailure('connection_timeout');if(error instanceof TransientModelError)throw new ApiNetworkFailure('connection_network_failed');throw error}
  }
  async catalog(provider?:string){
   if(provider&&provider!==this.id&&provider!==this.definition.kind)throw Error('Unknown backend model catalog: '+provider)
@@ -182,7 +191,7 @@ export class ApiModel implements Model {
     persist();checkBudget(this.body(t,instructions,r),r.contextBudget,'api-wire','complete',r.onBudget);if(queue.length)continue
     let value:unknown,parseError:string|undefined;try{value=JSON.parse(accepted.text)}catch(error){parseError=(error as SyntaxError).message}
     if(parseError||!validateOutput(value)){
-     if(++repairs>2)throw Error('Backend final output failed the required JSON schema')
+     if(++repairs>2||step+1>=this.definition.maxSteps)throw new ApiFailure('model_reply_invalid')
      appendUser('Invalid final output: '+(parseError??ajv.errorsText(validateOutput.errors))+'. Return only a valid JSON object matching the supplied schema. Inside JSON strings, escape line breaks as \\n and quotes as \\". Correct the reply only; do not repeat completed tools.');persist();continue
     }
     turn.status='completed';persist();return {threadId:t.id,turnId:turn.id,text:JSON.stringify(value)}

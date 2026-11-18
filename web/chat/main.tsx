@@ -52,9 +52,17 @@ import { FeatureNavigation } from "./navigation.tsx";
 import {lazy,Suspense} from "react";
 const PluginMarketplace=lazy(()=>import("./plugin-marketplace.tsx").then(m=>({default:m.PluginMarketplace})));
 const AutomationWorkspace=lazy(()=>import("./automations.tsx").then(m=>({default:m.AutomationWorkspace})));
+const WorkerTemplates=lazy(()=>import("./worker-templates.tsx").then(m=>({default:m.WorkerTemplates})));
+const ConnectorManagement=lazy(()=>import("./connector-management.tsx").then(m=>({default:m.ConnectorManagement})));
+const ArtifactCatalogPage=lazy(()=>import("./artifact-catalog.tsx").then(m=>({default:m.ArtifactCatalogPage})));
+const ArtifactResult=lazy(()=>import("./artifact-result.tsx").then(m=>({default:m.ArtifactResult})));
+const ExecutionTrace=lazy(()=>import("./execution-trace.tsx").then(m=>({default:m.ExecutionTrace})));
 import {spaceRequest,clearChatDrafts,type ChatSpace} from './chat-settings.tsx';
 import { Configuration } from "./configuration.tsx";
-import {WorkspaceView,useWorkspaceViews} from './workspace-view.tsx';
+import {WorkspaceTransportOwner} from "./workspace-context.tsx";
+import {preserveWorkspaceLink} from "./workspace-transport.ts";
+import {ViewVersionPage} from './view-version.tsx';
+import {WorkspaceView,ScopedWorkspaceView,useWorkspaceViews} from './workspace-view.tsx';
 import { FilesPanel } from "./files.tsx";
 import { BrowserPanel } from "./browser.tsx";
 import { AgentAvatar } from "./agent-avatar.tsx";
@@ -723,7 +731,7 @@ function App() {
         anchor.getAttribute("href")?.startsWith("#")
       )
         return;
-      const url = new URL(anchor.href);
+      const url = preserveWorkspaceLink(new URL(anchor.href),new URL(location.href));
       if (
         url.origin !== location.origin ||
         !["/configure", "/configure/", "/chat"].includes(url.pathname)
@@ -891,9 +899,17 @@ function Chat(p: ChatProps) {
   };
   const hash = route.split("#")[1] ?? "tasks";
   const automationRoute=configuring&&hash==='automations';
+  const templatesRoute=configuring&&hash==='worker-templates';
+  const connectorsRoute=configuring&&hash==='connectors';
+  const traceRoute=configuring&&hash==='execution-trace';
+  const catalogRoute=configuring&&hash==='artifacts';
+  const viewVersionRoute=configuring&&hash.startsWith('artifact-view-version/');
+  const scopedViewRoute=configuring&&hash.startsWith('artifact-view/');
+  const artifactRoute=configuring&&hash.startsWith('artifact/');
+  const capabilityRoute=templatesRoute||connectorsRoute||traceRoute||artifactRoute||catalogRoute||scopedViewRoute||viewVersionRoute;
   const marketRoute=configuring&&(hash==='integrations'||hash.startsWith('integrations/'));
   const marketTools=hash==='integrations'||hash==='integrations/tools';
-  const views=useWorkspaceViews();
+  const views=useWorkspaceViews(!scopedViewRoute&&!catalogRoute&&!viewVersionRoute);
   const pluginId=configuring&&hash.startsWith('plugin/')?hash.slice(7):null;
   const currentView=views.find(view=>view.id===pluginId);
   const pageNames: Record<string, string> = {
@@ -902,6 +918,13 @@ function Chat(p: ChatProps) {
     "tasks/history": L("Tasks", "任务"),
     attention: L("Needs your attention", "待处理"),
     automations: L("Event automations", "事件自动化"),
+    "worker-templates": L("Worker templates", "Worker 模板"),
+    connectors: L("Connectors", "连接器"),
+    "execution-trace": L("Task progress", "任务进展"),
+    artifact: L("File version", "文件版本"),
+    "artifact-view-version": L("View version metadata", "视图版本元数据"),
+    "artifact-view": L("Workspace view", "工作区视图"),
+    artifacts: L("Artifacts", "产物目录"),
     execution: L("Agent team", "Agent 团队"),
     deployments: L("Deployments", "部署"),
     models: L("Model connections", "模型连接"),
@@ -1387,7 +1410,7 @@ function Chat(p: ChatProps) {
             mobile={narrow}
             menuOpen={menu}
             closeMenu={closeNavigation}
-            openWorkspaces={() => {if(automationRoute||pluginId||marketRoute&&!marketTools){history.pushState(null,"","/configure#tasks");window.dispatchEvent(new Event('roppo:navigation'))}setPickerRequest((value) => value + 1)}}
+            openWorkspaces={() => {if(capabilityRoute||automationRoute||pluginId||marketRoute&&!marketTools){history.pushState(null,"",preserveWorkspaceLink(new URL("/configure#tasks",location.origin),new URL(location.href)));window.dispatchEvent(new Event('roppo:navigation'))}setPickerRequest((value) => value + 1)}}
             user={boot?.user}
             views={views.map(view=>({id:view.id,label:view.label[lang]}))}
           />
@@ -1474,8 +1497,9 @@ function Chat(p: ChatProps) {
             </header>
             {marketRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading plugins…","正在加载插件…")}</div>}><PluginMarketplace route={hash} language={lang}/></Suspense>:null}
             {automationRoute?<Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading automations…","正在加载自动化…")}</div>}><AutomationWorkspace language={lang}/></Suspense>:null}
+            {capabilityRoute?<WorkspaceTransportOwner language={lang}><Suspense fallback={<div className="workspace-view-placeholder" role="status">{L("Loading workspace…","正在加载工作区…")}</div>}>{templatesRoute?<WorkerTemplates language={lang}/>:connectorsRoute?<ConnectorManagement language={lang}/>:catalogRoute?<ArtifactCatalogPage language={lang}/>:viewVersionRoute?<ViewVersionPage key={hash} selection={hash.slice(22)} language={lang}/>:scopedViewRoute?<ScopedWorkspaceView key={hash} id={hash.slice(14)} dark={dark} language={lang}/>:artifactRoute?<ArtifactResult key={hash} id={hash.slice(9)} language={lang}/>:<ExecutionTrace language={lang}/>}</Suspense></WorkspaceTransportOwner>:null}
             <Configuration
-              visible={configuring&&!automationRoute&&!pluginId&&(!marketRoute||marketTools)}
+              visible={configuring&&!capabilityRoute&&!automationRoute&&!pluginId&&(!marketRoute||marketTools)}
               route={route}
               language={lang}
               pickerRequest={pickerRequest}

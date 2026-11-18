@@ -8,6 +8,7 @@ import {allowNewTaskInputs} from './task-context.ts'
 import {stableDigest} from './sources.ts'
 
 const key=z.string().min(1).max(300)
+const digest=z.string().regex(/^[a-f0-9]{64}$/)
 const choice=z.object({id:key,name:key})
 export const transitionView=z.object({account:key,issue:key,label:key,revision:key,current:choice,states:z.array(choice)})
 export type TransitionView=z.infer<typeof transitionView>
@@ -15,15 +16,22 @@ export interface StatusTarget {key:string;entryId:string;teamId:string;issueId:s
 type State='pending'|'applying'|'applied'|'declined'|'stale'|'uncertain'|'observed'
 export interface WorkflowAction {
   id:string;ticketId:string;originTriggerId:string;notificationTriggerId:string;sourceId:string;target:StatusTarget;entryRevision:number;ownerEpoch:number;dataRevision:number
-  view:TransitionView;next:z.infer<typeof choice>;state:State;at:number;finishedAt?:number;receipt?:{issue:string;state:string;revision:string}
+  planDigest?:string;view:TransitionView;next:z.infer<typeof choice>;state:State;at:number;finishedAt?:number;receipt?:{issue:string;state:string;revision:string}
   decision?:{kind:'approve'|'decline';at:number;via:'operator'|'conversation';actorId?:string;triggerId?:string}
 }
 export const workflowRequest=z.discriminatedUnion('action',[
   z.object({action:z.literal('list')}).strict(),
   z.object({action:z.literal('inspect'),sourceId:key,target:key}).strict(),
-  z.object({action:z.literal('propose'),sourceId:key,target:key,stateId:key,requestId:key}).strict(),
+  z.object({action:z.literal('plan'),sourceId:key,target:key,stateId:key}).strict(),
+  z.object({action:z.literal('propose'),sourceId:key,target:key,stateId:key,requestId:key,planDigest:digest.optional()}).strict(),
 ])
 export const decisionRequest=z.object({id:key,decision:z.enum(['approve','decline','reconcile'])}).strict()
+
+// A consistency fingerprint, never a permission grant. Include the complete read
+// model so a changed account, target, revision or displayed choice requires a new plan.
+function actionDigest(ticketId:string,binding:unknown,view:TransitionView,next:TransitionView['current']){
+ return stableDigest({schema:1,kind:'workflow_status',ticketId,binding,view:{...view,states:[...view.states].sort((a,b)=>a.id.localeCompare(b.id)||a.name.localeCompare(b.name))},next})
+}
 
 export class WorkflowActions {
   constructor(private host:Runtime,private now:()=>number=Date.now){
@@ -110,29 +118,35 @@ export class WorkflowActions {
   }
   async request(owner:WorkOwner,value:unknown){
     const input=workflowRequest.parse(value),ticketId=owner.ticketId
-    if(owner.agentId||!this.host.validWork(owner))throw Error('An active root Worker is required')
+    // Keep read-only guards synchronous: never leave global observation depths set across provider I/O.
+    const read=<T>(fn:()=>T):T=>input.action==='plan'?this.host.scopes.readOnly(()=>this.host.memory.readOnly(fn)):fn()
+    if(owner.agentId||!read(()=>this.host.validWork(owner)))throw Error('An active root Worker is required')
     if(input.action==='list')return this.targets(ticketId).map(({sourceId,target})=>({sourceId,target:target.key}))
-    const {binding,source}=this.target(ticketId,input.sourceId,input.target)
+    const {binding,source}=read(()=>this.target(ticketId,input.sourceId,input.target))
     const id=input.action==='propose'?stableDigest([ticketId,input.requestId]):''
     const prior=id&&this.host.store.get<WorkflowAction>('workflow-action',id)
     if(prior){
       if(prior.sourceId!==input.sourceId||prior.target.key!==input.target||input.action!=='propose'||prior.next.id!==input.stateId)throw Error('Request ID is bound to a different proposal')
       this.current(prior)
+      if(input.action==='propose'&&input.planDigest!==undefined&&input.planDigest!==prior.planDigest)throw Error('Request ID is bound to a different plan')
       return prior
     }
     const view=transitionView.parse(await source.workflowState!(binding.target))
-    if(!this.host.validWork(owner)||stableDigest(binding)!==stableDigest(this.target(ticketId,input.sourceId,input.target).binding))throw Error('Task changed while reading status')
+    read(()=>{if(!this.host.validWork(owner)||stableDigest(binding)!==stableDigest(this.target(ticketId,input.sourceId,input.target).binding))throw Error('Task changed while reading status')})
     if(input.action==='inspect')return view
     const next=view.states.find(s=>s.id===input.stateId)
     if(!next||next.id===view.current.id)throw Error('Choose a different workflow state for this issue')
+    const planDigest=actionDigest(ticketId,binding,view,next)
+    if(input.action==='plan')return {schema:1,kind:'workflow_status',readOnly:true,authorizesExecution:false,affectedCount:1,sourceId:input.sourceId,target:input.target,view,next,actionDigest:planDigest}
+    if(input.planDigest!==undefined&&input.planDigest!==planDigest)throw Error('Workflow plan changed; read a new plan and confirm its scope')
     return this.host.store.atomic(()=>{
       const existing=this.host.store.get<WorkflowAction>('workflow-action',id)
-      if(existing){if(existing.sourceId!==input.sourceId||existing.target.key!==input.target||existing.next.id!==next.id)throw Error('Request ID is bound to a different proposal');return existing}
+      if(existing){if(existing.sourceId!==input.sourceId||existing.target.key!==input.target||existing.next.id!==next.id)throw Error('Request ID is bound to a different proposal');this.current(existing);if(input.planDigest!==undefined&&input.planDigest!==existing.planDigest)throw Error('Request ID is bound to a different plan');return existing}
       this.host.store.requireWorkflowSchema()
       const originTriggerId=this.host.goals.forTask(ticketId)?.triggerId??this.host.taskAuthority(ticketId)?.parentTrigger??this.host.store.tickets.get(ticketId)!.origin.triggerId
       this.host.routerIngress.authority(originTriggerId)
       const notificationTriggerId=this.host.webhooks.notificationAnchor(originTriggerId)?.id??originTriggerId
-      const item=this.save({id,ticketId,originTriggerId,notificationTriggerId,...binding,view,next,state:'pending',at:this.now()})
+      const item=this.save({id,ticketId,originTriggerId,notificationTriggerId,...binding,view,next,...(input.planDigest!==undefined?{planDigest}:{}),state:'pending',at:this.now()})
       this.notice(item)
       return item
     })
@@ -173,6 +187,10 @@ export class WorkflowActions {
     const view=transitionView.parse(await source.workflowState!(item.target))
     this.current(item);authorize?.()
     if(get().state!=='pending')return get()
+    if(item.planDigest!==undefined){
+      const next=view.states.find(s=>s.id===item.next.id)
+      if(!next||actionDigest(item.ticketId,this.target(item.ticketId,item.sourceId,item.target.key).binding,view,next)!==item.planDigest)return this.finish(item,'stale')
+    }
     if(view.account!==item.view.account||view.issue!==item.view.issue||view.revision!==item.view.revision||view.current.id!==item.view.current.id||!view.states.some(s=>s.id===item.next.id))return this.finish(item,'stale')
     this.save({...item,state:'applying'})
     try{

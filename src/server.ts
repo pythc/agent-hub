@@ -1,3 +1,11 @@
+import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
+import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
+import {ConnectorManagement,ConnectorError} from './connector-management.ts'
+import {ExecutionTrace,TraceError} from './execution-trace.ts'
+import {ResourceUsage} from './resource-usage.ts'
+import {CredentialReferences} from './credential-references.ts'
+import {BackendRegistry} from './backends/registry.ts'
+import {BackendPluginError} from './backends/plugin-contract.ts'
 import {memoryWorkspace,changeMemoryWorkspace} from './memory-workspace.ts'
 import {personaFiles,importPersonaFile} from './persona.ts'
 import {deploymentMaintenance,DeploymentError} from './deployment-maintenance.ts'
@@ -34,6 +42,7 @@ import {EntrySetup,entryIds} from './entry-setup.ts'
 import {clientIds} from './clients.ts'
 import {clientStatus} from './client-status.ts'
 import {operatorWorkspace,operatorTask} from './operator-workspace.ts'
+import {OperatorAttention} from './operator-attention.ts'
 import {PersonalAccount,AccountError,setupAccountSchema,loginAccountSchema,recoverAccountSchema,passwordSchema} from './personal-account.ts'
 import {accountPage} from './ui/account.ts'
 import {chatPage,chatAsset} from './ui/chat-page.ts'
@@ -43,7 +52,7 @@ import {BrowserError} from './browser-contract.ts'
 import {browserRequest} from './browser-http.ts'
 import {serveWebhooks} from './webhook-http.ts'
 import {WebhookError} from './webhook-protocol.ts'
-import {enabledView,viewCatalog} from './workspace-view-package.ts'
+import {enabledView,viewCatalog,viewArtifactReference,viewVersion} from './workspace-view-package.ts'
 import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 
 export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string)=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
@@ -56,6 +65,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
   async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=(async()=>{await delegationServer?.close();delegationServer=undefined;await runtime.close()})()}await closingRuntime}
   const market=new PluginMarket(()=>runtime,options.pluginGitHub)
+  const templates=new WorkerTemplates(()=>runtime),connectors=new ConnectorManagement(()=>runtime),trace=new ExecutionTrace(()=>runtime)
   async function rebuild(config:Config,activationId?:string){
     await stopRuntime()
     if(stopping)throw Error('Host is stopping')
@@ -70,6 +80,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   try{watchdogToken=readFileSync(watchdogTokenPath,'utf8').trim()}catch{watchdogToken=randomBytes(32).toString('hex');writeFileSync(watchdogTokenPath,watchdogToken,{mode:0o600,flag:'wx'})}
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
+    if(error instanceof ConnectorError){send(response,error.status,{code:error.code,error:error.code,...(error.issues?.length?{issues:error.issues}:{})});return}
+    if(error instanceof WorkerTemplateError||error instanceof TraceError){send(response,error.status,{code:error.code,error:error.code});return}
     if(error instanceof DeploymentError){send(response,error.status,{code:error.code,error:error.message});return}
     if(error instanceof MarketError){if(error.code==='market_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof WebhookError){send(response,error.status,{code:error.code});return}
@@ -179,8 +191,8 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,403,{error:'This configuration preview cannot execute work or external actions',code:'preview_restricted'});return
     }
     if(req.method==='POST'&&path==='/worker'){
-      const owner=runtime.workerTools.authenticate(req.headers.authorization)
       const input=z.object({name:z.string(),args:z.unknown()}).strict().parse(await body(req))
+      const owner=runtime.workerTools.authenticate(req.headers.authorization,input.name,input.args)
       send(res,200,await runtime.workerTools.call(owner,input.name,input.args));return
     }
     // Connector identities may only submit to their configured source.
@@ -205,6 +217,69 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,405,{error:'Method not allowed'});return
     }
     if (!operator) { send(res, 401, { error: 'Operator access required',code:'token_required' }); return }
+    if(path==='/api/credential-references'){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      if(req.url!.includes('?')){send(res,400,{code:'credential_references_query_invalid'});return}
+      try{send(res,200,new CredentialReferences(()=>runtime).snapshot())}catch{send(res,503,{code:'credential_references_unavailable'})};return
+    }
+    if(path==='/api/resource-usage'){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      if(new URL(req.url!,requestOrigin).search!==''){send(res,400,{code:'resource_usage_query_invalid'});return}
+      try{send(res,200,new ResourceUsage(()=>runtime).snapshot())}catch{send(res,503,{code:'resource_usage_unavailable'})};return
+    }
+    if(path==='/api/scheduler-status'){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      try{send(res,200,runtime.schedulerStatus())}catch{send(res,503,{code:'scheduler_status_unavailable'})};return
+    }
+    if(path==='/api/worker-templates'||path.startsWith('/api/worker-templates/')){
+      requireCurrentOperator(req)
+      if(path==='/api/worker-templates'&&req.method==='GET'){send(res,200,templates.snapshot());return}
+      if(req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
+      const input=await operatorBody(req)
+      if(path==='/api/worker-templates/preview'){send(res,200,templates.preview(input));return}
+      if(path==='/api/worker-templates/install'){send(res,200,templates.install(input));return}
+      if(path==='/api/worker-templates/export'){send(res,200,templates.export(input));return}
+      if(path==='/api/worker-templates/remove'){send(res,200,templates.remove(input));return}
+      if(path==='/api/worker-templates/create'){send(res,200,await templates.create(input));return}
+      send(res,404,{code:'not_found'});return
+    }
+    if(path==='/api/connectors'||path.startsWith('/api/connectors/')){
+      requireCurrentOperator(req)
+      if(path==='/api/connectors'&&req.method==='GET'){send(res,200,connectors.snapshot());return}
+      if(req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
+      const input=await operatorBody(req)
+      if(path==='/api/connectors/validate'){send(res,200,connectors.validate(input));return}
+      if(path==='/api/connectors/plan'){const planned=connectors.plan(input);send(res,200,onboarding.sourcePlan(planned.revision,planned.source,planned.credentials));return}
+      if(path==='/api/connectors/probe'){send(res,200,await connectors.probe(input));return}
+      if(path==='/api/connectors/control'){send(res,200,connectors.control(input));return}
+      send(res,404,{code:'not_found'});return
+    }
+    if(path==='/api/execution-trace'||path.startsWith('/api/execution-trace/')){
+      requireCurrentOperator(req)
+      if(req.method==='GET'){
+        const query=Object.fromEntries(new URL(req.url!,requestOrigin).searchParams)
+        if(path==='/api/execution-trace'){send(res,200,trace.snapshot(query));return}
+        if(path==='/api/execution-trace/events'){send(res,200,trace.events(query));return}
+      }
+      if(path==='/api/execution-trace/recover'&&req.method==='POST'){send(res,200,await trace.recover(await operatorBody(req)));return}
+      send(res,405,{code:'method_not_allowed'});return
+    }
+    if(path==='/api/execution-backends/probe'&&req.method==='POST'){
+      const input=z.object({id:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),revision:z.number().int().nonnegative()}).strict().parse(await operatorBody(req))
+      if(input.revision!==runtime.settings.current().revision){send(res,409,{code:'settings_conflict'});return}
+      const definition=runtime.config.backends[input.id]
+      if(!definition||definition.kind!=='plugin'){send(res,400,{code:'backend_probe_unsupported'});return}
+      try{
+        const result=await new BackendRegistry({...runtime.config,turnTimeoutMs:Math.min(runtime.config.turnTimeoutMs,20000)},runtime.store).probe(input.id)
+        requireCurrentOperator(req)
+        if(input.revision!==runtime.settings.current().revision){send(res,409,{code:'settings_conflict'});return}
+        send(res,200,{id:input.id,revision:input.revision,checkedAt:Date.now(),available:result.available,authenticated:result.authenticated,remoteVerified:false,modelCallVerified:false})
+      }catch(error){if(error instanceof AccountError||error instanceof OnboardingError)throw error;send(res,400,{code:error instanceof BackendPluginError?error.code:'backend_probe_failed',modelCallVerified:false})}
+      return
+    }
     if(req.method==='GET'&&path==='/api-usage'){send(res,200,runtime.apiUsage.snapshot());return}
     if(req.method==='GET'&&path==='/api-usage/view'){res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(apiUsagePage(runtime.apiUsage.snapshot()));return}
     if(path==='/deployment/maintenance'&&req.method==='POST'){send(res,200,await deploymentMaintenance(runtime,await body(req)));return}
@@ -254,19 +329,24 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       send(res,200,onboarding.sourcePlan(input.revision,source,credentials));return
     }
     if(path==='/api/plugin-market/connection/apply'&&req.method==='POST'){
-      const input=z.object({id:z.string().uuid()}).strict().parse(await body(req));changing=true
+      const input=z.object({id:z.string().uuid()}).strict().parse(await operatorBody(req));changing=true
       try{send(res,200,await onboarding.apply(input.id,rebuild))}finally{changing=false}return
     }
     if(path==='/api/workspace-views'||path.startsWith('/api/workspace-views/')){
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
       if(path==='/api/workspace-views'){send(res,200,{views:viewCatalog(runtime.config)});return}
+      const versionMatch=path.match(/^\/api\/workspace-views\/([a-z][a-z0-9_-]{0,63})\/versions\/([a-f0-9]{64})$/)
+      if(versionMatch){
+        if(new URL(req.url!,'http://localhost').search){send(res,400,{code:'invalid_view_version_query'});return}
+        try{send(res,200,viewVersion(runtime.config,versionMatch[1]!,versionMatch[2]!))}catch{send(res,404,{code:'view_unavailable'})}return
+      }
       const match=path.match(/^\/api\/workspace-views\/([a-z][a-z0-9_-]{0,63})\/(bundle|runtime)$/)
       if(!match){send(res,404,{code:'view_not_found'});return}
       const params=new URL(req.url!,'http://localhost').searchParams,digest=params.get('digest')
       if(!digest||!/^[a-f0-9]{64}$/.test(digest)){send(res,400,{code:'view_digest_required'});return}
       let pkg
       try{pkg=enabledView(runtime.config,match[1]!,digest)}catch{send(res,404,{code:'view_unavailable'});return}
-      if(match[2]==='bundle'){send(res,200,{digest:pkg.digest,code:pkg.code});return}
+      if(match[2]==='bundle'){send(res,200,{digest:pkg.digest,code:pkg.code,reference:viewArtifactReference(pkg)});return}
       if(!pkg.manifest.capabilities.includes('workspace.runtime.read')){send(res,403,{code:'view_capability_required'});return}
       params.delete('digest')
       const query=viewQuerySchema.parse(Object.fromEntries(params))
@@ -278,6 +358,19 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='GET'&&path==='/router-scopes'){send(res,200,runtime.scopes.snapshot());return}
     if(req.method==='GET'&&path==='/router-proactive/state'){send(res,200,runtime.proactive.snapshot(new URL(req.url!,'http://localhost').searchParams.get('scopeId')??''));return}
+    if(path==='/artifact-catalog'){
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      const params=new URL(req.url!,'http://localhost').searchParams
+      if([...params.keys()].some(key=>key!=='cursor')||params.getAll('cursor').length>1){send(res,400,{code:'invalid_catalog_query'});return}
+      const cursor=params.get('cursor')??undefined
+      if(cursor!==undefined&&!/^[a-f0-9-]{36}$/.test(cursor)){send(res,400,{code:'catalog_cursor_expired'});return}
+      try{send(res,200,artifactCatalog(runtime,cursor))}catch(error){if(error instanceof ArtifactCatalogCursorError){send(res,400,{code:'catalog_cursor_expired'});return}throw error}return
+    }
+    if(path.startsWith('/goal-artifact-versions/')){
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      try{send(res,200,runtime.artifacts.describe(path.slice('/goal-artifact-versions/'.length)))}
+      catch{send(res,404,{code:'artifact_unavailable'})}return
+    }
     if(req.method==='GET'&&path.startsWith('/goal-artifacts/')){
       const {artifact,bytes}=runtime.artifacts.download(path.slice('/goal-artifacts/'.length))
       res.writeHead(200,{'content-type':artifact.mime,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(artifact.path.split('/').at(-1)!),'cache-control':'no-store','x-content-type-options':'nosniff'})
@@ -354,6 +447,13 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(path==='/api/chat/conversations'){
         if(req.method==='GET'){send(res,200,{conversations:runtime.chat.list(owner,query.get('archived')==='true')});return}
         if(req.method==='POST'){send(res,201,runtime.chat.create(owner));return}
+      }
+      const versionAttachment=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})\/attachments\/([a-f0-9-]{36})\/versions\/([a-f0-9]{64})$/)
+      if(versionAttachment){
+        if(!['GET','HEAD'].includes(req.method??'')){send(res,405,{code:'method_not_allowed'});return}
+        const {file,content}=runtime.chat.uploads.downloadVersion(versionAttachment[1]!,owner,versionAttachment[2]!,versionAttachment[3]!)
+        res.writeHead(200,{'content-type':'application/octet-stream','content-length':content.length,'content-disposition':'attachment; filename="attachment"; filename*=UTF-8\'\''+encodeURIComponent(file.name),'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"})
+        res.end(req.method==='HEAD'?undefined:content);return
       }
       const attachment=path.match(/^\/api\/chat\/conversations\/([a-f0-9-]{36})\/attachments(?:\/([a-f0-9-]{36}))?$/)
       if(attachment){
@@ -437,13 +537,23 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='POST'&&path==='/operator-link'){send(res,200,{url:sessions.link(runtime.config.http?.publicOrigin??endpoint),expiresIn:600});return}
     if(req.method==='POST'&&path==='/logout'){if(account.configured)account.logout(req,res);else sessions.logout(req,res);send(res,200,{operator:false});return}
     if(req.method==='GET'&&path==='/entry-setup'){send(res,200,await entries.info());return}
+    if(path==='/entry-workspace/attention'){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      const query=new URL(req.url!,requestOrigin).searchParams
+      if([...query].some(([key,value])=>!['offset','limit'].includes(key)||query.getAll(key).length!==1||!/^(0|[1-9][0-9]*)$/.test(value))){send(res,400,{code:'operator_attention_query_invalid'});return}
+      const input=z.object({offset:z.coerce.number().int().min(0).max(1_000_000).default(0),limit:z.coerce.number().int().min(1).max(100).default(25)}).strict().safeParse(Object.fromEntries(query))
+      if(!input.success){send(res,400,{code:'operator_attention_query_invalid'});return}
+      try{send(res,200,new OperatorAttention(()=>runtime).snapshot(input.data.offset,input.data.limit))}catch{send(res,503,{code:'operator_attention_unavailable'})};return
+    }
     if(req.method==='GET'&&path==='/entry-workspace'){
       const query=new URL(req.url!,'http://localhost').searchParams,input=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25),
         state:z.enum(['attention','running','replied','ready','closed','queued']).optional(),search:z.string().max(200).optional()}).parse(Object.fromEntries(query))
-      send(res,200,operatorWorkspace(runtime,input.offset,input.limit,{state:input.state,search:input.search}));return
+      try{send(res,200,runtime.scopes.readOnly(()=>runtime.memory.readOnly(()=>operatorWorkspace(runtime,input.offset,input.limit,{state:input.state,search:input.search}))))}catch{send(res,503,{code:'operator_workspace_unavailable'})};return
     }
     if(req.method==='GET'&&path.startsWith('/entry-workspace/task/')){
-      const task=operatorTask(runtime,decodeURIComponent(path.slice('/entry-workspace/task/'.length)));send(res,task?200:404,task??{code:'task_missing',error:'This work is no longer available.'});return
+      const id=decodeURIComponent(path.slice('/entry-workspace/task/'.length))
+      try{const task=runtime.scopes.readOnly(()=>runtime.memory.readOnly(()=>operatorTask(runtime,id)));send(res,task?200:404,task??{code:'task_missing',error:'This work is no longer available.'})}catch{send(res,503,{code:'operator_workspace_unavailable'})};return
     }
     if(req.method==='POST'&&path==='/entry-setup/probe'){const input=z.object({entryId:z.enum(entryIds),credentials:z.object({appId:z.string().trim().min(1).max(16000).optional(),appSecret:z.string().trim().min(1).max(16000).optional()}).strict().optional()}).strict().parse(await body(req));send(res,200,await entries.probe(input.entryId,input.credentials));return}
     if(req.method==='POST'&&path==='/entry-setup/plan'){send(res,200,entries.plan(await body(req)));return}

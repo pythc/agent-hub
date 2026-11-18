@@ -1,0 +1,18 @@
+{
+  "id": "acp-outbound", "label": "ACP v1 outbound (not a managed Worker)", "version": "0.1.0", "stateVersion": 1,
+  "configSchema": {
+    "type": "object", "required": ["command"], "properties": {
+      "command": {"type": "string", "pattern": "^/", "maxLength": 2000},
+      "args": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 8000}},
+      "environment": {"type": "array", "uniqueItems": true, "items": {"enum": ["ACP_TOKEN", "ACP_API_KEY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]}},
+      "authenticationMethod": {"type": "string", "minLength": 1, "maxLength": 200},
+      "requestTimeoutMs": {"type": "integer", "minimum": 100, "maximum": 600000},
+      "permissionTimeoutMs": {"type": "integer", "minimum": 100, "maximum": 120000},
+      "cancelTimeoutMs": {"type": "integer", "minimum": 100, "maximum": 10000}
+    }, "additionalProperties": false
+  },
+  "parametersSchema": {"type": "object", "additionalProperties": false},
+  "capabilities": {"resume": true, "tools": false, "managed": false, "contextBudget": false, "steering": false, "promptRefresh": false, "images": false, "nativeTakeover": false, "history": false, "purge": false, "modelCatalog": false},
+  "network": true,
+  "environment": ["ACP_TOKEN", "ACP_API_KEY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+}

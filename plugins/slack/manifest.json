@@ -121,20 +121,40 @@
     "fields": [
       {
         "name": "token-env",
-        "label": "Bot token environment variable",
+        "label": "Bot token",
         "secret": true,
-        "required": true
+        "required": true,
+        "path": "/options/tokenEnv",
+        "help": "From the Slack app OAuth page. Use a bot token with the listed scopes; never use your personal session token.",
+        "input": "text"
       },
       {
         "name": "team-id",
-        "label": "Expected workspace ID",
-        "required": true
+        "label": "Workspace ID",
+        "required": true,
+        "path": "/options/teamId",
+        "help": "Copy the expected T… workspace ID. Authentication checks reject a different workspace.",
+        "input": "text",
+        "secret": false
       },
       {
         "name": "channels",
-        "label": "Allowed channel IDs",
-        "required": true
+        "label": "Channel IDs",
+        "required": true,
+        "path": "/options/channels",
+        "help": "Invite the bot to each selected channel. Enter C… or G… IDs separated by commas.",
+        "input": "tags",
+        "secret": false
+      },
+      {
+        "name": "app-token",
+        "path": "/options/appTokenEnv",
+        "label": "Socket Mode app token",
+        "help": "Optional xapp token with connections:write enables live old-thread replies. Without it, polling is backfill only.",
+        "secret": true,
+        "required": false
       }
-    ]
+    ],
+    "serviceUrl": "https://slack.com/api/"
   }
 }

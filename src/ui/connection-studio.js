@@ -1,7 +1,7 @@
-const connectionStudio = { kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '', model: '', check: null, plan: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [], drafts: {}, generation: 0, modelError: '' }
+const connectionStudio = { backendProbes: {}, kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '', model: '', check: null, plan: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [], drafts: {}, generation: 0, modelError: '' }
 function connectionStudioReset() {
   const generation = connectionStudio.generation + 1
-  Object.assign(connectionStudio, { kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '', model: '', check: null, plan: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [], drafts: {}, generation, modelError: '' })
+  Object.assign(connectionStudio, { backendProbes: {}, kind: 'api', capabilities: null, error: '', loaded: false, provider: '', name: '', command: '', args: '', model: '', check: null, plan: null, auth: null, requestId: '', touched: false, native: false, accounts: [], editing: '', account: '', ownerSource: '', ownerActor: '', background: false, models: [], drafts: {}, generation, modelError: '' })
   connectionStudio.definitionId = ''
   if (typeof connectionLibraryState !== 'undefined') Object.assign(connectionLibraryState, { search: '', filter: 'all', selected: '' })
 }

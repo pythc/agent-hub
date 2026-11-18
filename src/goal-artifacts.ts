@@ -13,6 +13,8 @@ import {atomicPrivateFile} from './managed-config.ts'
 
 const mimeTypes:Record<string,string>={'.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pdf':'application/pdf','.mp4':'video/mp4','.png':'image/png'}
 export interface ArtifactVersion {id:string;goalId:string;ticketId:string;nodeId:string;path:string;version:number;sha256:string;size:number;mime:string}
+import type {ArtifactReference} from './artifact-reference.ts'
+export type {ArtifactReference} from './artifact-reference.ts'
 type CellCheck=Extract<NonNullable<GoalCriterion['check']>,{kind:'xlsx_cell_equals'}>
 
 /** Read the same file descriptor used to check the workspace boundary and size. */
@@ -56,7 +58,7 @@ export class GoalArtifacts {
       CREATE TRIGGER IF NOT EXISTS delete_goal_artifact AFTER DELETE ON records WHEN OLD.kind='goal-artifact'
       BEGIN DELETE FROM goal_artifact_bytes WHERE id=OLD.id; END;`)
   }
-  evidence(goal:RouterGoal,nodeId:string,ticketId:string,cwd:string,path:string,criteria:GoalCriterion[],head?:string){
+  evidence(goal:RouterGoal,nodeId:string,ticketId:string,cwd:string,path:string,criteria:GoalCriterion[],head?:string,options:{readOnly?:boolean}={}){
     const mime=mimeTypes[extname(path).toLowerCase()]
     const limit=mime?32*1024*1024:128*1024
     const bytes=head?this.host.projectCode.blob(goal,head,path,limit):evidenceBytes(cwd,path,limit)
@@ -66,6 +68,7 @@ export class GoalArtifacts {
     const store=this.host.store
     let artifact=store.get<ArtifactVersion>('goal-artifact',id)
     if(!artifact){
+      if(options.readOnly)throw Error('Artifact observation is not retained')
       artifact=store.atomic(()=>{
         const count=store.db.prepare("SELECT count(*) AS n FROM records WHERE kind='goal-artifact' AND json_extract(body,'$.goalId')=? AND json_extract(body,'$.nodeId')=? AND json_extract(body,'$.path')=?").get(goal.id,nodeId,path)!
         const item={id,goalId:goal.id,nodeId,ticketId,path,version:Number(count.n)+1,sha256,size:bytes.length,mime}
@@ -82,6 +85,7 @@ export class GoalArtifacts {
       const cache=stableDigest(['bounded-workbook-process-v1',id,checks])
       observation=store.get<{observation:unknown}>('workbook-observation',cache)?.observation
       if(!observation){
+        if(options.readOnly)throw Error('Workbook observation is not retained')
         try{observation=workbookObservation(bytes,checks)}catch{observation={error:'Workbook could not be read'}}
         store.put('workbook-observation',cache,{artifactId:id,ticketId,observation})
       }
@@ -93,11 +97,23 @@ export class GoalArtifacts {
     if(!row)throw Error('Artifact version unavailable')
     return Buffer.from(row.bytes as Uint8Array)
   }
-  download(id:string){
+  private operatorVersion(id:string){
     const artifact=this.host.store.get<ArtifactVersion>('goal-artifact',id)
     const goal=artifact?.goalId&&this.host.goals.get(artifact.goalId)
     if(!artifact?.mime||!goal||this.host.scopes.binding(goal.entryId).privateActor)throw Error('Artifact is outside the operator workspace')
     this.host.goals.context(goal)
+    return artifact
+  }
+  describe(id:string):ArtifactReference{
+    return this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>{
+      const artifact=this.operatorVersion(id)
+      const retained=!!this.host.store.db.prepare('SELECT 1 FROM goal_artifact_bytes WHERE id=?').get(id)
+      const category:ArtifactReference['category']=artifact.mime===mimeTypes['.xlsx']?'spreadsheet':artifact.mime==='application/pdf'?'document':artifact.mime.startsWith('image/')?'image':artifact.mime.startsWith('video/')?'video':'file'
+      return {schema:1,kind:'goal-artifact',id:artifact.id,version:artifact.version,sha256:artifact.sha256,name:basename(artifact.path),mediaType:artifact.mime,bytes:artifact.size,category,visibility:'operator_workspace',retention:'subject_to_history_cleanup',availability:retained?'retained':'unavailable',publication:'not_tracked',downloadPath:retained?'/goal-artifacts/'+encodeURIComponent(artifact.id):null}
+    }))
+  }
+  download(id:string){
+    const artifact=this.operatorVersion(id)
     return {artifact,bytes:this.bytes(id)}
   }
   open(owner:WorkOwner,id:string){

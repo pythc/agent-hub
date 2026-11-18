@@ -1,0 +1,19 @@
+# O32: source-partitioned registration candidates
+
+This is a validated source-locator contract and a read-only catalog projection, not a new persistent registry. `artifactRegistrationSchema` fixes schema 1, source kind/ID, version, checksum, permission domain and the source's existing retention policy. Acceptance and publication remain `not_tracked`; a registration candidate never implies either outcome. It contains no bytes, paths, download URLs, credentials or grants.
+
+- Task files: operator-workspace domain, original immutable goal artifact ID, integer version and checksum. The catalog constructs the candidate only after `GoalArtifacts.describe` authorizes the source.
+- Workspace Views: operator-workspace domain, original View ID plus manifest digest and code checksum. The catalog constructs the candidate only after the current enabled package verifies. This is not historical execution authority.
+- Attachments: conversation domain with an explicit conversation ID and original upload ID. The recorded display/reference ID must match the existing upload-ID/checksum derivation. Legacy uploads without a digest have no immutable candidate. The constructor does not authorize or query a conversation; callers must supply provenance from an already-authorized original record. It is never wired to a global catalog or new endpoint; the conversation draft integration is described below.
+
+Every locator is local to the owning workspace runtime. A saved descriptor cannot select another runtime, establish conversation ownership, survive revocation as an authorization token, or recreate deleted data. Permission checks and cleanup remain at the original resolver on each actual use. A renamed display label does not change identity; a changed version does. The catalog's optional additive `registration` field supports older clients/servers and the frontend rejects mismatches against the independently validated reference. No database writes or migrations occur.
+
+Future persistence must be separately integrated at original source write/cleanup boundaries and retain workspace/conversation partitions. It must not independently copy retained bytes or resurrect cleaned history. ResultEnvelope task/contract/input references and acceptance receipts remain separate, evidence-backed follow-ups; this candidate does not claim M8 or O32 complete.
+
+Tests cover source partitioning, legacy behavior, malformed/future schema, forged attachment reference identity, forbidden authority/publication fields, label independence, version changes, catalog access filtering, response validation and no record writes. Existing catalog auth/lease/cleanup tests remain required. Real browser/IM acceptance remains deferred; 7/49 unchanged.
+
+## Conversation draft integration
+
+The upload response and existing authenticated conversation attachment-draft list now project the candidate from the original upload row's conversation ID, upload ID and recorded digest. This is an additive optional response field, reconstructed on read; it is not written into the asset record. Legacy uploads omit it, and renamed drafts retain identity. Wrong owners/conversations, cleaned history and removed uploads remain governed by the existing conversation/cleanup checks. The operator artifact catalog still never includes attachments.
+
+The shared attachment converter defaults to excluding the candidate. Sending via `resolve`, binding to a trigger, and Worker resource copies therefore retain their existing payload and persistence shape; sent-history registration is not introduced here. Candidates in upload/list responses are metadata, not evidence that current bytes are still intact: the existing pinned download separately rechecks checksum and access. No new routes, storage, permissions or retention are introduced. This integration depends on the source-partitioned candidate contract and does not complete the persistent registry.

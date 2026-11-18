@@ -1,0 +1,14 @@
+.task-contract-card { margin:20px 0;padding:18px;border:1px solid var(--border-subtle);border-radius:12px;background:var(--surface);color:var(--text-primary);font-size:14px;line-height:1.6;min-width:0; }
+.task-contract-card h3 { font-size:16px;font-weight:600;line-height:1.5;margin:0 0 10px; }
+.task-contract-card h4 { font-size:14px;font-weight:600;margin:16px 0 8px; }
+.task-contract-card p,.task-contract-card li,.task-contract-card summary { font-size:14px;line-height:1.6;color:var(--text-primary);overflow-wrap:anywhere; }
+.task-contract-card p { margin:8px 0;white-space:pre-wrap; }
+.task-contract-card .task-contract-state { margin:0; }
+.task-contract-card ul { margin:8px 0;padding-left:20px; }
+.task-contract-card li+li { margin-top:6px; }
+.task-contract-card .task-contract-objective { margin-bottom:14px; }
+.task-contract-card .task-contract-details { margin-top:16px;padding-top:12px;border-top:1px solid var(--border-subtle); }
+.task-contract-card summary { cursor:pointer;width:fit-content;border-radius:3px; }
+.task-contract-card summary:focus-visible { outline:2px solid var(--action);outline-offset:3px; }
+@media(max-width:700px) { .task-contract-card { padding:16px; } }
+@media(prefers-reduced-motion:reduce) { .task-contract-card,.task-contract-card * { animation:none!important;transition:none!important; } }

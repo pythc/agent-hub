@@ -26,8 +26,9 @@ export const agentOptionsSchema=z.object({
 }).strict()
 export type AgentOptions=z.infer<typeof agentOptionsSchema>
 const parameters=parametersSchema.prefault({})
+export const backendLimitsSchema=z.object({timeoutMs:z.number().int().min(1000).max(3600000).optional(),maxOutputTokens:z.number().int().min(64).max(200000).optional(),maxSteps:z.number().int().min(1).max(256).optional(),maxToolCalls:z.number().int().min(1).max(10000).optional()}).strict()
 export const apiBackendDefinition=z.object({
-  kind:z.enum(['openai-responses','openai-chat','anthropic']),label:z.string().trim().min(1).max(100).optional(),baseUrl:apiBase,model:z.string().min(1),apiKeyEnv:envName.optional(),
+  kind:z.enum(['openai-responses','openai-chat','anthropic']),limits:backendLimitsSchema.optional(),label:z.string().trim().min(1).max(100).optional(),baseUrl:apiBase,model:z.string().min(1),apiKeyEnv:envName.optional(),
   images:z.boolean().default(false),maxSteps:z.number().int().min(1).max(256).default(64),
   maxToolCalls:z.number().int().min(1).max(10000).default(256),
   maxContextBytes:z.number().int().min(4096).max(64000000).default(16000000),
@@ -40,8 +41,8 @@ export const apiBackendDefinition=z.object({
   chatTokenField:z.enum(['max_completion_tokens','max_tokens']).default('max_completion_tokens'),
  }).strict()
 export const backendDefinition=z.discriminatedUnion('kind',[
- z.object({kind:z.literal('plugin'),plugin:name,label:z.string().trim().min(1).max(100).optional(),model:z.string().min(1).optional(),config:z.record(z.string(),z.unknown()).prefault({}),env:z.record(envName,envName).prefault({}),readPaths:z.array(z.string().min(1)).default([]),writePaths:z.array(z.string().min(1)).default([]),defaults:agentOptionsSchema.optional()}).strict(),
- z.object({kind:z.literal('codex'),label:z.string().trim().min(1).max(100).optional(),command:z.string().min(1).optional(),
+ z.object({kind:z.literal('plugin'),limits:backendLimitsSchema.optional(),plugin:name,label:z.string().trim().min(1).max(100).optional(),model:z.string().min(1).optional(),config:z.record(z.string(),z.unknown()).prefault({}),env:z.record(envName,envName).prefault({}),readPaths:z.array(z.string().min(1)).default([]),writePaths:z.array(z.string().min(1)).default([]),defaults:agentOptionsSchema.optional()}).strict(),
+ z.object({kind:z.literal('codex'),limits:backendLimitsSchema.optional(),label:z.string().trim().min(1).max(100).optional(),command:z.string().min(1).optional(),
   args:z.array(z.string()).optional(),env:z.record(envName,envName).optional(),model:z.string().min(1).optional(),defaults:agentOptionsSchema.optional(),
  }).strict(),
  apiBackendDefinition,

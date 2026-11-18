@@ -23,7 +23,26 @@ function connectionUses(id, config = S.base.config) {
   for (const [role, value] of Object.entries(route.roles || {})) if (value === id && !uses.length) uses.push(role)
   return [...new Set(uses)]
 }
+function connectionProtocolProbe(service) {
+  const probe = connectionStudio.backendProbes?.[service.id]
+  return probe?.revision === S.snap?.current?.revision && probe?.workspaceId === workspaceContext.activeId ? probe : null
+}
+async function connectionRunCheck(service) {
+  if (service.kind === 'plugin') {
+    const workspaceId = workspaceContext.activeId
+    const result = await api('/api/execution-backends/probe', {id: service.id, revision: S.snap.current.revision})
+    connectionStudio.backendProbes ||= {}
+    connectionStudio.backendProbes[service.id] = {...result, workspaceId}
+  } else {
+    await api('/model-connections/check', {id: service.id, revision: S.base.revision})
+    adopt(await snapshot())
+  }
+}
 function connectionCheckStatus(service) {
+  if (service.kind === 'plugin') {
+    const probe = connectionProtocolProbe(service)
+    return {result: null, text: !probe ? L('Protocol untested', '协议未探测') : probe.available ? L('Protocol reachable', '协议可达') : L('Protocol unavailable', '协议不可用'), state: !probe ? 'untested' : probe.available ? 'ready' : 'error'}
+  }
   const result = S.snap?.connectionChecks?.[service.id]
   return { result, text: !result ? L('Not tested', '未测试') : !result.ok ? L('Test failed', '测试失败') : result.remoteVerified ? L('Model replied', '模型已回复') : L('Tool ready', '工具已就绪'),
     state: !result ? 'untested' : !result.ok ? 'error' : result.remoteVerified ? 'verified' : 'ready' }
@@ -78,14 +97,21 @@ function connectionDetails(service) {
   dialog.append(add(el('div', 'connection-sheet-head'), heading, opButton(L('Close', '关闭'), close, 'icon-button', 'close')))
   const body = el('div', 'connection-sheet-body'), status = connectionCheckStatus(service), busy = entryState.busy === 'connection-check', uses = connectionUses(service.id)
   body.append(connectionIdentity(service), add(el('div', 'connection-key-value'), el('span', '', L('Default model', '默认模型')), el('span', '', service.model || L('Tool default', '工具默认模型'))))
+  if (service.admission) {
+    const a = service.admission
+    if (a.continuation === 'new_task_only') body.append(el('p', 'team-help', L('No resume capability: use an explicit new task, not a continuation.', '不具备续接能力：只能显式新建任务，不能冒充继续原任务。')))
+    if (a.unsupportedLimits) body.append(el('p', 'team-help', L('This backend cannot enforce the configured resource limits; execution is blocked.', '此后端无法执行所配置的资源限制，运行已阻止。')))
+    if (Object.keys(a.limits || {}).length) body.append(el('p', 'team-help', L('Host resource ceilings: ', '宿主资源上限：') + Object.entries(a.limits).map(([k,v]) => k + '=' + v).join(' · ')))
+    body.append(el('p', 'team-help', L('Resource limits are not a price estimate or permission grant.', '资源上限不是费用估算，也不授予权限。')))
+  }
+  if (service.managedEligible === false) body.append(el('p', 'team-help', L('Cannot serve as a managed Worker. Missing: ', '无法担任受管 Worker，缺少：') + service.managedMissing.join(', ')))
+  const probe = connectionProtocolProbe(service)
   const test = el('section', 'connection-test-section')
   test.append(el('h3', '', L('Connection test', '连接测试')), busy ? add(el('p', 'connection-check-line'), icon('refresh'), el('span', '', L('Checking…', '正在测试…'))) : connectionStatusLabel(service))
   if (status.result) test.append(connectionCheckView(status.result))
-  test.append(el('p', 'team-help', service.connectionType === 'cli' ? L('Verifies installation and sign-in. It does not send a model request.', '验证安装和登录，不会发送模型请求。') : L('Sends a model request and may use credits.', '会发送少量模型请求，可能消耗额度。')))
-  const check = opButton(service.connectionType === 'cli' ? L('Check tool', '检查工具') : L('Run model test', '模型试运行'), () => entryRun('connection-check', async () => {
-    await api('/model-connections/check', { id: service.id, revision: S.base.revision })
-    adopt(await snapshot())
-  }), 'button primary', 'play'); check.disabled = !!(entryState.busy || S.busy); test.append(check); body.append(test)
+  if (service.kind === 'plugin' && probe) test.append(el('p', 'team-help', L('Authentication: ', '认证：') + (probe.authenticated === true ? L('verified', '已验证') : probe.authenticated === false ? L('required', '待认证') : L('unknown', '未知')) + ' · ' + new Date(probe.checkedAt).toLocaleTimeString() + ' · ' + L('Model call unverified', '模型调用未验证')))
+  test.append(el('p', 'team-help', service.kind === 'plugin' ? L('Probes the protocol only. Model calls remain unverified.', '仅探测协议，模型调用仍未验证。') : service.connectionType === 'cli' ? L('Verifies installation and sign-in. It does not send a model request.', '验证安装和登录，不会发送模型请求。') : L('Sends a model request and may use credits.', '会发送少量模型请求，可能消耗额度。')))
+  const check = opButton(service.kind === 'plugin' ? L('Probe protocol', '探测协议') : service.connectionType === 'cli' ? L('Check tool', '检查工具') : L('Run model test', '模型试运行'), () => entryRun('connection-check', () => connectionRunCheck(service)), 'button primary', 'play'); check.disabled = !!(entryState.busy || S.busy); test.append(check); body.append(test)
   body.append(el('h3', '', L('Used by', '正在使用')), uses.length ? add(el('div', 'model-service-roles'), ...uses.map(u => el('span', '', u))) : el('p', 'team-help', L('Available as a spare connection.', '暂无组件使用，可作为备用连接。')))
   const definition = S.draft.backends?.[service.id]
   if (definition || service.id === 'codex') body.append(opButton(L('Edit connection', '编辑连接'), () => {

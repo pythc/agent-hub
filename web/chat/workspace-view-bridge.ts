@@ -1,3 +1,4 @@
+import type {WorkspaceTransportContext} from './workspace-transport.ts'
 import type {ViewHostMessage} from '../../src/workspace-view-contract.ts'
 const destinations={tasks:'/configure#tasks/history',attention:'/configure#attention',team:'/configure#execution/configuration',models:'/configure#models',conversation:'/chat',browser:'/chat?browser=open'} as const
 export function viewDestination(value:string){return Object.hasOwn(destinations,value)?destinations[value as keyof typeof destinations]:undefined}
@@ -20,4 +21,13 @@ export function viewDocument(code:string,nonce:string){
   if(!/^[a-zA-Z0-9-]+$/.test(nonce))throw Error('Invalid view nonce')
   // CSP is a network boundary. Opaque origin is the host/credential boundary. No same-origin sandbox permission.
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data:; connect-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'"></head><body><div id="root"></div><script nonce="${nonce}">${code.replace(/<\/script/gi,'<\\/script')}</script></body></html>`
+}
+
+/** A captured managed workspace may navigate only to configuration surfaces with explicit selection. */
+export function scopedViewDestination(value:string,context:WorkspaceTransportContext):string|undefined{
+ const target=viewDestination(value)
+ if(!target||context.state!=='ready')return
+ if(!context.managed)return target
+ if(!target.startsWith('/configure#'))return
+ return '/configure?workspace='+encodeURIComponent(context.activeId)+target.slice('/configure'.length)
 }

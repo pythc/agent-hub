@@ -5,6 +5,8 @@ import type {ScopeContext} from './router-scope.ts'
 import {skillRefSchema,validateGraph} from './goal-contract.ts'
 import {automationTemplateSchema} from './webhooks.ts'
 import {stableDigest} from './sources.ts'
+import {backendAdmission,checkWorkerAdmission} from './backend-admission.ts'
+import {BackendPluginError} from './backends/plugin-contract.ts'
 import {workerProfiles} from './worker-pool.ts'
 import type {ToolSpec} from './model.ts'
 
@@ -37,7 +39,7 @@ export class SavedSkills {
   }
   list(scopeId:string,context?:ScopeContext){
     if(context)this.host.scopes.assertCurrent(context)
-    return this.versions().filter(v=>v.template&&v.scopeId===scopeId&&this.visible(scopeId,v.entryId,context)).map(v=>({id:v.id,version:v.version,entryId:v.entryId,goalId:v.goalId,title:v.template.title,parameters:v.parameters??[],...this.status(v)}))
+    return this.versions().filter(v=>v.template&&v.scopeId===scopeId&&this.visible(scopeId,v.entryId,context)).map(v=>({id:v.id,version:v.version,entryId:v.entryId,goalId:v.goalId,title:v.template.title,objective:v.template.objective,parameters:v.parameters??[],...this.status(v)}))
       .sort((a,b)=>a.title.localeCompare(b.title)||b.version-a.version)
   }
   resolve(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
@@ -60,12 +62,44 @@ export class SavedSkills {
   }
   read(value:unknown){
     const input=skillRefSchema.extend({scopeId:id,entryId:id}).parse(value)
-    return this.resolve(input,input.scopeId,input.entryId)
+    return this.inspect(input,input.scopeId,input.entryId)
+  }
+  /** Read-only preflight, never an authorization or a promise of provider availability. */
+  inspect(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
+    if(context)this.host.scopes.assertCurrent(context)
+    const item=this.resolve(ref,scopeId,entryId,context),scope=this.host.scopes.scope(scopeId)
+    const profiles=workerProfiles(this.host.config)
+    const dependencies=(item.template.nodes??[]).map(node=>{
+      const profile=profiles.find(p=>p.id===node.workerId)
+      let reason:string|undefined
+      if(!profile||!scope.workerIds.includes(profile.id))reason='worker_unavailable'
+      else if(profile.state&&profile.state!=='enabled')reason='worker_paused'
+      else if(!scope.backendIds.includes(profile.backend))reason='backend_not_allowed'
+      else {
+        const definition=this.host.config.backends[profile.backend]??(profile.backend==='codex'?{kind:'codex' as const}:undefined)
+        if(!definition)reason='backend_unavailable'
+        else {
+          const admission=backendAdmission(this.host.config,profile.backend)
+          if(admission.managedMissing.length)reason='backend_not_managed'
+          else try{checkWorkerAdmission(this.host.config,profile.backend,profile)}catch(error){
+            reason=error instanceof BackendPluginError&&error.code==='quota_exhausted'?'backend_resource_limit':'backend_policy_unsupported'
+          }
+        }
+      }
+      const definition=profile&&this.host.config.backends[profile.backend]
+      const selected=profile?.toolConnections??definition?.defaults?.toolConnections??[]
+      const connections=reason?[]:selected.map(id=>({id,state:this.host.config.toolConnections[id]?.enabled?'configured':'blocked',reason:this.host.config.toolConnections[id]?.enabled?'execution_rechecks_permissions':'connection_disabled_or_missing'}))
+      // Do not disclose configuration for an inaccessible Worker or connection.
+      return {nodeId:node.id,state:reason?'blocked':'configured',...(reason?{reason}:{workerId:profile!.id,backendId:profile!.backend}),authorization:'not_granted' as const,connections}
+    })
+    return {...item,inspection:{digest:stableDigest(item),status:this.status(item),dependencies,
+      dependencyCoverage:'configured_workers_and_selected_connections_only',implicitMethodRequirements:'not_inferred',parameters:item.parameters??[],authorization:'fresh_request_required',providerVerification:'not_tested',
+      grants:[],changesConfiguration:false}}
   }
   readTool(value:unknown,context:ScopeContext){
     this.host.scopes.assertCurrent(context)
     const query=z.discriminatedUnion('action',[z.object({action:z.literal('list')}).strict(),skillRefSchema.extend({action:z.literal('read')}).strict()]).parse(value)
-    return query.action==='list'?this.list(context.route.scopeId,context):this.resolve(query,context.route.scopeId,context.route.entryId,context)
+    return query.action==='list'?this.list(context.route.scopeId,context):this.inspect(query,context.route.scopeId,context.route.entryId,context)
   }
   private workers(template:Template,scopeId:string){
     validateGraph(template.nodes,template.criteria)

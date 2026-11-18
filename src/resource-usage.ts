@@ -1,0 +1,67 @@
+import {z} from 'zod'
+import type {Runtime} from './runtime.ts'
+import {usageFields} from './model-usage.ts'
+import type {UsageSummary} from './usage-contract.ts'
+
+const count=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
+const time=count.max(8640000000000000)
+const purpose=z.enum(['router','worker','subagent','verification','replanning','plan_review','memory','auxiliary','watchdog'])
+const counts={calls:count,reportedCalls:count,unknownCalls:count,partialCalls:count,steps:count}
+const tokens=z.object(Object.fromEntries(usageFields.map(field=>[field,count.nullable()])) as Record<typeof usageFields[number],z.ZodNullable<typeof count>>)
+const group=z.object({purpose,...counts,tokens})
+const usageSchema=z.object({since:time.nullable(),...counts,tokens,fieldReported:z.object(Object.fromEntries(usageFields.map(field=>[field,count])) as Record<typeof usageFields[number],typeof count>),groups:z.array(group).max(purpose.options.length),legacyUntrackedCalls:count,watchdogUnavailable:z.boolean().optional()})
+const workStates=['starting','running','completed','failed','cancelled','interrupted'] as const
+export type ResourceWorkState=typeof workStates[number]
+export interface ResourceUsageSnapshot {
+ schema:1;observedAt:number;settingsRevision:number;scope:'host';usage:UsageSummary
+ context:{retainedActivities:number;withinBudgetActivities:number;exceededActivities:number;unrecognizedActivities:number;lastCheckAt:number|null}
+ work:{retainedItems:number;states:Record<ResourceWorkState,number>;unrecognizedStateItems:number;deadlineItems:number;pastDeadlineItems:number;invalidDeadlineItems:number;limits:{maxAgentsPerTicket:number;maxDepth:number;backgroundTimeoutMs:number;maxOutputBytesPerShell:number}}
+}
+const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value)
+const integer=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0
+const timestamp=(value:unknown):value is number=>integer(value)&&value<=8640000000000000
+/** Validate and whitelist the existing ledger's summary, without repairing or re-accounting its records. */
+function publicUsage(value:unknown):UsageSummary{
+ const summary=usageSchema.parse(value)
+ for(const row of [summary,...summary.groups])if(row.reportedCalls>row.calls||row.unknownCalls!==row.calls-row.reportedCalls||row.partialCalls>row.reportedCalls)throw Error('Usage coverage unavailable')
+ if(usageFields.some(field=>summary.fieldReported[field]>summary.steps)||new Set(summary.groups.map(row=>row.purpose)).size!==summary.groups.length)throw Error('Usage coverage unavailable')
+ // Never emit an imprecise total even when individual group counters are safe.
+ for(const field of ['calls','reportedCalls','unknownCalls','partialCalls','steps'] as const){
+  let total=0
+  for(const row of summary.groups){if(row[field]>Number.MAX_SAFE_INTEGER-total)throw Error('Usage coverage unavailable');total+=row[field]}
+  if(total!==summary[field])throw Error('Usage coverage unavailable')
+ }
+ return summary
+}
+/** Pure synchronous projection. Capture one Runtime; never construct accounting or budget owners on read. */
+export class ResourceUsage {
+ constructor(private readonly host:()=>Runtime,private readonly clock:()=>number=Date.now){}
+ snapshot():ResourceUsageSnapshot{
+  const host=this.host(),observedAt=time.parse(this.clock()),settingsRevision=count.parse(host.settings.current().revision)
+  const usage=publicUsage(host.usage.summary()),contextRows=host.store.list<unknown>('context-budget'),workRows=host.work.list() as unknown[]
+  const context:ResourceUsageSnapshot['context']={retainedActivities:contextRows.length,withinBudgetActivities:0,exceededActivities:0,unrecognizedActivities:0,lastCheckAt:null}
+  for(const row of contextRows){
+   if(!object(row)||typeof row.activity!=='string'||!row.activity||typeof row.phase!=='string'||!row.phase||typeof row.basis!=='string'||!['api-wire','native-protocol'].includes(row.basis)||typeof row.status!=='string'||!['within_budget','exceeded'].includes(row.status)||
+    !integer(row.bytes)||!integer(row.maxBytes)||row.maxBytes===0||!integer(row.reservedBytes)||!timestamp(row.at)){
+    context.unrecognizedActivities++;continue
+   }
+   // Subtraction preserves the comparison even if bytes + reservedBytes would overflow a safe integer.
+   const within=row.bytes<=row.maxBytes-row.reservedBytes
+   if(within!==(row.status==='within_budget')){context.unrecognizedActivities++;continue}
+   if(within)context.withinBudgetActivities++;else context.exceededActivities++
+   context.lastCheckAt=context.lastCheckAt===null?row.at:Math.max(context.lastCheckAt,row.at)
+  }
+  const states=Object.fromEntries(workStates.map(state=>[state,0])) as Record<ResourceWorkState,number>
+  const configured=host.config.work,limits={maxAgentsPerTicket:configured.maxAgents,maxDepth:configured.maxDepth,backgroundTimeoutMs:configured.backgroundTimeoutMs,maxOutputBytesPerShell:configured.maxOutputBytes}
+  for(const value of Object.values(limits))count.positive().parse(value)
+  const work:ResourceUsageSnapshot['work']={retainedItems:workRows.length,states,unrecognizedStateItems:0,deadlineItems:0,pastDeadlineItems:0,invalidDeadlineItems:0,limits}
+  for(const row of workRows){
+   if(!object(row)||typeof row.kind!=='string'||!['shell','agent'].includes(row.kind)||!workStates.includes(row.state as ResourceWorkState)){work.unrecognizedStateItems++;continue}
+   const state=row.state as ResourceWorkState;states[state]++
+   if(!['starting','running'].includes(state)||row.deadline===undefined)continue
+   if(!timestamp(row.deadline)){work.invalidDeadlineItems++;continue}
+   work.deadlineItems++;if(row.deadline<=observedAt)work.pastDeadlineItems++
+  }
+  return {schema:1,observedAt,settingsRevision,scope:'host',usage,context,work}
+ }
+}

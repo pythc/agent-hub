@@ -49,7 +49,7 @@ function executionPaint(){
  for(const node of root.querySelectorAll('.execution-router,.execution-worker')){
   const kind=node.classList.contains('execution-router')?'router':'worker',records=calls.filter(c=>executionMatches(c,kind,node.dataset.workerId));node.dataset.state=executionSummary(records);node.dataset.selected=String(executionView.selected.kind===kind&&(kind==='router'||executionView.selected.id===node.dataset.workerId))
   if(kind==='worker'){
-   const active=operator.work?.architecture?.workers?.find(w=>w.id===node.dataset.workerId)?.active||[],text=active.map(task=>task.title).join(' · '),previous=node.querySelector('.execution-worker-task')
+   const active=operator.work?.architecture?.workers?.find(w=>w.id===node.dataset.workerId)?.active||[],text=active.map(task=>task.displayTitle||task.title).join(' · '),previous=node.querySelector('.execution-worker-task')
    if(text){if(previous)previous.textContent=text;else node.append(el('p','execution-worker-task',text))}else previous?.remove()
   }
  }

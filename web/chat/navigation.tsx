@@ -1,5 +1,7 @@
 import {
   BookOpen,
+  Library,
+  Activity,
   History,
   Inbox,
   Link2,
@@ -52,6 +54,7 @@ export function FeatureNavigation({
         Icon: MessageSquare,
         current: !configuring,
       },
+      {href:"/configure#artifacts",label:L("Artifacts", "产物目录"),Icon:Library,current:configuring&&(hash==='artifacts'||hash.startsWith('artifact/'))},
       ...views.map(view=>({href:'/configure#plugin/'+view.id,label:view.label,Icon:LayoutDashboard,current:configuring&&hash==='plugin/'+view.id})),
       {
         href: "/configure#tasks/history",
@@ -59,6 +62,7 @@ export function FeatureNavigation({
         Icon: History,
         current: configuring && ["tasks/active", "tasks/history"].includes(hash),
       },
+      {href:"/configure#execution-trace",label:L("Task progress", "任务进展"),Icon:Activity,current:configuring&&hash==='execution-trace'},
       {
         href: "/configure#attention",
         label: L("Needs attention", "待处理"),
@@ -74,6 +78,7 @@ export function FeatureNavigation({
         Icon: Users,
         current: configuring && hash.startsWith("execution"),
       },
+      {href:"/configure#worker-templates",label:L("Worker templates", "Worker 模板"),Icon:Library,current:configuring&&hash==='worker-templates'},
       {
         href: "/configure#deployments",
         label: L("Deployments", "部署"),
@@ -92,6 +97,7 @@ export function FeatureNavigation({
         Icon: Plug,
         current: configuring && hash.startsWith("connections"),
       },
+      {href:"/configure#connectors",label:L("Connectors", "连接器"),Icon:Plug,current:configuring&&hash==='connectors'},
       {
         href: "/configure#integrations/market",
         label: L("Tools and apps", "工具与应用"),

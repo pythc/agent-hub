@@ -45,6 +45,7 @@ export function readRevocations(stateDir:string):Revocation[]{
  return rows
 }
 export class RouterMemory {
+ private readOnlyDepth=0
  readonly cleanup:HistoryCleanup
  recall?:(context:ScopeContext,query:string)=>{items:MemoryProjection[];status:string;reason?:string}
  onMutation?:()=>void
@@ -350,7 +351,17 @@ export class RouterMemory {
  }
  private appendRevocation(r:Revocation){this.appendRevocations([r])}
  private appendRevocations(rows:Revocation[]){const path=join(this.stateDir,'memory-revocations.jsonl');appendFileSync(path,rows.map(r=>JSON.stringify(r)+'\n').join(''),{mode:0o600});const fd=openSync(path,'r');try{fsyncSync(fd)}finally{closeSync(fd)}}
+ /** Observation cannot apply a revocation ledger that has not been reconciled. */
+ assertReconciled(){
+  const rows=readRevocations(this.stateDir),last=rows.at(-1),head=this.store.get<{seq:number;hash:string}>('memory-revocation-head','current')
+  if((last?.seq??0)!==(head?.seq??0)||(last?.hash??'')!==(head?.hash??''))throw Error('Memory reconciliation is required')
+ }
+ readOnly<T>(read:()=>T):T {
+  this.assertReconciled();this.readOnlyDepth++
+  try{const value=read();this.assertReconciled();return value}finally{this.readOnlyDepth--}
+ }
  reconcile(){
+  if(this.readOnlyDepth){this.assertReconciled();return}
   const rows=readRevocations(this.stateDir),head=this.store.get<{seq:number;hash:string}>('memory-revocation-head','current')
   if(head&&!rows.some(r=>r.seq===head.seq&&r.hash===head.hash))throw Error('Latest memory revocation ledger is required before restoring service')
   this.store.atomic(()=>{for(const r of rows)if(r.seq>(head?.seq??0))this.applyRevocation(r)})

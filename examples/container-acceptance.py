@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 import time
 import urllib.error
@@ -21,12 +22,23 @@ parser.add_argument('--port', type=int, default=14439)
 parser.add_argument('--subnet')
 parser.add_argument('--incompatible-image', help='Optional synthetic image with a lower maximum DB schema')
 parser.add_argument('--keep', action='store_true')
+parser.add_argument('--ci-apparmor', action='store_true', help='Explicit GitHub-hosted CI-only candidate; never a deployment option')
 args = parser.parse_args()
 assert args.project.startswith(('roppo-acceptance-', 'roppo-container-check-'))
 root = Path(__file__).resolve().parents[1]
+if args.ci_apparmor:
+    sys.path.insert(0, str(root / 'deployment/ci'))
+    from apparmor_control import compose_environment, local_docker
+    from acceptance_contract import actual_config, merged_config, bwrap_classification, bwrap_error, outer_controls
+    ci_environment = compose_environment(os.environ, args.project, args.subnet)
+    local_docker(os.environ)
+    if args.keep:
+        raise RuntimeError('CI policy acceptance must clean up its designated container')
+else:
+    ci_environment = os.environ
 args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
 os.umask(0o077)
-env = dict(os.environ, COMPOSE_PROJECT_NAME=args.project, ROPPO_IMAGE=args.image, ROPPO_PORT=str(args.port), ROPPO_BUILD='local')
+env = dict(ci_environment, COMPOSE_PROJECT_NAME=args.project, ROPPO_IMAGE=args.image, ROPPO_PORT=str(args.port), ROPPO_BUILD='local')
 if args.subnet:
     env['ROPPO_SUBNET'] = args.subnet
 base = 'http://127.0.0.1:' + str(args.port)
@@ -61,7 +73,61 @@ def api(route, body=None, authorized=True, origin=None):
     except urllib.error.HTTPError as error:
         return error.code, json.load(error)
 
+def startup_diagnostics():
+    # Only fixed probe classifications and allow-listed state metadata may reach
+    # CI output. Application logs and Health.Log can contain configured secrets;
+    # heuristic redaction cannot make those arbitrary strings safe to publish.
+    try:
+        probe = compose('run', '--rm', '--no-deps', '--entrypoint', 'bwrap', 'roppo', '--unshare-all', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true', check=False)
+        probe_error = probe.stderr
+        if 'Failed to make / slave: Permission denied' in probe_error:
+            classification = 'root_mount_propagation_permission_denied'
+        elif 'Creating new namespace failed' in probe_error:
+            classification = 'namespace_creation_failed'
+        elif 'No permissions to create new namespace' in probe_error:
+            classification = 'namespace_permission_denied'
+        else:
+            classification = 'unclassified' if probe.returncode else 'passed'
+        diagnostic = {'exitCode': probe.returncode, 'classification': classification}
+        (args.output / 'sandbox-startup-failure.json').write_text(json.dumps(diagnostic))
+        print('Sandbox no-op diagnostic: ' + json.dumps(diagnostic), file=sys.stderr)
+        ids = compose('ps', '--all', '--quiet', 'roppo', check=False).stdout.split()
+        for container_id in ids:
+            if not re.fullmatch(r'[a-f0-9]{12,64}', container_id):
+                continue
+            result = run(['docker', 'inspect', '--format', '{{json .State}}', container_id], check=False)
+            state = json.loads(result.stdout)
+            metadata = {key: state[key] for key in ('Running', 'Paused', 'Restarting', 'OOMKilled', 'Dead') if isinstance(state.get(key), bool)}
+            if type(state.get('ExitCode')) is int:
+                metadata['ExitCode'] = state['ExitCode']
+            if state.get('Status') in ('created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead'):
+                metadata['Status'] = state['Status']
+            health = state.get('Health', {})
+            if health.get('Status') in ('starting', 'healthy', 'unhealthy', 'none'):
+                metadata['HealthStatus'] = health['Status']
+            if type(health.get('FailingStreak')) is int:
+                metadata['HealthFailingStreak'] = health['FailingStreak']
+            (args.output / ('container-state-' + container_id[:12] + '.json')).write_text(json.dumps(metadata))
+            print('Container state metadata: ' + json.dumps(metadata), file=sys.stderr)
+    except Exception as error:
+        print('Could not collect container diagnostics: ' + type(error).__name__, file=sys.stderr)
+
 try:
+    if args.ci_apparmor:
+        merged_config(json.loads(compose('config', '--format', 'json').stdout))
+        # A fixed, no-app-entrypoint comparison under unchanged production policy.
+        base_compose = ['docker', 'compose', '-f', str(root / 'compose.yaml')]
+        label = run(base_compose + ['run', '--rm', '--no-deps', '--entrypoint', 'python3', 'roppo', '-c', "import pathlib,json;print(json.dumps({'defaultEnforcing':pathlib.Path('/proc/self/attr/current').read_text().strip()=='docker-default (enforce)'}))"])
+        assert json.loads(label.stdout) == {'defaultEnforcing':True}
+        arguments = ['run', '--rm', '--no-deps', '--entrypoint', 'bwrap', 'roppo', '--unshare-all', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true']
+        baseline = run(base_compose + arguments, check=False)
+        baseline_result = bwrap_classification(baseline)
+        assert baseline_result == 'root_propagation_failed' and bwrap_error(baseline) in ('permission_denied', 'operation_not_permitted'), 'Default-policy comparison did not reproduce the known boundary'
+        candidate = compose(*arguments, check=False)
+        comparison = {'baseline':baseline_result, 'baselineError':bwrap_error(baseline), 'candidate':bwrap_classification(candidate), 'candidateError':bwrap_error(candidate), 'kernelAudit':'unavailable_not_claimed'}
+        (args.output / 'ci-policy-comparison.json').write_text(json.dumps(comparison))
+        print('CI policy comparison: ' + json.dumps(comparison))
+        assert candidate.returncode == 0, 'CI candidate sandbox no-op failed; see fixed comparison classification'
     run(['./deployment/compose.sh', 'up'], name='up')
     cid = compose('ps', '-q', 'roppo').stdout.strip()
     info = json.loads(run(['docker', 'inspect', cid]).stdout)[0]
@@ -69,6 +135,15 @@ try:
     assert not info['HostConfig']['Privileged'] and 'ALL' in info['HostConfig']['CapDrop']
     assert not any(m['Destination'] == '/var/run/docker.sock' for m in info['Mounts'])
     checks['nonRootReadOnlyNoHostSocket'] = True
+    if args.ci_apparmor:
+        actual_config(info)
+        security = compose('exec', '-T', '--user', '0:0', 'roppo', 'python3', '-', input=(root / 'deployment/ci/container-security.py').read_text(), check=False)
+        controls = json.loads(security.stdout)
+        (args.output / 'ci-policy-security.json').write_text(json.dumps(controls))
+        assert security.returncode == 0, 'CI retained-boundary checks failed'
+        outer_controls(controls)
+        print('CI retained boundaries: ' + json.dumps(controls, sort_keys=True))
+        checks['ciNamedProfileAndRetainedBoundaries'] = True
     token = node("import fs from 'node:fs';process.stdout.write(fs.readFileSync('/data/state/access-token','utf8').trim())")
     assert api('/health', authorized=False)[1]['ok']
     assert api('/status', authorized=False)[0] == 401
@@ -173,6 +248,9 @@ try:
     (args.output / 'browser.json').write_text(json.dumps({'base': base, 'username': username, 'password': password, 'project': args.project}))
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'mode': 'fixture-api-real-container', 'commercialModelCalls': 0, 'project': args.project, 'image': args.image, 'checks': checks, 'doctor': capability}, indent=2))
     print(json.dumps({'passed': True, 'checks': list(checks), 'evidence': str(args.output)}))
+except Exception:
+    startup_diagnostics()
+    raise
 finally:
     if not args.keep:
         compose('down', '--volumes', check=False, name='cleanup')

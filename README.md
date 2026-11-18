@@ -137,3 +137,7 @@ Roppo builds on the domain core of [DeepSeek Super Agent](https://github.com/dee
 Licensed under [Apache-2.0](LICENSE). Third-party components retain their licenses, including the DeepSeek core under MIT. Thanks to [assistant-ui](https://github.com/assistant-ui/assistant-ui), [agent-browser](https://github.com/vercel-labs/agent-browser), React, Vite and the MCP SDK. [NOTICE](NOTICE) · [Third-party licenses](THIRD_PARTY.md)
 
 The repository and CLI retain the name `agent-hub`.
+
+### Worker recipes, connector diagnostics and execution history
+
+Review versioned recipes at **Worker templates**, configure installed IM source plugins at **Connectors**, and inspect durable task evidence at **Execution trace**. New recipe Workers and connections start paused or disabled. ACP outbound uses an opt-in execution plugin; standard ACP agents remain ineligible for managed Workers when they cannot meet every existing admission requirement. See [design, local acceptance and rollback](docs/increments/DESIGN_AND_ACCEPTANCE.md).
