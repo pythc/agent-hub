@@ -1,7 +1,7 @@
 import type {Store} from './store.ts'
 import type {TraceTask} from './execution-trace.ts'
 
-export const checkpointQuery = "SELECT seq, json_extract(body,'$.baseline') AS baseline FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.schema')=1 AND json_extract(body,'$.ticketId')=? AND json_extract(body,'$.stage')=? ORDER BY seq DESC LIMIT 1"
+export const checkpointQuery = "SELECT seq, json_extract(body,'$.baseline') AS baseline FROM audit WHERE json_valid(body) AND json_extract(body,'$.type')='execution.trace' AND json_extract(body,'$.schema')=1 AND json_extract(body,'$.ticketId')=? AND json_extract(body,'$.stage')=? AND (json_extract(body,'$.stage')!='tool' OR COALESCE(json_extract(body,'$.callKind'),'tool')='tool') ORDER BY seq DESC LIMIT 1"
 
 export interface RecoveryManifest {
  schema:1
