@@ -29,6 +29,7 @@ export const automationTemplateSchema=goalCommandSchema.pick({title:true,objecti
 export const webhookGrantSchema=z.object({
  transport:z.discriminatedUnion('kind',[z.object({kind:z.literal('standard')}).strict(),z.object({kind:z.literal('github-workflow'),repositoryId:z.number().int().positive(),repository:z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)}).strict()]).default({kind:'standard'}),normalizerSourceId:z.string().min(1).optional(),
  protocolVersion:z.union([z.literal(1),z.literal(2)]).default(1),continuations:z.array(continuationRuleSchema).max(20).default([]),
+ receiving:z.boolean().optional(),
  operationId:id,triggerId:z.string().min(1).max(300),authorizationQuote:z.string().min(1).max(16000),
  namespace:id,eventSource:z.string().url().max(1000),eventTypes:z.array(z.string().min(1).max(200)).min(1).max(30),subjects:z.array(z.string().max(1000)).min(1).max(100).optional(),
  secretEnvs:z.array(env).min(1).max(2),parameters:z.record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),parameter).refine(p=>Object.keys(p).length<=30),
@@ -92,7 +93,7 @@ export class Webhooks {
     // P1 hashed the parsed command before these fields existed. Only an actual
     // legacy grant and an equivalent P1 command may use that fingerprint.
     const {transport,normalizerSourceId,protocolVersion,continuations,...legacy}=x
-    if(g.transport!==undefined||g.normalizerSourceId!==undefined||g.protocolVersion!==undefined||g.continuations!==undefined||transport.kind!=='standard'||normalizerSourceId!==undefined||protocolVersion!==1||continuations.length||prior.fingerprint!==stableDigest(legacy))throw new WebhookError(409,'operation_id_conflict')
+    if(x.receiving!==undefined||g.transport!==undefined||g.normalizerSourceId!==undefined||g.protocolVersion!==undefined||g.continuations!==undefined||transport.kind!=='standard'||normalizerSourceId!==undefined||protocolVersion!==1||continuations.length||prior.fingerprint!==stableDigest(legacy))throw new WebhookError(409,'operation_id_conflict')
    }
    return g
   }
@@ -118,7 +119,7 @@ export class Webhooks {
   callbackURL(x.callback.url,this.host.config.webhooks.loopbackCallbackOrigins)
   const outbound=secretFromEnv(x.callback.secretEnv)
   for(const name of x.secretEnvs)if(secretFromEnv(name).equals(outbound))throw new WebhookError(400,'separate_direction_credentials_required')
-  const g:WebhookGrant={...x,id:'hook_'+randomUUID().replaceAll('-',''),version:1,active:true,receiving:true,deliveryPaused:false,scopeId:c.route.scopeId,entryId:c.route.entryId,tenantId:c.route.tenantId,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,triggerHash:stableDigest(t),policyHash:this.policyHash(c,x.protocolVersion===2),mandate,at:this.now()}
+  const g:WebhookGrant={...x,id:'hook_'+randomUUID().replaceAll('-',''),version:1,active:true,receiving:x.receiving??true,deliveryPaused:false,scopeId:c.route.scopeId,entryId:c.route.entryId,tenantId:c.route.tenantId,bindingRevision:this.host.scopes.binding(c.route.entryId).revision,triggerHash:stableDigest(t),policyHash:this.policyHash(c,x.protocolVersion===2),mandate,at:this.now()}
   this.host.store.atomic(()=>{
    // Enabling the protocol is a one-way schema barrier: older binaries must not
    // silently reopen a database containing executable automation grants.

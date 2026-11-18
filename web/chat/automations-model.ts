@@ -20,7 +20,7 @@ export function defaultAutomationTask(d: AutomationDraft) {
 export function automationCommand(d: AutomationDraft, operationId: string, now: number, skill?: SavedAutomationSkill) {
   const template=skill?.template??(d.customTask?{title:d.title,objective:d.objective,criteria:JSON.parse(d.criteria),nodes:JSON.parse(d.nodes)}:defaultAutomationTask(d));
   return {
-    protocolVersion:2, operationId, triggerId:d.triggerId, authorizationQuote:d.authorizationQuote,
+    protocolVersion:2, receiving:false, operationId, triggerId:d.triggerId, authorizationQuote:d.authorizationQuote,
     namespace:d.namespace, eventSource:d.eventSource, eventTypes:d.eventTypes.split(',').map(s=>s.trim()).filter(Boolean),
     secretEnvs:[d.secretEnv], parameters:JSON.parse(d.parameters), continuations:JSON.parse(d.continuations),
     transport:JSON.parse(d.transport), ...(d.normalizerSourceId ? {normalizerSourceId:d.normalizerSourceId} : {}),

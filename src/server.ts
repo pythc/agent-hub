@@ -303,10 +303,10 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(path==='/webhooks/goal'&&req.method==='POST'){send(res,200,runtime.webhooks.goalControl(await body(req)));return}
     if(path==='/webhooks/replay'&&req.method==='POST'){send(res,200,runtime.webhooks.replay(await body(req)));return}
     if(path==='/webhooks/rotate'&&req.method==='POST'){send(res,200,runtime.webhooks.rotate(await body(req)));return}
-    if(path==='/webhooks/dry-run'&&req.method==='POST'){send(res,200,runtime.webhooks.dryRun(await body(req)));return}
+    if(path==='/webhooks/dry-run'&&req.method==='POST'){send(res,200,runtime.webhooks.dryRun(await operatorBody(req)));return}
     if(path==='/webhooks/reconcile'&&req.method==='POST'){runtime.webhooks.reconcile(true);send(res,200,runtime.webhooks.snapshot().reconciliation);return}
-    if(path==='/webhooks/grants'&&req.method==='POST'){send(res,201,runtime.webhooks.create(await body(req)));return}
-    if(path==='/webhooks/control'&&req.method==='POST'){send(res,200,runtime.webhooks.control(await body(req)));return}
+    if(path==='/webhooks/grants'&&req.method==='POST'){send(res,201,runtime.webhooks.create(await operatorBody(req)));return}
+    if(path==='/webhooks/control'&&req.method==='POST'){send(res,200,runtime.webhooks.control(await operatorBody(req)));return}
     if(path==='/deployments'&&req.method==='GET'){send(res,200,runtime.delegation.snapshot());return}
     if(path==='/deployments/pairing'&&req.method==='POST'){send(res,200,runtime.delegation.pairing(await body(req)));return}
     if(path==='/deployments/connect'&&req.method==='POST'){send(res,200,await runtime.delegation.connect(await body(req)));return}
