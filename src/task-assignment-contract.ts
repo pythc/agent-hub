@@ -144,7 +144,11 @@ export function validateTaskAssignment(host:Runtime,ticketId:string):TaskAssignm
  const saved=currentTaskAssignment(host,ticketId);if(!saved)return
  const {digest,createdAt,...body}=saved;if(stableDigest(body)!==digest||host.memory.cleanup.blocked('task-assignment-contract',ticketId,saved))return fail('corrupt_or_cleaned')
  const task=host.store.tickets.get(ticketId),a=host.taskAuthority(ticketId),original=host.store.get<{workerId:string;parentTrigger?:string;source:string;actor:string;discussion:string;mode:string}>('worker-assignment',ticketId)
- if(!task||task.ended?.by==='human'||!saved.cause&&((original?.parentTrigger??null)!==saved.authority.parentTrigger||original?.discussion!==saved.authority.discussion)||saved.authority.provenance==='local_operator'&&a?.mode!=='client'||host.store.get<{workerId:string}>('worker-assignment',ticketId)?.workerId!==saved.workerId||!host.scopes.taskRunnable(ticketId)||!host.webhooks.taskExecutionAllowed(ticketId))return fail('authority_ended')
+ // Personal Chat legitimately rebinds its mutable delegation to a later turn.
+ // The original completed command receipt retains the initial assignment provenance.
+ const originalBound=(original?.parentTrigger??null)===saved.authority.parentTrigger&&original?.discussion===saved.authority.discussion||host.store.list<any>('worker-command').some(r=>r.status==='completed'&&r.result?.ticketId===ticketId&&r.result.workerId===saved.workerId&&(r.result.parentTrigger??null)===saved.authority.parentTrigger&&r.result.discussion===saved.authority.discussion&&r.result.source===saved.authority.source&&r.result.actor===saved.authority.actor)
+
+ if(!task||task.ended?.by==='human'||!saved.cause&&!originalBound||saved.authority.provenance==='local_operator'&&a?.mode!=='client'||host.store.get<{workerId:string}>('worker-assignment',ticketId)?.workerId!==saved.workerId||!host.scopes.taskRunnable(ticketId)||!host.webhooks.taskExecutionAllowed(ticketId))return fail('authority_ended')
  if(a?.parentTrigger&&a.parentTrigger!==saved.authority.parentTrigger){
   const trigger=host.store.triggers.get(a.parentTrigger),current=authority(host,{trigger,discussion:a.discussion})
   if(contextKey(current)!==contextKey(saved.authority)){
@@ -227,7 +231,7 @@ export function restrictAssignmentExecution(host:Runtime,ticketId:string,effecti
  checkWorkerAdmission(host.config,effective.backendId,options)
  return {...effective,tools,options:boundedBackendOptions(effective.backendId,backend,options,host.config.turnTimeoutMs),sandbox:c.effective.sandbox==='read-only'?'read-only':effective.sandbox,network:effective.network&&c.effective.network}
 }
-export function assignmentContractView(host:Runtime,ticketId:string){return host.scopes.readOnly(()=>host.memory.readOnly(()=>{
+export function assignmentContractView(host:Runtime,ticketId:string){try{return host.scopes.readOnly(()=>host.memory.readOnly(()=>{
  let contract:TaskAssignmentContract|undefined;try{contract=currentTaskAssignment(host,ticketId)}catch{return undefined}if(!contract||host.memory.cleanup.blocked('task-assignment-contract',ticketId,contract))return undefined
  if(contract.schema!==1||!contract.effective||!contract.authority||!contract.spec||!Array.isArray(contract.inputIds)||!contract.inputDigests||!contract.triggerDigests||!Array.isArray(contract.effective.tools)||!Array.isArray(contract.effective.connections)||!Array.isArray(contract.dependencies))return undefined
  const {digest,createdAt,...body}=contract;if(stableDigest(body)!==digest)return undefined
@@ -243,7 +247,7 @@ export function assignmentContractView(host:Runtime,ticketId:string){return host
  }catch{return undefined}
  let blocker:string|undefined;try{validateTaskAssignment(host,ticketId)}catch(e){blocker=e instanceof Error?e.message:'assignment_contract_unavailable'}
  return {contract,leases:host.store.list<TaskWorkspaceLease>('task-workspace-lease').filter(l=>l.ticketId===ticketId&&l.contractDigest===contract!.digest),...(blocker?{blocker}:{})}
-}))}
+}))}catch{return undefined}}
 
 export function assertAssignmentConnection(host:Runtime,ticketId:string,connection:string):void {
  const c=validateTaskAssignment(host,ticketId);if(c&&!c.effective.connections.includes(connection))fail('connection_not_allowed')

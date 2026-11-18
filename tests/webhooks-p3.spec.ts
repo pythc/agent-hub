@@ -72,7 +72,7 @@ it.each([false,true])('restores unchanged protected state after telemetry-only r
 it.each(['revoke','keys','wait','callback'])('still rejects stale restore after protected %s state changes',async kind=>{
  const url=await receiver((_req,res)=>{res.writeHead(204);res.end()}),f=fixture(url,kind==='wait'),backup=join(f.root,'protected-backup')
  // Isolate protected-state rollback from the independently enforced schema downgrade fence.
- f.h.store.requireAsyncWorkerSchema()
+ f.h.store.requireTaskAssignmentSchema()
  if(kind==='wait')f.receive()
  await backupState(f.config,backup)
  if(kind==='revoke')f.h.webhooks.control({id:f.grant.id,action:'revoke',operationId:'revoke-after-backup'})

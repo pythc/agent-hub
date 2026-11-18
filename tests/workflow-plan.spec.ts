@@ -1,3 +1,5 @@
+import {bindTaskAssignmentLease,currentTaskAssignment} from '../src/task-assignment-contract.ts'
+import type {WorkOwner} from '../src/work.ts'
 import {afterEach,expect,it,vi} from 'vitest'
 import {mkdtempSync,rmSync,readFileSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
@@ -42,7 +44,10 @@ async function planFixture(){
  adapter.workflowState=vi.fn(async()=>{const result=structuredClone(view);afterRead();return result})
  adapter.applyWorkflowState=vi.fn(async(_target,_view,next,valid)=>{if(valid&&!valid())throw Error('revoked');writes++;view.current=view.states.find(s=>s.id===next)!;view.revision='2';return 'updated' as const})
  f.h.engine.assignmentStarted(f.id,assignment.id)
- const work={ticketId:f.id,assignmentId:assignment.id,cwd:f.root,sandbox:'read-only' as const,depth:0}
+ const work:WorkOwner={ticketId:f.id,assignmentId:assignment.id,cwd:f.root,sandbox:'read-only' as const,depth:0}
+ f.h.store.put('run',f.id,{ticketId:f.id,assignmentId:assignment.id,cwd:f.root,phase:'running',backendId:'codex'})
+ const contract=currentTaskAssignment(f.h,f.id)!
+ work.leaseId=bindTaskAssignmentLease(f.h,work,{backendId:'codex',tools:contract.effective.tools,options:contract.effective.options})!.id
  const request={sourceId:'local',target:target.key,stateId:'done'}
  const plan=()=>f.h.workflows.request(work,{action:'plan',...request}) as Promise<any>
  const propose=(planDigest?:string,requestId='same')=>f.h.workflows.request(work,{action:'propose',...request,requestId,...(planDigest?{planDigest}:{})}) as Promise<any>

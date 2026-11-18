@@ -6,8 +6,12 @@ import {ApiModel,type ThreadStore} from '../src/backends/api.ts'
 import {backendDefinition,type ApiDefinition} from '../src/backend-config.ts'
 import {TransientModelError} from '../src/model.ts'
 import {classifyGoalFailure} from '../src/goal-contract.ts'
-import {ToolConnections} from '../src/tool-connections.ts'
-import type {Runtime} from '../src/runtime.ts'
+import {Runtime} from '../src/runtime.ts'
+import {configSchema} from '../src/config.ts'
+import {bindTaskAssignmentLease,currentTaskAssignment,validateAssignmentLease} from '../src/task-assignment-contract.ts'
+import {mkdtempSync,rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import type {WorkOwner} from '../src/work.ts'
 
 const sentinel='SYNTHETIC_ERROR_SENTINEL_NOT_A_REAL_SECRET'
@@ -16,8 +20,8 @@ const frame=(v:unknown)=>'data: '+JSON.stringify(v)+'\n\n'
 const stream=(v:unknown)=>new Response(frame(v),{headers:{'content-type':'text/event-stream'}})
 const parsers=[readResponsesStream,readChatStream,readAnthropicStream]
 const kinds=['openai-responses','openai-chat','anthropic'] as const
-const closers:ToolConnections[]=[]
-afterEach(async()=>{for(const t of closers.splice(0))await t.close();vi.unstubAllGlobals()})
+const hosts:Runtime[]=[],roots:string[]=[]
+afterEach(async()=>{for(const h of hosts.splice(0))await h.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});vi.restoreAllMocks();vi.unstubAllGlobals()})
 function safe(error:unknown){
  expect(error).toBeInstanceOf(OperationError)
  expect(String(error)).not.toContain(sentinel);expect(JSON.stringify(error)).not.toContain(sentinel)
@@ -70,23 +74,31 @@ it('keeps existing HTTP-body rejection fixed, and stream I/O transient and cance
  }
 })
 
-function tools(transport:any={kind:'http',url:'http://127.0.0.1:1/never-contacted',headerEnv:{}}){
- const records=new Map<string,any>(),writes:any[]=[]
- const host={config:{toolConnections:{fixture:{enabled:true,transport,allowedTools:['echo'],timeoutMs:3000}}},validWork:()=>true,
-  store:{list:()=>[],get:(kind:string,id:string)=>kind==='run'?{agentOptions:{toolConnections:['fixture']}}:records.get(kind+':'+id),put:(kind:string,id:string,value:any)=>{records.set(kind+':'+id,structuredClone(value));writes.push({kind,id,value:structuredClone(value)})}}} as unknown as Runtime
- const connection=new ToolConnections(host);closers.push(connection)
- const owner={ticketId:'ticket',assignmentId:'assignment',cwd:process.cwd(),sandbox:'read-only',depth:0} as WorkOwner
- return {connection,owner,writes,records}
+async function tools(transport:any={kind:'http',url:'http://127.0.0.1:1/never-contacted',headerEnv:{}}){
+ const records=new Map<string,any>(),writes:any[]=[],root=mkdtempSync(join(tmpdir(),'operation-errors-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),work:{sandboxDriver:'disabled',autoRecover:false},execution:{management:{enabled:true},workers:[{id:'one',backend:'codex',toolConnections:['fixture']}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['operator']}],toolConnections:{fixture:{enabled:true,transport,allowedTools:['echo'],timeoutMs:3000}}})
+ const host=new Runtime(config,{model:{async run(){throw Error('Provider must not run in this fixture')}}});hosts.push(host)
+ const assigned=await host.manager.call({action:'assign',id:'one',discussion:'test',text:'Call the fixture tool',revision:0,requestId:'assign'})
+ const task=host.store.tickets.get(assigned.ticketId)!,assignmentId=task.assignments.at(-1)!.id
+ host.engine.assignmentStarted(task.id,assignmentId)
+ const contract=currentTaskAssignment(host,task.id)!,effective={backendId:contract.backendId,tools:contract.effective.tools,options:contract.effective.options}
+ host.store.put('run',task.id,{ticketId:task.id,assignmentId,cwd:root,phase:'running',backendId:effective.backendId,agentOptions:effective.options})
+ const owner:WorkOwner={ticketId:task.id,assignmentId,cwd:root,sandbox:contract.effective.sandbox,network:contract.effective.network,depth:0}
+ owner.leaseId=bindTaskAssignmentLease(host,owner,effective)!.id
+ expect(host.validWork(owner)).toBe(true);expect(validateAssignmentLease(host,owner)).toBe(true)
+ const put=host.store.put.bind(host.store)
+ vi.spyOn(host.store,'put').mockImplementation((kind:string,id:string,value:any)=>{put(kind,id,value);if(kind==='tool-receipt'){records.set(kind+':'+id,structuredClone(value));writes.push({kind,id,value:structuredClone(value)})}})
+ return {connection:host.toolConnections,owner,writes,records}
 }
 const call={connection:'fixture',tool:'echo',arguments:{text:'synthetic'},requestId:'original-request'}
 it.each(['catalog','call'] as const)('drops SDK initialization HTTP bodies before %s and starts no receipt',async action=>{
  let fetches=0;vi.stubGlobal('fetch',async()=>{fetches++;return new Response(sentinel,{status:500})})
- const t=tools(),error=await rejected(action==='catalog'?t.connection.catalog(t.owner):t.connection.call(t.owner,call))
+ const t=await tools(),error=await rejected(action==='catalog'?t.connection.catalog(t.owner):t.connection.call(t.owner,call))
  safe(error);expect((error as OperationError).code).toBe('transient');expect(t.writes).toEqual([]);expect(fetches).toBe(1)
 })
 it.each([401,403,429,408,500,400])('classifies actual SDK HTTP %i by bounded status, never its body, without retry',async status=>{
  let requests=0;vi.stubGlobal('fetch',async()=>{requests++;return new Response(sentinel,{status})})
- const t=tools(),error=await rejected(t.connection.catalog(t.owner)) as OperationError
+ const t=await tools(),error=await rejected(t.connection.catalog(t.owner)) as OperationError
  safe(error);expect(error.code).toBe(({401:'auth_required',403:'provider_rejected',429:'rate_limited',408:'transient',500:'transient'} as Record<number,string>)[status]??'operation_failed');expect(error).not.toBeInstanceOf(TransientModelError);expect(requests).toBe(1);expect(t.writes).toEqual([])
 })
 function mcpFetch(failure:'catalog'|'dispatch'){
@@ -104,27 +116,27 @@ function mcpFetch(failure:'catalog'|'dispatch'){
  return methods
 }
 it.each(['catalog','call'] as const)('drops SDK listTools JSON-RPC errors before %s, with zero effects/receipts',async action=>{
- const methods=mcpFetch('catalog'),t=tools(),error=await rejected(action==='catalog'?t.connection.catalog(t.owner):t.connection.call(t.owner,call))
+ const methods=mcpFetch('catalog'),t=await tools(),error=await rejected(action==='catalog'?t.connection.catalog(t.owner):t.connection.call(t.owner,call))
  safe(error);expect((error as OperationError).operation).toBe('tool_catalog');expect(t.writes).toEqual([]);expect(methods).not.toContain('tools/call');expect(methods.filter(x=>x==='tools/list')).toHaveLength(1)
 })
 it('does not leak missing credential environment names or perform network initialization',async()=>{
  let fetches=0;vi.stubGlobal('fetch',async()=>{fetches++;throw Error('Unexpected synthetic fetch')})
- const t=tools({kind:'http',url:'http://127.0.0.1:1/never-contacted',headerEnv:{Authorization:sentinel}}),error=await rejected(t.connection.catalog(t.owner))
+ const t=await tools({kind:'http',url:'http://127.0.0.1:1/never-contacted',headerEnv:{Authorization:sentinel}}),error=await rejected(t.connection.catalog(t.owner))
  safe(error);expect((error as OperationError).code).toBe('configuration_invalid');expect(fetches).toBe(0);expect(t.writes).toEqual([])
 })
 it('does not trust a remote AbortError name or retain its error/cause without a real aborted signal',async()=>{
  vi.stubGlobal('fetch',async()=>{throw Object.assign(Error(sentinel,{cause:raw}),{name:'AbortError'})})
- const t=tools(),error=await rejected(t.connection.call(t.owner,call));safe(error)
+ const t=await tools(),error=await rejected(t.connection.call(t.owner,call));safe(error)
  expect((error as OperationError).code).toBe('operation_failed');expect(t.writes).toEqual([])
 })
 it('normalizes a real pre-dispatch cancellation before SDK auth errors and never carries the abort reason',async()=>{
  let start!:()=>void;const started=new Promise<void>(r=>{start=r})
  vi.stubGlobal('fetch',async(_url:unknown,init:RequestInit)=>new Promise((_resolve,reject)=>{start();init.signal?.addEventListener('abort',()=>reject(Error(sentinel)),{once:true})}))
- const t=tools(),pending=t.connection.call(t.owner,call);await started;t.connection.cancel(t.owner.ticketId)
+ const t=await tools(),pending=t.connection.call(t.owner,call);await started;t.connection.cancel(t.owner.ticketId)
  const error=await rejected(pending);safe(error);expect((error as OperationError).code).toBe('cancelled');expect(t.writes).toEqual([])
 })
 it('keeps dispatched disconnect uncertain and deduplicates the original request instead of replaying',async()=>{
- const methods=mcpFetch('dispatch'),t=tools(),first=await t.connection.call(t.owner,call)
+ const methods=mcpFetch('dispatch'),t=await tools(),first=await t.connection.call(t.owner,call)
  expect(first.success).toBe(false);expect(first.contentItems[0]?.text).toContain('uncertain');expect(JSON.stringify(first)).not.toContain(sentinel)
  expect(t.writes.map(x=>x.value.state)).toEqual(['running','uncertain'])
  expect(await t.connection.call(t.owner,call)).toEqual(first);expect(methods.filter(x=>x==='tools/call')).toHaveLength(1)
