@@ -70,6 +70,25 @@ export function enabledView(config:Config,id:string,expected?:string){
   if(pkg.manifest.id!==id)throw Error('Workspace view id mismatch')
   return pkg
 }
+/** Metadata only. Retained objects never authorize a historical bundle or runtime. */
+export function viewVersion(config:Config,id:string,version:string){
+  if(!identifier.safeParse(id).success||!digest.safeParse(version).success)throw Error('Workspace view unavailable')
+  // Current configuration remains the authority, including disabled, removed or damaged mounts.
+  const current=enabledView(config,id)
+  let pkg=current
+  if(current.digest!==version){
+    // Only this workspace's private object store is eligible; never follow directory symlinks.
+    let directory=realpathSync(config.stateDir)
+    for(const segment of ['plugins','objects',version]){
+      directory=join(directory,segment)
+      const stat=lstatSync(directory)
+      if(!stat.isDirectory()||stat.isSymbolicLink()||realpathSync(directory)!==directory)throw Error('Workspace view unavailable')
+    }
+    pkg=readViewPackage(directory,version)
+    if(pkg.manifest.id!==id)throw Error('Workspace view unavailable')
+  }
+  return {reference:viewArtifactReference(pkg),label:pkg.manifest.label,packageVersion:pkg.manifest.version,current:pkg.digest===current.digest}
+}
 /** Only call with the verified bytes returned by readViewPackage/enabledView. */
 export function viewArtifactReference(pkg:ReturnType<typeof readViewPackage>):WorkspaceViewArtifactReference {
   return {schema:1,kind:'workspace-view',id:pkg.manifest.id,version:pkg.digest,sha256:pkg.manifest.codeSha256,visibility:'operator_workspace',retention:'subject_to_plugin_removal',publication:'not_tracked'}
