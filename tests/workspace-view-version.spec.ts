@@ -65,3 +65,12 @@ it('requires operator auth, rejects ambiguous queries, and leaves historical exe
  host.config.viewPlugins=[]
  expect((await fetch(path,{headers})).status).toBe(404)
 })
+
+it('rejects retained manifest tampering and a symlinked plugins parent',async()=>{
+ const {host,v1}=await versions(),manifest=join(v1.directory,'manifest.json'),original=readFileSync(manifest,'utf8')
+ writeFileSync(manifest,JSON.stringify({...JSON.parse(original),version:'9.0.0'}))
+ expect(()=>viewVersion(host.config,v1.manifest.id,v1.digest)).toThrow()
+ writeFileSync(manifest,original)
+ const plugins=join(host.config.stateDir,'plugins');renameSync(plugins,plugins+'-moved');symlinkSync(plugins+'-moved',plugins)
+ expect(()=>viewVersion(host.config,v1.manifest.id,v1.digest)).toThrow()
+})

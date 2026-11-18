@@ -2,7 +2,7 @@ import type {WorkspaceViewArtifactReference} from './artifact-reference.ts'
 import type {ViewCatalogItem} from './workspace-view-contract.ts'
 import {z} from 'zod'
 import {createHash,randomUUID} from 'node:crypto'
-import {readFileSync,writeFileSync,mkdirSync,existsSync,realpathSync,lstatSync,renameSync,rmSync} from 'node:fs'
+import {openSync,closeSync,fstatSync,readSync,constants,writeFileSync,mkdirSync,existsSync,realpathSync,lstatSync,renameSync,rmSync} from 'node:fs'
 import {join,resolve} from 'node:path'
 import {stableDigest} from './sources.ts'
 import type {Config} from './config.ts'
@@ -20,11 +20,20 @@ export const viewManifestSchema=z.object({
 export type ViewManifest=z.infer<typeof viewManifestSchema>
 const sha=(code:Uint8Array)=>createHash('sha256').update(code).digest('hex')
 function file(directory:string,name:string,limit:number){
-  const path=join(directory,name),stat=lstatSync(path)
-  if(!stat.isFile()||stat.isSymbolicLink()||stat.size>limit)throw Error('Invalid workspace view package file')
-  const bytes=readFileSync(path)
-  if(bytes.length>limit)throw Error('Workspace view package too large')
-  return bytes
+  const path=join(directory,name)
+  // Bind validation and bytes to one non-following, non-blocking descriptor.
+  let fd:number
+  try{fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)}catch{throw Error('Invalid workspace view package file')}
+  try{
+    const before=fstatSync(fd)
+    if(!before.isFile()||before.size>limit)throw Error('Invalid workspace view package file')
+    const buffer=Buffer.alloc(before.size+1)
+    let length=0
+    while(length<buffer.length){const read=readSync(fd,buffer,length,buffer.length-length,null);if(!read)break;length+=read}
+    const after=fstatSync(fd)
+    if(length!==before.size||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs)throw Error('Workspace view package file changed')
+    return buffer.subarray(0,length)
+  }finally{closeSync(fd)}
 }
 /** The same bytes that passed the checksum are returned; never re-read executable bytes later. */
 export function readViewPackage(directory:string,expected?:string){
