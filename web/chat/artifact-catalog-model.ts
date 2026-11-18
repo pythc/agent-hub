@@ -14,6 +14,9 @@ export function parseArtifactCatalog(input:unknown):ArtifactCatalog|null{
   else if(ref.kind==='workspace-view'){
    if(ref.schema!==1||!/^[a-z][a-z0-9_-]{0,63}$/.test(ref.id)||!/^[a-f0-9]{64}$/.test(ref.version)||!/^[a-f0-9]{64}$/.test(ref.sha256)||ref.visibility!=='operator_workspace'||ref.retention!=='subject_to_plugin_removal'||ref.publication!=='not_tracked')return null
   }else return null
+  // Optional for compatibility with older servers. Never treat supplied provenance as authority.
+  const registration=item.registration
+  if(registration!==undefined&&(!registration||Object.keys(registration).length!==9||registration.schema!==1||registration.kind!==ref.kind||registration.domain!=='operator_workspace'||registration.id!==ref.id||registration.version!==ref.version||registration.sha256!==ref.sha256||registration.retention!==ref.retention||registration.publication!=='not_tracked'||registration.acceptance!=='not_tracked'))return null
   const key=ref.kind+':'+ref.id
   if(seen.has(key))return null
   seen.add(key)
