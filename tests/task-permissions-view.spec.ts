@@ -57,7 +57,15 @@ it('does not let a previously current or forged explanation bypass the productio
  expect(f.model.run).not.toHaveBeenCalled()
 })
 it('serves a read-only explanation only through the authenticated operator HTTP path',async()=>{
- const f=await fixture(),server=await serve(f.h);servers.push(server);const url=server.url
+ const f=await fixture()
+ // serve starts the 150ms scheduler; pause does not suppress its health writes.
+ // Isolate HTTP reads from that independent writer without excluding any DB rows.
+ const start=vi.spyOn(f.h,'start').mockImplementation(()=>{})
+ const server=await serve(f.h);servers.push(server);const url=server.url
+ expect(start).toHaveBeenCalledOnce()
+ const idle=db(f.h);await f.h.tick()
+ expect(f.h.store.get('health','host')).toMatchObject({pid:process.pid})
+ expect(db(f.h)).not.toBe(idle)
  const path='/entry-workspace/task/'+encodeURIComponent(f.id)
  expect((await fetch(url+path)).status).toBe(401)
  const before=db(f.h),r=await fetch(url+path,{headers:{Authorization:'Bearer '+readFileSync(server.tokenPath,'utf8').trim()}})
