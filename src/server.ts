@@ -274,6 +274,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
         if(path==='/api/execution-trace'){send(res,200,trace.snapshot(query));return}
         if(path==='/api/execution-trace/events'){send(res,200,trace.events(query));return}
       }
+      if(path==='/api/execution-trace/recovery-package'&&req.method==='POST'){
+        if(new URL(req.url!,requestOrigin).search){send(res,400,{code:'trace_query_unsupported'});return}
+        const input=await operatorBody(req);requireCurrentOperator(req)
+        send(res,200,trace.exportRecoveryPackage(input));return
+      }
       if(path==='/api/execution-trace/recover'&&req.method==='POST'){send(res,200,await trace.recover(await operatorBody(req)));return}
       send(res,405,{code:'method_not_allowed'});return
     }
