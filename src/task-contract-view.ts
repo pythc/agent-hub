@@ -6,7 +6,7 @@ import type {RouterRoute,ScopeContext} from './router-scope.ts'
 import type {ContextManifest} from './router-memory.ts'
 import type {TaskContinuation} from './task-context.ts'
 import {taskView} from './task-context.ts'
-import {criterionSchema} from './goal-contract.ts'
+import {criterionSchema,goalDetailsSchema} from './goal-contract.ts'
 import {stableDigest} from './sources.ts'
 
 export interface TaskContractViewV1 {
@@ -14,6 +14,8 @@ export interface TaskContractViewV1 {
  availability:'available'|'not_captured'|'unavailable'
  contentSource:'router_saved_goal'|'not_captured'
  basis:{contract:{kind:'goal_contract'|'mandate';digest:string}|null;goalId:string|null;goalRevision:number|null;planRevision:number|null;assignmentId:string|null;ownerEpoch:number|null;dataRevision:number|null;bindingRevision:number|null}
+ details?:{nonGoals:string[]|null;inputs:string[]|null;deadline:string|null}
+ lineage?:{state:'current'|'replaced';previousState:'none'|'available'|'unavailable';previous:{objective:string;criteria:{id:string;description:string}[];details?:TaskContractViewV1['details']|null;budget?:TaskContractViewV1['budget']}|null}
  objective:string|null;scope:null
  criteria:{id:string;description:string}[]
  deliverables:{files:string[];documents:string[]}
@@ -90,6 +92,37 @@ export function taskContractView(host:Runtime,ticketId:string,now=Date.now()):Ta
   if(!goal.managed)return result
   const retainedCriteria=criteria.parse(original.criteria),retainedObjective=objective.parse(original.objective)
   result.availability='available';result.contentSource='router_saved_goal';result.objective=retainedObjective
+  if(original.details){
+   const details=goalDetailsSchema.parse(original.details)
+   if(!originalTrigger.human||[...(details.nonGoals??[]),...(details.inputs??[]),...(details.deadline?[details.deadline]:[])].some(text=>!originalTrigger.text.includes(text)))return unavailable
+   result.details={nonGoals:details.nonGoals??null,inputs:details.inputs??null,deadline:details.deadline??null}
+  }
+  if(goal.supersedes||goal.supersededBy){
+   result.lineage={state:goal.supersededBy?'replaced':'current',previousState:goal.supersedes?'unavailable':'none',previous:null}
+   // Historical text is a separately authorized observation, never new execution authority.
+   if(goal.supersedes&&creation.result.supersedes===goal.supersedes){
+    try{
+     const previous=host.goals.list(goalContext).find(g=>g.id===goal.supersedes)
+     if(!previous?.contract||previous.supersededBy!==goal.id||previous.state!=='cancelled'||previous.scopeId!==goal.scopeId||previous.entryId!==goal.entryId||previous.actor!==goal.actor)throw Error('Unavailable')
+     const pc=previous.contract,pt=host.store.triggers.get(pc.triggerId)
+     if(!pt||stableDigest(pt)!==pc.triggerHash||stableDigest(host.routerIngress.authority(pc.triggerId))!==stableDigest(pc.mandate))throw Error('Unavailable')
+     context(host,previous.triggerId,previous.discussion)
+     const receipt=host.store.get<{goalId:string;result:RouterGoal}>('goal-receipt',previous.id.startsWith('goal-')?previous.id.slice(5):'')
+     if(receipt?.goalId!==previous.id||receipt.result?.id!==previous.id||stableDigest(receipt.result.contract)!==stableDigest(pc)||stableDigest({objective:previous.objective,criteria:previous.criteria})!==stableDigest({objective:pc.objective,criteria:pc.criteria}))throw Error('Unavailable')
+     result.lineage.previous={objective:objective.parse(pc.objective),criteria:criteria.parse(pc.criteria).map(c=>({id:c.id,description:c.description}))}
+     const pd=pc.details?goalDetailsSchema.parse(pc.details):undefined
+     if(pd&&(!pt.human||[...(pd.nonGoals??[]),...(pd.inputs??[]),...(pd.deadline?[pd.deadline]:[])].some(text=>!pt.text.includes(text))))throw Error('Unavailable')
+     result.lineage.previous.details=pd?{nonGoals:pd.nonGoals??null,inputs:pd.inputs??null,deadline:pd.deadline??null}:null
+     const pb=previous.project?.policy.budget
+     result.lineage.previous.budget=null
+     if(pb&&receipt.result.project&&stableDigest(pb)===stableDigest(receipt.result.project.policy.budget)){
+      const maxMinutes=positive(pb.maxMinutes),maxUsd=positive(pb.cost?.maxUsd)
+      if(maxMinutes!==null||maxUsd!==null)result.lineage.previous.budget={scope:'code_project',basis:'configured_estimate',maxMinutes,maxUsd}
+     }
+     result.lineage.previousState='available'
+    }catch{result.lineage.previous=null}
+   }
+  }
   result.criteria=retainedCriteria.map(c=>({id:c.id,description:c.description}))
   result.deliverables={files:[...new Set(retainedCriteria.flatMap(c=>c.files))],documents:[...new Set(retainedCriteria.flatMap(c=>c.documents))]}
   const budget=goal.project?.policy.budget

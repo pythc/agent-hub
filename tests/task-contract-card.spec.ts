@@ -69,3 +69,40 @@ it('registers only the new display assets in the existing configuration pipeline
  expect(configurationScripts.filter(name=>name==='task-contract-card.js')).toHaveLength(1);expect(configurationScripts.indexOf('task-contract-card.js')).toBeLessThan(configurationScripts.indexOf('operator-workspace.js'));expect(configurationStyles.filter(name=>name==='task-contract-card.css')).toHaveLength(1)
  const css=readFileSync(new URL('../src/ui/task-contract-card.css',import.meta.url),'utf8');expect(css).toMatch(/task-contract-card[^}]*font-size:14px/);expect(css).toContain('summary:focus-visible');expect(css).toContain('prefers-reduced-motion:reduce');expect(css).toContain('max-width:700px');expect(css).not.toMatch(/font-size:(?:1[0123]|[0-9])px/)
 })
+
+function extended(){return {...dto(),details:{nonGoals:['Do not deploy'],inputs:['User supplied brief'],deadline:'Friday afternoon, if possible'},lineage:{state:'current',previousState:'available',previous:{objective:'Earlier goal',criteria:[{id:'INTERNAL_OLD_CRITERION',description:'Earlier acceptance'}]}}}}
+it('separates current agreement details from a stopped previous agreement without showing internal versions',()=>{
+ const f=fixture(),card=f.render(extended()),body=text(card),details=all(card).filter(n=>n.tagName==='details')
+ expect(body).toContain('Current agreement');expect(body).toContain('Requested deadline');expect(body).toContain('Friday afternoon, if possible');expect(body).toContain('Do not deploy');expect(body).toContain('User supplied brief')
+ expect(details).toHaveLength(2);expect(text(details[0]!)).not.toContain('Earlier');expect(text(details[1]!)).toContain('Previous agreement · no longer authorized to execute');expect(text(details[1]!)).toContain('Previous acceptance criteria');expect(text(details[1]!)).not.toContain('Analyze the project');expect(body).not.toMatch(/INTERNAL|revision|version|automatic stop|hard deadline/)
+ expect(details.every(d=>!Object.hasOwn(d.attributes,'open'))).toBe(true);expect(all(card).some(n=>['button','a','input','form'].includes(n.tagName))).toBe(false);expect(f.fetch).not.toHaveBeenCalled();expect(f.api).not.toHaveBeenCalled()
+})
+it('distinguishes uncaptured details from captured empty lists and hides unverifiable history',()=>{
+ const f=fixture('zh'),value:any=extended();value.details={nonGoals:null,inputs:[],deadline:null};value.lineage={state:'replaced',previousState:'unavailable',previous:null};const body=text(f.render(value))
+ expect(body).toContain('非目标 未记录');expect(body).toContain('输入 已记录为空');expect(body).toContain('请求截止时间 未记录');expect(body).toContain('已替代 · 不再授权执行');expect(body).toContain('此前约定不可用');expect(body).not.toContain('Earlier')
+ value.lineage={state:'current',previousState:'none',previous:null};expect(text(f.render(value))).not.toContain('此前约定');expect(text(f.render(dto()))).not.toMatch(/非目标|请求截止时间|当前约定/)
+})
+it('keeps all new free text literal including deadline and previous content',()=>{
+ const value=extended();value.details.nonGoals=['<script>non-goal</script>'];value.details.inputs=['<img src=x>'];value.details.deadline='<a href=x>deadline</a>';value.lineage.previous.objective='<svg>previous</svg>';value.lineage.previous.criteria[0]!.description='<iframe>criterion</iframe>'
+ const card=fixture().render(value),body=text(card);for(const content of [...value.details.nonGoals,...value.details.inputs,value.details.deadline,value.lineage.previous.objective,value.lineage.previous.criteria[0]!.description])expect(body).toContain(content);expect(all(card).some(n=>['a','script','img','svg','iframe'].includes(n.tagName))).toBe(false)
+})
+for(const [name,mutate]of [
+ ['details null',(v:any)=>v.details=null],['missing detail',(v:any)=>delete v.details.inputs],['long input',(v:any)=>v.details.inputs=['x'.repeat(4001)]],['too many non-goals',(v:any)=>v.details.nonGoals=Array(31).fill('x')],['sparse inputs',(v:any)=>v.details.inputs=Array(1)],['deadline type',(v:any)=>v.details.deadline=123],['deadline length',(v:any)=>v.details.deadline='x'.repeat(1001)],['unknown lineage',(v:any)=>v.lineage.state='active'],['unverified prior',(v:any)=>v.lineage.previousState='unavailable'],['missing prior',(v:any)=>v.lineage.previous=null],['invalid prior criteria',(v:any)=>v.lineage.previous.criteria=[]],['duplicate prior criteria',(v:any)=>v.lineage.previous.criteria.push({...v.lineage.previous.criteria[0]})],['long prior objective',(v:any)=>v.lineage.previous.objective='x'.repeat(16001)],
+]as const)it('fails closed for malformed new agreement '+name,()=>{const value=extended();mutate(value);expect(fixture().render(value).dataset.state).toBe('unavailable')})
+it('does not invoke new nested getters or caller-owned iterators',()=>{
+ const getter=vi.fn(()=>{throw Error('Getter forbidden')}),value=extended();Object.defineProperty(value.details,'inputs',{get:getter});expect(fixture().render(value).dataset.state).toBe('unavailable');expect(getter).not.toHaveBeenCalled()
+ const top=extended();Object.defineProperty(top,'lineage',{get:getter});expect(fixture().render(top).dataset.state).toBe('unavailable');expect(getter).not.toHaveBeenCalled()
+ const safe=extended();Object.defineProperty(safe.details.inputs,Symbol.iterator,{get:getter});Object.defineProperty(safe.lineage.previous.criteria,'map',{get:getter});expect(fixture().render(safe).dataset.state).toBe('available');expect(getter).not.toHaveBeenCalled()
+})
+
+it('compares prior details and estimates inside history without mixing them with the current agreement',()=>{
+ const value:any=extended();value.budget={scope:'code_project',basis:'configured_estimate',maxMinutes:60,maxUsd:10};value.lineage.previous.details={nonGoals:['Old exclusion'],inputs:['Old source'],deadline:'Old deadline'};value.lineage.previous.budget={scope:'code_project',basis:'configured_estimate',maxMinutes:30,maxUsd:5}
+ const card=fixture().render(value),details=all(card).filter(n=>n.tagName==='details'),current=text(details[0]!),prior=text(details[1]!)
+ for(const str of ['Old exclusion','Old source','Old deadline','Time budget: 30 minutes','Estimated cost ceiling: US$5']){expect(prior).toContain(str);expect(current).not.toContain(str)}
+ expect(current).toContain('Time budget: 60 minutes');expect(prior).not.toContain('Friday afternoon');expect(text(card)).not.toContain('stopped')
+ value.lineage.previous.details=null;value.lineage.previous.budget=null;const unknown=text(all(fixture('zh').render(value)).filter(n=>n.tagName==='details')[1]!);expect(unknown).toContain('非目标 未记录');expect(unknown).toContain('输入 未记录');expect(unknown).toContain('请求截止时间 未记录');expect(unknown).toContain('项目配置预算 未记录');expect(unknown).not.toContain('已停止')
+})
+it('validates historical details and budgets with the same safe bounds as current values',()=>{
+ for(const extra of [{details:{nonGoals:Array(31).fill('x'),inputs:null,deadline:null}},{details:{nonGoals:null,inputs:null,deadline:123}},{budget:{scope:'account',basis:'configured_estimate',maxMinutes:30,maxUsd:5}}]){const value:any=extended();Object.assign(value.lineage.previous,extra);expect(fixture().render(value).dataset.state).toBe('unavailable')}
+ const getter=vi.fn(()=>{throw Error('Forbidden')});const value=extended();Object.defineProperty(value.lineage.previous,'details',{get:getter});expect(fixture().render(value).dataset.state).toBe('unavailable');expect(getter).not.toHaveBeenCalled()
+})

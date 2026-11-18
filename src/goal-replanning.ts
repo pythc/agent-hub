@@ -15,7 +15,7 @@ import {agentOptionsSchema} from './backend-config.ts'
 import {mergeOptions} from './agent-options.ts'
 import {workerSpecs} from './worker-tools.ts'
 
-export interface GoalContract {skill?:{id:string;version:number};objective:string;criteria:GoalCriterion[];triggerId:string;triggerHash:string;mandate:Mandate;workerIds:string[];backendIds:string[];teamTargets?:{id:string;policyHash:string}[]}
+export interface GoalContract {details?:import('./goal-contract.ts').GoalDetails;skill?:{id:string;version:number};objective:string;criteria:GoalCriterion[];triggerId:string;triggerHash:string;mandate:Mandate;workerIds:string[];backendIds:string[];teamTargets?:{id:string;policyHash:string}[]}
 export class ReplanningInterrupted extends Error {}
 const id=z.string().min(1).max(200),instruction=z.string().min(1).max(16000)
 const change=z.object({id,instruction,dependsOn:z.array(id).max(100)}).strict()
@@ -45,7 +45,7 @@ export class GoalReplanning {
   this.host.scopes.checkTask(ticket.id,c,true);this.assertWorker(g,n.workerId)
   const before=r.snapshot.nodes.find(x=>x.id===n.id&&x.ticketId===ticket.id),edit=r.proposal.changes.find(x=>x.id===n.id)
   if(!before||stableDigest(contract)!==stableDigest(r.snapshot.contract)||n.instruction!==(edit?.instruction??before.instruction)||stableDigest(n.dependsOn)!==stableDigest(edit?.dependsOn??before.dependsOn)||stableDigest(n.criterionIds)!==stableDigest(before.criterionIds)||n.workerId!==before.workerId)throw Error('Reviewed execution strategy changed')
-  const scope=JSON.stringify({kind:'reviewed_goal_step',goalId:g.id,replanId:r.id,planRevision:r.snapshot.planRevision+1,objective:contract.objective,node:{id:n.id,title:n.title,instruction:n.instruction},criteria:this.host.verification.criteria(g,n),originalAcceptance:contract.criteria,authorizationScope:contract.mandate.scope,requirements:this.host.continuity.command({action:'read'},c).requirements,notice:'This is the current independently approved node mandate. It supersedes earlier node implementation instructions in retained history, including file restrictions within the original authorizationScope. The original user authorization, objective, acceptance criteria and tool permissions remain binding. Inspect retained effects before acting; do not repeat completed work blindly.'})
+  const scope=JSON.stringify({kind:'reviewed_goal_step',goalId:g.id,replanId:r.id,planRevision:r.snapshot.planRevision+1,objective:contract.objective,...(contract.details?{contractDetails:contract.details}:{}),node:{id:n.id,title:n.title,instruction:n.instruction},criteria:this.host.verification.criteria(g,n),originalAcceptance:contract.criteria,authorizationScope:contract.mandate.scope,requirements:this.host.continuity.command({action:'read'},c).requirements,notice:'This is the current independently approved node mandate. It supersedes earlier node implementation instructions in retained history, including file restrictions within the original authorizationScope. The original user authorization, objective, acceptance criteria and tool permissions remain binding. Inspect retained effects before acting; do not repeat completed work blindly.'})
   if(Buffer.byteLength(scope)>this.host.scopes.scope(g.scopeId).contextBytes)throw Error('Reviewed execution strategy exceeds context budget')
   return {...ticket,mandate:{...ticket.mandate,scope}}
  }

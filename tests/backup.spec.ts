@@ -78,3 +78,17 @@ it.each(['tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool',
  const restored=new Store(join(config.stateDir,'state.sqlite'))
  try{expect(restored.get(kind,'write')).toEqual(after)}finally{restored.close()}
 })
+
+it('preserves goal replacement barriers and refuses restoring an earlier version chain',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-goal-contract-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
+ const file=join(config.stateDir,'state.sqlite'),initial=new Store(file);initial.close()
+ const legacy=join(root,'legacy');await backupState(config,legacy)
+ const current=new Store(file);current.requireGoalReplacementSchema();current.put('router-goal','old',{id:'old',state:'cancelled',supersededBy:'new'});current.put('router-goal','new',{id:'new',state:'active',supersedes:'old'});current.close()
+ await expect(restoreState(config,legacy)).rejects.toThrow('Downgrade cannot preserve goal contract replacement')
+ const bound=join(root,'bound');await backupState(config,bound);expect(verifyBackup(bound).schema).toBe(17)
+ await restoreState(config,bound)
+ const later=new Store(file);later.put('router-goal','new',{id:'new',state:'cancelled',supersedes:'old',supersededBy:'latest'});later.put('router-goal','latest',{id:'latest',supersedes:'new'});later.close()
+ await expect(restoreState(config,bound)).rejects.toThrow('Goal contract replacement advanced')
+ const reread=new Store(file);try{expect(reread.get('router-goal','new')).toMatchObject({supersededBy:'latest'})}finally{reread.close()}
+})

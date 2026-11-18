@@ -271,6 +271,11 @@ export class Runtime {
     this.manager.restoreSubscriptions()
     this.store.recoverJobs()
     this.store.recoverDeliveries()
+    // Recover the commit-to-interrupt crash window before any task can auto-resume.
+    for(const g of this.store.list<RouterGoal>('router-goal'))if(g.supersededBy)for(const id of this.goals.taskIdsForGoal(g)){
+      this.interruptForAutomation(id)
+      if(!this.store.tickets.get(id)?.ended)this.engine.stopTicket(id,'Goal contract replaced')
+    }
     for (const run of this.store.list<Run>('run')) {
       if (run.phase === 'running' || run.phase === 'starting' || run.phase === 'background' || run.phase==='interrupted' || run.phase === 'uncertain' || run.phase === 'delivering' || run.phase==='merging') {
         this.store.put('run', run.ticketId, { ...run, phase: 'uncertain', error: run.phase==='uncertain'&&run.error?run.error:'Host stopped during execution; inspect native history and workspace before retry' })
@@ -458,7 +463,9 @@ export class Runtime {
       if(key)this.controllers.get(key)?.abort(Error(reason))
     }
   }
+  private replacedTask(ticketId:string):boolean {return this.store.list<RouterGoal>('router-goal').some(g=>!!g.supersededBy&&this.goals.taskIdsForGoal(g).includes(ticketId))}
   validWork(owner:WorkOwner):boolean {
+    if(this.replacedTask(owner.ticketId))return false
     const ticket=this.store.tickets.get(owner.ticketId),assignment=ticket&&latestAssignment(ticket)
     const project=this.goals.forTask(owner.ticketId)
     if(project?.project&&!['active','waiting'].includes(project.state))return false
@@ -731,6 +738,7 @@ export class Runtime {
       const { ticketId, assignmentId } = job.payload as { ticketId: string; assignmentId: string }
       const ticket = this.store.tickets.get(ticketId)
       if (!ticket || ticket.ended || latestAssignment(ticket)?.id !== assignmentId) { this.store.jobState(job.id, 'done'); return }
+      if(this.replacedTask(ticketId)){this.interruptForAutomation(ticketId);if(!ticket.ended)this.engine.stopTicket(ticketId,'Goal contract replaced');this.store.jobState(job.id,'done');return}
       const delegation=this.taskAuthority(ticketId)
       if(delegation?.mode==='host'&&delegation.parentTrigger)this.routerIngress.authority(delegation.parentTrigger,delegation.discussion)
       if (job.kind === 'start') {
@@ -786,6 +794,7 @@ export class Runtime {
     if(scoped)this.memory.ingest(scoped)
     const controller=new AbortController(),key='router:'+discussion
     const authorizedMessage=(m:any)=>{
+      if(this.replacedTask(m.ticketId))return false
       const owner=this.taskAuthority(m.ticketId)
       if(this.store.get<TaskContinuation>('task-continuation',m.ticketId)?.priorMessages.includes(m.id))return false
       if(!owner?.parentTrigger||owner.discussion!==discussion||!scoped&&this.store.get<{actor:string}>('worker-assignment',m.ticketId)?.actor!==trigger.actor.id)return false
@@ -1121,7 +1130,7 @@ export class Runtime {
         managed:true,privateState:this.config.stateDir,attachments:this.chat.uploads.taskPaths(ticket.id),tools:specs,onTool:(name,args)=>this.workerTools.call(owner,name,args),onCapabilities:cap=>this.store.put('capabilities',ticket.id,{ticketId:ticket.id,...cap}),
         input: JSON.stringify({...(toolsChanged?{toolsChanged:{notice:'This activation has updated tools and schemas. Reassess earlier capability blockers using the current tool definitions before asking for user intervention. Continue the retained task; do not repeat completed effects.',tools:specs.map(({name,description})=>({name,description}))}}:{}),...(saved?.rebuild?{handoff:this.store.get('context-handoff',saved.rebuild),notice:'Explicit context rebuild. This is the same task and reviewed workspace. Only the current authorized mandate and permitted inputs are included. Retained effect identities prevent duplicate execution; old text is quarantined when permissions changed.'}:{}), ...(saved?.migration?{migration:this.store.get('worker-migration',saved.migration),notice:'Continue this logical task in a new backend session. Inspect prior results and artifacts; never repeat completed effects blindly.'}:{}),sourceContext, mandate: ticket.mandate, connectionCheck:this.connectionCheck(ticket.origin.triggerIds.map(id=>this.store.triggers.get(id)).filter((t):t is Trigger=>!!t)), relatedThreads:ticket.follows, ...(!saved ? { origin: ticket.origin.triggerIds.map(id => this.store.triggers.get(id)) } : {}), inputs: inputs.map(i => i.kind === 'trigger' ? { ...i, event: this.store.triggers.get(i.triggerId) } : i) }),
         signal: controller.signal,
-        onHumanRequest:request=>this.approvals.request(ticket.id,request),
+        onHumanRequest:request=>{if(!this.validWork(owner))return Promise.reject(Error('Assignment authority ended before approval'));return this.approvals.request(ticket.id,request)},
         onActive:control=>{this.controls.set(ticket.id,control);this.controlRevisions.set(ticket.id,promptRevision);live.control=control;live.offered.clear();live.retryAt=0},
         onProgress:event=>{
           this.store.put('progress',ticket.id,{ticketId:ticket.id,at:Date.now(),event})
@@ -1134,7 +1143,16 @@ export class Runtime {
       live.accepting=false
       await live.delivery
       let current = this.store.tickets.get(ticket.id)
-      if (controller.signal.aborted || !current || current.ended || latestAssignment(current)?.id !== assignmentId) return
+      if (controller.signal.aborted || !current || current.ended || latestAssignment(current)?.id !== assignmentId) {
+        const replaced=this.store.list<RouterGoal>('router-goal').find(g=>g.supersededBy&&this.goals.taskIdsForGoal(g).includes(ticket.id))
+        // Retain late evidence under the old task's existing history/cleanup boundary,
+        // never as a report, acceptance result, output or message for its successor.
+        if(replaced&&current&&!this.memory.cleanup.blocked('ticket',ticket.id,current)&&!this.memory.cleanup.blocked('router-goal',replaced.id,replaced)){
+          const id='late-goal:'+stableDigest([ticket.id,assignmentId,result.turnId])
+          this.store.put('transcript',id,{ticketId:ticket.id,assignmentId,goalId:replaced.id,contractHash:stableDigest(replaced.contract),threadId:result.threadId,turnId:result.turnId,status:'stale',reason:'goal_contract_replaced',text:result.text.slice(0,128000),truncated:result.text.length>128000,at:Date.now(),revision:promptRevision})
+        }
+        return
+      }
       const output = report.parse(JSON.parse(result.text))
       if(context)this.memory.validateWorkerTurn(ticket.id,context.manifest)
       if(delegated?.mode==='client'&&output.handbacks.length)throw Error('Client-delegated Workers must return scope questions to their Router')
@@ -1238,7 +1256,7 @@ export class Runtime {
       if(message.status==='sending'||message.status==='uncertain'||message.attempts<3)blocked.add(channel)
       if(this.closing)return
       if (message.status !== 'pending') continue
-      const replyOwner=this.store.get<{discussion:string;triggerId:string;inputs:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
+      const replyOwner=this.store.get<{goalId?:string;discussion:string;triggerId:string;inputs:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
       // Old queued derived notices lack the context used to compose them; a
       // current input must recreate them instead of assuming their provenance.
       if((message.id.startsWith('goal-notice:')&&!Array.isArray(replyOwner?.manifests))||(message.id.startsWith('router-clarify:')&&!replyOwner?.manifest)){
@@ -1248,8 +1266,22 @@ export class Runtime {
         try{const manifests=[...(replyOwner.manifest?[replyOwner.manifest]:[]),...replyOwner.manifests??[]];for(const manifest of manifests)this.memory.validate(manifest);for(const id of replyOwner.inputs)this.routerIngress.authority(id,manifests.length?undefined:replyOwner.discussion)}
         catch{this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'authorizationWithdrawn'});blocked.delete(channel);continue}
       }
+      // Replacement withdraws the old contract, not the original human input.
+      // Check the goal separately so that a still-valid input cannot publish a stale notice.
+      if(replyOwner){
+        const withdrawnInput=replyOwner.inputs.some(id=>this.store.list<RouterGoal>('router-goal').some(g=>g.supersededBy&&this.goals.triggerIdsForGoal(g).includes(id)))
+        if(withdrawnInput){this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'goalContractReplaced'});blocked.delete(channel);continue}
+      }
+      if(message.id.startsWith('goal-notice:')&&replyOwner){
+        const owner=replyOwner.goalId?this.goals.get(replyOwner.goalId):undefined
+        const replaced=owner?.supersededBy||(!replyOwner.goalId&&this.store.list<RouterGoal>('router-goal').some(g=>g.supersededBy&&this.goals.triggerIdsForGoal(g).includes(replyOwner.triggerId)))
+        if(replaced||(replyOwner.goalId&&!owner)){
+          this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'goalContractReplaced'});blocked.delete(channel);continue
+        }
+      }
       const notificationDelay=this.proactive.notificationDelay(message,replyOwner)
       if(notificationDelay.quiet||notificationDelay.nextAt>Date.now())continue
+      if(message.ticketId&&this.replacedTask(message.ticketId)){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
       const ticket = message.ticketId && this.store.tickets.get(message.ticketId)
       if (ticket && (ticket.ended?.by === 'human' || this.store.get<Run>('run', ticket.id)?.phase === 'human')) continue
       const source=this.sources.get(message.channel.source)
