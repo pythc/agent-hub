@@ -23,6 +23,11 @@ export const memoryLearningSchema=z.object({
  quote:z.string().min(1).max(1000).optional(),
 }).strict()
 export type MemoryLearning=z.infer<typeof memoryLearningSchema>
+/** Automatic learning uses exact domains and absolute expiry, never inferred containment. */
+export function sameMemoryApplicability(a:{learning?:MemoryLearning;expiresAt?:number},b:{learning?:MemoryLearning;expiresAt?:number}){
+ return a.learning?.discussion===b.learning?.discussion&&(a.learning?.condition??'')===(b.learning?.condition??'')&&a.expiresAt===b.expiresAt
+}
+
 export const memoryKinds=['profile','preference','fact','task','interest'] as const
 export const normalizeMemory=(s:string)=>s.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu,'')
 export function memoryTokens(s:string){

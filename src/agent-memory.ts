@@ -4,7 +4,7 @@ import type {Runtime} from './runtime.ts'
 import type {ScopeContext} from './router-scope.ts'
 import type {MemoryFact,MemoryProjection,MemoryCapture,ContextManifest,MemoryEvidence} from './router-memory.ts'
 import {stableDigest} from './sources.ts'
-import {memoryPolicySchema,normalizeMemory,lexicalScore,cosine,assertNoMemorySecret,type MemoryPolicy} from './memory-policy.ts'
+import {sameMemoryApplicability,memoryPolicySchema,normalizeMemory,lexicalScore,cosine,assertNoMemorySecret,type MemoryPolicy} from './memory-policy.ts'
 import {embedMemory,validateMemoryVector,type EmbedMemory} from './memory-vectors.ts'
 import {rerankMemory,memoryCandidates,memoryRetrievalComplete,type RerankMemory} from './memory-rerank.ts'
 import {extractMemories,consolidateMemories} from './memory-learning.ts'
@@ -101,7 +101,11 @@ export class AgentMemory {
    const current=this.authorized(c,true).find(f=>f.id===fact.id&&f.revision===fact.revision&&f.entryId===c.route.entryId&&f.owner===c.actor)
    if(!current||current.state!=='candidate')return this.host.memory.fact(fact.id)
    const targets=current.replaces?.map(ref=>({ref,f:this.host.memory.fact(ref.id)}))??[]
-   if(targets.some(({ref,f})=>!f||f.state!=='active'||f.revision!==ref.revision||current.learning?.inferred&&(f.protected||f.learning?.inferred!==true))||current.proposalAction==='forget'){
+   // Recheck persisted/legacy automatic candidates too, not just today's extractor.
+   // Explicit operator confirm/edit does not pass through this automatic boundary.
+   const automatic=['extracted','consolidated','experience'].includes(current.origin??'')
+   const incompatible=automatic&&targets.some(({f})=>!!f&&(f.scopeId!==current.scopeId||f.tenantId!==current.tenantId||f.entryId!==current.entryId||f.owner!==current.owner||!sameMemoryApplicability(f,current)))
+   if(incompatible||targets.some(({ref,f})=>!f||f.state!=='active'||f.revision!==ref.revision||current.learning?.inferred&&(f.protected||f.learning?.inferred!==true))||current.proposalAction==='forget'){
     this.host.store.put('memory-version',current.id+':'+current.revision,current)
     this.host.store.put('memory-fact',current.id,{...current,archived:true,revision:current.revision+1})
     return {id:current.id,status:'not_applied'}

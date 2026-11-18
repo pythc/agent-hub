@@ -2,7 +2,7 @@ import {z} from 'zod'
 import type {AgentMemory,MemoryObservation} from './agent-memory.ts'
 import type {ScopeContext} from './router-scope.ts'
 import type {MemoryCapture,MemoryFact} from './router-memory.ts'
-import {memoryKinds,normalizeMemory,safeMemoryText,lexicalScore,assertNoMemorySecret} from './memory-policy.ts'
+import {sameMemoryApplicability,memoryKinds,normalizeMemory,safeMemoryText,lexicalScore,assertNoMemorySecret} from './memory-policy.ts'
 import {stableDigest} from './sources.ts'
 
 const decisionSchema=z.object({
@@ -62,7 +62,7 @@ export async function extractMemories(engine:AgentMemory,c:ScopeContext,batch:Me
  const existing=[...ranked,...all.filter(f=>!ranked.includes(f))].slice(0,15)
  const topics=host.store.list<any>('memory-topic').filter(t=>t.space===engine.space(c)&&t.generation===host.memory.generation(c.route.scopeId)).slice(-40)
  const rejected=host.memory.suppressions(c).map(r=>({factId:r.factId}))
- const result=await modelJSON(engine,c,'extract',{referenceTime:new Date(engine.now()).toISOString(),messages:messages.map((m,index)=>({...m,index})),existing:existing.map((f,index)=>({index,kind:f.kind,topic:f.subject,content:f.content,protected:f.protected,learning:f.learning})),topics:topics.map((t,index)=>({index,label:t.label,aliases:t.aliases})),rejected},extractionSchema,signal,batch.map(r=>r.triggerId),existing) as z.infer<typeof extractionSchema>
+ const result=await modelJSON(engine,c,'extract',{referenceTime:new Date(engine.now()).toISOString(),messages:messages.map((m,index)=>({...m,index})),existing:existing.map((f,index)=>({index,kind:f.kind,topic:f.subject,content:f.content,protected:f.protected,learning:f.learning,expiresAt:f.expiresAt??null})),topics:topics.map((t,index)=>({index,label:t.label,aliases:t.aliases})),rejected},extractionSchema,signal,batch.map(r=>r.triggerId),existing) as z.infer<typeof extractionSchema>
  // Validate the complete result before committing anything or advancing progress.
  const decisions=result.memories.map(d=>{
   const source=messages[d.source];if(!source||!source.text.includes(d.quote))throw Error('unverifiable_memory_source')
@@ -82,14 +82,20 @@ export async function extractMemories(engine:AgentMemory,c:ScopeContext,batch:Me
   for(const d of decisions){
    const current=engine.authorized(c,true).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
    const learning={inferred:d.inferred,condition:d.condition,quote:d.quote,...(d.scope==='discussion'?{discussion:c.route.discussion}:{})}
-   if(current.some(f=>f.kind===d.kind&&normalizeMemory(f.content)===normalizeMemory(d.content)&&f.learning?.discussion===learning.discussion&&(f.learning?.condition??'')===learning.condition&&(f.learning?.inferred??false)===learning.inferred&&f.proposalAction!=='forget'&&d.action!=='delete'))continue
-   // A temporary exception never supersedes a standing preference.
-   const target=d.action==='delete'||d.target?.learning?.discussion===learning.discussion?d.target:undefined
+   if(current.some(f=>f.kind===d.kind&&normalizeMemory(f.content)===normalizeMemory(d.content)&&f.learning?.discussion===learning.discussion&&(f.learning?.condition??'')===learning.condition&&(f.learning?.inferred??false)===learning.inferred&&f.expiresAt===d.expiresAt&&f.proposalAction!=='forget'&&d.action!=='delete'))continue
+   // Automatic replacement must not widen applicability or erase a standing
+   // preference. Different textual conditions or lifetimes coexist; no semantic
+   // inclusion is inferred. Explicit human edits keep their separate authority.
+   const sameDomain=!!d.target&&sameMemoryApplicability(d.target,{learning,expiresAt:d.expiresAt})
+   // Do not turn a rejected inferred replacement into an independent active
+   // fact just because its condition differs. Keep the target for final rejection.
+   const protectedInference=d.inferred&&!!d.target&&(d.target.protected||d.target.learning?.inferred!==true)
+   const target=d.action==='delete'||sameDomain||protectedInference?d.target:undefined
    const refs=[d.source.sourceId,...(target?.sources.map(s=>s.id)??[])]
    const ids=[...new Set(refs)],fullCapture=host.memory.capture(c,ids)
    if(fullCapture.epoch!==capture.epoch||fullCapture.generation!==capture.generation)throw Error('stale_extraction')
    try{
-    const fact=host.memory.command(c,{action:'remember',operationId:'extract:'+stableDigest([d.source.id,d.action,d.kind,d.topic,d.content,target?.id,learning]),expectedRevision:0,subject:d.topic,content:d.content,sourceIds:ids,kind:d.kind,importance:d.importance,expiresAt:d.expiresAt,candidate:true,origin:'extracted',learning,replaces:target?[{id:target.id,revision:target.revision}]:undefined,proposalAction:d.action==='delete'?'forget':'replace',capture:fullCapture,visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'}) as MemoryFact
+    const fact=host.memory.command(c,{action:'remember',operationId:'extract:'+stableDigest([d.source.id,d.action,d.kind,d.topic,d.content,target?.id,learning,d.expiresAt??null]),expectedRevision:0,subject:d.topic,content:d.content,sourceIds:ids,kind:d.kind,importance:d.importance,expiresAt:d.expiresAt,candidate:true,origin:'extracted',learning,replaces:target?[{id:target.id,revision:target.revision}]:undefined,proposalAction:d.action==='delete'?'forget':'replace',capture:fullCapture,visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'}) as MemoryFact
     engine.acceptNote(c,fact)
    }catch(error){if(!String(error).includes('Fact was forgotten'))throw error}
   }
@@ -105,13 +111,13 @@ export async function consolidateMemories(engine:AgentMemory,c:ScopeContext,sign
  if(previous?.status==='running')return {status:'busy'}
  if(previous&&previous.status!=='interrupted'&&engine.now()-previous.at<60000)return {status:'rate_limited'}
  const candidates=engine.applicable(c).filter(f=>f.owner===c.actor&&f.entryId===c.route.entryId)
- const sameContext=(a:MemoryFact,b:MemoryFact)=>a.kind===b.kind&&(a.origin==='experience')===(b.origin==='experience')&&a.learning?.discussion===b.learning?.discussion&&(a.learning?.condition??'')===(b.learning?.condition??'')&&a.learning?.inferred===b.learning?.inferred
+ const sameContext=(a:MemoryFact,b:MemoryFact)=>a.kind===b.kind&&(a.origin==='experience')===(b.origin==='experience')&&sameMemoryApplicability(a,b)&&a.learning?.inferred===b.learning?.inferred
  const related=candidates.filter((f,i)=>candidates.some((other,j)=>i!==j&&sameContext(f,other)&&(lexicalScore(f.subject+' '+f.content,other.subject+' '+other.content)>.3||engine.similar(c,f,other)>=.88))).slice(0,20)
  const revision=engine.policyRevision(c),generation=host.memory.generation(c.route.scopeId)
  host.store.put('memory-consolidation',space,{at:engine.now(),status:'running',reviewed:candidates.length})
  try{
   if(related.length<2){const result={at:engine.now(),status:'no_candidates',reviewed:candidates.length,proposed:0};host.store.put('memory-consolidation',space,result);return result}
-  const result=await modelJSON(engine,c,'consolidate',{memories:related.map((f,index)=>({index,kind:f.kind,content:f.content,topic:f.subject,recordedAt:f.createdAt,protected:f.protected,learning:f.learning}))},consolidationSchema,signal,[c.trigger.id],related) as z.infer<typeof consolidationSchema>
+  const result=await modelJSON(engine,c,'consolidate',{memories:related.map((f,index)=>({index,kind:f.kind,content:f.content,topic:f.subject,recordedAt:f.createdAt,protected:f.protected,learning:f.learning,expiresAt:f.expiresAt??null}))},consolidationSchema,signal,[c.trigger.id],related) as z.infer<typeof consolidationSchema>
   signal.throwIfAborted();if(!engine.enabled(c)||revision!==engine.policyRevision(c)||generation!==host.memory.generation(c.route.scopeId))throw Error('memory_policy_changed')
   const seen=new Set<number>()
   const merges=result.merges.map(m=>{
@@ -121,7 +127,7 @@ export async function consolidateMemories(engine:AgentMemory,c:ScopeContext,sign
   })
   return host.store.atomic(()=>{const proposed=merges.map(m=>{
    const sources=[...new Set(m.members.flatMap(f=>f.sources.map(s=>s.id)))];if(sources.length>30)throw Error('merge_evidence_limit')
-   const fact=host.memory.command(c,{action:'remember',operationId:'merge:'+stableDigest([m.members.map(f=>[f.id,f.revision]),m.content]),expectedRevision:0,subject:m.members[0]!.subject,content:m.content,sourceIds:sources,kind:m.members[0]!.kind??'fact',candidate:true,origin:m.members.every(f=>f.origin==='experience')?'experience':'consolidated',learning:m.members[0]!.learning,replaces:m.members.map(f=>({id:f.id,revision:f.revision})),visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'},m.members.every(f=>f.origin==='experience')) as MemoryFact
+   const fact=host.memory.command(c,{action:'remember',operationId:'merge:'+stableDigest([m.members.map(f=>[f.id,f.revision]),m.content,m.members[0]!.expiresAt??null]),expectedRevision:0,subject:m.members[0]!.subject,content:m.content,sourceIds:sources,kind:m.members[0]!.kind??'fact',candidate:true,origin:m.members.every(f=>f.origin==='experience')?'experience':'consolidated',learning:m.members[0]!.learning,expiresAt:m.members[0]!.expiresAt,replaces:m.members.map(f=>({id:f.id,revision:f.revision})),visibility:host.scopes.binding(c.route.entryId).privateActor?'private':'group'},m.members.every(f=>f.origin==='experience')) as MemoryFact
    return engine.acceptNote(c,fact)
   })
   const report={at:engine.now(),status:'completed',reviewed:candidates.length,proposed:proposed.length};host.store.put('memory-consolidation',space,report);return report
