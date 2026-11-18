@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from container_sqlite_fixture import sqlite_write
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('output', type=Path)
@@ -214,7 +215,7 @@ try:
     steady_id = compose('ps', '-q', 'roppo').stdout.strip()
     steady_pid = run(['docker', 'inspect', '--format', '{{.State.Pid}}', steady_id]).stdout.strip()
     job_id = 'container-busy-' + uuid.uuid4().hex
-    node("import {DatabaseSync} from 'node:sqlite';const d=new DatabaseSync('/data/state/state.sqlite');d.prepare(\"INSERT INTO jobs(id,kind,payload,next_at) VALUES(?,?,?,?)\").run(" + repr(job_id) + ",'container-acceptance','{}',Date.now()+86400000);d.close()")
+    node(sqlite_write('INSERT INTO jobs(id,kind,payload,next_at) VALUES(?,?,?,?)', [job_id, 'container-acceptance', '{}', int(time.time() * 1000) + 86400000]))
     try:
         busy = run(['./deployment/compose.sh', 'upgrade'], check=False, name='busy-upgrade')
         assert busy.returncode and 'Unsettled work' in busy.stderr, busy.stderr
@@ -222,7 +223,7 @@ try:
         assert run(['docker', 'inspect', '--format', '{{.State.Pid}}', steady_id]).stdout.strip() == steady_pid
         assert node("import fs from 'node:fs';console.log(fs.existsSync('/data/state/container-maintenance.json'))") == 'false'
     finally:
-        node("import {DatabaseSync} from 'node:sqlite';const d=new DatabaseSync('/data/state/state.sqlite');d.prepare('DELETE FROM jobs WHERE id=?').run(" + repr(job_id) + ");d.close()")
+        node(sqlite_write('DELETE FROM jobs WHERE id=?', [job_id]))
     checks['busyUpgradeRejectedBeforeStoppingHost'] = True
     if args.incompatible_image:
         rejected = run(['./deployment/compose.sh', 'upgrade'], overrides={'ROPPO_IMAGE': args.incompatible_image}, check=False, name='incompatible-upgrade')
@@ -238,7 +239,7 @@ try:
     interrupted_id = str(uuid.uuid4())
     assert api('/deployment/maintenance', {'action': 'prepare', 'operationId': interrupted_id, 'expectedRevision': api('/settings')[1]['current']['revision']})[0] == 200
     # Reproduce a persisted intermediate receipt, then restart the real host.
-    node("import fs from 'node:fs';import {DatabaseSync} from 'node:sqlite';const id=" + repr(interrupted_id) + ";const d=new DatabaseSync('/data/state/state.sqlite');d.prepare(\"UPDATE records SET body=json_remove(json_set(body,'$.state','preparing'),'$.pauseSeq') WHERE kind='deployment-maintenance' AND id=?\").run(id);d.close();fs.writeFileSync('/data/state/container-maintenance.json',JSON.stringify({operationId:id}),{mode:0o600})")
+    node(sqlite_write("UPDATE records SET body=json_remove(json_set(body,'$.state','preparing'),'$.pauseSeq') WHERE kind='deployment-maintenance' AND id=?", [interrupted_id]) + ";import fs from 'node:fs';fs.writeFileSync('/data/state/container-maintenance.json',JSON.stringify({operationId:" + json.dumps(interrupted_id) + "}),{mode:0o600})")
     compose('restart', 'roppo', name='interrupted-prepare-restart')
     compose('start', '--wait', '--wait-timeout', '120', 'roppo', name='interrupted-prepare-health')
     run(['./deployment/compose.sh', 'abort'], name='interrupted-prepare-abort')
