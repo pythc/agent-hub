@@ -18,6 +18,9 @@ it('upgrades retained audit history and bounds missing-stage checkpoint lookups'
   insert.run('not JSON');insert.run(JSON.stringify({type:'execution.trace',schema:2,ticketId:'target',stage:'tool'}))
   insert.run(JSON.stringify({type:'execution.trace',schema:1,ticketId:'target',stage:'tool',baseline:true}))
   const latest=Number(insert.run(JSON.stringify({type:'execution.trace',schema:1,ticketId:'target',stage:'tool'})).lastInsertRowid)
+  // execution-call model transitions are stored under stage=tool for legacy
+  // projection compatibility, but the trace presents them as run events.
+  for(const callKind of ['worker','router','subagent'])insert.run(JSON.stringify({type:'execution.trace',schema:1,ticketId:'target',stage:'tool',callKind}))
   old.exec('COMMIT');old.close()
   store=new Store(path)
   const plan=store.db.prepare('EXPLAIN QUERY PLAN '+checkpointQuery).all('target','tool').map(r=>r.detail).join('\n')
