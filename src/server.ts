@@ -411,7 +411,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='POST'&&path==='/router-skills/read'){send(res,200,runtime.skills.read(await operatorBody(req)));return}
     if(req.method==='POST'&&path==='/router-skills'){send(res,200,runtime.skills.command(await operatorBody(req)));return}
-    if(req.method==='POST'&&path==='/router-proactive'){send(res,200,runtime.proactive.command(await body(req)));return}
+    if(req.method==='POST'&&path==='/router-proactive'){send(res,200,runtime.proactive.command(await operatorBody(req)));return}
     if(req.method==='GET'&&path==='/router-cleanup'){send(res,200,{items:runtime.memory.cleanup.receipts()});return}
     if(req.method==='POST'&&path==='/router-scopes'){send(res,200,await runtime.scopeCommand(await body(req)));return}
     if(req.method==='POST'&&path==='/agent-memory'){

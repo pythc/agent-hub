@@ -1235,7 +1235,7 @@ export class Runtime {
       if(blocked.has(channel))continue
       if(message.status==='sending'||message.status==='uncertain'||message.attempts<3)blocked.add(channel)
       if(this.closing)return
-      if (message.status !== 'pending' || message.nextAt > Date.now()) continue
+      if (message.status !== 'pending') continue
       const replyOwner=this.store.get<{discussion:string;triggerId:string;inputs:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
       // Old queued derived notices lack the context used to compose them; a
       // current input must recreate them instead of assuming their provenance.
@@ -1246,6 +1246,8 @@ export class Runtime {
         try{const manifests=[...(replyOwner.manifest?[replyOwner.manifest]:[]),...replyOwner.manifests??[]];for(const manifest of manifests)this.memory.validate(manifest);for(const id of replyOwner.inputs)this.routerIngress.authority(id,manifests.length?undefined:replyOwner.discussion)}
         catch{this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'authorizationWithdrawn'});blocked.delete(channel);continue}
       }
+      const notificationDelay=this.proactive.notificationDelay(message,replyOwner)
+      if(notificationDelay.quiet||notificationDelay.nextAt>Date.now())continue
       const ticket = message.ticketId && this.store.tickets.get(message.ticketId)
       if (ticket && (ticket.ended?.by === 'human' || this.store.get<Run>('run', ticket.id)?.phase === 'human')) continue
       const source=this.sources.get(message.channel.source)
