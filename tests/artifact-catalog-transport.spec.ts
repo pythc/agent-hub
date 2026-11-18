@@ -29,10 +29,10 @@ it('catalog uses scoped transport, rejects late responses after teardown, and re
  const p=pageFixture();p.render();p.flush();p.pending.shift().reject(Error('SECRET'));await tick();expect(JSON.stringify(p.render())).not.toContain('SECRET');p.replay();expect(p.calls[0].signal.aborted).toBe(true);expect(p.calls[1].signal.aborted).toBe(false);p.pending.shift().resolve({schema:1,items:[],truncated:false,nextCursor:null});await tick();expect(JSON.stringify(p.render())).toContain('No visible artifacts on this page.')
 })
 
-it('withholds unsupported managed View navigation while preserving fixed file links',async()=>{
+it('uses workspace-bound View destinations while preserving fixed file links',async()=>{
  const p=pageFixture();p.render();p.flush();p.pending.shift().resolve({schema:1,truncated:false,nextCursor:null,items:[{reference:{kind:'workspace-view',id:'board'},label:{en:'Board','zh-CN':'看板'}},{reference:{kind:'goal-artifact',id:'a'.repeat(64)},label:{en:'File','zh-CN':'文件'}}]});await tick()
- let tree=JSON.stringify(p.render());expect(tree).not.toContain('#plugin/board');expect(tree).toContain('managed workspace is not supported');expect(tree).toContain('#artifact/'+'a'.repeat(64))
- p.workspace.context.managed=false;tree=JSON.stringify(p.render());expect(tree).toContain('#plugin/board')
+ let tree=JSON.stringify(p.render());expect(tree).not.toContain('#plugin/board');expect(tree).toContain('#artifact-view/board');expect(tree).toContain('#artifact/'+'a'.repeat(64))
+ p.workspace.context.managed=false;tree=JSON.stringify(p.render());expect(tree).toContain('#artifact-view/board');expect(tree).not.toContain('#plugin/board')
 })
 
 function nodes(tree:any):any[]{return !tree||typeof tree!=='object'?[]:[tree,...Object.values(tree.props??{}).flatMap(v=>Array.isArray(v)?v.flatMap(nodes):nodes(v))]}
