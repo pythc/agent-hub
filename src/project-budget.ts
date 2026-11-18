@@ -15,10 +15,15 @@ export function projectBudget(store:Store,g:RouterGoal,now:number){
   for(const row of store.list<UsageRecord>('model-usage')){
    if(!(row.ticketId?g.taskIds.includes(row.ticketId):!!row.triggerId&&p.triggerIds.includes(row.triggerId)))continue
    const steps=Object.entries(row.steps)
-   let unknown=Object.entries(row.attempts??{}).some(([attempt,state])=>state!=='running'&&!steps.some(([key])=>key.startsWith(attempt+':')))
-   if(row.state!=='running'&&!steps.length)unknown=true
-   for(const [,s] of steps){
-    if((s.inputTokens===undefined&&price.inputUsdPerMillion>0||s.outputTokens===undefined&&price.outputUsdPerMillion>0)&&row.state!=='running')unknown=true
+   const chargeable=price.inputUsdPerMillion>0||price.outputUsdPerMillion>0
+   const endedAttempts=new Set(Object.entries(row.attempts??{}).filter(([,state])=>state!=='running').map(([attempt])=>attempt))
+   let unknown=chargeable&&[...endedAttempts].some(attempt=>!steps.some(([key])=>key.startsWith(attempt+':')))
+   if(chargeable&&row.state!=='running'&&!steps.length)unknown=true
+   for(const [key,s] of steps){
+    // The call stays running across retries. An ended attempt nevertheless needs
+    // complete billable counts before the existing retry admission can continue.
+    const settled=row.state!=='running'||endedAttempts.has(key.slice(0,key.indexOf(':')))
+    if((s.inputTokens===undefined&&price.inputUsdPerMillion>0||s.outputTokens===undefined&&price.outputUsdPerMillion>0)&&settled)unknown=true
     estimatedUsd+=((s.inputTokens??0)*price.inputUsdPerMillion+(s.outputTokens??0)*price.outputUsdPerMillion)/1e6
    }
    if(unknown)unknownCalls++
