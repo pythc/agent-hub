@@ -1,4 +1,4 @@
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync,readdirSync} from 'node:fs'
 import {spawn} from 'node:child_process'
 import {tmpdir} from 'node:os'
 import {join,resolve} from 'node:path'
@@ -193,19 +193,42 @@ it('retains live model defaults but never restores old plugin deployment over st
  expect(()=>new Settings(f.store,staged).save(1,{backends:changed})).toThrow('controlled restart')
 })
 
-it('stops a native descendant when the owning host process is killed',async()=>{
- const f=await fixture(),file=join(f.root,'config.json'),script=join(f.root,'owner.mjs')
+it.each([true,false])('gates a native descendant write on release after owner kill=%s',async killOwner=>{
+ const f=await fixture(),file=join(f.root,'config.json'),script=join(f.root,'owner.mjs'),data=join(f.config.stateDir,'backend-plugin-data','external')
  writeFileSync(file,JSON.stringify(f.config))
  writeFileSync(script,`import {loadConfig} from ${JSON.stringify(resolve('src/config.ts'))};import {Store} from ${JSON.stringify(resolve('src/store.ts'))};import {BackendRegistry} from ${JSON.stringify(resolve('src/backends/registry.ts'))};const c=loadConfig(${JSON.stringify(file)}),s=new Store(c.stateDir+'/crash.sqlite');await new BackendRegistry(c,s).run({...${JSON.stringify({...f.request,input:'descendant'})},onThread:()=>console.log('started')});`)
  const owner=spawn(process.execPath,['--import','tsx',script],{cwd:process.cwd(),env:process.env,stdio:['ignore','pipe','pipe']})
+ // Register close before signalling, including failure cleanup. Never kill a PID
+ // read from disk: it may have been reused after the descendant exited.
+ let ownerClosed=false
+ owner.once('close',()=>{ownerClosed=true})
+ let directory:string|undefined,stderr=''
+ owner.stderr.on('data',chunk=>{stderr+=String(chunk)})
+ const waitFor=async(check:()=>boolean,label:string)=>{const deadline=Date.now()+5000;while(!check()){if(Date.now()>=deadline)throw Error(label+': '+stderr);await new Promise(ok=>setTimeout(ok,10))}}
  try{
-  await new Promise<void>((ok,fail)=>{const timer=setTimeout(()=>fail(Error('Child did not start')),5000);owner.stdout.on('data',chunk=>{if(String(chunk).includes('started')){clearTimeout(timer);ok()}});owner.once('exit',()=>{clearTimeout(timer);fail(Error('Owner exited before starting'))})})
-  owner.kill('SIGKILL');await new Promise<void>(ok=>owner.once('close',()=>ok()));await new Promise(ok=>setTimeout(ok,1200))
-  const {readdirSync}=await import('node:fs'),data=join(f.config.stateDir,'backend-plugin-data','external')
-  expect(readdirSync(data).some(name=>existsSync(join(data,name,'descendant')))).toBe(true)
-  expect(readdirSync(data).some(name=>existsSync(join(data,name,'escaped')))).toBe(false)
- }finally{owner.kill('SIGKILL')}
-})
+  await waitFor(()=>{directory=existsSync(data)?readdirSync(data).map(name=>join(data,name)).find(dir=>existsSync(join(dir,'descendant'))):undefined;return !!directory},'Descendant did not acknowledge readiness')
+  expect(existsSync(join(directory!,'escaped'))).toBe(false)
+  if(killOwner){owner.kill('SIGKILL');await waitFor(()=>ownerClosed,'Owner did not close after kill')}
+  writeFileSync(join(directory!,'release-descendant'),'release')
+  if(killOwner){
+   // Bounded negative observation starts only after the owner is closed, never
+   // while the owner/worker/test are still scheduling their readiness messages.
+   await new Promise(ok=>setTimeout(ok,1200))
+   expect(existsSync(join(directory!,'escaped'))).toBe(false)
+  }else{
+   // Positive control proves that a live descendant observes the same gate and
+   // really writes; removing process cleanup cannot turn this into an empty test.
+   await waitFor(()=>existsSync(join(directory!,'escaped')),'Live descendant did not write after release')
+   expect(readFileSync(join(directory!,'escaped'),'utf8')).toBe('escaped')
+  }
+ }finally{
+  try{if(directory)writeFileSync(join(directory,'cancel-descendant'),'cancel')}
+  finally{
+   if(owner.exitCode===null&&owner.signalCode===null)owner.kill('SIGKILL')
+   await waitFor(()=>ownerClosed,'Owner did not close during cleanup')
+  }
+ }
+},20000)
 
 it('retains safe native failure metadata without provider messages or secret details',async()=>{
  const f=await fixture();let id=''
