@@ -1,3 +1,4 @@
+import {taskQueueSummary,type TaskQueueSummary} from './scheduler-status.ts'
 import {assignmentContractView} from './task-assignment-contract.ts'
 import {createRecoveryPackage} from './recovery-package.ts'
 import {recoveryManifest,type RecoveryManifest} from './recovery-manifest.ts'
@@ -28,6 +29,7 @@ interface RecoveryReceipt {fingerprint:string;state:'started'|'completed'|'uncer
 export interface AsyncInboxSummary {schema:1;received:number;applied:number;archived:number;latest:{kind:'progress'|'blocked'|'result';disposition:'applied'|'archived';observedAt:number}|null}
 export interface TaskAssignmentSummary {schema:1;objective:string;inputCount:number;interface?:{key:string;version:number;digest:string;inputs:string[];outputs:string[];acceptance:string[]};dependencyCount:number;tools:string[];connections:string[];workspace:{access:'read-only'|'workspace-write';scope:'whole_root';network:boolean;leaseCount:number};budget:{timeoutMs?:number;maxSteps?:number;maxToolCalls?:number;maxOutputTokens?:number};createdAt:number;blocker?:string}
 export interface TraceTask {
+ queue?:TaskQueueSummary
  assignment?:TaskAssignmentSummary
  asyncInbox?:AsyncInboxSummary
  recovery?:RecoveryManifest
@@ -169,7 +171,8 @@ export class ExecutionTrace {
   const asyncInbox:AsyncInboxSummary|undefined=events.length&&verifiedEvents?{schema:1,received:events.length,applied:events.filter(e=>e.disposition==='applied').length,archived:events.filter(e=>e.disposition==='archived').length,latest:last?{kind:last.kind,disposition:last.disposition,observedAt:last.observedAt}:null}:undefined
   const assignmentView=assignmentContractView(host,ticket.id),contract=assignmentView?.contract
   const assignment:TaskAssignmentSummary|undefined=contract?{schema:1,objective:contract.objective,inputCount:contract.inputIds.length+Object.keys(contract.triggerDigests??{}).length,...(contract.interface?{interface:{key:contract.interface.key,version:contract.interface.version,digest:contract.interface.digest,inputs:contract.interface.inputs,outputs:contract.interface.outputs,acceptance:contract.interface.acceptance}}:{}),dependencyCount:contract.dependencies.length,tools:contract.effective.tools,connections:contract.effective.connections,workspace:{access:contract.effective.sandbox,scope:'whole_root',network:contract.effective.network,leaseCount:assignmentView!.leases.length},budget:Object.fromEntries(['timeoutMs','maxSteps','maxToolCalls','maxOutputTokens'].flatMap(k=>{const value=contract.effective.options[k as keyof typeof contract.effective.options];return typeof value==='number'?[[k,value]]:[]})),createdAt:contract.createdAt,...(assignmentView?.blocker?{blocker:assignmentView.blocker}:{})}:undefined
-  const projected:TraceTask={...(assignment?{assignment}:{}),...(asyncInbox?{asyncInbox}:{}),blocker,status,id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
+  const queue=taskQueueSummary(host,ticket.id)
+  const projected:TraceTask={...(queue?{queue}:{}),...(assignment?{assignment}:{}),...(asyncInbox?{asyncInbox}:{}),blocker,status,id:ticket.id,label:'Task '+opaque(ticket.id).slice(0,8),state:enumState(state),...(run?{phase:enumState(run.phase)}:{}),updatedAt:ticket.updatedAt,...(run?.workerId?{workerId:run.workerId}:{}),...(run?.backendId?{backendId:run.backendId}:{}),...(run?.threadId?{sessionRef:opaque(run.threadId)}:{}),hasResult:!!run?.result,evidence,revision:host.settings.current().revision,observed,problem,unknownEffects:unknown,pendingApprovals:approvals.length,acceptance,actions,next:unknown?'reconcile':approvals.length?'answer_approval':held?'review_context':['auth_required','configuration_invalid'].includes(problem)?'reconnect':ticket.attention?'follow_up':'none'}
   return {...projected,recovery:recoveryManifest(host.store,projected)}
  }
  private readAllowed(host:Runtime,ticket:Ticket){

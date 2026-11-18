@@ -12,7 +12,10 @@ afterEach(()=>{for(const r of roots.splice(0))rmSync(r,{recursive:true,force:tru
 function sample(){return createRecoveryPackage({id:'SECRET_TASK',state:'uncertain',unknownEffects:true,observed:'SECRET_OBSERVATION',revision:42,status:{effects:{state:'unknown'},delivery:{state:'uncertain'}},recovery:{session:'unavailable',nextSafeAction:'inspect_state',checkpoints:[{stage:'tool',origin:'transition',cursor:124}],ticketId:'SECRET_TASK'}} as any)}
 it('exports only explicit fields with fresh aliases and conservatively reconciles unknown effects',()=>{
  const value=sample(),text=JSON.stringify(value)
- expect(text).not.toMatch(/SECRET_|cursor|124|revision|observed/)
+ // Random UUIDs and SHA-256 digests may legitimately contain the digits 124.
+ // Check the entire exported payload, not substrings inside unrelated entropy.
+ expect(text).not.toMatch(/SECRET_|cursor|revision|observed/)
+ expect(value.payload).toEqual({format:'agent-hub-recovery-diagnostic',schema:1,application:'0.10.0',taskAlias:expect.stringMatching(/^[a-f0-9-]{36}$/),execution:'unknown',unknownEffects:true,session:'unavailable',nextSafeAction:'reconcile_effects',checkpoints:[{stage:'tool',origin:'transition'}],scope:'retained_local_observation',excluded:'content_credentials_paths_sessions_and_remote_verification',replayAllowed:false})
  expect(sample().payload.taskAlias).not.toBe(value.payload.taskAlias)
  expect(verifyRecoveryPackage(text)).toMatchObject({valid:true,authenticity:'not_verified',unknownEffects:true,nextSafeAction:'reconcile_effects',replayAllowed:false,restorationSupported:false})
  const reordered={sha256:value.sha256,payload:Object.fromEntries(Object.entries(value.payload).reverse())}
