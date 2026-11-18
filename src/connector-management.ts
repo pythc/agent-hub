@@ -1,4 +1,6 @@
-import {randomUUID} from 'node:crypto'
+import {ProcessSource} from './plugin-process.ts'
+import {FeishuSource} from '../plugins/feishu/feishu.ts'
+import {randomUUID,randomBytes,createHmac} from 'node:crypto'
 import {types as nodeTypes} from 'node:util'
 import {z} from 'zod'
 import {Ajv2020} from 'ajv/dist/2020.js'
@@ -27,6 +29,8 @@ export class ConnectorError extends Error {
  constructor(readonly code:'connector_invalid'|'connector_conflict'|'connector_missing'|'connector_disabled'|'connector_unsupported'|'connector_request_conflict'|'connector_busy'|'connector_actors_required',readonly status=400,readonly issues?:ConnectorFieldIssue[]){super(code)}
 }
 const safeParse=<T>(schema:z.ZodType<T>,value:unknown):T=>{const parsed=schema.safeParse(value);if(!parsed.success)throw new ConnectorError('connector_invalid');return parsed.data}
+interface EvidenceBasis {lifecycle:string;adapter:string;credentials?:string;known:boolean;missing:boolean;restart?:boolean}
+type SavedDiagnostic=ConnectorDiagnostic&{fingerprint?:string;basis?:EvidenceBasis;requestFingerprint?:string}
 type Definition=ReturnType<Runtime['sourceRegistry']['connectionDefinitions']>[number]
 function fieldPath(definition:Definition,field:NonNullable<Definition['setup']>['fields'][number]){
  if(field.path)return field.path
@@ -52,6 +56,48 @@ function setField(target:Record<string,unknown>,path:string,value:unknown){
 /** A view/control layer over SourceRegistry, existing settings and onboarding.
  * It owns diagnostic evidence only; it never owns a second connection registry. */
 export class ConnectorManagement {
+ private readonly evidenceKey=randomBytes(32)
+ private readonly identities=new WeakMap<object,string>()
+ private identity(value:object){let id=this.identities.get(value);if(!id){id=randomUUID();this.identities.set(value,id)}return id}
+ private sealed(value:unknown){return createHmac('sha256',this.evidenceKey).update(JSON.stringify(value)).digest('hex')}
+ private basis(config:SourceConfig,level:ConnectorLayer):EvidenceBasis {
+  const host=this.host(),definition=this.definition(config.kind),adapter=host.sources.get(config.id)
+  const lifecycle=this.sealed(this.identity(host)),identity=this.sealed({definition,instance:adapter?this.identity(adapter):null,identity:adapter?.identity?this.identity(adapter.identity):null,members:adapter?.members?this.identity(adapter.members):null})
+  if(level==='reachable')return {lifecycle,adapter:identity,known:true,missing:false}
+  if(level==='configuration'){
+   const presence=Object.entries(definition.credentials).sort(([a],[b])=>a.localeCompare(b)).map(([slot,path])=>{const name=pointer(config,path);return [slot,typeof name==='string'&&/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)?credentialPresent(name):false]})
+   return {lifecycle,adapter:identity,credentials:this.sealed(presence),known:true,missing:false}
+  }
+  // Only supported adapters prove which material an identity call consumes.
+  // Arbitrary native adapters may cache credentials and cannot be inferred safe.
+  let known=(!!definition.setup||'pluginId'in definition)&&(adapter instanceof ProcessSource||adapter instanceof FeishuSource&&!config.feishu?.cli||this.options.evidenceMode==='fixture'),missing=false
+  const material=Object.entries(definition.credentials).sort(([a],[b])=>a.localeCompare(b)).map(([slot,path])=>{
+   const name=pointer(config,path)
+   if(name===undefined)return [slot,'not_declared']
+   if(typeof name!=='string'||!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)){known=false;return [slot,'unknown']}
+   const value=Object.hasOwn(process.env,name)?process.env[name]:undefined
+   if(!value)missing=true
+   return [slot,name,value??null]
+  })
+  return {lifecycle,adapter:identity,credentials:this.sealed(material),known,missing,restart:adapter instanceof ProcessSource&&!adapter.diagnosticCredentialsCurrent(config)}
+ }
+ private invalidation(record:SavedDiagnostic):string|undefined {
+  try{
+   const host=this.host(),config=host.config.sources.find(s=>s.id===record.sourceId)
+   if(!config||host.settings.current().revision!==record.revision||this.fingerprint(config)!==record.fingerprint)return 'configuration_changed'
+   const basis=this.basis(config,record.level),old=record.basis
+   if(!old||old.lifecycle!==basis.lifecycle)return 'evidence_lifecycle_changed'
+   if(old.adapter!==basis.adapter)return 'adapter_changed'
+   if(basis.restart)return 'adapter_restart_required'
+   if(!basis.known)return 'credential_basis_unavailable'
+   if(basis.missing)return 'credential_missing'
+   if(old.credentials!==basis.credentials)return record.level==='configuration'?'configuration_changed':'credential_changed'
+  }catch{return 'configuration_changed'}
+ }
+ private observed(record:SavedDiagnostic){
+  const reason=this.invalidation(record)
+  return reason?this.publicRecord({...record,status:reason==='credential_basis_unavailable'?'unknown':'stale',code:reason,checkedCapabilities:undefined,checkedScopes:undefined}):this.publicRecord(record)
+ }
  private readonly active=new Map<string,Promise<ConnectorDiagnostic>>()
  private readonly controllers=new Map<string,{sourceId:string;controller:AbortController}>()
  constructor(private readonly host:()=>Runtime,private readonly options:{fetch?:typeof fetch;timeoutMs?:number;clock?:()=>number;evidenceMode?:'configured-adapter'|'fixture'}={}){}
@@ -131,7 +177,8 @@ export class ConnectorManagement {
    const records=diagnostics.filter(d=>d.sourceId===config.id)
    const layers=Object.fromEntries((['configuration','reachable','authentication','capabilities'] as const).map(level=>{
     const head=host.store.get<{id:string}>('connector-diagnostic-head',config.id+':'+level),record=records.find(d=>d.id===head?.id)
-    return [level,record?{...record,current:record.revision===current&&host.store.get<ConnectorDiagnostic&{fingerprint:string}>('connector-diagnostic',record.id)?.fingerprint===this.fingerprint(config)}:null]
+    const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
+    return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
    return {id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
   }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
@@ -193,18 +240,18 @@ export class ConnectorManagement {
  }
  async probe(value:unknown):Promise<ConnectorDiagnostic>{
   const input=safeParse(connectorProbeSchema,value),host=this.host(),requestFingerprint=stableDigest(input)
-  const existing=host.store.get<ConnectorDiagnostic&{requestFingerprint:string}>('connector-diagnostic',input.requestId)
+  const existing=host.store.get<SavedDiagnostic>('connector-diagnostic',input.requestId)
   if(existing){
    if(existing.requestFingerprint!==requestFingerprint)throw new ConnectorError('connector_request_conflict',409)
    const active=this.active.get(input.requestId);if(active)return active
    if(existing.status==='running'){const interrupted={...existing,status:'interrupted' as const,code:'probe_interrupted',finishedAt:this.now()};host.store.put('connector-diagnostic',existing.id,interrupted);return this.publicRecord(interrupted)}
-   return this.publicRecord(existing)
+   return this.observed(existing)
   }
   this.checkRevision(input.revision)
   const source=this.source(input.sourceId),adapter=host.sources.get(source.id),definition=this.definition(source.kind)
   if(!source.enabled&&input.level!=='configuration')throw new ConnectorError('connector_disabled',409)
   if(this.controllers.size>=16)throw new ConnectorError('connector_busy',429)
-  const record:ConnectorDiagnostic&{fingerprint:string}={id:input.requestId,sourceId:source.id,revision:input.revision,fingerprint:this.fingerprint(source),level:input.level,status:'running',code:'probe_running',startedAt:this.now(),realCall:false,evidenceMode:this.options.evidenceMode??'configured-adapter'}
+  const record:ConnectorDiagnostic&{fingerprint:string;basis:EvidenceBasis}={id:input.requestId,sourceId:source.id,revision:input.revision,fingerprint:this.fingerprint(source),basis:this.basis(source,input.level),level:input.level,status:'running',code:'probe_running',startedAt:this.now(),realCall:false,evidenceMode:this.options.evidenceMode??'configured-adapter'}
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),this.options.timeoutMs??20000)
   this.controllers.set(record.id,{sourceId:source.id,controller})
   host.store.atomic(()=>{host.store.put('connector-diagnostic',record.id,{...record,requestFingerprint});host.store.put('connector-diagnostic-head',source.id+':'+input.level,{id:record.id})})
@@ -214,11 +261,11 @@ export class ConnectorManagement {
    // turn a late reply / timeout callback into an unhandled SQLite exception.
    try{
     const current=this.host(),config=current.config.sources.find(s=>s.id===source.id)
-    return current===host&&!!config&&current.settings.current().revision===record.revision&&this.fingerprint(config)===record.fingerprint&&(input.level==='configuration'||config.enabled)&&current.store.get<{id:string}>('connector-diagnostic-head',source.id+':'+input.level)?.id===record.id
+    return current===host&&!!config&&current.settings.current().revision===record.revision&&this.fingerprint(config)===record.fingerprint&&!this.invalidation(record)&&(input.level==='configuration'||config.enabled)&&current.store.get<{id:string}>('connector-diagnostic-head',source.id+':'+input.level)?.id===record.id
    }catch{return false}
   }
   const persist=(result:ConnectorDiagnostic)=>{
-   try{this.host().store.put('connector-diagnostic',record.id,{...result,requestFingerprint});return true}catch{return false}
+   try{if(this.host()!==host)return false;host.store.put('connector-diagnostic',record.id,{...result,requestFingerprint});return true}catch{return false}
   }
   const guard=()=>{
    if(!currentMatches())throw new ConnectorError('connector_conflict',409)
@@ -250,14 +297,14 @@ export class ConnectorManagement {
     else if(controller.signal.aborted){status='interrupted';code='probe_interrupted'}
     else{status='failed';code=input.level==='reachable'?'service_unreachable':input.level==='authentication'?'authentication_not_verified':input.level==='capabilities'?'directory_not_verified':'configuration_invalid'}
    }
-   if(!currentMatches()){status='stale';code='configuration_changed';checkedCapabilities=undefined;checkedScopes=undefined}
+   if(!currentMatches()){code=this.invalidation(record)??'configuration_changed';status=code==='credential_basis_unavailable'?'unknown':'stale';checkedCapabilities=undefined;checkedScopes=undefined}
    const result={...record,status,code,finishedAt:this.now(),...(checkedCapabilities?{checkedCapabilities,checkedScopes}:{})}
    if(!persist(result)&&result.status!=='stale'){result.status='interrupted';result.code='diagnostic_store_unavailable';delete result.checkedCapabilities;delete result.checkedScopes}
    // Metadata receipts cannot contain provider errors, identities or raw responses.
    return this.publicRecord(result)
   })()
   const interrupted=new Promise<ConnectorDiagnostic>(resolve=>{controller.signal.addEventListener('abort',()=>{
-   const stale=!currentMatches(),result={...record,status:stale?'stale' as const:'interrupted' as const,code:stale?'configuration_changed':'probe_interrupted',finishedAt:this.now()}
+   const stale=!currentMatches(),result={...record,status:stale?'stale' as const:'interrupted' as const,code:stale?(this.invalidation(record)??'configuration_changed'):'probe_interrupted',finishedAt:this.now()}
    persist(result)
    resolve(this.publicRecord(result))
   },{once:true})})

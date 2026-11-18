@@ -48,3 +48,15 @@ it.each([NaN,Infinity,-1,1.5,8640000000000001,'123',null,undefined])('rejects in
 it('uses start time for a pending check with no finished time',()=>{
  expect(connectorCheck(record('authentication',{status:'running',code:'probe_running',finishedAt:undefined}),'authentication',4)).toMatchObject({state:'running',at:at-10})
 })
+it.each(['authentication','capabilities'] as const)('retains safe %s evidence invalidation reasons without a current success',layer=>{
+ for(const code of ['adapter_restart_required','credential_changed','credential_missing','adapter_changed','evidence_lifecycle_changed','credential_basis_unavailable']){
+  const view=connectorCheck(record(layer,{current:false,status:code==='credential_basis_unavailable'?'unknown':'stale',code,checkedCapabilities:undefined}),layer,4)
+  expect(view).toMatchObject({state:code==='credential_basis_unavailable'?'unknown':'stale',code,at})
+  expect(connectorCheckLabel(view.state,layer)[0]).not.toMatch(/Identity verified|Directory readable/i)
+  expect(connectorCheck(record(layer,{code}),layer,4).state).not.toBe('passed')
+ }
+})
+it('does not use credential invalidation codes to claim local settings or reachability checks',()=>{
+ for(const layer of ['configuration','reachable'] as const){expect(connectorCheck(record(layer,{code:'credential_changed'}),layer,4)).toMatchObject({state:'unknown',code:''});expect(connectorCheck(record(layer),layer,4).state).toBe('passed')}
+ expect(connectorCheck(record('authentication',{current:false,status:'stale',code:'PRIVATE_REASON'}),'authentication',4)).toMatchObject({state:'stale',code:'configuration_changed'})
+})

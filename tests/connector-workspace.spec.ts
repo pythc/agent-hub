@@ -124,3 +124,23 @@ it('groups ordinary help outside labels in one closed disclosure with unique acc
  const toggle=f.nodes().find(node=>node.type==='input'&&node.props.type==='checkbox');toggle.props.onChange({target:{checked:true}});f.render();verify()
  const warning=f.nodes().find(node=>node.type==='small'&&node.props.id==='connector-env-help-token');expect(warning.props.children).toBe('Enter the environment variable name, not its value.');expect(f.input('token').props['aria-describedby']).toContain(warning.props.id)
 })
+it.each([
+ ['adapter_restart_required','The adapter still uses earlier credentials.'],['credential_changed','Credential information changed.'],['credential_missing','Required credential information is missing.'],['adapter_changed','The adapter changed.'],['evidence_lifecycle_changed','The runtime changed.'],['credential_basis_unavailable','The credentials actually used by the adapter could not be confirmed.'],
+])('renders %s as invalidated evidence with a fixed explanation and no automatic probe',async(code,explanation)=>{
+ const f=fixture('page');await f.flush()
+ f.setHandler(async call=>{
+  if(call.apiPath==='/api/credential-references')return {schema:1,scope:'host',settingsRevision:7,observedAt:Date.now(),connections:[]}
+  const data:any=f.snapshot(call.workspace),record={id:'old',sourceId:'same-source',level:'authentication',revision:7,current:false,status:code==='credential_basis_unavailable'?'unknown':'stale',code,finishedAt:Date.now(),evidenceMode:'configured-adapter',realCall:false}
+  data.instances[0].layers.authentication=record
+  data.diagnostics=[{...record,current:undefined,status:'passed',code:'identity_verified'}]
+  return data
+ })
+ f.button('Refresh').props.onClick();await f.flush();await f.flush()
+ const layer=f.nodes().find(n=>n.props?.['data-layer']==='authentication')
+ expect(layer.props['data-state']).toBe(code==='credential_basis_unavailable'?'unknown':'stale')
+ expect(textOf(layer)).toContain(explanation);expect(textOf(layer)).not.toContain('Identity verified')
+ expect(f.text()).toContain('Earlier results may no longer apply.')
+ if(['credential_missing','adapter_restart_required'].includes(code))expect(f.nodes().some(n=>n.type==='a'&&n.props.href==='#connections'&&textOf(n)==='Review connection settings')).toBe(true)
+ if(code==='adapter_restart_required')expect(textOf(layer)).toContain('This page does not restart it automatically.')
+ expect(f.calls.every(c=>c.body===undefined)).toBe(true);expect(f.navigate).not.toHaveBeenCalled();f.unmount()
+})

@@ -1,3 +1,4 @@
+import {randomBytes,createHmac} from 'node:crypto'
 import type {StatusTarget,TransitionView} from './workflow-actions.ts'
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process'
 import {mkdtempSync,rmSync} from 'node:fs'
@@ -24,6 +25,11 @@ const quote=(s:string)=>"'"+s.replaceAll("'","'\\''")+"'"
 export interface PluginProcessOptions {sandboxDriver:SandboxDriver;codex:string;stateDir:string;readPaths?:string[];timeoutMs?:number}
 /** One connection, one process. The child receives no host DB, task-control API or ambient credentials. */
 export class ProcessSource extends MessageSource {
+  private readonly diagnosticKey=randomBytes(32)
+  private launchedCredentials?:string
+  private credentialBasis(env:NodeJS.ProcessEnv,config=this.config){return createHmac('sha256',this.diagnosticKey).update(JSON.stringify(Object.entries(this.pkg.manifest.credentials).sort(([a],[b])=>a.localeCompare(b)).map(([slot,path])=>{const name=pointer(config,path);return [slot,name,typeof name==='string'?env[name]??null:null]}))).digest('hex')}
+  /** Read-only proof for diagnostics, not permission to restart a live adapter. */
+  diagnosticCredentialsCurrent(config=this.config){return !this.child&&!this.ready||this.launchedCredentials===this.credentialBasis(process.env,config)}
   private child?:ChildProcessWithoutNullStreams
   private sourceContext?:SourceContext
   private sequence=0
@@ -172,6 +178,7 @@ export class ProcessSource extends MessageSource {
         env[name]=process.env[name]!
       }
       const command=sandboxCommand({sandboxDriver:this.options.sandboxDriver,codex:this.options.codex,cwd:this.pkg.directory,scratch,sandbox:'read-only',network:this.pkg.manifest.network,privateState:this.options.stateDir,privatePaths:hostPrivateFiles(),attachments:[runner,...this.options.readPaths??[]],command:'exec '+[process.execPath,runner].map(quote).join(' ')})
+      this.launchedCredentials=this.credentialBasis(env)
       const child=spawn(command.command,command.args,{cwd:this.pkg.directory,env,stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'});this.child=child;this.stateAck=0
       child.stderr.resume()
       let buffer=''
