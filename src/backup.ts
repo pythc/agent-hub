@@ -124,6 +124,12 @@ export async function restoreState(config:Config,directory:string){
      const previous=old.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(String(row.kind),String(row.id))
      if(!previous||previous.body!==row.body)throw Error('Task, native thread or ownership advanced after backup; reconcile before restore')
     }
+    // Repository publication, review resolution and merge authority can advance
+    // without changing a ticket/run. Compare both directions: missing live rows
+    // must not resurrect a removed receipt or a previously granted authority.
+    // This is deliberately a closed family, not a blanket ban on state rollback.
+    const repositoryEffects=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind IN ('pr-delivery','review-action','merge-attempt','merge-grant') ORDER BY kind,id").all()
+    if(JSON.stringify(repositoryEffects(live))!==JSON.stringify(repositoryEffects(old)))throw Error('External tool or merge effects advanced after backup; reconcile before restore')
     // External calls can finish without changing the task. Their intent/result
     // receipts are the replay fence, including running and uncertain outcomes.
     for(const row of live.prepare("SELECT kind,id,body FROM records WHERE kind IN ('tool-receipt','browser-receipt','merge-attempt','backend-plugin-tool','workflow-action')").all()){

@@ -75,3 +75,28 @@ For help, open a [discussion](https://github.com/pythc/agent-hub/discussions) wi
 Optional managed-team delegation uses isolated local instances and a separate signed loopback service. Cross-machine delegation and a Worker directly coordinating another instance are outside the final scope. See [delegation operation and recovery](DELEGATION.md). Enabling it raises the database barrier to 10 (11 for remote goal nodes); Webhook protocol activation remains independent. Preserve the instance identity, stop the supervisor before restore, and review the incompatible-version gate before switching code. The database backup is still not a complete installation backup.
 
 For container setup and its verified platform limits, see [Docker deployment](DOCKER.md). Local service templates still require deployment-specific review.
+
+### Repository effects during offline restore
+
+Restoring over an existing state database requires exact agreement of the saved
+and current `pr-delivery`, `review-action`, `merge-attempt`, and `merge-grant`
+records (kind, ID and stored body, including every phase). Publication and review
+resolution can advance without changing a ticket or its final run phase. Merge
+authority is also protected, including grant-only changes without an attempt.
+Missing records on either side block restore: a removed receipt or authorization
+must not be resurrected by an older backup. Reconcile the repository outcome and
+retain a current verified backup rather than deleting evidence to force restore.
+
+The rejection preserves the live database, receipts and authorization. It is not
+a guarantee of zero filesystem writes: existing restore preparation may recover
+managed files or materialize verified plugin packages before this check. An
+unchanged repository ledger still permits offline restore, and ordinary mutable
+state retains its existing rollback semantics. This check does not verify remote
+outcomes, replay actions, introduce a new backup format, or supply evidence when
+restoring into an empty environment with no current database.
+
+Local regression coverage uses real backup/restore and production review/draft
+writers with deterministic local stand-ins for remote effects. It covers inserted,
+changed and deleted records in all four families, unchanged ticket/run state,
+retained uncertain publication, and successful current-backup restore. It is not
+real repository publication or cross-environment disaster-recovery acceptance.
