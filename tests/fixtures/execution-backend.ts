@@ -11,7 +11,11 @@ export default {
    async run(r){
     const id=r.input==='replace'?'replaced':r.threadId??randomUUID(),file=join(dataDirectory,id+'.json')
     const history:string[]=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):[]
-    if(r.input==='descendant'){const child=spawn(process.execPath,['-e',`setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(join(dataDirectory,'escaped'))},'escaped'),1000)`],{stdio:'ignore'});writeFileSync(join(dataDirectory,'descendant'),String(child.pid))}
+    if(r.input==='descendant'){
+     // The descendant, not its spawning worker, acknowledges readiness. It cannot
+     // write the escape marker until the test releases it after owner close.
+     spawn(process.execPath,['-e',`const fs=require('node:fs'),path=require('node:path'),dir=${JSON.stringify(dataDirectory)};const file=name=>path.join(dir,name);fs.writeFileSync(file('descendant'),String(process.pid));const deadline=Date.now()+30000;const timer=setInterval(()=>{if(fs.existsSync(file('cancel-descendant'))||Date.now()>=deadline){clearInterval(timer);return}if(fs.existsSync(file('release-descendant'))){fs.writeFileSync(file('escaped'),'escaped');clearInterval(timer)}},10);`],{stdio:'ignore'})
+    }
     r.onThread?.(id);r.onTurn?.(r.input==='replay'?'stable-turn':randomUUID())
     r.onConfiguration?.({requested:r.options??{},sent:{parameters:r.options?.parameters}})
     r.onContextReady?.()
