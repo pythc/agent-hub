@@ -16,6 +16,7 @@ const ledgerCode=compile('../web/chat/worker-template-requests.ts','ts')
 const manifest={apiVersion:1,type:'worker-template',id:'reviewer',version:'1.0.0',label:'Safe recipe',description:'Local fixture recipe',digest:'a'.repeat(64),instructions:'Review evidence.',requirements:{capabilities:['managed','tools','resume','history','contextBudget'],tools:['read']},acceptance:['Check evidence'],examples:[],source:{name:'Fixture',url:'https://example.test/recipe',license:'MIT'}}
 const attemptBody=(extra:Record<string,unknown>={})=>({id:manifest.id,version:manifest.version,digest:manifest.digest,revision:3,settingsRevision:9,workerId:'safe-worker',label:'Safe Worker',backend:'codex',...extra})
 const deferred=()=>{let resolve!:(v:any)=>void,reject!:(v:any)=>void;const promise=new Promise<any>((yes,no)=>{resolve=yes;reject=no});return {promise,resolve,reject}}
+const compatibility=(body:any)=>({...body,compatible:true,managementEnabled:true,backendState:'available',capabilities:[...new Set(['managed','tools','resume','history','contextBudget',...manifest.requirements.capabilities])].map(name=>({name,requiredByTemplate:manifest.requirements.capabilities.includes(name),requiredByHost:['managed','tools','resume','history','contextBudget'].includes(name),available:true})),tools:manifest.requirements.tools.map(name=>({name,available:false,requiresAuthorization:true})),grants:[],startsWorker:false})
 function fixture(){
  let slots:any[]=[],initialized=new Set<number>(),effects:(()=>void)[]=[],index=0,mount=0,currentKey='',tree:any,wrapper:any,active=true
  const calls:{owner:string;path:string;body:any;signal:AbortSignal|undefined}[]=[],writes:{mount:number;value:any}[]=[],frames:(()=>void)[]=[],timers:(()=>void)[]=[],focus:number[]=[],links:any[]=[],storageData=new Map<string,string>()
@@ -29,7 +30,7 @@ function fixture(){
   ownerReads=new AbortController();const captured={...next},contextKey=key(captured),binding={context:captured,async request<T>(path:string,body?:unknown,_publicRead?:boolean,_scope?:string,signal?:AbortSignal):Promise<T>{
    if(!active||owner.contextKey!==contextKey)throw {status:409,payload:{code:'workspace_obsolete'}}
    calls.push({owner:contextKey,path,body:structuredClone(body),signal})
-   const value=await handler(path,body)
+   const value=path.endsWith('/compatibility')?compatibility(body):await handler(path,body)
    if(!active||owner.contextKey!==contextKey)throw {status:409,payload:{code:'workspace_obsolete'}}
    return value
   }}
@@ -70,7 +71,7 @@ function fixture(){
 function text(value:any):string{if(value==null||typeof value==='boolean')return '';if(typeof value==='string'||typeof value==='number')return String(value);return Array.isArray(value)?value.map(text).join(''):text(value.props?.children)}
 async function loaded(f=fixture()){f.render();await f.flush();return f}
 async function reviewed(f=fixture()){await loaded(f);await f.click('Review recipe');return f}
-async function startCreate(f:ReturnType<typeof fixture>){await f.click('Create Worker');f.fill('Worker ID','safe-worker');f.fill('Display name','Safe Worker');f.submit('template-create');await f.flush()}
+async function startCreate(f:ReturnType<typeof fixture>){await f.click('Create Worker');await f.flush();f.fill('Worker ID','safe-worker');f.fill('Display name','Safe Worker');f.submit('template-create');await f.flush()}
 it('keys the real page by the C2 owner and routes its initial GET through the bound transport with a page/owner read signal',async()=>{
  const f=await loaded();expect(f.wrapper.key).toBe(f.owner.contextKey);expect(f.calls[0]).toMatchObject({path:'/api/worker-templates',owner:f.owner.contextKey,body:undefined});expect(f.calls[0]!.signal).toBeInstanceOf(AbortSignal);expect(f.rootFetch).not.toHaveBeenCalled();f.unmount();expect(f.calls[0]!.signal!.aborted).toBe(true)
 })
