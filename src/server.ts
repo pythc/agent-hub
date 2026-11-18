@@ -52,7 +52,7 @@ import {BrowserError} from './browser-contract.ts'
 import {browserRequest} from './browser-http.ts'
 import {serveWebhooks} from './webhook-http.ts'
 import {WebhookError} from './webhook-protocol.ts'
-import {enabledView,viewCatalog,viewArtifactReference} from './workspace-view-package.ts'
+import {enabledView,viewCatalog,viewArtifactReference,viewVersion} from './workspace-view-package.ts'
 import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 
 export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string)=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
@@ -335,6 +335,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(path==='/api/workspace-views'||path.startsWith('/api/workspace-views/')){
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
       if(path==='/api/workspace-views'){send(res,200,{views:viewCatalog(runtime.config)});return}
+      const versionMatch=path.match(/^\/api\/workspace-views\/([a-z][a-z0-9_-]{0,63})\/versions\/([a-f0-9]{64})$/)
+      if(versionMatch){
+        if(new URL(req.url!,'http://localhost').search){send(res,400,{code:'invalid_view_version_query'});return}
+        try{send(res,200,viewVersion(runtime.config,versionMatch[1]!,versionMatch[2]!))}catch{send(res,404,{code:'view_unavailable'})}return
+      }
       const match=path.match(/^\/api\/workspace-views\/([a-z][a-z0-9_-]{0,63})\/(bundle|runtime)$/)
       if(!match){send(res,404,{code:'view_not_found'});return}
       const params=new URL(req.url!,'http://localhost').searchParams,digest=params.get('digest')
