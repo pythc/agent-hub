@@ -72,3 +72,15 @@ Fresh verification on source commit `7837b45337d75efe0d24c50edad6eb7cb6e6d13b` i
 - `git diff --check` for owned template files: passed.
 
 Historical pre-reset results are not substituted for these fresh checks. Browser evidence and final integrated checks belong to the integration owner's acceptance report; deterministic tests do not prove live providers or external IM services.
+
+## Creation compatibility preflight
+
+The installed recipe's creation form now checks its exact ID/version/digest against the selected backend before creating a paused Worker. Operator-only `POST /api/worker-templates/compatibility` requires the current library revision and settings revision; query selectors are rejected. It is a read operation despite POST: no command receipt, Worker, configuration, model call, plugin process, network request or grant is created.
+
+A shared pure evaluator reports the union of the recipe's requested capabilities and the host's five managed-role requirements (`managed`, `tools`, `resume`, `history`, `contextBudget`). The same capability evaluation is used by new creation requests. Missing backend, unavailable package declarations and disabled management remain explicit. Package errors are mapped to unavailable rather than exposing filesystem diagnostics. These are configured capability declarations, not a live model/authentication verification.
+
+Required tool names are checked against the host's currently exposed Worker tool specifications. Presence does not mean authorization; absence is guidance, not a new prohibition on creating a paused Worker. Tool/MCP grants remain empty and activation remains separate. Preflight never installs a backend or enables management.
+
+The form binds its result to workspace transport, recipe digest, both revisions and backend selection; a changed basis or late response cannot enable another creation. The existing create endpoint still rechecks authoritative capability rules and the manager's permissions. Preflight adds no mandatory token or prerequisite to the durable original-request retry/reconciliation path: an interrupted earlier creation can still complete its original receipt after recipe removal or revision changes.
+
+This is an F01 creation-flow improvement adjacent to O48 compatibility work. It does not implement upgrade impact graphs, targeted evidence invalidation, automatic migration of existing Workers, or completion of O48.

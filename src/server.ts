@@ -241,6 +241,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(path==='/api/worker-templates'&&req.method==='GET'){send(res,200,templates.snapshot());return}
       if(req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
       const input=await operatorBody(req)
+      if(path==='/api/worker-templates/compatibility'){if(new URL(req.url!,requestOrigin).search!==''){send(res,400,{code:'template_validation_failed'});return};send(res,200,templates.compatibility(input));return}
       if(path==='/api/worker-templates/preview'){send(res,200,templates.preview(input));return}
       if(path==='/api/worker-templates/install'){send(res,200,templates.install(input));return}
       if(path==='/api/worker-templates/export'){send(res,200,templates.export(input));return}

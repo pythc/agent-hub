@@ -48,15 +48,41 @@ export function readWorkerTemplate(value:unknown):WorkerTemplate{
 const entryKey=(r:{id:string;version:string})=>r.id+'@'+r.version
 const starter=sealWorkerTemplate({apiVersion:1,type:'worker-template',id:'evidence-reviewer',version:'1.0.0',label:'Evidence reviewer',description:'Review a supplied result against explicit acceptance criteria.',instructions:'Review the supplied task artifacts against the user’s acceptance criteria. Cite the evidence used for each conclusion. Identify missing evidence and unresolved questions. Ask before performing any action outside the assigned review.',requirements:{capabilities:['managed','tools','resume','history','contextBudget'],tools:['superagent_read']},examples:[{request:'Review the attached implementation against its acceptance criteria.',expected:'A concise evidence-based assessment with unmet criteria clearly identified.'}],acceptance:['Every conclusion identifies its supporting evidence.','Missing evidence remains explicitly unverified.'],source:{name:'Roppo original starter recipe',url:'https://github.com/pythc/agent-hub',license:'Apache-2.0'}})
 
+const managedCapabilities=['managed','tools','resume','history','contextBudget'] as const
+/** Declaration compatibility only. Tool availability never grants use or blocks
+ * creation of a paused Worker; the existing manager owns execution permission. */
+export function evaluateTemplateCompatibility(requirements:WorkerTemplate['requirements'],available:Partial<Record<typeof capabilities[number],boolean>>|undefined,tools:readonly string[]){
+ const required=[...new Set([...managedCapabilities,...requirements.capabilities])]
+ const checks=required.map(name=>({name,requiredByTemplate:requirements.capabilities.includes(name),requiredByHost:(managedCapabilities as readonly string[]).includes(name),available:available?.[name]===true}))
+ return {capabilities:checks,tools:[...new Set(requirements.tools)].map(name=>({name,available:tools.includes(name),requiresAuthorization:true as const})),capabilitiesMet:checks.every(c=>c.available)}
+}
 export class WorkerTemplates {
  constructor(private readonly runtime:()=>Runtime){}
  private revision(){return this.runtime().store.get<{revision:number}>('worker-template-library','current')?.revision??0}
  private entry(input:{id:string;version:string},active=true){const entry=this.runtime().store.get<TemplateEntry>('worker-template',entryKey(input));if(!entry||active&&entry.removedAt)fail('template_not_installed',404);return entry!}
  snapshot(){
-  const h=this.runtime(),pkgs=backendPackages(h.config)
+  const h=this.runtime()
+  let pkgs:ReturnType<typeof backendPackages>
+  try{pkgs=backendPackages(h.config)}catch{pkgs=new Map()} // Keep the library readable when package bytes become unavailable.
   return {revision:this.revision(),settingsRevision:h.settings.current().revision,templates:h.store.list<TemplateEntry>('worker-template').filter(t=>!t.removedAt),starters:[starter],backends:[{id:'codex',label:'Codex',eligible:true},...Object.entries(h.config.backends).filter(([id])=>id!=='codex').map(([id,d])=>({id,label:d.label??id,eligible:d.kind!=='plugin'||!!pkgs.get(d.plugin)&&['managed','tools','resume','history','contextBudget'].every(c=>(pkgs.get(d.plugin)!.manifest.capabilities as Record<string,boolean>)[c])}))],managementEnabled:h.config.execution.management?.enabled===true}
  }
  preview(value:unknown){const input=parse(z.object({manifest:z.unknown()}).strict(),value),manifest=readWorkerTemplate(input.manifest),old=this.runtime().store.get<TemplateEntry>('worker-template',entryKey(manifest));return {manifest,revision:this.revision(),installed:!!old&&!old.removedAt,conflict:!!old&&old.manifest.digest!==manifest.digest,grants:[],startsWorker:false,warnings:['Template content is untrusted role guidance.','Creating a Worker pauses it with no tools or MCP connections.','Tool requirements need separate operator configuration.']}}
+ private backendCompatibility(manifest:WorkerTemplate,backend:string){
+  const h=this.runtime(),definition=h.config.backends[backend]??(backend==='codex'?{kind:'codex' as const}:undefined)
+  let declared:Partial<Record<typeof capabilities[number],boolean>>|undefined
+  if(definition?.kind==='plugin')try{declared=backendPackages(h.config).get(definition.plugin)?.manifest.capabilities}catch{/* Missing or changed package bytes are unavailable, never raw path errors. */}
+  const available=!definition?undefined:definition.kind==='codex'?Object.fromEntries(capabilities.map(k=>[k,true])):definition.kind==='plugin'?declared:{managed:true,tools:true,resume:true,history:true,contextBudget:true,images:definition.images,steering:true,promptRefresh:true}
+  return {backendState:!definition?'missing' as const:definition.kind==='plugin'&&!declared?'package_unavailable' as const:'available' as const,...evaluateTemplateCompatibility(manifest.requirements,available,h.availableWorkerSpecs().map(t=>t.name))}
+ }
+ compatibility(value:unknown){
+  const input=parse(reference.extend({digest,revision:z.number().int().nonnegative(),settingsRevision:z.number().int().nonnegative(),backend:id}).strict(),value),h=this.runtime()
+  if(input.revision!==this.revision())fail('template_revision_conflict',409)
+  if(input.settingsRevision!==h.settings.current().revision)fail('settings_conflict',409)
+  const manifest=this.entry(input).manifest
+  if(manifest.digest!==input.digest)fail('template_preview_changed',409)
+  const {capabilitiesMet,...assessment}=this.backendCompatibility(manifest,input.backend),managementEnabled=h.config.execution.management?.enabled===true
+  return {...input,...assessment,managementEnabled,compatible:managementEnabled&&assessment.backendState==='available'&&capabilitiesMet,grants:[],startsWorker:false as const}
+ }
  private mutate(value:unknown,action:'install'|'remove',work:(input:any)=>unknown){
   const input=action==='install'?parse(mutation.extend({manifest:z.unknown(),digest}).strict(),value):parse(mutation.extend({id,version}).strict(),value)
   const h=this.runtime(),key=stableDigest(['templates',input.requestId]),fingerprint=stableDigest({action,...input})
@@ -79,11 +105,9 @@ export class WorkerTemplates {
   else {
    if(input.revision!==this.revision())fail('template_revision_conflict',409)
    const manifest=this.entry(input).manifest;if(manifest.digest!==input.digest)fail('template_preview_changed',409)
-   const definition=h.config.backends[input.backend]??(input.backend==='codex'?{kind:'codex' as const}:undefined)
-   if(!definition)fail('template_backend_unavailable')
-   const declared=definition.kind==='plugin'?backendPackages(h.config).get(definition.plugin)?.manifest.capabilities:undefined
-   const available=definition.kind==='codex'?Object.fromEntries(capabilities.map(k=>[k,true])):definition.kind==='plugin'?declared:{managed:true,tools:true,resume:true,history:true,contextBudget:true,images:definition.images,steering:true,promptRefresh:true}
-   if(!available||[...new Set([...manifest.requirements.capabilities,'managed','tools','resume','history','contextBudget'])].some(c=>!(available as Record<string,boolean>)[c]))fail('template_capabilities_unavailable')
+   const assessment=this.backendCompatibility(manifest,input.backend)
+   if(assessment.backendState==='missing')fail('template_backend_unavailable')
+   if(!assessment.capabilitiesMet)fail('template_capabilities_unavailable')
    staged={fingerprint,manifest};h.store.put('worker-template-create',key,staged)
   }
   const result=await h.manager.call({action:'create',revision:input.settingsRevision,requestId:'template:'+key,profile:{id:input.workerId,label:input.label,backend:input.backend,...(input.model?{model:input.model}:{}),state:'paused',prompt:staged.manifest.instructions,tools:[],toolConnections:[]}})
