@@ -35,7 +35,7 @@ it('runs a sourced quiet-time synthesis in the existing maintenance loop and reu
  const view=f.h.agentMemory.reflection(a.c)!;expect(view.points).toHaveLength(1)
  expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(15)
  f.h.store.requireEvolutionSchema();f.h.store.requireWorkflowSchema();f.h.store.requireCodeProjectSchema()
- expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(15)
+ expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(20)
  expect(f.calls).toHaveLength(1);expect(f.calls[0]!.instructions).toContain('in English');expect(f.calls[0]!.input).not.toContain('BOB PRIVATE')
  expect(f.h.agentMemory.reflection(b.c)).toBeUndefined()
  const packet=f.h.memory.build(a.c,{replyLocale:'zh-CN'},'test'),input=JSON.parse(packet.input)

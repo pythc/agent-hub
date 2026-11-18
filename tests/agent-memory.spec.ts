@@ -566,7 +566,7 @@ it('learns sourced failure lessons directly, deduplicates them and never treats 
  expect(f.h.agentMemory.cooperation(c)).toContainEqual(expect.objectContaining({content:'输入文件缺失时先核对路径'}))
  expect(f.h.goals.get(g.id)?.state).toBe('held')
  await f.restart();expect(f.h.memory.fact(pending.id)?.state).toBe('active')
- f.h.store.requireCodeProjectSchema();expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(14)
+ f.h.store.requireCodeProjectSchema();expect(f.h.store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(20)
 })
 
 

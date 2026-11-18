@@ -13,7 +13,8 @@ export const WEBHOOK_REHEARSAL_DB_SCHEMA=16
 export const GOAL_REPLACEMENT_DB_SCHEMA=17
 export const ASYNC_WORKER_DB_SCHEMA=18
 export const TASK_ASSIGNMENT_DB_SCHEMA=19
-export const MAX_DB_SCHEMA=TASK_ASSIGNMENT_DB_SCHEMA
+export const PROJECT_INTEGRATION_DB_SCHEMA=20
+export const MAX_DB_SCHEMA=PROJECT_INTEGRATION_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
@@ -88,7 +89,7 @@ export class Store implements Repositories {
   requireAsyncWorkerSchema(){this.db.exec('PRAGMA user_version='+Math.max(ASYNC_WORKER_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireGoalReplacementSchema(){this.db.exec('PRAGMA user_version='+Math.max(GOAL_REPLACEMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireWorkflowSchema(){this.db.exec('PRAGMA user_version='+Math.max(WORKFLOW_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
-  requireCodeProjectSchema(){this.db.exec('PRAGMA user_version='+Math.max(13,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
+  requireCodeProjectSchema(){this.db.exec('PRAGMA user_version='+Math.max(PROJECT_INTEGRATION_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireEvolutionSchema(){this.db.exec('PRAGMA user_version='+Math.max(EVOLUTION_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   /** Older releases cannot invalidate or erase the new derived memory copies. */
   requireReflectionSchema(){this.db.exec('PRAGMA user_version='+Math.max(REFLECTION_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
