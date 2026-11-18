@@ -13,6 +13,13 @@ import type {Model} from '../src/model.ts'
 import type {WorkOwner} from '../src/work.ts'
 import {backupState,restoreState} from '../src/backup.ts'
 
+// A concurrent append may expose the created file before its first complete JSONL record.
+function completeCalls(text:string){const end=text.lastIndexOf('\n');return end<0?[]:text.slice(0,end).split('\n').filter(Boolean).map(line=>JSON.parse(line))}
+it('waits for complete fixture log records without swallowing malformed completed JSON',()=>{
+ expect(completeCalls('')).toEqual([]);expect(completeCalls('{"tool":')).toEqual([])
+ expect(completeCalls('{"tool":"echo"}\n{"tool":')).toEqual([{tool:'echo'}])
+ expect(()=>completeCalls('{bad}\n')).toThrow()
+})
 const roots:string[]=[],hosts:Runtime[]=[],closers:(()=>Promise<void>)[]=[]
 afterEach(async()=>{for(const host of hosts.splice(0))await host.close();for(const close of closers.splice(0))await close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true})})
 const waiting:Model={async run(r){const threadId=r.threadId??'fixture-thread';r.onThread?.(threadId);return {threadId,turnId:'fixture-turn',text:JSON.stringify(r.ephemeral?{action:'accept',title:'Read',scope:'Use granted tools',reason:'requested',rules:[]}:{state:'waiting',summary:'Waiting',reply:'',question:null,handbacks:[]})}}}
@@ -24,7 +31,7 @@ async function fixture(override:Partial<Config>={}){
   for(let i=0;i<200;i++){await host.tick();await new Promise(r=>setTimeout(r,2));if(host.status().tickets[0]?.run?.phase==='idle')break}
   const ticket=host.store.tickets.list()[0]!,owner:WorkOwner={ticketId:ticket.id,assignmentId:ticket.assignments.at(-1)!.id,cwd:root,sandbox:'read-only',depth:0}
   expect(host.validWork(owner)).toBe(true)
-  const calls=()=>existsSync(log)?readFileSync(log,'utf8').trim().split('\n').map(x=>JSON.parse(x)):[]
+  const calls=()=>existsSync(log)?completeCalls(readFileSync(log,'utf8')):[]
   return {host,root,config,owner,calls}
 }
 const input=(tool='echo',requestId=tool)=>({connection:'docs',tool,arguments:{text:'actual tool output'},requestId})

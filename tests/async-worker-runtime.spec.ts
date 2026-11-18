@@ -10,9 +10,9 @@ import {observe,type WorkerAttempt,type WorkerEventReceipt} from '../src/async-w
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{vi.restoreAllMocks();for(const h of hosts.splice(0))await h.close();for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true})})
 const report=JSON.stringify({state:'ready',summary:'PRIVATE report',reply:'PRIVATE result',question:null,askedBy:null,handbacks:[]})
-async function fixture(model:Model){
+async function fixture(model:Model,sandboxDriver:'disabled'|'bubblewrap'='disabled'){
  const root=mkdtempSync(join(tmpdir(),'async-worker-runtime-'));roots.push(root)
- const config=configSchema.parse({stateDir:join(root,'state'),acceptMode:'auto',work:{sandboxDriver:'disabled',autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice']}]})
+ const config=configSchema.parse({stateDir:join(root,'state'),acceptMode:'auto',work:{sandboxDriver,autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice']}]})
  const host=new Runtime(config,{model});hosts.push(host)
  host.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'org',name:'Team',managers:[JSON.stringify(['local','alice'])],workerIds:['one'],sourceIds:['local'],backendIds:['codex']}})
  host.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'topic',history:'group'})
@@ -64,7 +64,7 @@ it('rejects an old root tool callback after its terminal event while the same as
  await until(f.host,()=>f.host.store.list<WorkerEventReceipt>('async-worker-event').some(e=>e.kind==='result'))
  expect(f.host.store.tickets.get(f.ticketId)?.ended).toBeUndefined()
  const shell=vi.spyOn(f.host.work,'shell')
- await expect(captured!.onTool!('superagent_shell',{command:'touch must-not-exist',requestId:'late-effect'},'late-tool')).rejects.toThrow('attempt has ended')
+ await expect(captured!.onTool!('superagent_progress',{summary:'Late progress'},'late-tool')).rejects.toThrow('attempt has ended')
  expect(shell).not.toHaveBeenCalled();expect(f.host.work.list(f.ticketId)).toEqual([])
 })
 it('rejects a previous root callback after a real second activation in the same assignment starts',async()=>{
@@ -77,7 +77,7 @@ it('rejects a previous root callback after a real second activation in the same 
  expect(f.host.store.tickets.get(f.ticketId)!.assignments.at(-1)!.id).toBe(assignmentId)
  expect(f.host.store.list('async-worker-attempt')).toHaveLength(2)
  const shell=vi.spyOn(f.host.work,'shell')
- try{await expect(requests[0]!.onTool!('superagent_shell',{command:'touch must-not-exist',requestId:'stale-effect'},'stale-tool')).rejects.toThrow('attempt has ended')}finally{release()}
+ try{await expect(requests[0]!.onTool!('superagent_progress',{summary:'Stale progress'},'stale-tool')).rejects.toThrow('attempt has ended')}finally{release()}
  expect(shell).not.toHaveBeenCalled()
 })
 it.each(['ready','dropped'] as const)('retains result and idle run after a no-follow %s report ends its ticket',async state=>{
@@ -123,7 +123,7 @@ it.each(['resolve','reject'] as const)('archives an invalidated running %s and s
 it('rechecks the root attempt after an awaited tool prompt refresh before any shell effect',async()=>{
  let captured:ModelRequest|undefined,finish!:()=>void,refreshStarted!:()=>void,refreshDone!:()=>void
  const workerGate=new Promise<void>(r=>finish=r),entered=new Promise<void>(r=>refreshStarted=r),refreshGate=new Promise<void>(r=>refreshDone=r)
- const f=await fixture({async run(r){if(r.role==='worker'){captured=r;await workerGate;return {threadId:'worker',turnId:'done',text:JSON.stringify({state:'waiting',summary:'Waiting',reply:'',question:null,askedBy:null,handbacks:[]})}}return {threadId:'router',turnId:'router',text:'{"reply":""}'}}})
+ const f=await fixture({async run(r){if(r.role==='worker'){captured=r;await workerGate;return {threadId:'worker',turnId:'done',text:JSON.stringify({state:'waiting',summary:'Waiting',reply:'',question:null,askedBy:null,handbacks:[]})}}return {threadId:'router',turnId:'router',text:'{"reply":""}'}}},'bubblewrap')
  await until(f.host,()=>!!captured)
  vi.spyOn(f.host,'refreshWork').mockImplementation(async()=>{refreshStarted();await refreshGate})
  const shell=vi.spyOn(f.host.work,'shell'),tool=captured!.onTool!('superagent_shell',{command:'touch must-not-exist',requestId:'refresh-race'},'refresh-tool')

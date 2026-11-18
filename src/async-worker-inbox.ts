@@ -1,3 +1,4 @@
+import {validateTaskAssignment} from './task-assignment-contract.ts'
 import {randomUUID} from 'node:crypto'
 import type {Runtime} from './runtime.ts'
 import type {RouterGoal} from './router-goals.ts'
@@ -8,7 +9,7 @@ import {taskView} from './task-context.ts'
 import type {ContextManifest} from './router-memory.ts'
 
 export interface WorkerBasis {
- taskId:string;assignmentId:string;mandateDigest:string;goalId:string|null;contractDigest:string|null;
+ taskId:string;assignmentId:string;taskAssignmentDigest?:string|null;mandateDigest:string;goalId:string|null;contractDigest:string|null;
  goalRevision:number|null;planRevision:number|null;ownerEpoch:number|null;dataRevision:number|null;bindingRevision:number|null;
 }
 export interface WorkerAttempt {
@@ -25,6 +26,7 @@ export interface WorkerEventReceipt {
 }
 const version=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0?v:null
 const digest=(value:unknown)=>stableDigest(value===undefined?null:value)
+const identity=(basis:WorkerBasis)=>{const {goalRevision,...rest}=basis;return {...rest,taskAssignmentDigest:basis.taskAssignmentDigest??null}}
 function basis(host:Runtime,ticketId:string,assignmentId:string,delivery=false):WorkerBasis {
  const task=host.store.tickets.get(ticketId)
  if(!task||host.memory.cleanup.blocked('ticket',ticketId,task))throw Error('async_worker_task_unavailable')
@@ -37,7 +39,7 @@ function basis(host:Runtime,ticketId:string,assignmentId:string,delivery=false):
  if(goals.length>1)throw Error('async_worker_goal_ambiguous')
  const goal=goals[0]
  if(goal&&(goal.supersededBy||host.memory.cleanup.blocked('router-goal',goal.id,goal)||!(delivery?['active','waiting','completed']:['active','waiting']).includes(goal.state)))throw Error('async_worker_goal_unavailable')
- return {taskId:ticketId,assignmentId,mandateDigest:digest(taskView(host.store,task).mandate),goalId:goal?.id??null,contractDigest:goal?.contract?digest(goal.contract):null,goalRevision:version(goal?.revision),planRevision:version(goal?.planRevision),ownerEpoch:version(owner?.ownerEpoch),dataRevision:version(owner?.dataRevision),bindingRevision:version(binding?.revision)}
+ return {taskId:ticketId,assignmentId,taskAssignmentDigest:validateTaskAssignment(host,ticketId)?.digest??null,mandateDigest:digest(taskView(host.store,task).mandate),goalId:goal?.id??null,contractDigest:goal?.contract?digest(goal.contract):null,goalRevision:version(goal?.revision),planRevision:version(goal?.planRevision),ownerEpoch:version(owner?.ownerEpoch),dataRevision:version(owner?.dataRevision),bindingRevision:version(binding?.revision)}
 }
 function authorized(host:Runtime,attempt:Pick<WorkerAttempt,'ticketId'|'assignmentId'>):boolean {
  try{
@@ -58,8 +60,7 @@ function currentReason(host:Runtime,attempt:WorkerAttempt):WorkerEventReceipt['r
  if(!authorized(host,attempt))return 'authority_changed'
  try{
   const fresh=basis(host,attempt.ticketId,attempt.assignmentId)
-  const {goalRevision:_,...oldIdentity}=attempt.basis,{goalRevision:__,...identity}=fresh
-  return digest(oldIdentity)===digest(identity)?'current':'basis_changed'
+  return digest(identity(attempt.basis))===digest(identity(fresh))?'current':'basis_changed'
  }catch{return 'authority_changed'}
 }
 /** Advisory read-only fence; observe still repeats the check in its transaction. */
@@ -94,8 +95,7 @@ export function isDeliverable(host:Runtime,receipt:WorkerEventReceipt):boolean {
   const context=host.store.get<{manifest:ContextManifest}>('task-context',task.id)
   if(context)host.memory.validate(context.manifest)
   const fresh=basis(host,task.id,receipt.assignmentId,true)
-  const {goalRevision:_revision,...oldIdentity}=receipt.basis,{goalRevision:__,...identity}=fresh
-  return digest(oldIdentity)===digest(identity)
+  return digest(identity(receipt.basis))===digest(identity(fresh))
  }))}catch{return false}
 }
 /** Real activation identity, not a provider event ID or invented native sequence. */

@@ -1,3 +1,4 @@
+import {currentTaskAssignment,validateTaskAssignment} from '../src/task-assignment-contract.ts'
 import {afterEach,expect,it} from 'vitest'
 import {mkdtempSync,rmSync,readFileSync,writeFileSync,mkdirSync,symlinkSync,existsSync} from 'node:fs'
 import {Readable} from 'node:stream'
@@ -440,8 +441,11 @@ it('routes a continued Worker to the new chat turn and cancels that activation',
   })
   const c=h.chat.create('owner'),first=send(h,c.id)
   await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='waiting')
+  const originalContract=currentTaskAssignment(h,ticketId)!
   const next=send(h,c.id,'Use the personal scope')
   await settle(h,()=>workerTurns===2)
+  expect(validateTaskAssignment(h,ticketId)?.digest).toBe(originalContract.digest)
+  expect(currentTaskAssignment(h,ticketId)?.authority.parentTrigger).toBe(first.runId)
   expect(h.store.get<any>('worker-assignment',ticketId).parentTrigger).toBe(next.runId)
   expect(h.chat.view(c.id,'owner').workers[0]?.tasks[0]?.state).toBe('running')
   // Cancelling an old turn cannot stop the activation owned by this follow-up.

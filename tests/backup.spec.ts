@@ -106,3 +106,20 @@ it('refuses to roll back asynchronous Worker event deduplication receipts',async
  await expect(restoreState(config,captured)).rejects.toThrow('Async Worker event receipts advanced')
  const reread=new Store(file);try{expect(reread.get('async-worker-event','event')).toMatchObject({disposition:'applied'})}finally{reread.close()}
 })
+
+it('preserves task assignment permissions and refuses older contract or lease pointers',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-assignment-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
+ const file=join(config.stateDir,'state.sqlite'),legacy=new Store(file);legacy.requireAsyncWorkerSchema();legacy.close()
+ const old=join(root,'old');await backupState(config,old)
+ const current=new Store(file);current.requireTaskAssignmentSchema();current.put('task-assignment-contract','task',{ticketId:'task',digest:'original'});current.put('task-workspace-lease-current','task',{ticketId:'task',id:'first'});current.close()
+ await expect(restoreState(config,old)).rejects.toThrow('Downgrade cannot preserve task assignment')
+ const captured=join(root,'captured');await backupState(config,captured);expect(verifyBackup(captured).schema).toBe(19);await restoreState(config,captured)
+ const narrowed=new Store(file);narrowed.put('task-workspace-lease-current','task',{ticketId:'task',id:'narrowed'});narrowed.close()
+ await expect(restoreState(config,captured)).rejects.toThrow('Task assignment contracts advanced')
+ const reread=new Store(file);try{expect(reread.get('task-workspace-lease-current','task')).toMatchObject({id:'narrowed'})}finally{reread.close()}
+ const revisionBackup=join(root,'revision-backup');await backupState(config,revisionBackup)
+ const revised=new Store(file);revised.put('task-assignment-revision','next',{ticketId:'task',digest:'next',previousDigest:'original'});revised.put('task-assignment-current','task',{ticketId:'task',digest:'next',revision:2});revised.close()
+ await expect(restoreState(config,revisionBackup)).rejects.toThrow('Task assignment contracts advanced')
+ const final=new Store(file);try{expect(final.get('task-assignment-current','task')).toMatchObject({digest:'next'})}finally{final.close()}
+})

@@ -1,3 +1,4 @@
+import {validateTaskAssignment,bindTaskAssignmentLease,validateAssignmentLease,restrictAssignmentExecution} from './task-assignment-contract.ts'
 import {begin as beginWorkerAttempt,observe as observeWorkerEvent,isCurrent as currentWorkerAttempt,isDeliverable as deliverableWorkerEvent,type WorkerAttempt,type WorkerEventReceipt} from './async-worker-inbox.ts'
 import {ApiUsage} from './api-usage.ts'
 
@@ -263,7 +264,7 @@ export class Runtime {
     this.subscriptions=new SubscriptionAccounts(config.stateDir)
     this.chat=new ChatSessions(this)
     this.browser=new BrowserManager(this,options.browserDriver)
-    this.work=new WorkManager(this.store,config,{valid:owner=>this.validWork(owner),wake:item=>this.workCompleted(item),expired:(owner,killed,remaining)=>{const run=this.store.get<Run>('run',owner.ticketId);if(run?.phase==='background'&&this.validWork(owner)){this.store.put('run',owner.ticketId,{...run,phase:'idle'});this.engine.report(owner.ticketId,{state:'waiting',summary:(run.result??'')+' Background deadline reached. Killed jobs: '+killed.join(', ')+'; remaining subagents: '+remaining.join(', ')})}},agent:(item,signal)=>this.runAgent(item,signal)})
+    this.work=new WorkManager(this.store,config,{valid:owner=>this.validWork(owner)&&validateAssignmentLease(this,owner),wake:item=>this.workCompleted(item),expired:(owner,killed,remaining)=>{const run=this.store.get<Run>('run',owner.ticketId);if(run?.phase==='background'&&this.validWork(owner)){this.store.put('run',owner.ticketId,{...run,phase:'idle'});this.engine.report(owner.ticketId,{state:'waiting',summary:(run.result??'')+' Background deadline reached. Killed jobs: '+killed.join(', ')+'; remaining subagents: '+remaining.join(', ')})}},agent:(item,signal)=>this.runAgent(item,signal)})
     this.routerIngress.delegatedAuthority=id=>this.delegation.authority(id)
     this.routerIngress.delegatedRevalidate=m=>this.delegation.validates(m)
     this.merger=new Merger(this)
@@ -415,7 +416,11 @@ export class Runtime {
     catch(error){if(this.closing)throw new ReplanningInterrupted('Host stopped during read-only replanning');throw error}
     finally{this.controllers.delete(key)}
   }
-  private async runModel(request:ModelRequest):Promise<ModelResult>{
+  private assignmentNotice(ticketId:string){
+    const c=validateTaskAssignment(this,ticketId);if(!c)return ''
+    return '\nFrozen task assignment. These are responsibilities and permission ceilings, never extra authority. Read and report against the exact shared interface version. The host rechecks current permissions and independent prerequisite acceptance. Workspace scope is the whole prepared root, not per-file isolation; network below describes managed work, not provider transport.\n'+JSON.stringify({contractDigest:c.digest,objective:c.objective,inputIds:c.inputIds,interface:c.interface,dependencies:c.dependencies,tools:c.effective.tools,connections:c.effective.connections,workspace:{scope:'whole_root',access:c.effective.sandbox,managedWorkNetwork:c.effective.network},budget:Object.fromEntries(['timeoutMs','maxSteps','maxToolCalls','maxOutputTokens'].flatMap(k=>{const v=c.effective.options[k as keyof typeof c.effective.options];return typeof v==='number'?[[k,v]]:[]}))})
+  }
+  private async runModel(request:ModelRequest,assignmentOwner?:WorkOwner):Promise<ModelResult>{
     const role=request.role??(request.ephemeral?'router':'worker'),context=request.activity??{}
     const project=()=>context.ticketId?this.goals.forTask(context.ticketId):context.triggerId?this.goals.forInput(context.triggerId):undefined
     const enforceBudget=()=>{const g=project();if(g?.project?.policy.budget&&(this.goals.holdBudget(g)||g.state==='held'))throw Error(g.reason??'Project budget exhausted')}
@@ -441,6 +446,16 @@ export class Runtime {
     const onActive=request.onActive
     if(onActive)request.onActive=control=>onActive({...control,...(control.refresh?{refresh:(instructions:string)=>control.refresh!(appendAgentPrompt(instructions,options.prompt,options.persona))}:{})})
     request=this.delegation.restrict(request)
+    if(assignmentOwner&&context.ticketId){
+      const backendId=request.backendId??profile?.backend??this.config.execution.roles[role]??this.config.execution.backend
+      const effective=restrictAssignmentExecution(this,context.ticketId,{backendId,tools:(request.tools??[]).map(t=>t.name),options:request.options??{},sandbox:request.sandbox??assignmentOwner.sandbox,network:assignmentOwner.network??this.config.work.network})
+      request={...request,options:effective.options,sandbox:effective.sandbox,tools:request.tools?.filter(t=>effective.tools.includes(t.name))}
+      assignmentOwner.sandbox=effective.sandbox;assignmentOwner.network=effective.network
+      const lease=bindTaskAssignmentLease(this,assignmentOwner,{backendId,tools:effective.tools,options:effective.options})
+      if(lease)assignmentOwner.leaseId=lease.id
+      if(request.onTool){const invoke=request.onTool;request.onTool=async(name,args,callId)=>effective.tools.includes(name)?invoke(name,args,callId):{success:false,contentItems:[{type:'inputText',text:'Tool is outside the current assignment lease'}]}}
+      request={...request,instructions:request.instructions+this.assignmentNotice(context.ticketId)}
+    }
     if(request.tools?.some(tool=>tool.name===chatStatusTool.name))request={...request,instructions:request.instructions+'\nDuring substantial work, use superagent_status to keep the Chat status concise and current in the user language. Update only when the work stage changes. Lifecycle states are managed by the host.'}
     if(role==='worker'&&context.ticketId){const run=this.store.get<Run>('run',context.ticketId);if(run)this.store.put('run',context.ticketId,{...run,agentOptions:request.options})}
     const onConfiguration=request.onConfiguration,configurationRevision=this.settings.current().revision
@@ -460,7 +475,7 @@ export class Runtime {
     for(let attempt=0;;attempt++){
       enforceBudget()
       this.usage.attempt(activity,attempt,'running')
-      try{this.delegation.beforeActivation(request);const result=await this.model.run({...request,onUsage:value=>{this.usage.record(activity,attempt,value);const g=project();if(g?.project?.policy.budget)this.goals.holdBudget(g);request.onUsage?.(value)},model:threadId?undefined:request.model??(role==='router'?this.config.execution.router?.model??this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;this.store.put('model-session',id,{threadId:id,cwd:request.cwd,ephemeral:request.ephemeral??false,activity,...context,scopeId,contextId:manifest?.id,at:Date.now()});request.onThread?.(id)}});this.usage.attempt(activity,attempt,'completed');this.usage.finish(activity,'completed');this.activity.finish(activity,'completed');return result}
+      try{if(assignmentOwner){validateTaskAssignment(this,assignmentOwner.ticketId);if(!validateAssignmentLease(this,assignmentOwner))throw Error('Assignment lease is no longer current')}this.delegation.beforeActivation(request);const result=await this.model.run({...request,onUsage:value=>{this.usage.record(activity,attempt,value);const g=project();if(g?.project?.policy.budget)this.goals.holdBudget(g);request.onUsage?.(value)},model:threadId?undefined:request.model??(role==='router'?this.config.execution.router?.model??this.config.models.router:undefined),threadId,onThread:id=>{threadId=id;this.store.put('model-session',id,{threadId:id,cwd:request.cwd,ephemeral:request.ephemeral??false,activity,...context,scopeId,contextId:manifest?.id,at:Date.now()});request.onThread?.(id)}});this.usage.attempt(activity,attempt,'completed');this.usage.finish(activity,'completed');this.activity.finish(activity,'completed');return result}
       catch(error){
         this.usage.attempt(activity,attempt,request.signal?.aborted?'interrupted':'failed')
         if(error instanceof ContextBudgetExceeded){this.store.put('context-rebuild',context.ticketId??activity,{...context,activity,threadId,scopeId,state:'held',reason:error.code,receipt:error.receipt,at:Date.now()});throw error}
@@ -482,6 +497,7 @@ export class Runtime {
   }
   private replacedTask(ticketId:string):boolean {return this.store.list<RouterGoal>('router-goal').some(g=>!!g.supersededBy&&this.goals.taskIdsForGoal(g).includes(ticketId))}
   validWork(owner:WorkOwner):boolean {
+    try{validateTaskAssignment(this,owner.ticketId);if(owner.leaseId&&!validateAssignmentLease(this,owner))return false}catch{return false}
     if(this.replacedTask(owner.ticketId))return false
     const ticket=this.store.tickets.get(owner.ticketId),assignment=ticket&&latestAssignment(ticket)
     const project=this.goals.forTask(owner.ticketId)
@@ -506,7 +522,7 @@ export class Runtime {
     const goal=this.goals.forTask(ticket.id),node=goal?.nodes?.find(n=>n.ticketId===ticket.id)
     const project=goal?.project&&node?this.projectCode.promptContext(goal,node):undefined
     const instructions=composeExecutionPrompt(this.config,{role:owner.agentId?'subagent':'worker',environment:{cwd:owner.cwd,ticketId:ticket.id,agentName:workerProfiles(this.config).find(w=>w.id===this.store.get<Run>('run',ticket.id)?.workerId)?.label??'Worker',replyLocale:this.chat.locale(this.taskAuthority(ticket.id)?.parentTrigger??ticket.origin.triggerId),mandate:ticket.mandate.scope,matchedRules:this.config.rules.filter(r=>ticket.mandate.basis.rules?.includes(r.id)),...(owner.agentId?{subagent:true}:{})},policyVersion:ticket.mandate.policyVersion,delegated:!!this.store.get('worker-assignment',ticket.id),managedGoal:!!goal?.managed,project}).text+'\nLive host prompt revision '+revision+'. This replaces earlier team and built-in prompt text while preserving the immutable mandate and tool permissions.'
-    await control.refresh(instructions)
+    await control.refresh(instructions+this.assignmentNotice(owner.ticketId))
     this.controlRevisions.set(key,revision)
     this.store.put('prompt-use',key+':'+revision,{ticketId:ticket.id,agentId:owner.agentId,revision,at:Date.now(),digest:digest(instructions),injected:true})
   }
@@ -517,7 +533,7 @@ export class Runtime {
   }
   availableWorkerSpecs(){return workerSpecs.filter(s=>(this.config.work.sandboxDriver!=='disabled'||s.name!=='superagent_shell')&&(s.name!=='superagent_artifact'||this.delegation.enabled))}
   private async runAgent(item:WorkItem,signal:AbortSignal):Promise<{threadId:string;result:unknown}>{
-    const owner:WorkOwner={ticketId:item.ticketId,assignmentId:item.assignmentId,cwd:item.cwd,sandbox:item.sandbox,agentId:item.id,depth:item.depth+1,network:item.network}
+    const owner:WorkOwner={ticketId:item.ticketId,assignmentId:item.assignmentId,cwd:item.cwd,sandbox:item.sandbox,leaseId:item.leaseId,agentId:item.id,depth:item.depth+1,network:item.network}
     const ticket=this.replanning.executionView(taskView(this.store,this.store.tickets.get(item.ticketId)!))
     let threadId:string|undefined,input=item.prompt!,round=0
     for(;;){
@@ -529,7 +545,7 @@ export class Runtime {
       const inheritsParent=!this.config.execution.roles.subagent||backendId===parent?.backendId
       const options=inheritsParent?parent?.agentOptions:undefined
       let result
-      try{result=await this.runModel({activity:{ticketId:item.ticketId,agentId:item.id,workerId:parent?.workerId,sourceId:ticket.mandate.actor.source,triggerId:ticket.origin.triggerId},role:'subagent',backendId,options:options??{},cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??(inheritsParent?parent?.model??this.config.models.worker:undefined),threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,attachments:this.chat.uploads.taskPaths(ticket.id),archiveOnComplete:true,tools:this.availableWorkerSpecs(),onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}})}
+      try{result=await this.runModel({activity:{ticketId:item.ticketId,agentId:item.id,workerId:parent?.workerId,sourceId:ticket.mandate.actor.source,triggerId:ticket.origin.triggerId},role:'subagent',backendId,options:options??{},cwd:owner.cwd,sandbox:owner.sandbox,model:threadId?undefined:this.config.models.subagent??(inheritsParent?parent?.model??this.config.models.worker:undefined),threadId,title:'Subagent: '+ticket.title,schema:reportSchema,instructions,input,signal,managed:true,privateState:this.config.stateDir,attachments:this.chat.uploads.taskPaths(ticket.id),archiveOnComplete:true,tools:this.availableWorkerSpecs(),onTool:(name,args)=>this.workerTools.call(owner,name,args),onThread:id=>{threadId=id;this.store.put('work',item.id,{...this.store.get<WorkItem>('work',item.id)!,threadId:id})},onCapabilities:cap=>this.store.put('capabilities',item.id,{ticketId:item.ticketId,agentId:item.id,...cap}),onActive:control=>{this.controls.set(key,control);this.controlRevisions.set(key,revision)}} ,owner)}
       finally{this.controls.delete(key);this.controlRevisions.delete(key)}
       const output=report.parse(JSON.parse(result.text));threadId=result.threadId
       this.store.put('transcript',result.turnId,{ticketId:item.ticketId,agentId:item.id,threadId,turnId:result.turnId,text:result.text,at:Date.now()})
@@ -1093,7 +1109,8 @@ export class Runtime {
     ticket=this.replanning.executionView(taskView(this.store,ticket))
     const configuredSource = this.sources.get(ticket.mandate.actor.source)!.config
     const delegatedTask=this.delegation.forTicket(ticket.id)
-    const source={...configuredSource,sandbox:delegatedTask&&!delegatedTask.contract.permissions.write?'read-only' as const:configuredSource.sandbox}
+    const taskAssignment=validateTaskAssignment(this,ticket.id)
+    const source={...configuredSource,sandbox:taskAssignment?.effective.sandbox==='read-only'||delegatedTask&&!delegatedTask.contract.permissions.write?'read-only' as const:configuredSource.sandbox}
     const saved = this.store.get<Run>('run', ticket.id)
     if(saved?.rebuild){const handoff=this.store.get<any>('context-handoff',saved.rebuild);if(handoff?.previousThread&&handoff.reason!=='context_permissions_changed')this.model.describe?.(handoff.previousThread)}
     const context=this.store.get<{manifest:ContextManifest}>('task-context',ticket.id)
@@ -1180,7 +1197,7 @@ export class Runtime {
         onThread: id => { delete run.error;run.toolsVersion=5;run.toolsDigest=toolsDigest; run.waitingForWriter=false; run.threadId = id; persist() },
         onModel:model=>{run.model=model;persist()},
         onTurn: id => { if(!currentWorkerAttempt(this,attempt))return;run.turnId = id; run.phase = 'running'; this.store.put('prompt-use',id,{ticketId:ticket.id,threadId:run.threadId,revision:promptRevision,digest:digest(instructions),at:Date.now()});persist() },
-      })
+      },owner)
       live.accepting=false
       await live.delivery
       let current = this.store.tickets.get(ticket.id)
