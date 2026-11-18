@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto'
 import type {ChatArtifactReference} from './artifact-reference.ts'
-import {createWriteStream,copyFileSync,mkdirSync,readFileSync,rmSync} from 'node:fs'
+import {constants,closeSync,fstatSync,openSync,readSync,createWriteStream,copyFileSync,mkdirSync,readFileSync,rmSync} from 'node:fs'
 import {dirname,extname,join} from 'node:path'
 import {pipeline} from 'node:stream/promises'
 import type {Runtime} from './runtime.ts'
@@ -63,6 +63,24 @@ export class ChatAttachments {
     this.discard(row);return {removed:true}
   }
   download(conversationId:string,owner:string,id:string){this.conversation(conversationId,owner);return this.row(id,conversationId)}
+  /** Return the same bounded bytes that were hashed, never an unverified path or a newer upload. */
+  downloadVersion(conversationId:string,owner:string,id:string,sha256:string){
+    try{return this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>{
+      this.conversation(conversationId,owner)
+      const file=this.row(id,conversationId)
+      if(!/^[a-f0-9]{64}$/.test(sha256)||file.sha256!==sha256||!Number.isSafeInteger(file.bytes)||file.bytes<0||file.bytes>chatUploadLimits.maxBytes)throw Error('unavailable')
+      const fd=openSync(file.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
+      try{
+        const before=fstatSync(fd)
+        if(!before.isFile()||before.size!==file.bytes)throw Error('unavailable')
+        const buffer=Buffer.alloc(file.bytes+1);let size=0,count=0
+        while(size<buffer.length&&(count=readSync(fd,buffer,size,buffer.length-size,size))>0)size+=count
+        const after=fstatSync(fd),content=buffer.subarray(0,size)
+        if(size!==file.bytes||before.mtimeMs!==after.mtimeMs||after.size!==file.bytes||createHash('sha256').update(content).digest('hex')!==sha256)throw Error('unavailable')
+        return {file,content}
+      }finally{closeSync(fd)}
+    }))}catch{throw new ChatError('attachment_version_unavailable','This retained file version is unavailable.',404)}
+  }
   resolve(conversationId:string,owner:string,ids:string[]){
     this.conversation(conversationId,owner)
     if(ids.length>chatUploadLimits.maxFiles||new Set(ids).size!==ids.length)throw new ChatError('attachment_limit','Select up to 10 different files.',400)
