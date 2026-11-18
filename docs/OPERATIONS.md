@@ -100,3 +100,12 @@ writers with deterministic local stand-ins for remote effects. It covers inserte
 changed and deleted records in all four families, unchanged ticket/run state,
 retained uncertain publication, and successful current-backup restore. It is not
 real repository publication or cross-environment disaster-recovery acceptance.
+
+### Source-only reconstruction
+
+Use the dependency-free [source recovery inventory](optimization/SOURCE_RECONSTRUCTION.md)
+to record an exact commit/tree/lockfile, optionally read back its HTTPS origin
+branch, and verify a separate fresh checkout. It does not package private state
+or credentials, install dependencies, start a host or restore external effects.
+Reinstall and rebuild in the new directory before claiming successful recovery;
+local changes and excluded artifacts are not covered by the remote source copy.
