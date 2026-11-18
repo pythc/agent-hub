@@ -42,3 +42,49 @@ The reviewed CI commits are integrated at `88a7c20fe408ed0b28cc7a819858b95754eef
 ## Parallel next stage
 
 O05 / [Issue #16](https://github.com/pythc/agent-hub/issues/16) is isolated on `feat/optimization-scheduler-20261116`, draft [PR #62](https://github.com/pythc/agent-hub/pull/62), head `d1685363102f69d0a296e360c81d4ea477a002ff`. Its read-only backend and plain team settings panel passed independent review, actual Runtime held/queued/pause/release browser checks (10 screenshots, no page errors), and current-head ordinary/container CI. Cloud full check: 1623 pass / the same 75 baseline failures / 4 skip; one sandbox-process EPIPE also occurs in baseline. All 32 CI-policy Python tests pass. Report `.local/scheduler-root-final/browser-report.json`; exact failure comparison `.local/scheduler-failure-comparison.json` in the scheduler worktree. This is the first aggregate observation slice, not full queue reasons, fairness or resource quotas; the whole O05 remains open.
+
+## Current O07 closeout revalidation — 2026-11-18
+
+This section supersedes the **current-state interpretation** of the historical
+pending-recovery paragraphs above; those paragraphs and their original browser,
+review and CI evidence remain intact. Revalidation starts from development commit
+`954d090e7364c568a86f66d951751437a05f44e2`, tree
+`28e2dc8c217c6a1ad1618dec8bb6c1603c5c1b66`. This increment changes documentation
+only. It introduces no new projection, authority, recovery operation or UI.
+
+The formerly separate recovery decision is no longer pending: subsequently
+approved and delivered PR #99 (`b811e06a4bb199a84707c00665e69367f15d003d`)
+integrated repository-effect uncertainty into the execution-trace resume fence.
+The existing `src/execution-trace.ts` recomputes the authoritative status and
+current observation before recovery; unknown effects / uncertain delivery require
+reconciliation instead of `resume_session`. Later O11 real-process recovery
+coverage is retained on the current base. This does not retroactively change the
+scope, approval outcome or evidence of the original O07 stage.
+
+Current acceptance mapping for Issue #18:
+
+| Required behavior | Existing production and repeatable evidence |
+| --- | --- |
+| Execution finished while delivery still pending/retrying | `src/execution-status.ts` projects independent execution/effects/acceptance/delivery fields; `execution-status.spec.ts` covers finished plus pending, retry delay, mixed delivery and causal current-result attribution. |
+| Unknown outcome is not success or a blind retry | Repository/tool/browser/workflow/outbox uncertainties retain priority. `execution-status-view.spec.ts` keeps finished execution separate from unknown effects; `execution-trace.spec.ts` exercises unknown-effect POST rejection and changed observations. `recovery-delivery-crash.spec.ts` kills a real Runtime while a local destination effect awaits ACK, then proves uncertain/no repeat on reopen and repeated flush. |
+| Acceptance must still be current | Verifier read-only freshness checks and backend tests cover changed artifacts/documents/input revisions, obsolete assignment evidence and retained historical passed rounds. Frontend tests downgrade stale/unknown freshness rather than showing current passed acceptance. |
+| Old/malformed schema must degrade conservatively | `web/chat/execution-status-view.ts` and its tests reject missing/unsupported schema and inconsistent counts; they do not infer four successful states from an old `completed` or `hasResult` value. |
+| Four readable separate cards, not one success label | `web/chat/execution-trace.tsx` uses the validated view in four independent cards with explicit unknown/stale/unconfirmed-send explanations. Historical live-page evidence above belongs only to its recorded code; the coordinator's current component review is separate. |
+
+Current automated commands and final results are recorded in the appended
+`currentCloseout` object in `STATUS_ACCEPTANCE.json`. They bind to the base commit
+and tree above: only these two acceptance documents change afterward. Exact final
+PR CI/container status, independent final review and any current component/page
+acceptance are coordinator delivery gates, not assumed by this documentation.
+
+No fresh live-browser session, screenshot, real provider/IM/ACP delivery or remote
+readback was performed by this revalidation. In particular, `recorded` still means
+host-record evidence, not recipient acknowledgement. Historical narrow-screen,
+keyboard, Chinese, dark/light and reduced-motion captures are not relabeled as
+current-head captures. The existing state-hash fence does not claim monotonic ABA
+history protection. There is no main merge, public deployment or paid call.
+
+Issue #18 remains open at this local handoff and the master total remains **9/49**.
+Only the coordinator may record **10/49** after the required exact-head gates,
+development merge and authorized issue closure. This file does not pre-declare
+that outcome or broader O08/O11/O12 completion.
