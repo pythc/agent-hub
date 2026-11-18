@@ -609,7 +609,13 @@ it('does not propose cross-expiry consolidation or make a model call for incompa
  expect(f.calls).toHaveLength(0);expect(f.h.agentMemory.applicable(c)).toHaveLength(3)
 })
 it('rejects a cross-expiry model merge even when each lifetime has eligible peers',async()=>{
- const expiry=Date.now()+86400000,f=fixture(()=>({merges:[{indices:[0,2],content:'Prefer concise Go reports'}]})),c=f.send()
+ const expiry=Date.now()+86400000,f=fixture(input=>{
+  // Equal createdAt values can reorder peers by random ID. Select incompatible
+  // lifetimes from the actual model input, not their insertion positions.
+  const permanent=input.memories.find((m:any)=>m.expiresAt===null),temporary=input.memories.find((m:any)=>m.expiresAt===expiry)
+  expect(permanent).toBeDefined();expect(temporary).toBeDefined()
+  return {merges:[{indices:[permanent.index,temporary.index],content:'Prefer concise Go reports'}]}
+ }),c=f.send()
  for(const expiresAt of [undefined,undefined,expiry,expiry])f.remember(c,'Prefer concise Go reports',{kind:'preference',expiresAt})
  const before=f.h.agentMemory.applicable(c).map(x=>[x.id,x.revision,x.expiresAt])
  await expect(f.h.agentMemory.consolidate(c)).rejects.toThrow('incompatible_merge_kinds')
