@@ -151,7 +151,7 @@ it('projects verified package identity across relocation, upgrade and rollback w
 it('catalog includes only verified enabled view packages and never treats current package metadata as a snapshot',async()=>{
  const root=directory(),host=fixture(root),pkg=await pack(root)
  host.config.viewPlugins=[{id:'example-view',directory:pkg.directory,digest:pkg.digest,enabled:true}]
- expect(artifactCatalog(host).items).toEqual([{reference:viewArtifactReference(pkg),label:manifest.label}])
+ expect(artifactCatalog(host).items).toEqual([{reference:viewArtifactReference(pkg),label:manifest.label,registration:{schema:1,kind:'workspace-view',domain:'operator_workspace',id:pkg.manifest.id,version:pkg.digest,sha256:pkg.manifest.codeSha256,retention:'subject_to_plugin_removal',publication:'not_tracked',acceptance:'not_tracked'}}])
  host.config.viewPlugins[0]!.enabled=false;expect(artifactCatalog(host).items).toEqual([])
  host.config.viewPlugins[0]!.enabled=true;writeFileSync(join(pkg.directory,'view.js'),pkg.code+'//tampered')
  expect(artifactCatalog(host).items).toEqual([])

@@ -68,3 +68,16 @@ it('continues from task versions into view packages with bounded verification an
   try{const hidden=artifactCatalog(other.host);expect(hidden.items).toEqual([]);expect(verify).toHaveBeenCalledTimes(200);expect(hidden.nextCursor).not.toBeNull();expect(artifactCatalog(other.host,hidden.nextCursor!).nextCursor).toBeNull();expect(verify).toHaveBeenCalledTimes(205)}finally{other.db.close()}
  }finally{verify.mockRestore();f.db.close()}
 })
+
+it('projects source-owned registration only after authorization and validates optional provenance',()=>{
+ const f=fixture(2)
+ try{
+  f.denied.add(f.rows[1]!.id)
+  const before=f.db.prepare('SELECT * FROM records ORDER BY id').all(),page=artifactCatalog(f.host),item=page.items[0]!
+  expect(page.items).toHaveLength(1)
+  expect(item.registration).toEqual({schema:1,kind:'goal-artifact',domain:'operator_workspace',id:item.reference.id,version:1,sha256:'b'.repeat(64),retention:'subject_to_history_cleanup',publication:'not_tracked',acceptance:'not_tracked'})
+  expect(parseArtifactCatalog(page)).toEqual(page)
+  for(const patch of [{domain:'conversation'},{id:f.rows[1]!.id},{version:2},{acceptance:'accepted'},{authorized:true}])expect(parseArtifactCatalog({...page,items:[{...item,registration:{...item.registration,...patch}}]})).toBeNull()
+  expect(f.db.prepare('SELECT * FROM records ORDER BY id').all()).toEqual(before)
+ }finally{f.db.close()}
+})
