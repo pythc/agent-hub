@@ -10,7 +10,7 @@ import {backendDefinition,type BackendDefinition} from './backend-config.ts'
 import type {Runtime} from './runtime.ts'
 import {ApiModel} from './backends/api.ts'
 import {apiCheckFailure} from './backends/api-errors.ts'
-import {managedConnections,managedSecrets,prepareManagedConfig} from './managed-config.ts'
+import {managedConnections,managedSecrets,managedFiles,prepareManagedConfig} from './managed-config.ts'
 import {Store} from './store.ts'
 import {cliEnvironment} from './codex.ts'
 import {recordConnectionCheck,subscriptionOwners} from './connection-library.ts'
@@ -23,7 +23,7 @@ export const onboardingPlanSchema=z.object({revision:z.number().int().min(0),con
  z.object({kind:z.literal('api'),protocol:z.enum(['openai-responses','openai-chat','anthropic']),baseUrl:z.string().url(),model:z.string().trim().min(1).max(300),apiKey:z.string().trim().min(1).max(16000).regex(/^[^\x00-\x1f\x7f]+$/).optional()}).strict(),
 ]),name:z.string().trim().min(1).max(100).optional(),workspace:z.string().min(1).max(4000).optional(),channel:z.enum(['browser','feishu','wecom']).default('browser')}).strict()
 type Check={id:string;status:'ok'|'required'|'pending';code:string;detail?:string}
-interface Plan {id:string;revision:number;expiresAt:number;connection:{id:string;kind:string;label:string;model?:string};workspace:string;sourceId:string;channel:string;next:Config;keyName?:string;key?:string;credentials?:Record<string,string>;entry?:boolean;backend?:BackendDefinition;lastCheck?:{ok:boolean;checks:Check[];remoteVerified:boolean;preview:boolean}}
+interface Plan {replaceSource?:boolean;revalidate?:()=>void;id:string;revision:number;expiresAt:number;connection:{id:string;kind:string;label:string;model?:string};workspace:string;sourceId:string;channel:string;next:Config;keyName?:string;key?:string;credentials?:Record<string,string>;entry?:boolean;backend?:BackendDefinition;lastCheck?:{ok:boolean;checks:Check[];remoteVerified:boolean;preview:boolean}}
 export class OnboardingError extends Error {constructor(readonly code:string,message:string,readonly status=400){super(message)}}
 const inside=(root:string,path:string)=>{const r=relative(root,path);return !r||r!=='..'&&!r.startsWith('..'+sep)&&!isAbsolute(r)}
 function canonical(path:string):string{const p=resolve(path);if(existsSync(p))return realpathSync(p);const parent=dirname(p);return parent===p?p:join(canonical(parent),basename(p))}
@@ -68,6 +68,19 @@ export class Onboarding {
   const plan:Plan={id:randomUUID(),revision,expiresAt:Date.now()+600000,connection:{id:next.execution.backend,kind:definition.kind,label:connectionLabel(definition)},workspace:source.cwd,sourceId:source.id,channel:source.kind,next,credentials,entry:true}
   this.plans.set(plan.id,plan);return this.view(plan)
  }
+ /** Host-only repair recipe: authorization and exact immutable target were checked
+  * by ConnectorManagement; revalidate again after every pre-commit await. */
+ sourceRepairPlan(revision:number,source:Config['sources'][number],credentials:Record<string,string>,revalidate:()=>void){
+  revalidate();const host=this.host()
+  for(const [id,p]of this.plans)if(p.expiresAt<Date.now())this.plans.delete(id)
+  if(this.plans.size>=20)throw new OnboardingError('too_many_plans','Close old setup drafts or try again later.',429)
+  const next=configSchema.parse(host.config),index=next.sources.findIndex(s=>s.id===source.id)
+  if(index<0||source.enabled)throw new OnboardingError('source_conflict','A disabled managed connection is required.',409)
+  next.sources[index]=configSchema.shape.sources.element.parse(source)
+  const definition=next.backends[next.execution.backend]??{kind:'codex' as const}
+  const plan:Plan={id:randomUUID(),revision,expiresAt:Date.now()+600000,connection:{id:next.execution.backend,kind:definition.kind,label:connectionLabel(definition)},workspace:source.cwd,sourceId:source.id,channel:source.kind,next,credentials,entry:true,replaceSource:true,revalidate}
+  this.plans.set(plan.id,plan);return this.view(plan)
+ }
  plan(value:unknown){
   const input=onboardingPlanSchema.parse(value),host=this.host();if(input.revision!==host.settings.current().revision)throw new OnboardingError('settings_conflict','Settings changed in another session. Review the latest settings.',409)
   for(const [id,p]of this.plans)if(p.expiresAt<Date.now())this.plans.delete(id)
@@ -105,6 +118,7 @@ export class Onboarding {
  }
  async check(id:string){
   const plan=this.current(id),host=this.host(),checks:Check[]=[]
+  if(plan.replaceSource)throw new OnboardingError('check_not_supported','Connection repair is local only; explicitly verify the connection after applying.')
   if(this.preview){plan.lastCheck={ok:false,checks:[{id:'connection',status:'pending',code:'preview_not_connected'}],remoteVerified:false,preview:true};return plan.lastCheck}
   const definition=plan.next.backends[plan.connection.id]??{kind:'codex' as const};let remoteVerified=false
   if(definition.kind==='codex'){
@@ -145,17 +159,26 @@ export class Onboarding {
    return {models:[...new Set(models.map(m=>typeof m==='string'?m:m?.id).filter((id):id is string=>typeof id==='string'&&id.length>0&&id.length<=300))].slice(0,1000)}
   }catch(error){if(error instanceof OnboardingError)throw error;throw new OnboardingError('model_catalog_unavailable','Model list could not be read. Enter a model ID manually.')}
  }
- async apply(id:string,rebuild:(config:Config)=>Promise<void>){
+ async apply(id:string,rebuild:(config:Config)=>Promise<void>,authorize?:()=>void){
+  authorize?.()
   const replay=this.host().store.get<any>('onboarding-deployment',id)?.receipt
   if(replay)return {...replay,replayed:true,paused:this.host().status().paused,ready:replay.ready&&this.host().sources.get(replay.sourceId)?.config.enabled===true}
-  const plan=this.current(id),host=this.host(),previous=host.settings.current(),previousSetup=host.store.get('onboarding','current'),connections=managedConnections(host.config.stateDir),secrets=managedSecrets(host.config.stateDir)
+  const plan=this.current(id);plan.revalidate?.()
+  const host=this.host(),previous=host.settings.current(),previousSetup=host.store.get('onboarding','current'),connections=managedConnections(host.config.stateDir),secrets=managedSecrets(host.config.stateDir)
+  const originalManaged=JSON.stringify({connections,secrets})
   const previousBackendManagement=host.store.get('settings-backends','managed')
   let paused:boolean
   try{paused=await host.pauseForConfiguration()}catch{throw new OnboardingError('configuration_busy','Work is still running. Finish or stop it before applying setup.',409)}
   const additions={...plan.credentials,...(plan.keyName&&plan.key?{[plan.keyName]:plan.key}:{})},env=Object.fromEntries(Object.keys(additions).map(key=>[key,process.env[key]]))
   const receipt={applied:true,revision:previous.revision+1,sourceId:plan.sourceId,workspace:plan.workspace,connection:plan.connection,preview:this.preview,ready:!this.preview&&plan.lastCheck?.ok===true,paused,checks:plan.lastCheck?.checks??[]}
-  let files:ReturnType<typeof prepareManagedConfig>|undefined,committed=false
+  let files:ReturnType<typeof prepareManagedConfig>|undefined,committed=false,preparationStarted=false
   try{
+   authorize?.()
+   if(plan.replaceSource){
+    this.current(id)
+    if(JSON.stringify(managedConnections(host.config.stateDir))!==JSON.stringify(connections)||JSON.stringify(managedSecrets(host.config.stateDir))!==JSON.stringify(secrets))throw new OnboardingError('settings_conflict','Managed configuration changed while waiting. Review the repair again.',409)
+   }
+   plan.revalidate?.()
    // Live edits/deletions may have superseded previously managed definitions.
    // Carry the current revision into the restart overlay instead of reviving it.
    for(const backendId of Object.keys(connections.backends)){
@@ -163,9 +186,11 @@ export class Onboarding {
     else delete connections.backends[backendId]
    }
    if(plan.backend)connections.backends[plan.connection.id]=plan.backend
-   if(!connections.sources.some(s=>s.id===plan.sourceId))connections.sources.push(plan.next.sources.find(s=>s.id===plan.sourceId)!)
+   if(plan.replaceSource){const index=connections.sources.findIndex(s=>s.id===plan.sourceId);if(index<0)throw new OnboardingError('source_conflict','Managed connection changed.',409);connections.sources[index]=plan.next.sources.find(s=>s.id===plan.sourceId)!}
+   else if(!connections.sources.some(s=>s.id===plan.sourceId))connections.sources.push(plan.next.sources.find(s=>s.id===plan.sourceId)!)
    Object.assign(secrets,additions)
    mkdirSync(plan.workspace,{recursive:true,mode:0o700})
+   preparationStarted=true
    files=prepareManagedConfig(host.config.stateDir,plan.id,connections,secrets)
    host.store.atomic(()=>{
     if(host.settings.current().revision!==plan.revision)throw new OnboardingError('settings_conflict','Settings changed while applying setup. Review them again.',409)
@@ -181,12 +206,19 @@ export class Onboarding {
    this.plans.delete(id);plan.key=undefined;plan.credentials=undefined
    return receipt
   }catch(error){
-   files?.rollback();for(const [key,value]of Object.entries(env)){if(value===undefined)delete process.env[key];else process.env[key]=value}
+   let recoveryFailed=false
+   if(plan.replaceSource&&preparationStarted&&!files){
+    try{recoveryFailed=existsSync(managedFiles(host.config.stateDir).journal)||JSON.stringify({connections:managedConnections(host.config.stateDir),secrets:managedSecrets(host.config.stateDir)})!==originalManaged}catch{recoveryFailed=true}
+   }
+   try{files?.rollback()}catch{recoveryFailed=true}
+   for(const [key,value]of Object.entries(env)){if(value===undefined)delete process.env[key];else process.env[key]=value}
    if(committed){
-    const store=new Store(join(host.config.stateDir,'state.sqlite'))
-    try{store.atomic(()=>{store.put('settings','current',previous);store.db.prepare("DELETE FROM records WHERE kind='settings-history' AND id=?").run(String(previous.revision));store.db.prepare("DELETE FROM records WHERE kind='onboarding-deployment' AND id=?").run(plan.id);if(previousSetup)store.put('onboarding','current',previousSetup);else store.db.prepare("DELETE FROM records WHERE kind='onboarding' AND id='current'").run();if(previousBackendManagement)store.put('settings-backends','managed',previousBackendManagement);else store.db.prepare("DELETE FROM records WHERE kind='settings-backends' AND id='managed'").run()})}finally{store.close()}
+    try{const store=new Store(join(host.config.stateDir,'state.sqlite'))
+    try{store.atomic(()=>{store.put('settings','current',previous);store.db.prepare("DELETE FROM records WHERE kind='settings-history' AND id=?").run(String(previous.revision));store.db.prepare("DELETE FROM records WHERE kind='onboarding-deployment' AND id=?").run(plan.id);if(previousSetup)store.put('onboarding','current',previousSetup);else store.db.prepare("DELETE FROM records WHERE kind='onboarding' AND id='current'").run();if(previousBackendManagement)store.put('settings-backends','managed',previousBackendManagement);else store.db.prepare("DELETE FROM records WHERE kind='settings-backends' AND id='managed'").run()})}finally{store.close()}}catch{recoveryFailed=true}
+    if(recoveryFailed)throw new OnboardingError('setup_recovery_required','Previous configuration could not be fully restored. Stop and inspect the host before continuing.',503)
     try{await rebuild(previous.config);this.host().pause(paused)}catch{throw new OnboardingError('setup_recovery_required','Setup was restored, but the host could not restart. Restart it before continuing.',503)}
-   }else host.pause(paused)
+   }else if(!recoveryFailed)host.pause(paused)
+   if(recoveryFailed)throw new OnboardingError('setup_recovery_required','Previous configuration could not be fully restored. Stop and inspect the host before continuing.',503)
    if(error instanceof OnboardingError)throw error
    throw new OnboardingError('setup_apply_failed','Setup could not be applied. Previous settings were restored.',503)
   }

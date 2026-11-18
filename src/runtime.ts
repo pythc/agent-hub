@@ -153,8 +153,10 @@ export class Runtime {
   private timer?: ReturnType<typeof setInterval>
   private lock: string
   private paused = false
-  static async create(config:Config,options:{model?:Model;sources?:Source[];clock?:()=>number;browserDriver?:BrowserDriver;pluginActivation?:string}={}){loadMarketConfig(config,options.pluginActivation);return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
-  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory;memoryRerank?:import('./memory-rerank.ts').RerankMemory;pluginActivation?:string } = {}) {
+  readonly startupSourceIds:readonly string[]
+  static async create(config:Config,options:{model?:Model;sources?:Source[];clock?:()=>number;browserDriver?:BrowserDriver;pluginActivation?:string;startupSourceIds?:readonly string[]}={}){loadMarketConfig(config,options.pluginActivation);return new Runtime(config,{...options,sourceRegistry:await SourceRegistry.load(config)})}
+  constructor(readonly config: Config, options: { model?: Model; sources?: Source[];sourceRegistry?:SourceRegistry;clock?:()=>number;browserDriver?:BrowserDriver;memoryEmbed?:EmbedMemory;memoryRerank?:import('./memory-rerank.ts').RerankMemory;pluginActivation?:string;startupSourceIds?:readonly string[] } = {}) {
+    this.startupSourceIds=Object.freeze([...(options.startupSourceIds??config.sources.map(s=>s.id))])
     if(config.sourcePlugins.length&&!options.sourceRegistry)throw Error('Use Runtime.create to load configured source plugins')
     this.sourceRegistry=options.sourceRegistry??new SourceRegistry()
     validateBackendSelection(config)
