@@ -1,3 +1,4 @@
+import {workflowEffectState} from './effect-receipt.ts'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {ScopeContext,TaskOwnership} from './router-scope.ts'
@@ -7,6 +8,7 @@ import {stableDigest} from './sources.ts'
 const id=z.string().min(1).max(300),at=z.number().int().nonnegative().max(8640000000000000),choice=z.object({id,name:id}).strict()
 const action=z.object({id,ticketId:id,originTriggerId:id,notificationTriggerId:id,sourceId:id,
  target:z.object({key:id,entryId:id,teamId:id,issueId:id}).strict(),entryRevision:z.number().int().nonnegative(),ownerEpoch:z.number().int().nonnegative(),dataRevision:z.number().int().positive(),
+ effectReceiptVersion:z.unknown().optional(),effectReceipt:z.unknown().optional(),
  planDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),
  view:z.object({account:id,issue:id,label:id,revision:id,current:choice,states:z.array(choice).max(1000)}).strict(),next:choice,
  state:z.enum(['pending','applying','applied','declined','stale','uncertain','observed']),at,finishedAt:at.optional(),
@@ -52,9 +54,10 @@ export function taskDecisionOperations(h:Runtime,taskId:string,c:ScopeContext,ow
    }else if(!v.decision.actorId||v.decision.triggerId)continue
    confirmation=v.decision.kind==='approve'?'approved':'declined'
   }
+  const state=workflowEffectState(v as Parameters<typeof workflowEffectState>[0])
   const readback=v.receipt?.issue===v.view.issue&&v.receipt.state===v.next.id&&v.finishedAt!==undefined
   // observed is only readback: the writer is unknown. A decision alone is never execution.
-  const execution:DecisionOperationView['execution']=v.state==='applied'?(readback&&confirmation==='approved'?'applied_readback':'unknown'):v.state==='observed'?(readback?'observed_only':'unknown'):v.state==='uncertain'?'unknown':v.state==='applying'?'in_progress':v.state==='stale'||v.state==='declined'?'not_applied':'not_recorded'
+  const execution:DecisionOperationView['execution']=state==='applied'?(readback&&confirmation==='approved'?'applied_readback':'unknown'):state==='observed'?(readback?'observed_only':'unknown'):state==='uncertain'?'unknown':state==='applying'?'in_progress':state==='stale'||state==='declined'?'not_applied':'not_recorded'
   values.push({kind:'workflow_status',label:v.view.label,from:v.view.current.name,to:v.next.name,proposedAt:v.at,confirmation,...(confirmation!=='not_recorded'?{confirmationAt:v.decision!.at}:{}),execution,...(v.finishedAt!==undefined?{finishedAt:v.finishedAt}:{})})
  }catch{/* Unreadable or inconsistent evidence is not repaired or summarized. */}
  values.sort((a,b)=>b.proposedAt-a.proposedAt)

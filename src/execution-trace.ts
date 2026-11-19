@@ -140,6 +140,7 @@ export class ExecutionTrace {
   return {
    pr:rows('pr-delivery').filter(r=>r.value.ticketId===ticketId||r.value.id===ticketId||r.id.startsWith(ticketId+':')),
    review:rows('review-action').filter(r=>r.value.ticketId===ticketId),
+   workflow:rows('workflow-action').filter(r=>r.value.ticketId===ticketId),
    grants,merges:rows('merge-attempt').filter(r=>grantIds.has(r.id)),
    replyOwners:rows('router-reply-owner').filter(r=>r.value.taskIds?.includes(ticketId)),
   }

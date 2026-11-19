@@ -1,3 +1,4 @@
+import {workflowEffectState,type WorkflowEffectBinding} from './effect-receipt.ts'
 import type {Runtime} from './runtime.ts'
 import type {Run,Delivery} from './store.ts'
 import type {Ticket} from './vendor/dsh-core/index.ts'
@@ -53,7 +54,7 @@ function effects(host:Runtime,ticket:Ticket,deliveries:Delivery[]):TaskStatusPro
  }
  for(const kind of ['tool-receipt','browser-receipt'])for(const {value:r} of recordRows(host,kind))if(r.ticketId===ticket.id)observe(r.state,['running'],['complete'])
  for(const r of host.work.list(ticket.id))observe(r.state,['starting','running'],['completed','failed','cancelled'])
- for(const {value:r} of recordRows(host,'workflow-action'))if(r.ticketId===ticket.id)observe(r.state,['pending','applying'],['applied','declined','stale','observed'])
+ for(const {value:r} of recordRows(host,'workflow-action'))if(r.ticketId===ticket.id)observe(workflowEffectState(r as unknown as WorkflowEffectBinding),['pending','applying'],['applied','declined','stale','observed'])
  for(const {key,value:r} of recordRows(host,'pr-delivery'))if(r.ticketId===ticket.id||r.id===ticket.id||key.startsWith(ticket.id+':'))observe(r.phase,['pushing','creating'],['pushed','draft'])
  for(const {value:r} of recordRows(host,'review-action'))if(r.ticketId===ticket.id)observe(r.phase,[],['resolved','stale'])
  for(const {key,value:r} of recordRows(host,'merge-attempt'))if(host.store.get<{ticketId:string}>('merge-grant',key)?.ticketId===ticket.id)observe(r.phase,['waiting','submitting'],['merged','revoked'])

@@ -1,3 +1,4 @@
+import {workflowEffectSummary,workflowEffectState} from './effect-receipt.ts'
 import {evidenceBytes} from './goal-artifacts.ts'
 
 import {z} from 'zod'
@@ -78,7 +79,7 @@ export class GoalVerification {
    if(complete)receiptBytes-=bytes
    return {id:r.id,connection:r.connection,tool:r.tool,state:r.state,resource:r.resource,resultComplete:complete,...(complete?{result}:{reason:result===undefined?'No provider result retained':'Result exceeds this evidence snapshot; request a narrower provider read'}),...(result===undefined?{}:{resultBytes:bytes,resultHash:stableDigest(result)})}
   })
-  const workflowActions=this.host.workflows.list().filter(a=>a.ticketId===ticketId).map(({id,state,receipt})=>({id,state,receipt}))
+  const workflowActions=this.host.store.list<any>('workflow-action').filter(a=>a.ticketId===ticketId).map(a=>{const state=workflowEffectState(a);return {id:a.id,state,effectSummary:workflowEffectSummary(a),...(state==='applied'||state==='observed'?{receipt:a.receipt}:{})}})
   const browserReceipts=this.host.store.list<any>('browser-receipt'),ownedBrowserReceipts=browserReceipts.filter(r=>r.ticketId===ticketId)
   const browserActions=ownedBrowserReceipts.slice(0,100).map(r=>{
    const bytes=r.result===undefined?0:Buffer.byteLength(JSON.stringify(r.result)),complete=r.result!==undefined&&bytes<=receiptBytes

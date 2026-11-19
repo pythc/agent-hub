@@ -496,3 +496,13 @@ it('rejects a partially streamed export after the real operator session is logge
   const result=await response;expect(result.status).toBe(401);expect(result.body).not.toContain('agent-hub-recovery-diagnostic')
  }finally{server.server.closeAllConnections();await new Promise<void>(resolve=>server.server.close(()=>resolve()));await server.closeRuntime();hosts.splice(hosts.indexOf(host),1)}
 })
+
+it('invalidates recovery observations when workflow evidence changes without a state change',async()=>{
+ const {host,trace}=fixture(),ticket=task(host),retry=vi.spyOn(host,'retry')
+ host.store.put('workflow-action','receipt',{id:'receipt',ticketId:ticket.id,state:'observed',receipt:{revision:'first'}})
+ const input=command(trace,ticket.id,'resume_session'),first=input.observed
+ host.store.put('workflow-action','receipt',{id:'receipt',ticketId:ticket.id,state:'observed',receipt:{revision:'second',detail:'SECRET_REMOTE_EVIDENCE'}})
+ const current=trace.snapshot({ticketId:ticket.id}).tasks[0]!
+ expect(current.observed).not.toBe(first);expect(JSON.stringify(current)).not.toContain('SECRET_REMOTE_EVIDENCE')
+ await expect(trace.recover(input)).rejects.toThrow();expect(retry).not.toHaveBeenCalled()
+})

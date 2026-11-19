@@ -288,9 +288,35 @@ function opAttentionCard(task) {
     add(el('div', 'item-heading'), el('h3', '', task.displayTitle||task.title), open),
     el('p', '', task.question || task.summary || label),attentionStatusRows('task',task.id))
 }
+function workflowEffectEvidence(p){
+ const own=(v,k)=>{if(!v||typeof v!=='object'||Array.isArray(v))return undefined;const d=Object.getOwnPropertyDescriptor(v,k);return d&&Object.hasOwn(d,'value')?d.value:undefined}
+ const legacy=()=>!Object.hasOwn(p,'effectReceipt')&&!Object.hasOwn(p,'effectReceiptVersion')
+ try{
+  if(!Object.hasOwn(p,'effectSummary'))return {kind:legacy()?'legacy':'unknown'}
+  const summary=own(p,'effectSummary'),kind=own(summary,'kind'),at=own(summary,'attemptedAt'),observed=own(summary,'observedAt'),time=v=>Number.isSafeInteger(v)&&v>=0&&v<=8640000000000000
+  const expected={pending:'prepared',applying:'unknown',uncertain:'unknown',applied:'confirmed',observed:'observed',declined:'not_executed',stale:'not_executed'}
+  if(own(summary,'schema')!==1||!['legacy','unknown','prepared','confirmed','observed','not_executed'].includes(kind)||!Object.hasOwn(expected,p.state))return {kind:'unknown'}
+  if(kind==='legacy')return {kind:legacy()?'legacy':'unknown'}
+  if(kind==='unknown')return {kind:'unknown'}
+  if(kind!==expected[p.state]||Object.hasOwn(summary,'attemptedAt')&&!time(at)||Object.hasOwn(summary,'observedAt')&&!time(observed)||observed!==undefined&&at!==undefined&&observed<at||['confirmed','observed'].includes(kind)&&observed===undefined||kind==='confirmed'&&at===undefined)return {kind:'unknown'}
+  return {kind,attemptedAt:at,observedAt:observed}
+ }catch{return {kind:'unknown'}}
+}
+function workflowEffectLabel(p,evidence){
+ const e=evidence||workflowEffectEvidence(p)
+ if(e.kind==='legacy')return p.state==='applied'?L('Historical receipt; unified evidence not captured','历史回执，未捕获统一证据'):p.state==='observed'?L('Target state observed. Writer unconfirmed. Unified evidence not captured.','已回读目标状态，写入方未确认，未捕获统一证据。'):L('Unified effect evidence not recorded','统一效果证据未记录')
+ const labels={prepared:['Prepared, not executed','已准备，未执行'],unknown:['Write outcome unknown','写入结果未知'],confirmed:['This write confirmed by receipt and readback','本次写入已由回执和回读确认'],observed:['Target state observed. Writer unconfirmed.','已回读目标状态，写入方未确认'],not_executed:['Not executed','未执行']}
+ return L(...labels[e.kind])
+}
+function workflowEffectDetails(p){
+ const e=workflowEffectEvidence(p),body=el('div');body.append(el('p','',workflowEffectLabel(p,e)))
+ for(const [key,en,zh]of [['attemptedAt','Attempt recorded','尝试时间'],['observedAt','Remote state checked','远端核对时间']])if(e[key]!==undefined)body.append(el('p','',L(en,zh)+' · '+new Date(e[key]).toLocaleString(lang,{timeZone:'UTC',timeZoneName:'short'})))
+ return detail(L('Effect evidence','效果证据'),body)
+}
 function workflowOutcome(p){
-  const states={pending:['Awaiting approval','待确认'],applying:['Submitting change…','正在提交'],applied:['Written and verified','已写入并回读'],declined:['Declined','已拒绝'],stale:['The issue changed. A new proposal is needed.','事项已变化，需要重新提案'],uncertain:['The write outcome is still unknown','写入结果仍待核对'],observed:['Target state observed. Writer unconfirmed.','已回读目标状态，写入方未确认']}
-  return p.view.label+' · '+L(...states[p.state])+(p.receipt?' · '+p.receipt.revision:'')
+ const states={pending:['Awaiting approval','待确认'],applying:['Submitting change…','正在提交'],declined:['Declined','已拒绝'],stale:['The issue changed. A new proposal is needed.','事项已变化，需要重新提案']}
+ const state=Object.hasOwn(states,p.state)?L(...states[p.state]):workflowEffectLabel(p)
+ return p.view.label+' · '+state
 }
 function readProjectIntegration(value){
  const own=(v,k)=>{if(!v||typeof v!=='object'||Array.isArray(v))return undefined;const d=Object.getOwnPropertyDescriptor(v,k);return d&&Object.hasOwn(d,'value')?d.value:undefined},sha=v=>typeof v==='string'&&/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(v),states=['passed','failed','unverified']
@@ -362,6 +388,7 @@ function opAttention() {
     for (const p of proposals) {
       const card = add(el('article','attention-item'), el('h3','',p.view.label),
         el('p','',p.view.current.name+' → '+p.next.name), el('small','',p.sourceId+' · '+p.view.account))
+      card.append(workflowEffectDetails(p))
       card.id='attention-workflow-'+p.id;card.tabIndex=-1;const status=attentionStatusRows('workflow',p.id);if(status)card.append(status)
       const decide = decision => entryRun('workflow',async()=>{
         const result=await api('/workflow-actions',{id:p.id,decision})
@@ -554,7 +581,7 @@ function opTaskDialog(){
       body.append(add(el('p'),link,document.createTextNode(' · '),details))
     }
   }
-  for(const change of task.workflowActions||[])body.append(el('p','message',workflowOutcome(change)+' · '+change.view.current.name+' → '+change.next.name))
+  for(const change of task.workflowActions||[])body.append(el('p','message',workflowOutcome(change)+' · '+change.view.current.name+' → '+change.next.name),workflowEffectDetails(change))
   for(const approval of task.approvals||[])body.append(opApproval(approval))
   if(typeof taskContractCard==='function')body.append(taskContractCard(currentProof?task.contractView:undefined,task.id))
   if(task.model)body.append(el('p','task-model',L('Execution model: ','执行模型：')+task.model))

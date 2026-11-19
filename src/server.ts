@@ -1,3 +1,4 @@
+import {workflowEffectSummary} from './effect-receipt.ts'
 import {LocalDiagnostics,LocalDiagnosticError} from './local-diagnostics.ts'
 import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
@@ -420,7 +421,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='POST'&&path==='/workflow-actions'){
       const operatorId=account.status(req).user?.id??'local-operator'
-      send(res,200,await runtime.workflows.decide(await body(req),{operatorId,authorize:()=>requireCurrentOperator(req)}));return
+      const result=await runtime.workflows.decide(await body(req),{operatorId,authorize:()=>requireCurrentOperator(req)});send(res,200,{...result,effectSummary:workflowEffectSummary(result)});return
     }
     if(req.method==='POST'&&path==='/router-skills/read'){send(res,200,runtime.skills.read(await operatorBody(req)));return}
     if(req.method==='POST'&&path==='/router-skills'){send(res,200,runtime.skills.command(await operatorBody(req)));return}
