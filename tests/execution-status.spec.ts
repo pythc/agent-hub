@@ -355,3 +355,14 @@ it('checks scheduled-skill acceptance without creating a missing original author
  expect(projectTaskStatus(f.host,current(f,ticket)).acceptance).toEqual({state:'passed',freshness:'current'});expect(dbState(f)).toBe(restored);expect(totalChanges()).toBe(restoredChanges)
  expect(model).not.toHaveBeenCalled();expect(history).not.toHaveBeenCalled();expect(deliver).not.toHaveBeenCalled()
 })
+
+it('treats missing or malformed new workflow receipts as unknown without repairing them',async()=>{
+ const f=fixture(),ticket=await task(f);run(f,ticket)
+ for(const receipt of [undefined,null,{schema:1,state:'confirmed'}]){
+  f.host.store.put('workflow-action','bad',{id:'bad',ticketId:ticket.id,state:'applied',effectReceiptVersion:1,...(receipt!==undefined?{effectReceipt:receipt}:{})})
+  const before=dbState(f)
+  expect(projectTaskStatus(f.host,current(f,ticket)).effects).toMatchObject({state:'unknown',receiptCount:1})
+  expect(f.trace.snapshot({ticketId:ticket.id}).tasks[0]).toMatchObject({unknownEffects:true,next:'reconcile'})
+  expect(dbState(f)).toBe(before)
+ }
+})

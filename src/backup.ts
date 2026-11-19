@@ -9,7 +9,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import {readRevocations} from './router-memory.ts'
 import {configSchema,type Config} from './config.ts'
 import {managedFiles,recoverManagedFiles,prepareManagedFiles,validateManagedSnapshot,atomicPrivateFile} from './managed-config.ts'
-import {MAX_DB_SCHEMA,PROJECT_INTEGRATION_DB_SCHEMA,WEBHOOK_REHEARSAL_DB_SCHEMA,GOAL_REPLACEMENT_DB_SCHEMA,ASYNC_WORKER_DB_SCHEMA,TASK_ASSIGNMENT_DB_SCHEMA} from './store.ts'
+import {MAX_DB_SCHEMA,EFFECT_RECEIPT_DB_SCHEMA,PROJECT_INTEGRATION_DB_SCHEMA,WEBHOOK_REHEARSAL_DB_SCHEMA,GOAL_REPLACEMENT_DB_SCHEMA,ASYNC_WORKER_DB_SCHEMA,TASK_ASSIGNMENT_DB_SCHEMA} from './store.ts'
 const hash=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex')
 const digest=(text:string)=>createHash('sha256').update(text).digest('hex')
 function captureManaged(state:string){const files=managedFiles(state);if(existsSync(files.journal))throw Error('Setup is changing; retry backup after configuration recovery');return {connections:existsSync(files.connections)?readFileSync(files.connections,'utf8'):undefined,secrets:existsSync(files.secrets)?readFileSync(files.secrets,'utf8'):undefined}}
@@ -99,6 +99,7 @@ export async function restoreState(config:Config,directory:string){
    const live=new DatabaseSync(currentPath,{readOnly:true}),old=new DatabaseSync(join(directory,'state.sqlite'),{readOnly:true})
    try{
     const liveSchema=Number(live.prepare('PRAGMA user_version').get()!.user_version)
+    if(liveSchema>=EFFECT_RECEIPT_DB_SCHEMA&&verified.schema<EFFECT_RECEIPT_DB_SCHEMA)throw Error('Downgrade cannot preserve effect receipt semantics')
     if(liveSchema>=PROJECT_INTEGRATION_DB_SCHEMA&&verified.schema<PROJECT_INTEGRATION_DB_SCHEMA)throw Error('Downgrade cannot preserve project integration responsibility')
     if(liveSchema>=TASK_ASSIGNMENT_DB_SCHEMA&&verified.schema<TASK_ASSIGNMENT_DB_SCHEMA)throw Error('Downgrade cannot preserve task assignment contracts')
     if(liveSchema>=ASYNC_WORKER_DB_SCHEMA&&verified.schema<ASYNC_WORKER_DB_SCHEMA)throw Error('Downgrade cannot preserve async Worker event receipts')
@@ -130,6 +131,8 @@ export async function restoreState(config:Config,directory:string){
     if(liveSchema>=TASK_ASSIGNMENT_DB_SCHEMA&&JSON.stringify(assignments(live))!==JSON.stringify(assignments(old)))throw Error('Task assignment contracts advanced after backup; reconcile before restore')
     const projectIntegration=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind IN ('project-base','project-commit','project-review','project-review-input') OR (kind='router-goal' AND json_extract(body,'$.project.base') IS NOT NULL) ORDER BY kind,id").all()
     if(liveSchema>=PROJECT_INTEGRATION_DB_SCHEMA&&JSON.stringify(projectIntegration(live))!==JSON.stringify(projectIntegration(old)))throw Error('Project integration responsibility or evidence advanced after backup; reconcile before restore')
+    const workflowEffects=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE kind='workflow-action' ORDER BY id").all()
+    if(liveSchema>=EFFECT_RECEIPT_DB_SCHEMA&&JSON.stringify(workflowEffects(live))!==JSON.stringify(workflowEffects(old)))throw Error('Workflow effect receipts advanced after backup; reconcile before restore')
     const skillsSchedules=(db:DatabaseSync)=>db.prepare("SELECT kind,id,body FROM records WHERE (kind='router-schedule' AND json_extract(body,'$.skill.id') IS NOT NULL) OR (kind='router-schedule-run' AND json_extract(body,'$.spec.skill.id') IS NOT NULL) ORDER BY kind,id").all()
     if(JSON.stringify(skillsSchedules(live))!==JSON.stringify(skillsSchedules(old)))throw Error('Saved skill schedule or run advanced after backup; reconcile before restore')
     const head=live.prepare("SELECT body FROM records WHERE kind='memory-revocation-head' AND id='current'").get(),required=head&&JSON.parse(String(head.body))

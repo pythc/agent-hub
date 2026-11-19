@@ -136,3 +136,19 @@ it('fences project responsibility downgrade and receipt removal across restore',
  await expect(restoreState(config,captured)).rejects.toThrow('Project integration responsibility or evidence advanced')
  const reread=new Store(file);try{expect(reread.get('project-commit','d')).toBeUndefined();expect(reread.db.prepare('PRAGMA user_version').get()!.user_version).toBe(20)}finally{reread.close()}
 })
+
+it('fences effect receipt downgrade, advancement and resurrection without blocking unchanged restore',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'restore-workflow-effects-'));roots.push(root)
+ const config=configSchema.parse({stateDir:join(root,'state'),sources:[{id:'local',kind:'local',allowedActors:['operator'],cwd:root}]})
+ const file=join(config.stateDir,'state.sqlite'),legacy=new Store(file);legacy.requireCodeProjectSchema();legacy.close()
+ const old=join(root,'legacy');await backupState(config,old)
+ const current=new Store(file);current.requireEffectReceiptSchema();current.put('workflow-action','write',{id:'write',state:'uncertain',effectReceipt:{schema:1,state:'unknown'}});current.close()
+ await expect(restoreState(config,old)).rejects.toThrow('Downgrade cannot preserve effect receipt')
+ const captured=join(root,'captured');await backupState(config,captured);expect(verifyBackup(captured).schema).toBe(21)
+ await restoreState(config,captured)
+ const observed=new Store(file);observed.put('workflow-action','write',{id:'write',state:'observed',effectReceipt:{schema:1,state:'observed'}});observed.close()
+ await expect(restoreState(config,captured)).rejects.toThrow('Workflow effect receipts advanced')
+ const removed=new Store(file);removed.db.prepare("DELETE FROM records WHERE kind='workflow-action' AND id='write'").run();removed.close()
+ await expect(restoreState(config,captured)).rejects.toThrow('Workflow effect receipts advanced')
+ const reread=new Store(file);try{expect(reread.get('workflow-action','write')).toBeUndefined()}finally{reread.close()}
+})

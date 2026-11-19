@@ -1,4 +1,4 @@
-import {afterEach,expect,it} from 'vitest'
+import {afterEach,expect,it,vi} from 'vitest'
 import {createHmac,randomBytes,randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
 import {execFile} from 'node:child_process'
@@ -133,13 +133,13 @@ it.each(['approved','concurrent','declined','interrupted','stale','uncertain','r
  }
  if(mode==='interrupted'){
    // The process stopped after its durable pre-write checkpoint. The remote is still at Todo.
-   f.h.store.put('workflow-action',p.id,{...p,state:'applying'})
+   f.h.store.put('workflow-action',p.id,{...p,state:'applying',effectReceipt:{...p.effectReceipt!,state:'unknown',attemptedAt:Date.now()}})
    await f.restart();expect(f.h.workflows.list()[0]?.state).toBe('uncertain')
    expect((await decide()).state).toBe('uncertain')
    expect((await f.h.workflows.decide({id:p.id,decision:'reconcile'})).state).toBe('uncertain')
    expect(f.writes).toBe(0);return
  }
- if(mode==='revoked'){f.revoke();await expect(decide()).rejects.toThrow(/unavailable|permissions_changed/);expect(f.writes).toBe(0);return}
+ if(mode==='revoked'){f.revoke();await expect(decide()).rejects.toThrow(/unavailable|permissions_changed|identity changed/);expect(f.writes).toBe(0);return}
  if(mode==='stale'){f.changeIssue();expect((await decide()).state).toBe('stale');expect(f.writes).toBe(0);return}
  if(mode==='uncertain'){
    f.loseResponse()
@@ -164,3 +164,38 @@ it.each(['approved','concurrent','declined','interrupted','stale','uncertain','r
  const ref={id:saved.id,version:saved.version}
  expect(f.h.webhooks.create({...f.spec,operationId:'saved-ci',namespace:'next-ci',skill:ref,template:saved.template}).skill).toEqual(ref)
 },30000)
+
+
+it('retains unknown after remote success/local finish failure and readback never repeats the write',async()=>{
+ const f=await scenario();await f.send();await f.until(()=>f.h.workflows.list()[0]?.state==='pending');const p=f.h.workflows.list()[0]!
+ const put=f.h.store.put.bind(f.h.store);let fail=true
+ const spy=vi.spyOn(f.h.store,'put').mockImplementation((kind,id,value)=>{if(kind==='workflow-action'&&(value as any).state==='applied'&&fail){fail=false;throw Error('injected local commit loss')}return put(kind,id,value)})
+ try{
+  const result=await f.h.workflows.decide({id:p.id,decision:'approve'});expect(result.state).toBe('uncertain');expect(result.effectReceipt?.state).toBe('unknown');expect(f.writes).toBe(1)
+ }finally{spy.mockRestore()}
+ await f.restart()
+ await Promise.all(Array.from({length:10},()=>f.h.workflows.decide({id:p.id,decision:'reconcile'})))
+ expect(f.writes).toBe(1);const result=f.h.workflows.list()[0]!;expect(result).toMatchObject({state:'observed',effectReceipt:{state:'observed',remoteOperationId:null,remote:{objectId:issue,stateId:started.id}}})
+ const notices=f.h.store.db.prepare("SELECT count(*) AS n FROM outbox WHERE id=?").get('workflow-action:'+p.id+':observed');expect(Number(notices!.n)).toBe(1)
+ await f.h.workflows.decide({id:p.id,decision:'approve'});expect(f.writes).toBe(1)
+},30000)
+it('does not notify when authority is revoked during the final remote readback',async()=>{
+ const f=await scenario();await f.send();await f.until(()=>f.h.workflows.list()[0]?.state==='pending');const p=f.h.workflows.list()[0]!,source=f.h.sources.get('tracker')!,read=source.workflowState!.bind(source)
+ source.workflowState=async target=>{const result=await read(target);if(f.writes)f.revoke();return result}
+ const result=await f.h.workflows.decide({id:p.id,decision:'approve'})
+ expect(f.writes).toBe(1);expect(result.state).toBe('uncertain');expect(result.effectReceipt?.state).toBe('unknown')
+ expect(f.h.store.db.prepare("SELECT id FROM outbox WHERE id IN (?,?)").all('workflow-action:'+p.id+':applied','workflow-action:'+p.id+':uncertain')).toEqual([])
+})
+it('blocks another preexisting proposal for the same unresolved target and refuses malformed new receipts',async()=>{
+ const f=await scenario();await f.send();await f.until(()=>f.h.workflows.list()[0]?.state==='pending');const p=f.h.workflows.list()[0]!,id='b'.repeat(64)
+ f.h.store.put('workflow-action',id,{...p,id,effectReceipt:{...p.effectReceipt!,localOperationId:id}})
+ f.loseResponse();await f.h.workflows.decide({id:p.id,decision:'approve'});expect(f.writes).toBe(1)
+ await expect(f.h.workflows.decide({id,decision:'approve'})).rejects.toThrow('unknown effect')
+ f.h.store.put('workflow-action',id,{...p,id,effectReceipt:undefined})
+ await expect(f.h.workflows.decide({id,decision:'approve'})).rejects.toThrow('receipt missing');expect(f.writes).toBe(1)
+ await f.h.workflows.decide({id:p.id,decision:'reconcile'})
+ const nextId='c'.repeat(64);f.h.store.put('workflow-action',nextId,{...p,id:nextId,effectReceipt:{...p.effectReceipt!,localOperationId:nextId}})
+ f.h.store.put('workflow-action',id,{...p,id,state:'applied',view:undefined,effectReceipt:undefined})
+ expect(f.h.workflows.unsettled(p.ticketId)).toBe(true)
+ await expect(f.h.workflows.decide({id:nextId,decision:'approve'})).rejects.toThrow('unknown effect');expect(f.writes).toBe(1)
+})
