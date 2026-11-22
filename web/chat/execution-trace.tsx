@@ -11,6 +11,7 @@ import './execution-trace.css'
 type Snapshot={visibility:string;at:number;revision:number;cursor:number;total:number;offset:number;more:boolean;tasks:TraceTask[]}
 type Events={visibility:string;events:TraceEvent[];cursor:number;head:number;more:boolean;at:number}
 type Action=TraceTask['actions'][number]
+const recoveryBasis=(task:TraceTask)=>JSON.stringify([task.id,task.observed,task.revision])
 class TraceRequestError extends Error {constructor(readonly code:string){super(code)}}
 async function request<T>(binding:WorkspaceBinding,path:string,isCurrent:()=>boolean,signal?:AbortSignal,body?:unknown):Promise<T>{
  try{return await binding.request<T>('/api/execution-trace'+path,body,false,undefined,body===undefined?signal:undefined)}catch(cause){
@@ -160,7 +161,7 @@ export function AsyncInboxSummary({value,language='en'}:{value:unknown;language?
 export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh,word=(names:[string,string])=>names[language==='en'?0:1]
- const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmResume,setConfirmResume]=useState(''),[confirmStop,setConfirmStop]=useState(false),[truncated,setTruncated]=useState(false)
+ const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmResume,setConfirmResume]=useState(''),[confirmStop,setConfirmStop]=useState(''),[truncated,setTruncated]=useState(false)
  const taskNumbers=useRef(new Map<string,number>())
  const taskName=(item:TraceTask)=>{if(!taskNumbers.current.has(item.id))taskNumbers.current.set(item.id,taskNumbers.current.size+1);return workerName(item.workerId,language)+L(' · Task ',' · 任务 ')+taskNumbers.current.get(item.id)}
  const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<()=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
@@ -168,11 +169,12 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  page.current={binding,contextKey,selected}
  const pageCurrent=()=>page.current.binding===binding&&page.current.contextKey===contextKey&&page.current.selected===selected&&!readSignal.aborted
  const task=snapshot?.tasks.find(t=>t.id===selected),active=snapshot?.tasks.filter(t=>['running','starting','background'].includes(t.state)).length??0,waiting=snapshot?.tasks.filter(t=>['waiting','blocked'].includes(t.state)).length??0,uncertain=snapshot?.tasks.filter(t=>t.unknownEffects).length??0
+ const basis=task?recoveryBasis(task):'',latestBasis=useRef('')
  useEffect(()=>{
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal]),current=++generation.current;let fetching=false,hasMore=false
   pageRead.current=signal
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!signal.aborted
-  cursor.current=0;visibility.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop(false);setConfirmResume('');setBusy(false)
+  cursor.current=0;visibility.current='';latestBasis.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop('');setConfirmResume('');setBusy(false)
   const readEvents=async()=>{
    if(!isCurrent())return
    const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
@@ -189,6 +191,8 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     const data=await request<Snapshot>(binding,'?limit=100',isCurrent,signal)
     if(!isCurrent())return
     if(visibility.current&&visibility.current!==data.visibility){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}
+    const observedTask=data.tasks.find(t=>t.id===selected),observedBasis=observedTask?recoveryBasis(observedTask):''
+    if(latestBasis.current!==observedBasis){latestBasis.current=observedBasis;setConfirmStop('');setConfirmResume('')}
     visibility.current=data.visibility;setSnapshot(data)
     if(!hasMore)await readEvents()
     if(isCurrent())setError('')
@@ -201,11 +205,11 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   return()=>{controller.abort();clearInterval(timer);if(generation.current===current)generation.current++}
  },[selected,binding,contextKey,readSignal])
  const failure=(code:string)=>code==='trace_changed'||code==='trace_settings_conflict'?L('This task changed. Review its current state before trying again.','任务状态已变更，请核对最新状态后重试。'):code==='trace_reconcile_required'?L('Check the external outcome before repeating any work.','请先核查外部结果，再决定是否重复执行。'):code==='trace_recovery_uncertain'?L('The action could not be confirmed. Check the current task and original session.','操作结果尚未确认，请检查当前任务和原会话。'):code==='trace_action_unavailable'?L('This action is no longer available. Review the latest task state.','此操作已不可用，请查看最新任务状态。'):code==='trace_repair_confirmation_required'?L('Confirm that you have checked or repaired the reported problem before a single manual continuation.','请确认已核查或修复所报问题，再手动继续一次。'):code==='trace_cursor_ahead'?L('The saved history changed. Refresh to reload the timeline.','历史记录已变更，请刷新以重新加载轨迹。'):L('Updates are unavailable. Your last known state is still shown.','暂时无法更新，当前显示最近一次已知状态。')
- async function recover(action:Action,repairConfirmed=false){
+ async function recover(action:Action,repairConfirmed=false,confirmedBasis?:string){
   const current=generation.current,signal=pageRead.current
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!!signal&&!signal.aborted
-  if(!task||busy||!isCurrent())return
-  setBusy(true);setActionError('');setNotice('');setConfirmStop(false);setConfirmResume('')
+  if(!task||busy||!isCurrent()||(confirmedBasis!==undefined&&confirmedBasis!==latestBasis.current))return
+  setBusy(true);setActionError('');setNotice('');setConfirmStop('');setConfirmResume('')
   try{
    const result=await request<{status:string}>(binding,'/recover',isCurrent,undefined,{ticketId:task.id,action,revision:task.revision,observed:task.observed,...(repairConfirmed?{repairConfirmed:true}:{}),requestId:crypto.randomUUID()})
    if(!isCurrent())return
@@ -247,9 +251,9 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
    <AsyncInboxSummary value={task.asyncInbox} language={language}/>
    <RecoverySummary task={task} language={language}/>
    <RecoveryPackageExport task={task} language={language}/>
-   <footer className="trace-task-actions">{task.actions.includes('inspect')?<button disabled={busy} onClick={()=>void recover('inspect')}><RefreshCw size={15}/>{L('Check current state','核对当前状态')}</button>:null}{task.actions.includes('read_history')?<button disabled={busy} onClick={()=>void recover('read_history')}><History size={15}/>{L('Check history','核查历史')}</button>:null}{task.actions.includes('resume_session')?<button className="trace-primary" disabled={busy} onClick={()=>task.blocker?.retryPolicy.mode==='after_repair'?setConfirmResume(JSON.stringify([task.id,task.observed,task.revision])):void recover('resume_session')}><ArrowRight size={15}/>{L('Continue task','继续任务')}</button>:null}{task.actions.includes('cancel')?<button disabled={busy} onClick={()=>setConfirmStop(true)}><Square size={13}/>{L('Stop task','停止任务')}</button>:null}{busy?<span role="status"><LoaderCircle size={15} className="trace-spin"/>{L('Checking…','处理中…')}</span>:null}</footer>
-   {confirmResume&&confirmResume===JSON.stringify([task.id,task.observed,task.revision])?<div className="trace-confirm" role="group" aria-label={L('Confirm repair','确认修复')}><p>{L('Have you checked or repaired the reported problem? Continue once using the same account and session. This does not verify credentials or replay uncertain effects.','已核查或修复所报问题？将使用同一账号和会话继续一次；这不代表凭据验证成功，也不会重放效果未知的操作。')}</p><button disabled={busy} onClick={()=>void recover('resume_session',true)}>{L('Checked, continue once','已核查，继续一次')}</button><button onClick={()=>setConfirmResume('')}>{L('Cancel','取消')}</button></div>:null}
-   {confirmStop?<div className="trace-confirm" role="group" aria-label={L('Confirm stop','确认停止')}><p>{L('Stop this task? Earlier actions will not be undone.','停止此任务？先前已发生的操作不会因此撤销。')}</p><button className="trace-primary" disabled={busy} onClick={()=>void recover('cancel')}>{L('Stop task','停止任务')}</button><button onClick={()=>setConfirmStop(false)}>{L('Keep working','继续运行')}</button></div>:null}
+   <footer className="trace-task-actions">{task.actions.includes('inspect')?<button disabled={busy} onClick={()=>void recover('inspect')}><RefreshCw size={15}/>{L('Check current state','核对当前状态')}</button>:null}{task.actions.includes('read_history')?<button disabled={busy} onClick={()=>void recover('read_history')}><History size={15}/>{L('Check history','核查历史')}</button>:null}{task.actions.includes('resume_session')?<button className="trace-primary" disabled={busy} onClick={()=>task.blocker?.retryPolicy.mode==='after_repair'?setConfirmResume(basis):void recover('resume_session')}><ArrowRight size={15}/>{L('Continue task','继续任务')}</button>:null}{task.actions.includes('cancel')?<button disabled={busy} onClick={()=>setConfirmStop(basis)}><Square size={13}/>{L('Stop task','停止任务')}</button>:null}{busy?<span role="status"><LoaderCircle size={15} className="trace-spin"/>{L('Checking…','处理中…')}</span>:null}</footer>
+   {confirmResume&&confirmResume===basis?<div className="trace-confirm" role="group" aria-label={L('Confirm repair','确认修复')}><p>{L('Have you checked or repaired the reported problem? Continue once using the same account and session. This does not verify credentials or replay uncertain effects.','已核查或修复所报问题？将使用同一账号和会话继续一次；这不代表凭据验证成功，也不会重放效果未知的操作。')}</p><button disabled={busy} onClick={()=>void recover('resume_session',true,confirmResume)}>{L('Checked, continue once','已核查，继续一次')}</button><button onClick={()=>setConfirmResume('')}>{L('Cancel','取消')}</button></div>:null}
+   {confirmStop&&confirmStop===basis?<div className="trace-confirm" role="group" aria-label={L('Confirm stop','确认停止')}><p>{L('Stop this task? Earlier actions will not be undone.','停止此任务？先前已发生的操作不会因此撤销。')}</p><button className="trace-primary" disabled={busy} onClick={()=>void recover('cancel',false,confirmStop)}>{L('Stop task','停止任务')}</button><button onClick={()=>setConfirmStop('')}>{L('Keep working','继续运行')}</button></div>:null}
    <details className="trace-records"><summary>{L('View records','查看记录')}</summary><div className="trace-records-body"><dl className="trace-facts"><div><dt>{L('Session reference','会话编号')}</dt><dd>{task.sessionRef??L('Not started','尚未启动')}</dd></div><div><dt>{L('Result','结果')}</dt><dd>{task.hasResult?L('Saved','已保留'):L('Not recorded','尚无记录')}</dd></div><div><dt>{L('Backend','执行后端')}</dt><dd>{task.backendId??L('Not recorded','尚无记录')}</dd></div></dl>
     <div className="trace-evidence" aria-label={L('Evidence checks','证据核查')}><div><GitCommitHorizontal size={16}/><span>{L('Commit','提交')}</span><strong>{task.evidence.commit==='recorded'?task.evidence.commitRef?.slice(0,12):L('Unverified','未验证')}</strong></div><div><FileCheck2 size={16}/><span>{L('Tests','测试')}</span><strong>{task.evidence.tests==='unverified'?L('Unverified','未验证'):task.evidence.tests==='passed'?L('Passed','通过'):L('Failed','失败')}</strong></div><div><CheckCircle2 size={16}/><span>{L('Deployment','部署')}</span><strong>{L('Unverified','未验证')}</strong></div></div>
     {timeline}
