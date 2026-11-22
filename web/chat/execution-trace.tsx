@@ -181,7 +181,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
    const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
    const data=await request<Events>(binding,'/events?'+query,isCurrent,signal)
    if(!isCurrent())return
-   if(visibility.current&&visibility.current!==data.visibility){visibility.current=data.visibility;cursor.current=0;setEvents([]);hasMore=false;setMore(false);return}
+   if(visibility.current&&visibility.current!==data.visibility){visibility.current=data.visibility;resetTimeline();return}
    visibility.current=data.visibility;cursor.current=data.cursor;hasMore=data.more;setMore(data.more)
    setEvents(previous=>{const seen=new Set(previous.map(e=>e.id)),all=[...previous,...data.events.filter(e=>!seen.has(e.id))];if(all.length>600)setTruncated(true);return all.slice(-600)})
   }
@@ -191,7 +191,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
    try{
     const data=await request<Snapshot>(binding,'?limit=100',isCurrent,signal)
     if(!isCurrent())return
-    if(visibility.current&&visibility.current!==data.visibility){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}
+    if(visibility.current&&visibility.current!==data.visibility)resetTimeline()
     const observedTask=data.tasks.find(t=>t.id===selected),observedBasis=observedTask?recoveryBasis(observedTask):''
     if(latestBasis.current!==observedBasis){latestBasis.current=observedBasis;setConfirmStop('');setConfirmResume('')}
     visibility.current=data.visibility;setSnapshot(data)
