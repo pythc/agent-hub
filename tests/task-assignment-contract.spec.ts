@@ -1,3 +1,4 @@
+import {ExecutionTrace} from '../src/execution-trace.ts'
 import {mkdtempSync,rmSync,mkdirSync,renameSync,symlinkSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -167,9 +168,18 @@ it('withholds historical contract text after permission rebuild or original sour
 
 it('adds an immutable migration revision with the old ceiling and rejects stale revisions or expansion',async()=>{
  const f=fixture(),a=await f.assign('revision',{allowedTools:['superagent_progress'],interface:shared}),old=currentTaskAssignment(f.host,a.ticketId)!,raw=f.host.store.get('task-assignment-contract',a.ticketId)
+ const trace=new ExecutionTrace(()=>f.host),snapshot=()=>trace.snapshot({ticketId:a.ticketId}).tasks[0]!,visible=()=>snapshot().assignment
+ const before=snapshot()
+ expect(visible()).toMatchObject({contractRevision:1,interface:{version:shared.version}})
  const next=reviseTaskAssignment(f.host,a.ticketId,'one',f.context,{kind:'migration',commandId:'migration-1',fingerprint:'actual-command-fingerprint',expectedDigest:old.digest})
  expect(next).toMatchObject({revision:2,previousDigest:old.digest,interface:old.interface,effective:{tools:['superagent_progress']}})
  expect(currentTaskAssignment(f.host,a.ticketId)?.digest).toBe(next.digest)
+ expect(visible()).toMatchObject({contractRevision:2,interface:{version:shared.version}})
+ expect(snapshot().revision).toBe(before.revision);expect(snapshot().observed).not.toBe(before.observed)
+ await expect(trace.recover({ticketId:a.ticketId,action:'inspect',requestId:'stale-contract',revision:before.revision,observed:before.observed})).rejects.toThrow('trace_changed')
+ await expect(trace.recover({ticketId:a.ticketId,action:'inspect',requestId:'fresh-contract',revision:snapshot().revision,observed:snapshot().observed})).resolves.toMatchObject({status:'inspected'})
+ expect(JSON.stringify(visible())).not.toContain(next.digest)
+ f.host.config.sources[0]!.enabled=false;expect(visible()).toBeUndefined();f.host.config.sources[0]!.enabled=true
  expect(f.host.store.get('task-assignment-contract',a.ticketId)).toEqual(raw)
  expect(()=>validateTaskAssignment(f.host,a.ticketId)).not.toThrow()
  expect(()=>reviseTaskAssignment(f.host,a.ticketId,'one',f.context,{kind:'migration',commandId:'stale',fingerprint:'x',expectedDigest:old.digest})).toThrow('revision_conflict')

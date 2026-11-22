@@ -102,13 +102,13 @@ export function TaskAssignmentSummary({value,language='en'}:{value:unknown;langu
   const list=(v:unknown):string[]|null=>{if(!Array.isArray(v)||v.length>1000)return null;const out:string[]=[];for(let i=0;i<v.length;i++){const item=Object.getOwnPropertyDescriptor(v,String(i))?.value;if(!text(item))return null;out.push(item)}return out}
   try{
    const objective=own(value,'objective'),inputCount=own(value,'inputCount'),dependencyCount=own(value,'dependencyCount'),tools=list(own(value,'tools')),connections=list(own(value,'connections')),workspace=own(value,'workspace'),budget=own(value,'budget'),createdAt=own(value,'createdAt'),blocker=own(value,'blocker')
-   const access=own(workspace,'access'),network=own(workspace,'network'),leaseCount=own(workspace,'leaseCount')
+   const access=own(workspace,'access'),network=own(workspace,'network'),leaseCount=own(workspace,'leaseCount'),revision=own(value,'contractRevision')
    if(own(value,'schema')!==1||!text(objective,100000)||!count(inputCount)||!count(dependencyCount)||!tools||!connections||!['read-only','workspace-write'].includes(access as string)||own(workspace,'scope')!=='whole_root'||typeof network!=='boolean'||!count(leaseCount)||!count(createdAt)||createdAt>8640000000000000||!budget||typeof budget!=='object'||Array.isArray(budget)||blocker!==undefined&&!text(blocker))return null
    const limits:Record<string,number>={}
    for(const key of ['timeoutMs','maxSteps','maxToolCalls','maxOutputTokens']){const v=own(budget,key);if(Object.hasOwn(budget,key)){if(!count(v)||v===0)return null;limits[key]=v}}
    let contract:null|{key:string;version:number;digest:string;inputs:string[];outputs:string[];acceptance:string[]}=null
    if(Object.hasOwn(value as object,'interface')){const v=own(value,'interface'),inputs=list(own(v,'inputs')),outputs=list(own(v,'outputs')),acceptance=list(own(v,'acceptance')),version=own(v,'version'),digest=own(v,'digest');if(!text(own(v,'key'))||!count(version)||!text(digest,64)||!/^([a-f0-9]{64})$/.test(digest)||!inputs||!outputs||!acceptance)return null;contract={key:own(v,'key') as string,version,digest,inputs,outputs,acceptance}}
-   return {objective,inputCount,dependencyCount,tools,connections,access:access as string,network,leaseCount,limits,contract,createdAt,blocker:typeof blocker==='string'?blocker:null}
+   return {objective,inputCount,dependencyCount,tools,connections,access:access as string,network,leaseCount,limits,contract,createdAt,contractRevision:count(revision)&&revision>0?revision:null,blocker:typeof blocker==='string'?blocker:null}
   }catch{return null}
  }
  const data=read(),unknown=L('Not recorded','未记录'),unconfigured=L('Not configured','未配置')
@@ -124,8 +124,8 @@ export function TaskAssignmentSummary({value,language='en'}:{value:unknown;langu
  }
  const row=(label:string,content:ReactNode)=><div><dt>{label}</dt><dd>{content}</dd></div>
  const items=(values:string[])=>values.length?<ul>{values.map((v,i)=><li key={i}>{v}</li>)}</ul>:L('None recorded','已记录为空')
- return <details className="trace-records"><summary>{L('Assignment agreement at dispatch','派工时约定')}</summary><div className="trace-records-body">{data?<>
-  <p>{data.objective}</p><dl className="trace-facts">{row(L('Inputs','输入'),data.inputCount)}{row(L('Dependencies','依赖'),data.dependencyCount)}{row(L('Recorded at','记录时间'),new Date(data.createdAt).toLocaleString(language,{timeZone:'UTC',timeZoneName:'short'}))}</dl>
+ return <details className="trace-records"><summary>{data?.contractRevision?L('Assignment agreement','派工约定'):L('Assignment agreement at dispatch','派工时约定')}</summary><div className="trace-records-body">{data?<>
+  <p>{data.objective}</p><dl className="trace-facts">{data.contractRevision!==null?row(L('Contract revision','派工约定版本'),data.contractRevision):null}{row(L('Inputs','输入'),data.inputCount)}{row(L('Dependencies','依赖'),data.dependencyCount)}{row(L('Recorded at','记录时间'),new Date(data.createdAt).toLocaleString(language,{timeZone:'UTC',timeZoneName:'short'}))}</dl>
   {data.contract?<dl className="trace-facts">{row(L('Interface name','接口名称'),data.contract.key)}{row(L('Interface version','接口版本'),data.contract.version)}{row(L('Interface fingerprint','接口指纹'),data.contract.digest.slice(0,12))}</dl>:null}
   <dl className="trace-facts">{row(L('Interface inputs','接口输入'),data.contract?items(data.contract.inputs):unknown)}{row(L('Interface outputs','接口输出'),data.contract?items(data.contract.outputs):unknown)}{row(L('Acceptance requirements','验收要求'),data.contract?items(data.contract.acceptance):unknown)}</dl>
   <dl className="trace-facts">{row(L('Tool ceiling','工具权限上限'),items(data.tools))}{row(L('Connection ceiling','连接权限上限'),items(data.connections))}</dl><p>{L('These limits do not grant additional permission.','这些上限不构成额外授权。')}</p>
