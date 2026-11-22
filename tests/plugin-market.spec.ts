@@ -255,3 +255,65 @@ it('fails closed on an invalid target schema without returning validator diagnos
  await expect(f.market.execute(plan.id,randomUUID(),vi.fn())).rejects.toMatchObject({code:'source_compatibility_blocked'})
  expect(pause).not.toHaveBeenCalled()
 })
+
+it('commits view version provenance with canonical settings, preserves first promotion across rollback and restart',async()=>{
+  const f=await fixture(),versions=()=>marketState(f.host().store).installed[0]!.viewPromotions!
+  expect(marketState(f.host().store).installed).toEqual([])
+  const installed=await f.execute('install'),first=versions()[0]!
+  expect(first).toEqual({registration:{schema:1,kind:'workspace-view',domain:'operator_workspace',id:'agent-board',version:f.github.one.pkg.digest,sha256:f.github.one.pkg.manifest.codeSha256,retention:'subject_to_plugin_removal',publication:'not_tracked',acceptance:'not_tracked'},operationId:installed.id,settingsRevision:f.host().settings.current().revision,at:expect.any(String)})
+  const v2=await f.github.add('workspace-view','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url})
+  expect(versions()).toEqual([first]) // Catalog reads are not promotions.
+  await f.execute('install');const second=versions()[1]!
+  expect(second.registration.version).toBe(v2.pkg.digest)
+  await f.execute('rollback');expect(versions()).toEqual([first,second])
+  const state=marketState(f.host().store).installed[0]!
+  expect(state.active?.digest).toBe(f.github.one.pkg.digest);expect(state.selected.digest).toBe(f.github.one.pkg.digest);expect(state.previous?.digest).toBe(v2.pkg.digest)
+  await f.execute('disable');await f.execute('enable');expect(versions()).toEqual([first,second])
+  await f.rebuild(configSchema.parse(f.config));expect(versions()).toEqual([first,second])
+  expect(f.market.snapshot().installed[0]!.viewPromotions).toBeUndefined()
+  await f.execute('uninstall');expect(marketState(f.host().store).installed).toEqual([])
+})
+it('does not persist view provenance for verified staging when the settings transaction fails',async()=>{
+  const f=await fixture();await f.execute('install')
+  const before=marketState(f.host().store),settings=f.host().settings.current(),refs=structuredClone(f.host().config.viewPlugins)
+  const v2=await f.github.add('workspace-view','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url})
+  const stable=marketState(f.host().store),put=f.host().store.put.bind(f.host().store)
+  const spy=vi.spyOn(f.host().store,'put').mockImplementation((kind,id,value)=>{if(kind==='settings'&&id==='current')throw Error('Injected settings failure');return put(kind,id,value)})
+  await expect(f.execute('install')).rejects.toThrow('Injected settings failure');spy.mockRestore()
+  // Immutable object bytes may exist, but are not proof of promotion.
+  expect(marketState(f.host().store)).toEqual(stable)
+  expect(marketState(f.host().store).installed[0]!.viewPromotions).toEqual(before.installed[0]!.viewPromotions)
+  expect(f.host().settings.current()).toEqual(settings);expect(f.host().config.viewPlugins).toEqual(refs)
+  expect(marketState(f.host().store).installed[0]!.viewPromotions!.some(v=>v.registration.version===v2.pkg.digest)).toBe(false)
+})
+it('does not backfill legacy promotions during enable or rollback, or register source staging',async()=>{
+  const f=await fixture();await f.execute('install');const v2=await f.github.add('workspace-view','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install')
+  const legacy=marketState(f.host().store);delete legacy.installed[0]!.viewPromotions;f.host().store.put('plugin-market','current',legacy)
+  await f.execute('rollback');await f.execute('disable');await f.execute('enable')
+  expect(marketState(f.host().store).installed[0]!.viewPromotions).toBeUndefined()
+  await f.execute('install','test-connector');expect(marketState(f.host().store).installed.find(p=>p.id==='test-connector')!.viewPromotions).toBeUndefined()
+})
+it('does not turn tampered or merely planned view downloads into promotion evidence',async()=>{
+  const f=await fixture(),plan=f.market.plan({action:'install',pluginId:'agent-board',catalogId:f.catalog().id,revision:f.market.snapshot().revision})
+  expect(marketState(f.host().store).installed).toEqual([])
+  f.github.files.set(f.github.one.release.assetId,Buffer.from('bad'))
+  await expect(f.market.execute(plan.id,randomUUID(),f.rebuild)).rejects.toThrow('checksum mismatch')
+  expect(marketState(f.host().store).installed).toEqual([]);expect(f.host().config.viewPlugins).toEqual([])
+})
+it('bounds retained promotion evidence and does not duplicate it on request replay or reinstall',async()=>{
+  const f=await fixture(),plan=f.market.plan({action:'install',pluginId:'agent-board',catalogId:f.catalog().id,revision:f.market.snapshot().revision}),id=randomUUID()
+  await f.market.execute(plan.id,id,f.rebuild);const first=marketState(f.host().store).installed[0]!.viewPromotions!
+  await f.market.execute(plan.id,id,f.rebuild);await f.execute('install')
+  expect(marketState(f.host().store).installed[0]!.viewPromotions).toEqual(first)
+  const v2=await f.github.add('workspace-view','1.1.0');f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install')
+  const v3=await f.github.add('workspace-view','1.2.0');f.github.changed();await f.market.catalogs({url:f.catalog().url});await f.execute('install')
+  expect(marketState(f.host().store).installed[0]!.viewPromotions!.map(v=>v.registration.version)).toEqual([v2.pkg.digest,v3.pkg.digest])
+})
+it('does not infer managed promotion from manually mounted view configuration or catalog reads',async()=>{
+  const f=await fixture()
+  f.host().config.viewPlugins=[{id:'agent-board',directory:f.github.one.pkg.directory,digest:f.github.one.pkg.digest,enabled:true}]
+  f.host().settings.save(f.host().settings.current().revision,{effort:'medium'})
+  f.market.snapshot();await f.market.catalogs({url:f.catalog().url})
+  expect(marketState(f.host().store).installed).toEqual([])
+  expect(()=>f.market.plan({action:'install',pluginId:'agent-board',catalogId:f.catalog().id,revision:f.market.snapshot().revision})).toThrow('startup configuration')
+})

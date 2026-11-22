@@ -7,8 +7,9 @@ import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import {configSchema,type Config} from './config.ts'
 import {Store} from './store.ts'
+import {operatorArtifactRegistration} from './artifact-registry.ts'
 import {readPluginPackage,installPluginPackage,type PluginManifest} from './plugin-package.ts'
-import {readViewPackage,installViewPackage,type ViewManifest} from './workspace-view-package.ts'
+import {readViewPackage,installViewPackage,viewArtifactReference,type ViewManifest} from './workspace-view-package.ts'
 import {PluginGitHub,githubLocation} from './plugin-github.ts'
 import {extractPluginArchive} from './plugin-archive.ts'
 import {compatible,compareVersion,latestCompatible,marketId,type CatalogPlugin,type InstalledPlugin,type MarketOperation,type MarketPlan,type MarketRelease,type SourceCompatibility} from './plugin-market-contract.ts'
@@ -40,7 +41,7 @@ export class PluginMarket {
   constructor(private host:()=>Runtime,private github=new PluginGitHub()){}
   snapshot(){
     const host=this.host(),state=marketState(host.store)
-    return {...state,installed:state.installed.map(p=>({...p,directory:undefined,connections:host.config.sources.filter(s=>s.kind===p.kind).map(s=>({id:s.id,label:s.label??s.id,enabled:s.enabled})),update:this.updateFor(state,p)})),operations:host.store.list<MarketOperation>('plugin-market-operation').sort((a,b)=>b.at-a.at).slice(0,30),blockers:marketBlockers(host)}
+    return {...state,installed:state.installed.map(p=>({...p,viewPromotions:undefined,directory:undefined,connections:host.config.sources.filter(s=>s.kind===p.kind).map(s=>({id:s.id,label:s.label??s.id,enabled:s.enabled})),update:this.updateFor(state,p)})),operations:host.store.list<MarketOperation>('plugin-market-operation').sort((a,b)=>b.at-a.at).slice(0,30),blockers:marketBlockers(host)}
   }
   private updateFor(state:ManagedMarketState,item:InstalledPlugin){
     const plugin=state.catalogs.filter(c=>c.origin?.repositoryId===item.origin.repositoryId).flatMap(c=>c.plugins).find(p=>p.id===item.id)
@@ -178,7 +179,7 @@ export class PluginMarket {
           if(item.category==='workspace-view'){
             if(item.active?.digest!==target.digest)item.previous=item.active
             item.active=target;item.enabled=true
-            this.commitView(state)
+            this.commitView(state,op)
           }else this.persist(state)
         }finally{rmSync(temp,{recursive:true,force:true})}
         save(item!.category==='source'?'installed':'complete')
@@ -204,11 +205,28 @@ export class PluginMarket {
       throw error
     }finally{this.busy=false}
   }
-  private commitView(state:ManagedMarketState){
+  private commitView(state:ManagedMarketState,promotion?:MarketOperation){
     const host=this.host(),next=configSchema.parse(host.config);applyMarketConfig(next,state)
     host.store.atomic(()=>{
+      const previous=host.settings.current()
+      if(promotion){
+        const item=state.installed.find(p=>p.id===promotion.pluginId&&p.category==='workspace-view')
+        if(promotion.action!=='install'||!item?.enabled||!item.active||item.active.digest!==item.selected.digest)throw Error('Invalid view promotion')
+        // Resolve the canonical mounted package, not download/staging metadata. This
+        // write shares the settings/ref transaction and cannot survive a failed commit.
+        const ref=next.viewPlugins.find(p=>p.id===item.id&&p.enabled&&p.digest===item.active!.digest)
+        if(!ref)throw Error('View promotion is not mounted')
+        const pkg=readViewPackage(ref.directory,ref.digest)
+        if(pkg.manifest.id!==item.id||pkg.manifest.version!==item.active.version)throw Error('View promotion identity mismatch')
+        const registration=operatorArtifactRegistration(viewArtifactReference(pkg))
+        if(registration.kind!=='workspace-view')throw Error('Invalid view registration')
+        const retained=new Set([item.selected.digest,item.active.digest,item.previous?.digest])
+        const versions=(item.viewPromotions??[]).filter(v=>retained.has(v.registration.version))
+        if(!versions.some(v=>v.registration.version===registration.version))versions.push({registration,operationId:promotion.id,settingsRevision:previous.revision+1,at:new Date().toISOString()})
+        item.viewPromotions=versions
+      }
       this.persist(state)
-      const previous=host.settings.current();host.store.put('settings-history',String(previous.revision),previous)
+      host.store.put('settings-history',String(previous.revision),previous)
       host.store.put('settings','current',{revision:previous.revision+1,at:new Date().toISOString(),config:next})
     })
     // View refs are read at each bundle/data request; no running model or source is restarted.
