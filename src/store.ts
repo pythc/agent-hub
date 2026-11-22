@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Repositories, Trigger, TriggerDisposition, Thread, Ticket, Decision, OutboundMessage } from './vendor/dsh-core/index.ts'
@@ -34,6 +34,8 @@ export class Store implements Repositories {
   bodyFilter?:(kind:string,id:string,value:any)=>any
   readonly recordObservers=new Map<string,(id:string,value:any,previous:any)=>void>()
   private depth = 0
+  private readonly readRecord: StatementSync
+  private readonly writeRecord: StatementSync
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
@@ -64,6 +66,10 @@ export class Store implements Repositories {
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(id UNINDEXED, body, tokenize='trigram');
       PRAGMA user_version=${Math.max(version,6)};
     `)
+    // Backlog delivery reads and updates the same record table thousands of times.
+    // Reuse these statements for this connection; values are still bound per call.
+    this.readRecord = this.db.prepare('SELECT body FROM records WHERE kind=? AND id=?')
+    this.writeRecord = this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body')
   }
   atomic<T>(work: () => T): T {
     const level = this.depth
@@ -81,7 +87,7 @@ export class Store implements Repositories {
     } finally { this.depth-- }
   }
   get<T>(kind: string, id: string): T | undefined {
-    const row = this.db.prepare('SELECT body FROM records WHERE kind=? AND id=?').get(kind, id)
+    const row = this.readRecord.get(kind, id)
     return row ? JSON.parse(String(row.body)) as T : undefined
   }
   /** An older verifier would ignore an unknown check and could release a waiting goal. */
@@ -98,8 +104,7 @@ export class Store implements Repositories {
     const observe=this.recordObservers.get(kind)
     if(observe&&!this.depth){this.atomic(()=>this.put(kind,id,value));return}
     const previous=observe?this.get(kind,id):undefined,filtered=this.bodyFilter?.(kind,id,value)??value
-    this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body')
-      .run(kind, id, JSON.stringify(filtered))
+    this.writeRecord.run(kind, id, JSON.stringify(filtered))
     observe?.(id,filtered,previous)
   }
   list<T>(kind: string): T[] {
