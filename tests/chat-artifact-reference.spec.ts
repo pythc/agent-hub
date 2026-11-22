@@ -43,7 +43,13 @@ it('preserves recorded identity after restart and represents legacy digests as u
  const reopened=new Runtime(config,{model});hosts.push(reopened)
  expect(reopened.chat.uploads.drafts(c.id,'owner')[0]?.reference).toEqual(file.reference)
  expect(reopened.chat.uploads.drafts(c.id,'owner')[0]?.registration).toEqual(file.registration)
- const row=reopened.store.get<any>('asset',id);delete row.sha256;row.name='renamed.txt';reopened.store.put('asset',id,row)
+ const row=reopened.store.get<any>('asset',id)
+ expect(row.committedRegistration).toEqual(file.registration)
+ delete row.committedRegistration;reopened.store.put('asset',id,row)
+ const legacyWithDigest=reopened.store.get<any>('asset',id)
+ expect(reopened.chat.uploads.drafts(c.id,'owner')[0]?.registration).toEqual(file.registration)
+ expect(reopened.store.get('asset',id)).toEqual(legacyWithDigest)
+ delete row.sha256;row.name='renamed.txt';reopened.store.put('asset',id,row)
  const before=reopened.store.get<any>('asset',id)
  expect(reopened.chat.uploads.drafts(c.id,'owner')[0]).toMatchObject({id,name:'renamed.txt',reference:{id,version:null,sha256:null}})
  expect(reopened.store.get('asset',id)).toEqual(before)
@@ -110,23 +116,27 @@ it('serves pinned downloads and HEAD only behind current HTTP authorization and 
  }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
 })
 
-it('projects draft registration from authorized source rows without persisting or globally enumerating it',async()=>{
+it('commits attachment registration on the source row without exposing the internal field',async()=>{
  const {h}=fixture(),c=h.chat.create('owner'),other=h.chat.create('other'),id=randomUUID()
  const file=await h.chat.uploads.upload(c.id,'owner',id,{name:'draft.txt',mimeType:'text/plain'},Readable.from([Buffer.from('draft bytes')]))
  const expected={schema:1,kind:'chat-attachment',domain:'conversation',conversationId:c.id,id,referenceId:file.reference!.id,version:1,sha256:file.reference!.sha256,retention:'subject_to_history_cleanup',publication:'not_tracked',acceptance:'not_tracked'}
  expect(file.registration).toEqual(expected)
  const before=h.store.get<any>('asset',id)
  expect(before).not.toHaveProperty('registration')
+ expect(before.committedRegistration).toEqual(expected)
+ expect(file).not.toHaveProperty('committedRegistration')
  expect(h.chat.uploads.drafts(c.id,'owner')[0]!.registration).toEqual(expected)
  expect(h.store.get('asset',id)).toEqual(before)
  expect(()=>h.chat.uploads.drafts(c.id,'other')).toThrow()
  expect(h.chat.uploads.drafts(other.id,'other')).toEqual([])
  expect(h.chat.uploads.resolve(c.id,'owner',[id])[0]).not.toHaveProperty('registration')
+ expect(h.chat.uploads.resolve(c.id,'owner',[id])[0]).not.toHaveProperty('committedRegistration')
  const renamed={...before,name:'renamed.txt'};h.store.put('asset',id,renamed)
  expect(h.chat.uploads.drafts(c.id,'owner')[0]!.registration).toEqual(expected)
  h.chat.uploads.bind([id],'trigger-test')
  expect(h.chat.uploads.drafts(c.id,'owner')).toEqual([])
  expect(h.store.get<any>('asset',id)).not.toHaveProperty('registration')
+ expect(h.store.get<any>('asset',id).committedRegistration).toEqual(expected)
 })
 it('omits legacy candidates and rechecks cleanup before draft metadata projection',async()=>{
  const {h}=fixture(),c=h.chat.create('owner'),id=randomUUID()
@@ -135,6 +145,7 @@ it('omits legacy candidates and rechecks cleanup before draft metadata projectio
  expect(h.chat.uploads.drafts(c.id,'owner')[0]).not.toHaveProperty('registration')
  h.memory.cleanup.apply(planChatHistory(h.store,h.config.stateDir,'@chat:'+stableDigest('owner'),'registration-clear',Date.now(),[c.id]))
  expect(()=>h.chat.uploads.drafts(c.id,'owner')).toThrow()
+ expect(h.store.get<any>('asset',id)?.committedRegistration).toBeUndefined()
 })
 it('exposes draft candidates only through the existing authenticated conversation HTTP list',async()=>{
  const {h}=fixture(),c=h.chat.create('local-operator'),other=h.chat.create('other'),id=randomUUID()
@@ -143,11 +154,33 @@ it('exposes draft candidates only through the existing authenticated conversatio
  try{
   expect((await fetch(url)).status).toBe(401)
   const response=await fetch(url,{headers});expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store')
-  expect((await response.json()).attachments[0].registration).toEqual(file.registration)
+  const returned=(await response.json()).attachments[0]
+  expect(returned.registration).toEqual(file.registration)
+  expect(returned).not.toHaveProperty('committedRegistration')
   expect((await fetch(http.url+'/api/chat/conversations/'+other.id+'/attachments',{headers})).status).toBe(404)
   const catalog=await (await fetch(http.url+'/artifact-catalog',{headers})).json()
   expect(JSON.stringify(catalog)).not.toContain(id);expect(JSON.stringify(catalog)).not.toContain(c.id)
   h.chat.uploads.remove(c.id,'local-operator',id)
   expect((await (await fetch(url,{headers})).json()).attachments).toEqual([])
  }finally{http.server.closeAllConnections();await new Promise<void>(r=>http.server.close(()=>r()))}
+})
+
+it('has no committed attachment evidence during streaming or after a rejected ready write',async()=>{
+ const {h}=fixture(),c=h.chat.create('owner'),id=randomUUID()
+ const abortReady=(recordId:string,current:any)=>{
+  if(recordId===id&&current.state==='ready')throw Error('ready record write rejected')
+ }
+ h.store.recordObservers.set('asset',abortReady)
+ try{
+  async function* chunks(){
+   const pending=h.store.get<any>('asset',id)
+   expect(pending).toMatchObject({state:'uploading'})
+   expect(pending).not.toHaveProperty('committedRegistration')
+   expect(h.chat.uploads.drafts(c.id,'owner')).toEqual([])
+   yield Buffer.from('bytes')
+  }
+  await expect(h.chat.uploads.upload(c.id,'owner',id,{name:'file',mimeType:'text/plain'},chunks())).rejects.toThrow('ready record write rejected')
+  expect(h.store.get('asset',id)).toBeUndefined()
+  expect(h.chat.uploads.drafts(c.id,'owner')).toEqual([])
+ }finally{h.store.recordObservers.delete('asset')}
 })

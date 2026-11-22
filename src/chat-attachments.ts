@@ -9,8 +9,9 @@ import {ChatError} from './chat-errors.ts'
 import {stableDigest} from './sources.ts'
 
 export const chatUploadLimits={maxBytes:25*1024*1024,maxFiles:10}
-export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string;reference?:ChatArtifactReference;registration?:Extract<ArtifactRegistration,{kind:'chat-attachment'}>}
-interface Upload {id:string;kind:'chat-upload';conversationId:string;name:string;mimeType:string;bytes:number;path:string;createdAt:number;state:'uploading'|'ready';triggerId?:string;previewType?:string;sha256?:string}
+type AttachmentRegistration=Extract<ArtifactRegistration,{kind:'chat-attachment'}>
+export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string;reference?:ChatArtifactReference;registration?:AttachmentRegistration}
+interface Upload {id:string;kind:'chat-upload';conversationId:string;name:string;mimeType:string;bytes:number;path:string;createdAt:number;state:'uploading'|'ready';triggerId?:string;previewType?:string;sha256?:string;committedRegistration?:AttachmentRegistration}
 interface Conversation {id:string;owner:string;discussion:string;archived:boolean}
 
 function previewType(bytes:Buffer){
@@ -55,8 +56,13 @@ export class ChatAttachments {
       authorize();this.conversation(conversationId,owner)
       if(!this.host.store.get('asset',id))throw new ChatError('attachment_missing','Upload was removed.',404)
       row.previewType=previewType(readFileSync(path).subarray(0,12));if(row.previewType)row.mimeType=row.previewType
-      row.sha256=hash.digest('hex');row.state='ready';this.host.store.put('asset',id,row)
-      return this.public(row,true)
+      row.sha256=hash.digest('hex');row.state='ready'
+      const attachment=this.public(row,true)
+      // Publish the ready version and its source-local evidence in one row write.
+      // Draft reads still project from the original row; this is not an access grant.
+      row.committedRegistration=attachment.registration
+      this.host.store.put('asset',id,row)
+      return attachment
     }catch(error){this.discard(row);throw error}
   }
   remove(conversationId:string,owner:string,id:string){

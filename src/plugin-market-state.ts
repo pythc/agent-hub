@@ -3,11 +3,24 @@ import {join} from 'node:path'
 import {DatabaseSync} from 'node:sqlite'
 import type {Config} from './config.ts'
 import type {Store} from './store.ts'
+import type {ArtifactRegistration} from './artifact-registry.ts'
+import type {InstalledPlugin} from './plugin-market-contract.ts'
 import {marketCatalogSchema,type MarketState} from './plugin-market-contract.ts'
 import {readPluginPackage} from './plugin-package.ts'
 import {readViewPackage} from './workspace-view-package.ts'
 
-export interface ManagedMarketState extends MarketState {ownedDigests:string[]}
+/** Internal evidence of a committed managed install, never an access grant or history index. */
+export interface ViewPromotion {
+  registration:Extract<ArtifactRegistration,{kind:'workspace-view'}>
+  /** Correlation only: terminal operation status is persisted after this commit. */
+  operationId:string
+  settingsRevision:number
+  at:string
+}
+export interface ManagedMarketState extends MarketState {
+  ownedDigests:string[]
+  installed:(InstalledPlugin & {viewPromotions?:ViewPromotion[]})[]
+}
 export interface MarketActivation {id:string;previous:ManagedMarketState;settings:any;installations:any[];paused:boolean}
 export const emptyMarket=():ManagedMarketState=>({format:1,revision:0,catalogs:[{id:'roppo',url:'https://github.com/pythc/agent-hub/tree/main/plugins',plugins:marketCatalogSchema.parse(JSON.parse(readFileSync(new URL('../plugins/catalog.json',import.meta.url),'utf8'))).plugins.map(p=>({...p,releases:[]}))}],installed:[],ownedDigests:[]})
 export const marketState=(store:Store)=>store.get<ManagedMarketState>('plugin-market','current')??emptyMarket()
