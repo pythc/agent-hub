@@ -164,29 +164,30 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmResume,setConfirmResume]=useState(''),[confirmStop,setConfirmStop]=useState(''),[truncated,setTruncated]=useState(false)
  const taskNumbers=useRef(new Map<string,number>())
  const taskName=(item:TraceTask)=>{if(!taskNumbers.current.has(item.id))taskNumbers.current.set(item.id,taskNumbers.current.size+1);return workerName(item.workerId,language)+L(' · Task ',' · 任务 ')+taskNumbers.current.get(item.id)}
- const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<()=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
+ const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<(retryPage?:boolean)=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
  const page=useRef({binding,contextKey,selected}),pageRead=useRef<AbortSignal|null>(null)
  page.current={binding,contextKey,selected}
  const pageCurrent=()=>page.current.binding===binding&&page.current.contextKey===contextKey&&page.current.selected===selected&&!readSignal.aborted
  const task=snapshot?.tasks.find(t=>t.id===selected),active=snapshot?.tasks.filter(t=>['running','starting','background'].includes(t.state)).length??0,waiting=snapshot?.tasks.filter(t=>['waiting','blocked'].includes(t.state)).length??0,uncertain=snapshot?.tasks.filter(t=>t.unknownEffects).length??0
  const basis=task?recoveryBasis(task):'',latestBasis=useRef('')
  useEffect(()=>{
-  const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal]),current=++generation.current;let fetching=false,hasMore=false
+  const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal]),current=++generation.current;let fetching=false,hasMore=false,pageFailed=false,retryQueued=false
   pageRead.current=signal
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!signal.aborted
   cursor.current=0;visibility.current='';latestBasis.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop('');setConfirmResume('');setBusy(false)
-  const resetTimeline=()=>{cursor.current=0;hasMore=false;setEvents([]);setMore(false);setTruncated(false)}
+  const resetTimeline=()=>{cursor.current=0;hasMore=false;pageFailed=false;setEvents([]);setMore(false);setTruncated(false)}
   const readEvents=async()=>{
    if(!isCurrent())return
    const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
    const data=await request<Events>(binding,'/events?'+query,isCurrent,signal)
    if(!isCurrent())return
    if(visibility.current&&visibility.current!==data.visibility){visibility.current=data.visibility;resetTimeline();return}
-   visibility.current=data.visibility;cursor.current=data.cursor;hasMore=data.more;setMore(data.more)
+   visibility.current=data.visibility;cursor.current=data.cursor;hasMore=data.more;pageFailed=false;setMore(data.more)
    setEvents(previous=>{const seen=new Set(previous.map(e=>e.id)),all=[...previous,...data.events.filter(e=>!seen.has(e.id))];if(all.length>600)setTruncated(true);return all.slice(-600)})
   }
-  const refresh=async()=>{
-   if(fetching||!isCurrent())return
+  const refresh=async(retryPage=false)=>{
+   if(!isCurrent())return
+   if(fetching){if(retryPage&&pageFailed)retryQueued=true;return}
    fetching=true
    try{
     const data=await request<Snapshot>(binding,'?limit=100',isCurrent,signal)
@@ -195,13 +196,18 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     const observedTask=data.tasks.find(t=>t.id===selected),observedBasis=observedTask?recoveryBasis(observedTask):''
     if(latestBasis.current!==observedBasis){latestBasis.current=observedBasis;setConfirmStop('');setConfirmResume('')}
     visibility.current=data.visibility;setSnapshot(data)
-    if(!hasMore)await readEvents()
-    if(isCurrent())setError('')
+    if(!hasMore||(retryPage&&pageFailed))await readEvents()
+    if(isCurrent()&&!pageFailed)setError('')
    }catch(cause){if(isCurrent()){const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead')resetTimeline()}}
-   finally{if(isCurrent()){setLoading(false);fetching=false}}
+   finally{if(isCurrent()){setLoading(false);finishRead()}}
+  }
+  const finishRead=()=>{
+   if(!isCurrent())return
+   fetching=false
+   if(retryQueued){retryQueued=false;if(pageFailed)void refresh(true)}
   }
   refreshRef.current=refresh
-  eventRef.current=async()=>{if(fetching||!isCurrent())return;fetching=true;try{await readEvents();if(isCurrent())setError('')}catch(cause){if(isCurrent()){if(cause instanceof TraceRequestError&&cause.code==='trace_cursor_ahead'){resetTimeline();setError(cause.code)}else setError('trace_refresh_failed')}}finally{if(isCurrent())fetching=false}}
+  eventRef.current=async()=>{if(fetching||!isCurrent())return;fetching=true;try{await readEvents();if(isCurrent())setError('')}catch(cause){if(isCurrent()){if(cause instanceof TraceRequestError&&cause.code==='trace_cursor_ahead'){resetTimeline();setError(cause.code)}else{pageFailed=true;setError('trace_refresh_failed')}}}finally{finishRead()}}
   void refresh();const timer=setInterval(()=>void refresh(),3000)
   return()=>{controller.abort();clearInterval(timer);if(generation.current===current)generation.current++}
  },[selected,binding,contextKey,readSignal])
@@ -228,9 +234,9 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   {truncated?<p className="trace-muted">{L('Showing the latest 600 loaded activities. Reload to read earlier records.','显示最近加载的 600 条动态，重新加载可查看较早记录。')}</p>:null}
  </>
  return <section className="trace-page" aria-labelledby="trace-title">
-  <header className="trace-heading"><div><h1 id="trace-title">{L('Task progress','任务进展')}</h1></div><button type="button" disabled={loading||busy} onClick={()=>{setActionError('');void refreshRef.current()}}><RefreshCw size={16} className={loading?'trace-spin':''}/>{L('Refresh','刷新')}</button></header>
+  <header className="trace-heading"><div><h1 id="trace-title">{L('Task progress','任务进展')}</h1></div><button type="button" disabled={loading||busy} onClick={()=>{setActionError('');void refreshRef.current(true)}}><RefreshCw size={16} className={loading?'trace-spin':''}/>{L('Refresh','刷新')}</button></header>
   <div className="trace-summary" aria-label={L('Shown task counts','当前所示任务统计')}><div><Activity size={17}/><strong>{active}</strong><span>{L('Working','正在执行')}</span></div><div><ShieldQuestion size={17}/><strong>{waiting}</strong><span>{L('Needs input','等待处理')}</span></div><div data-attention={uncertain>0}><History size={17}/><strong>{uncertain}</strong><span>{L('Needs checking','待核查结果')}</span></div></div>
-  {actionError||error?<p className="trace-notice trace-error" role="alert">{failure(actionError||error)}<button onClick={()=>{setActionError('');void refreshRef.current()}}>{L('Try refresh','重试刷新')}</button></p>:null}
+  {actionError||error?<p className="trace-notice trace-error" role="alert">{failure(actionError||error)}<button onClick={()=>{setActionError('');void refreshRef.current(true)}}>{L('Try refresh','重试刷新')}</button></p>:null}
   {notice?<p className="trace-notice" role="status"><Check size={16}/>{notice}</p>:null}
   <div className="trace-toolbar"><label htmlFor="trace-task">{L('Task','任务')}</label><select id="trace-task" aria-label={L('Show','显示')} value={selected} onChange={e=>setSelected(e.target.value)}><option value="">{L('All tasks','全部任务')}</option>{snapshot?.tasks.map(t=><option value={t.id} key={t.id}>{taskName(t)}</option>)}</select></div>
   {snapshot?.more?<p className="trace-muted">{L('Showing the 100 latest tasks.','显示最近更新的 100 项任务。')}</p>:null}

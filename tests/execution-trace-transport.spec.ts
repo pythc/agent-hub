@@ -179,3 +179,79 @@ it.each(['snapshot','events'])('clears the old history-cap warning when visibili
  expect(find(p.render(),n=>n.type==='li'&&n.key==='event:601')).toBeUndefined()
  p.unmount()
 })
+
+async function failLoadingNextPage(){
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve(snapshot());await tick()
+ const retained={id:'event:5',cursor:5,at:'2026-11-22T00:00:00Z',stage:'run',state:'observed',ticketId:task.id,baseline:false}
+ p.pending.shift().resolve({...events(5,true),events:[retained]});await tick()
+ button(p.render(),'Load more').props.onClick()
+ expect(p.calls.at(-1).path).toContain('cursor=5&')
+ p.pending.shift().reject({status:503});await tick()
+ expect(find(p.render(),n=>n.props?.role==='alert')).toBeTruthy()
+ return {p,retained}
+}
+
+it('keeps the pagination failure visible through successful snapshot-only polling',async()=>{
+ const {p,retained}=await failLoadingNextPage()
+ p.timers[0].callback();p.pending.shift().resolve(snapshot());await tick()
+ expect(p.pending).toHaveLength(0)
+ expect(find(p.render(),n=>n.props?.role==='alert')).toBeTruthy()
+ expect(find(p.render(),n=>n.type==='li'&&n.key===retained.id)).toBeTruthy()
+ p.unmount()
+})
+
+it.each(['Try refresh','Refresh'])('retries the failed event cursor via %s and clears the warning only after recovery',async(label)=>{
+ const {p,retained}=await failLoadingNextPage()
+ for(let attempt=0;attempt<2;attempt++){
+  button(p.render(),label).props.onClick()
+  p.pending.shift().resolve(snapshot());await tick()
+  expect(p.calls.at(-1).path).toContain('cursor=5&')
+  expect(find(p.render(),n=>n.props?.role==='alert')).toBeTruthy()
+  if(attempt===0){p.pending.shift().reject({status:503});await tick();expect(find(p.render(),n=>n.props?.role==='alert')).toBeTruthy()}
+ }
+ p.pending.shift().resolve({...events(6),events:[{...retained,id:'event:6',cursor:6}]});await tick()
+ expect(find(p.render(),n=>n.props?.role==='alert')).toBeUndefined()
+ expect(find(p.render(),n=>n.type==='li'&&n.key===retained.id)).toBeTruthy()
+ expect(find(p.render(),n=>n.type==='li'&&n.key==='event:6')).toBeTruthy()
+ p.unmount()
+})
+
+it('restarts from zero rather than retrying the old cursor if the snapshot changes visibility',async()=>{
+ const {p,retained}=await failLoadingNextPage()
+ button(p.render(),'Try refresh').props.onClick()
+ p.pending.shift().resolve({...snapshot(),visibility:'changed'});await tick()
+ expect(p.calls.at(-1).path).toContain('cursor=0&')
+ expect(find(p.render(),n=>n.type==='li'&&n.key===retained.id)).toBeUndefined()
+ p.pending.shift().resolve({...events(),visibility:'changed'});await tick()
+ expect(find(p.render(),n=>n.props?.role==='alert')).toBeUndefined()
+ p.unmount()
+})
+
+it('honors one explicit pagination retry clicked during a snapshot poll',async()=>{
+ const {p}=await failLoadingNextPage()
+ p.timers[0].callback()
+ const ongoingPoll=p.pending.shift()
+ button(p.render(),'Try refresh').props.onClick()
+ button(p.render(),'Try refresh').props.onClick()
+ expect(p.pending).toHaveLength(0)
+ ongoingPoll.resolve(snapshot());await tick()
+ expect(p.pending).toHaveLength(1)
+ p.pending.shift().resolve(snapshot());await tick()
+ expect(p.calls.at(-1).path).toContain('cursor=5&')
+ p.pending.shift().resolve(events(6));await tick()
+ expect(p.pending).toHaveLength(0)
+ expect(find(p.render(),n=>n.props?.role==='alert')).toBeUndefined()
+ p.unmount()
+})
+
+it('discards the queued pagination retry when the workspace changes',async()=>{
+ const {p}=await failLoadingNextPage()
+ p.timers[0].callback()
+ const ongoingPoll=p.pending.shift(),callCount=p.calls.length
+ button(p.render(),'Try refresh').props.onClick()
+ p.switchContext()
+ ongoingPoll.resolve(snapshot());await tick()
+ expect(p.calls).toHaveLength(callCount)
+ expect(p.pending).toHaveLength(0)
+ p.unmount()
+})
