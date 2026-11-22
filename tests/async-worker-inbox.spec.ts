@@ -1,3 +1,4 @@
+import {ExecutionTrace} from '../src/execution-trace.ts'
 import {currentTaskAssignment,reviseTaskAssignment,type AssignmentSpec} from '../src/task-assignment-contract.ts'
 import {mkdtempSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
@@ -191,4 +192,25 @@ it('normalizes missing legacy assignment digest only when no assignment contract
  const attempt=begin(f.host,f.ticketId,f.assignmentId);delete attempt.basis.taskAssignmentDigest;f.host.store.put('async-worker-attempt',attempt.id,attempt)
  const receipt=observe(f.host,attempt,{kind:'result',payload:'legacy completed result'},()=>{})
  expect(receipt.disposition).toBe('applied');expect(isDeliverable(f.host,receipt)).toBe(true)
+})
+
+it('projects only committed worker receipts into the timeline, distinguishing adopted results from archived events',async()=>{
+ const f=await fixture(),trace=new ExecutionTrace(()=>f.host),cursor=trace.events().cursor,a=begin(f.host,f.ticketId,f.assignmentId),event={kind:'result' as const,payload:'PRIVATE_RESULT_DETAIL',nativeTurnId:'PRIVATE_NATIVE_TURN'}
+ expect(()=>observe(f.host,a,event,()=>{throw Error('effect rollback')})).toThrow('effect rollback')
+ expect(trace.events({cursor,ticketId:f.ticketId}).events.filter(e=>e.workerEvent)).toEqual([])
+ const applied=observe(f.host,a,event,()=>{})
+ expect(observe(f.host,a,event,()=>{throw Error('duplicate effect')})).toMatchObject({replayed:true})
+ observe(f.host,a,{kind:'blocked',payload:'PRIVATE_BLOCKER_DETAIL'},()=>{throw Error('late effect')})
+ const page=trace.events({cursor,ticketId:f.ticketId}),receipts=page.events.filter(e=>e.workerEvent)
+ expect(receipts.map(({state,workerEvent})=>({state,workerEvent}))).toEqual([{state:'applied',workerEvent:{kind:'result',disposition:'applied'}},{state:'observed',workerEvent:{kind:'blocked',disposition:'archived'}}])
+ expect(receipts.every(e=>e.stage==='run'&&!e.hasResult&&!e.baseline)).toBe(true)
+ expect(JSON.stringify(page)).not.toMatch(/PRIVATE_|payloadDigest|nativeTurnDigest|attemptId|worker-event:/)
+ expect(trace.events({cursor:page.cursor,ticketId:f.ticketId}).events).toEqual([])
+ const first=trace.events({cursor,ticketId:f.ticketId,limit:1})
+ expect(first.more).toBe(true)
+ expect([...first.events,...trace.events({cursor:first.cursor,ticketId:f.ticketId}).events]).toEqual(page.events)
+ const blocked=f.host.memory.cleanup.blocked.bind(f.host.memory.cleanup)
+ vi.spyOn(f.host.memory.cleanup,'blocked').mockImplementation((kind,id,value)=>kind==='async-worker-event'&&id===applied.id||blocked(kind,id,value))
+ expect(trace.events({cursor,ticketId:f.ticketId}).events.filter(e=>e.workerEvent).map(e=>e.workerEvent?.kind)).toEqual(['blocked'])
+ expect(trace.snapshot({ticketId:f.ticketId}).tasks[0]?.asyncInbox).toMatchObject({received:1,applied:0,archived:1})
 })
