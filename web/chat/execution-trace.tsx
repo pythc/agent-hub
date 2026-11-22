@@ -175,6 +175,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   pageRead.current=signal
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!signal.aborted
   cursor.current=0;visibility.current='';latestBasis.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop('');setConfirmResume('');setBusy(false)
+  const resetTimeline=()=>{cursor.current=0;hasMore=false;setEvents([]);setMore(false);setTruncated(false)}
   const readEvents=async()=>{
    if(!isCurrent())return
    const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
@@ -196,11 +197,11 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     visibility.current=data.visibility;setSnapshot(data)
     if(!hasMore)await readEvents()
     if(isCurrent())setError('')
-   }catch(cause){if(isCurrent()){const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead'){cursor.current=0;setEvents([]);hasMore=false;setMore(false)}}}
+   }catch(cause){if(isCurrent()){const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead')resetTimeline()}}
    finally{if(isCurrent()){setLoading(false);fetching=false}}
   }
   refreshRef.current=refresh
-  eventRef.current=async()=>{if(fetching||!isCurrent())return;fetching=true;try{await readEvents();if(isCurrent())setError('')}catch{if(isCurrent())setError('trace_refresh_failed')}finally{if(isCurrent())fetching=false}}
+  eventRef.current=async()=>{if(fetching||!isCurrent())return;fetching=true;try{await readEvents();if(isCurrent())setError('')}catch(cause){if(isCurrent()){if(cause instanceof TraceRequestError&&cause.code==='trace_cursor_ahead'){resetTimeline();setError(cause.code)}else setError('trace_refresh_failed')}}finally{if(isCurrent())fetching=false}}
   void refresh();const timer=setInterval(()=>void refresh(),3000)
   return()=>{controller.abort();clearInterval(timer);if(generation.current===current)generation.current++}
  },[selected,binding,contextKey,readSignal])

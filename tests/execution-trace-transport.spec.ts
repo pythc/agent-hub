@@ -126,3 +126,37 @@ it('labels late Worker results as archived rather than presenting them as execut
  expect(JSON.stringify(e)).not.toMatch(/Result saved|Acceptance passed/)
  p.unmount()
 })
+
+it('resets a stale paginated timeline cursor and catches up from the beginning on refresh',async()=>{
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve(snapshot());await tick()
+ const old={id:'event:50',cursor:50,at:'2026-11-22T00:00:00Z',stage:'run',state:'observed',ticketId:task.id,baseline:false}
+ p.pending.shift().resolve({...events(50,true),events:[old]});await tick()
+ button(p.render(),'Load more').props.onClick()
+ expect(p.calls.at(-1).path).toContain('cursor=50&')
+ p.pending.shift().reject({status:409,payload:{code:'trace_cursor_ahead'}});await tick()
+ expect(p.stateValues()).toContain('trace_cursor_ahead')
+ expect(find(p.render(),n=>n.type==='li'&&n.key===old.id)).toBeUndefined()
+ expect(find(p.render(),n=>n.type==='button'&&n.props.children==='Load more')).toBeUndefined()
+ button(p.render(),'Try refresh').props.onClick()
+ p.pending.shift().resolve({...snapshot(),cursor:3});await tick()
+ expect(p.calls.at(-1).path).toContain('cursor=0&')
+ const current={...old,id:'event:3',cursor:3}
+ p.pending.shift().resolve({...events(3),events:[current]});await tick()
+ expect(find(p.render(),n=>n.type==='li'&&n.key===current.id)).toBeTruthy()
+ expect(find(p.render(),n=>n.props?.role==='alert')).toBeUndefined()
+ p.unmount()
+})
+
+it('preserves the timeline and retry cursor on an ordinary pagination error',async()=>{
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve(snapshot());await tick()
+ const event={id:'event:5',cursor:5,at:'2026-11-22T00:00:00Z',stage:'run',state:'observed',ticketId:task.id,baseline:false}
+ p.pending.shift().resolve({...events(5,true),events:[event]});await tick()
+ button(p.render(),'Load more').props.onClick()
+ p.pending.shift().reject({status:503});await tick()
+ expect(find(p.render(),n=>n.type==='li'&&n.key===event.id)).toBeTruthy()
+ button(p.render(),'Load more').props.onClick()
+ expect(p.calls.at(-1).path).toContain('cursor=5&')
+ p.pending.shift().resolve(events(6));await tick()
+ expect(find(p.render(),n=>n.props?.role==='alert')).toBeUndefined()
+ p.unmount()
+})
