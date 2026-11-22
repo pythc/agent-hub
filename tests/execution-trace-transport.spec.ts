@@ -93,3 +93,25 @@ it('passes async inbox evidence from the selected current task only and refreshe
 it('does not apply late async inbox evidence after the owning workspace changes',async()=>{
  const p=pageFixture();const view=await selectTask(p);button(view,'Refresh').props.onClick();const stale=p.pending.shift(),before=p.writes.length;p.switchContext();stale.resolve(snapshot([{...task,asyncInbox:{schema:1,received:99,applied:99,archived:0,latest:null}}]));await tick();expect(p.writes).toHaveLength(before);expect(p.stateValues().some(v=>v?.tasks?.[0]?.asyncInbox?.received===99)).toBe(false);p.unmount()
 })
+
+it('requires fresh confirmation to stop after the task changes, not just when settings change',async()=>{
+ const p=pageFixture(),group=(view:any)=>find(view,n=>n.props?.['aria-label']==='Confirm stop')
+ let view=await selectTask(p);button(view,'Stop task').props.onClick();view=p.render()
+ const stale=button(group(view),'Stop task').props.onClick
+ p.timers.at(-1).callback();p.pending.shift().resolve(snapshot([{...task}]));await tick();p.pending.shift().resolve(events());await tick()
+ expect(group(p.render())).toBeTruthy()
+ p.timers.at(-1).callback();p.pending.shift().resolve(snapshot([{...task,observed:'revised-contract'}]));await tick();p.pending.shift().resolve(events());await tick()
+ const count=p.calls.length;stale();await tick();expect(p.calls).toHaveLength(count)
+ view=p.render();expect(group(view)).toBeUndefined()
+ button(view,'Stop task').props.onClick();button(group(p.render()),'Stop task').props.onClick()
+ expect(p.calls.at(-1).body).toMatchObject({action:'cancel',revision:7,observed:'revised-contract'});expect(p.calls.length).toBe(count+1)
+ p.unmount()
+})
+it('ignores a queued old repair click after the latest observation changed',async()=>{
+ const p=pageFixture(),blocked={...task,blocker:{resolution:'review_quota',retryPolicy:{mode:'after_repair',automatic:false}}}
+ const view=await selectTask(p,blocked);button(view,'Continue task').props.onClick()
+ const stale=button(p.render(),'Checked, continue once').props.onClick
+ p.timers.at(-1).callback();p.pending.shift().resolve(snapshot([{...blocked,observed:'new-basis'}]));await tick();p.pending.shift().resolve(events());await tick()
+ p.render();const count=p.calls.length;stale();await tick();expect(p.calls).toHaveLength(count)
+ p.unmount()
+})
