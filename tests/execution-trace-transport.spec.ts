@@ -160,3 +160,22 @@ it('preserves the timeline and retry cursor on an ordinary pagination error',asy
  expect(find(p.render(),n=>n.props?.role==='alert')).toBeUndefined()
  p.unmount()
 })
+
+it.each(['snapshot','events'])('clears the old history-cap warning when visibility changes in %s',async(source)=>{
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve(snapshot());await tick()
+ for(let page=0;page<7;page++){
+  const base=page*100,count=page===6?1:100
+  const batch=Array.from({length:count},(_,n)=>({id:'event:'+String(base+n+1),cursor:base+n+1,at:'2026-11-22T00:00:00Z',stage:'run',state:'observed',ticketId:task.id,baseline:false}))
+  p.pending.shift().resolve({...events(base+count,page<6),events:batch});await tick()
+  if(page<6)button(p.render(),'Load more').props.onClick()
+ }
+ const warning=(n:any)=>n.type==='p'&&[n.props.children].flat(Infinity).some(x=>typeof x==='string'&&x.startsWith('Showing the latest 600 loaded activities'))
+ expect(find(p.render(),warning)).toBeTruthy()
+ p.timers[0].callback()
+ p.pending.shift().resolve({...snapshot(),...(source==='snapshot'?{visibility:'new-visibility'}:{})});await tick()
+ expect(p.calls.at(-1).path).toContain(source==='snapshot'?'cursor=0&':'cursor=601&')
+ p.pending.shift().resolve({...events(1),visibility:'new-visibility'});await tick()
+ expect(find(p.render(),warning)).toBeUndefined()
+ expect(find(p.render(),n=>n.type==='li'&&n.key==='event:601')).toBeUndefined()
+ p.unmount()
+})
