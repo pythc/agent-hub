@@ -115,3 +115,14 @@ it('ignores a queued old repair click after the latest observation changed',asyn
  p.render();const count=p.calls.length;stale();await tick();expect(p.calls).toHaveLength(count)
  p.unmount()
 })
+
+it('labels late Worker results as archived rather than presenting them as execution or acceptance',async()=>{
+ const p=pageFixture();p.render();p.flush();p.pending.shift().resolve(snapshot());await tick()
+ const receipt={id:'event:4',cursor:4,at:'2026-11-22T00:00:00Z',stage:'run',state:'observed',ticketId:task.id,baseline:false,workerEvent:{kind:'result',disposition:'archived'}}
+ p.pending.shift().resolve({...events(),events:[receipt]});await tick()
+ const e=find(p.render(),n=>n.type==='li'&&n.key==='event:4')
+ expect(find(e,n=>n.type==='strong')?.props.children).toBe('Worker result')
+ expect(find(e,n=>n.props?.className==='trace-state')?.props.children).toBe('Archived only')
+ expect(JSON.stringify(e)).not.toMatch(/Result saved|Acceptance passed/)
+ p.unmount()
+})

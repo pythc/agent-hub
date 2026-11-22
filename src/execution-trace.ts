@@ -6,6 +6,7 @@ import {recoveryManifest,type RecoveryManifest} from './recovery-manifest.ts'
 import {createHash} from 'node:crypto'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
+import type {WorkerEventReceipt} from './async-worker-inbox.ts'
 import type {Run,Store} from './store.ts'
 import {canRetry,type Ticket} from './vendor/dsh-core/index.ts'
 import {stableDigest} from './sources.ts'
@@ -16,7 +17,7 @@ const stages=['task','assignment','run','approval','tool','result','acceptance',
 const states=['queued','running','waiting','ready','blocked','failed','cancelled','completed','interrupted','uncertain','pending','resolved','expired','passed','insufficient','errored','stale','sent','held','dropped','idle','starting','background','human','delivering','merging','complete','ended','observed','sending','applying','applied','declined'] as const
 export type TraceStage=typeof stages[number]
 export type TraceState=typeof states[number]
-export interface TraceEvent {id:string;cursor:number;at:string;stage:TraceStage;state:TraceState;ticketId?:string;entity:string;entityId:string;baseline:boolean;hasResult?:boolean}
+export interface TraceEvent {id:string;cursor:number;at:string;stage:TraceStage;state:TraceState;ticketId?:string;entity:string;entityId:string;baseline:boolean;hasResult?:boolean;workerEvent?:{kind:WorkerEventReceipt['kind'];disposition:WorkerEventReceipt['disposition']}}
 export class TraceError extends Error {
  constructor(readonly code:string,readonly status=409){super(code);this.name='TraceError'}
 }
@@ -68,7 +69,7 @@ const legacy={
  'ticket.created':{stage:'task',state:'queued'},'ticket.resumed':{stage:'task',state:'queued'},'ticket.ended':{stage:'task',state:'ended'},
  'assignment.started':{stage:'assignment',state:'running'},'assignment.ended':{stage:'assignment',state:'ended'},
 } as const
-const eventTypes=['execution.trace',...Object.keys(legacy)]
+const eventTypes=['execution.trace','worker.receipt',...Object.keys(legacy)]
 const eventPredicate=`json_valid(body) AND json_extract(body,'$.type') IN (${eventTypes.map(sqlString).join(',')})`
 /** Observation hooks append safe metadata in the authoritative write's transaction.
  * They never decide or mutate task, job or outbox state. */
@@ -124,6 +125,13 @@ export class ExecutionTrace {
   for(const row of page){
    const body=JSON.parse(String(row.body)),old=legacy[body.type as keyof typeof legacy],ticketId=old?body.data?.ticketId:body.ticketId
    if(typeof ticketId==='string'&&!visible(host,ticketId))continue
+   if(body.type==='worker.receipt'){
+    if(body.schema!==1||typeof ticketId!=='string'||typeof body.receiptId!=='string')continue
+    const receipt=host.store.get<WorkerEventReceipt>('async-worker-event',body.receiptId)
+    if(!receipt||receipt.schema!==1||receipt.id!==body.receiptId||receipt.ticketId!==ticketId||host.memory.cleanup.blocked('async-worker-event',receipt.id,receipt)||!['progress','blocked','result'].includes(receipt.kind)||!['applied','archived'].includes(receipt.disposition))continue
+    events.push({id:'event:'+row.seq,cursor:Number(row.seq),at:String(row.at),stage:'run',state:receipt.disposition==='applied'?'applied':'observed',ticketId,entity:'async-worker-event',entityId:opaque('async-worker-event:'+receipt.id),baseline:false,workerEvent:{kind:receipt.kind,disposition:receipt.disposition}})
+    continue
+   }
    if(!old&&(body.schema!==1||!(stages as readonly unknown[]).includes(body.stage)))continue
    const stage:TraceStage=old?.stage??(body.stage==='tool'&&body.callKind&&body.callKind!=='tool'?'run':body.stage)
    const state=old?body.type==='ticket.ended'&&body.data?.outcome==='stopped'?'cancelled':old.state:enumState(body.state)
@@ -169,7 +177,7 @@ export class ExecutionTrace {
   if((!blocker||['manual','after_repair'].includes(blocker.retryPolicy.mode))&&!ticket.ended&&!unknown&&!held&&!approvals.length&&!ticket.attention&&run?.threadId&&['idle','interrupted'].includes(run.phase)&&canRetry(ticket)&&!host.executionActive(ticket.id)&&!jobs.some(j=>j.state==='running')&&!work.some(w=>['running','starting'].includes(w.state))&&!workflow.some(w=>!['applied','declined','stale','observed'].includes(w.state))&&!host.workflows.unsettled(ticket.id)){
    try{if(host.model.describe?.(run.threadId).resume&&this.authorized(host,ticket,run))actions.push('resume_session')}catch{/* Preserve backend and session identity fences. */}
   }
-  const events=host.store.list<{schema:number;ticketId:string;kind:'progress'|'blocked'|'result';disposition:'applied'|'archived';observedAt:number}>('async-worker-event').filter(e=>e.ticketId===ticket.id)
+  const events=host.store.list<WorkerEventReceipt>('async-worker-event').filter(e=>e.ticketId===ticket.id&&typeof e.id==='string'&&!host.memory.cleanup.blocked('async-worker-event',e.id,e))
   const verifiedEvents=events.every(e=>e.schema===1&&['progress','blocked','result'].includes(e.kind)&&['applied','archived'].includes(e.disposition)&&Number.isSafeInteger(e.observedAt)&&e.observedAt>=0&&e.observedAt<=8640000000000000)
   const last=verifiedEvents?[...events].sort((a,b)=>b.observedAt-a.observedAt)[0]:undefined
   const asyncInbox:AsyncInboxSummary|undefined=events.length&&verifiedEvents?{schema:1,received:events.length,applied:events.filter(e=>e.disposition==='applied').length,archived:events.filter(e=>e.disposition==='archived').length,latest:last?{kind:last.kind,disposition:last.disposition,observedAt:last.observedAt}:null}:undefined

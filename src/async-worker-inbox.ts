@@ -138,6 +138,8 @@ export function observe(host:Runtime,attempt:WorkerAttempt,event:WorkerEvent,app
    if(result&&typeof (result as {then?:unknown}).then==='function')throw Error('async_worker_apply_must_be_synchronous')
   }
   host.store.put('async-worker-event',id,receipt)
+  // Only an opaque receipt link enters the audit; trace reads recheck the retained row.
+  host.store.audit({type:'worker.receipt',schema:1,ticketId:receipt.ticketId,receiptId:id})
   if(event.kind!=='progress'&&!terminal)host.store.put('async-worker-terminal',attempt.id,{schema:1,ticketId:attempt.ticketId,assignmentId:attempt.assignmentId,attemptId:attempt.id,eventId:id})
   return {...receipt,replayed:false}
  })
