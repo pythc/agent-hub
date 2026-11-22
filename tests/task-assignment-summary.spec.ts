@@ -48,3 +48,14 @@ it.each([
 it('keeps unknown and prototype-named blockers generic',()=>{
  for(const blocker of ['PRIVATE_UNKNOWN','toString','__proto__']){const html=render({...dto(),blocker});expect(html).toContain('Assignment restriction recorded');expect(html).not.toContain(blocker)}
 })
+
+it('displays the assignment revision separately from the interface version and preserves older responses',()=>{
+ const value={...dto(),contractRevision:3}
+ expect(render(value)).toContain('Assignment agreement</summary>')
+ expect(render(value)).toContain('Contract revision</dt><dd>3')
+ expect(render(value)).toContain('Interface version</dt><dd>1')
+ expect(render(value,'zh-CN')).toContain('派工约定版本</dt><dd>3')
+ for(const revision of [undefined,null,0,-1,1.5,'3',Number.MAX_SAFE_INTEGER+1]){const html=render({...value,contractRevision:revision});expect(html).not.toContain('Contract revision');expect(html).toContain('Review the saved change')}
+ const getter=vi.fn(()=>3);Object.defineProperty(value,'contractRevision',{get:getter})
+ expect(render(value)).not.toContain('Contract revision');expect(getter).not.toHaveBeenCalled()
+})
