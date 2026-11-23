@@ -3,9 +3,9 @@ import type {Delivery} from './store.ts'
 
 const time=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null
 /** Read-only host observations; these are not reservations or recipient receipts. */
-export function schedulePlanState(plan:{active:boolean;nextAt?:number;revision:number},now:number){
+export function schedulePlanState(plan:{active:boolean;nextAt?:number;revision:number;endedAt?:number;snoozeUntil?:number},now:number){
  const nextDueAt=plan.active?time(plan.nextAt):null
- return {schema:1 as const,state:!plan.active?'paused' as const:nextDueAt===null?'expired' as const:nextDueAt<=now?'due' as const:'scheduled' as const,
+ return {schema:1 as const,state:plan.endedAt!==undefined?'ended' as const:(plan.snoozeUntil??0)>now?'snoozed' as const:!plan.active?'paused' as const:nextDueAt===null?'expired' as const:nextDueAt<=now?'due' as const:'scheduled' as const,
   revision:plan.revision,nextDueAt,misfire:'coalesce_latest' as const,overlap:'skip' as const}
 }
 export function scheduledRunLifecycle(run:ScheduledRun,messages:Pick<Delivery,'status'>[]){

@@ -18,18 +18,19 @@ import {timingSchema,nextTime,latestDue,type Timing} from './schedule-time.ts'
 const id=z.string().min(1).max(300)
 const dutySchema=z.object({id,name:id,entryIds:z.array(id).min(1),instruction:z.string().min(1).max(16000),mode:z.enum(['off','observe','auto']).default('observe')}).strict()
 const settingsSchema=z.object({quietHours:quietHoursSchema.nullable().optional(),enabled:z.boolean(),debounceMs:z.number().int().min(0).max(30000).default(1500),maxWaitMs:z.number().int().min(1).max(60000).default(5000),cooldownMs:z.number().int().min(0).max(3600000).default(60000)}).strict().refine(x=>x.maxWaitMs>=x.debounceMs,'maxWaitMs must cover debounceMs')
-const scheduleSchema=z.object({id,name:id,triggerId:id,skill:skillRefSchema.optional(),prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true)}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
-export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.run','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional()}).strict()
+const scheduleSchema=z.object({id,name:id,triggerId:id,skill:skillRefSchema.optional(),prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true),quietPriority:z.enum(['normal','urgent']).optional()}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
+export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.snooze','schedule.end','schedule.run','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),snoozeUntil:z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional()}).strict()
 type Command=z.infer<typeof proactiveCommandSchema>
 type Duty=z.infer<typeof dutySchema>&{scopeId:string;revision:number}
 type Controls=z.infer<typeof settingsSchema>&{scopeId:string;revision:number}
-type Schedule=z.infer<typeof scheduleSchema>&{scopeId:string;revision:number;entryId:string;bindingRevision:number;nextAt?:number;createdAt:number}
+type Schedule=z.infer<typeof scheduleSchema>&{scopeId:string;revision:number;entryId:string;bindingRevision:number;nextAt?:number;createdAt:number;snoozeUntil?:number;endedAt?:number}
 export interface ScheduledRun {queuedAt?:number;startedAt?:number;firstDueAt?:number;triggerKind?:'scheduled'|'manual';goalId?:string;id:string;scheduleId:string;scopeId:string;revision:number;scheduledAt:number;createdAt:number;triggerId?:string;triggerHash?:string;spec:Schedule;state:'queued'|'running'|'waiting'|'completed'|'failed'|'cancelled'|'skipped';taskIds:string[];delivery:'none'|'pending'|'sent'|'failed';reason?:string;finishedAt?:number}
+interface NotificationOwner {triggerId:string;inputs:string[];quietDigest?:{runIds:string[];at:number;sourceId:string}}
 export interface MessageBatch {id:string;scopeId:string;entryId:string;discussion:string;actor:string;strength:'explicit'|'inferred';policyVersion:string;settingsRevision:number;triggerIds:string[];firstAt:number;dueAt:number;state:'pending'|'evaluating'|'decided'|'failed';decision?:Intervention;manifest?:ContextManifest;reason?:string}
 export type Intervention=Assessment|{action:'clarify';reason:string;question:string}
 const terminal=new Set(['completed','failed','cancelled','skipped'])
 const defaults={enabled:false,debounceMs:1500,maxWaitMs:5000,cooldownMs:60000,revision:0}
-export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing a schedule only affects future runs; run.cancel stops the selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm} for scheduled external notifications only; null disables it. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
+export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing only affects future runs; schedule.snooze delays future occurrences and scheduled sends until snoozeUntil (Unix milliseconds), schedule.end permanently ends a plan and withdraws unsent notices, and run.cancel stops a selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm,handling:delay|digest,sourceId?,scheduleId?} for wholly scheduled notifications only; null disables it. Only the operator UI can grant a specific plan the urgent quiet-hours exception. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},snoozeUntil:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
 
 /** Durable host extension. Time creates source events; Eval itself never schedules a wake. */
 export class RouterProactive {
@@ -42,8 +43,8 @@ export class RouterProactive {
   // Older versions exhausted their eight-day search at a weekly DST gap.
   // Restore only the next future occurrence, never replay the missed week or
   // resume a paused/expired plan. Normal launch-time authority checks still apply.
-  for(const p of host.store.list<Schedule>('router-schedule'))if(p.active&&p.timing.kind==='weekly'&&p.nextAt===undefined){
-   const nextAt=nextTime(p.timing,this.now())
+  for(const p of host.store.list<Schedule>('router-schedule'))if(p.active&&p.endedAt===undefined&&p.timing.kind==='weekly'&&p.nextAt===undefined){
+   const nextAt=nextTime(p.timing,Math.max(this.now(),p.snoozeUntil??0))
    if(nextAt!==undefined)host.store.put('router-schedule',stableDigest([p.scopeId,p.id]),{...p,nextAt})
   }
  }
@@ -61,7 +62,9 @@ export class RouterProactive {
   const inScope=(v:{scopeId:string})=>v.scopeId===scopeId
   const visible=(entryId:string)=>context?entryId===context.route.entryId:!this.host.scopes.bindings().find(e=>e.id===entryId)?.privateActor
   const acceptedGoals=context?[]:this.host.goals.snapshot().filter(g=>g.scopeId===scopeId&&g.state==='completed'&&g.finalRoundId&&g.nodes?.every(n=>n.workerId)).map(g=>({id:g.id,title:g.title,skill:g.contract?.skill}))
-  return {skills:this.host.skills.list(scopeId,context),acceptedGoals,settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:this.host.store.list<Schedule>('router-schedule').filter(p=>inScope(p)&&visible(p.entryId)).map(p=>({...p,lifecycle:schedulePlanState(p,this.now())})),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r),pendingNotifications:this.pendingNotifications(r),lifecycle:scheduledRunLifecycle(r,this.host.store.deliveries().filter(m=>!m.channel.address.routerInbox&&!!r.triggerId&&(this.host.store.get<{inputs?:string[]}>('router-reply-owner',m.id)?.inputs??[]).includes(r.triggerId)))})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
+  const digests=new Map<string,{at:number;notices:number}>()
+  for(const owner of this.host.store.list<NotificationOwner>('router-reply-owner'))if(owner.quietDigest)for(const id of owner.quietDigest.runIds){const old=digests.get(id);digests.set(id,{at:Math.max(old?.at??0,owner.quietDigest.at),notices:(old?.notices??0)+1})}
+  return {skills:this.host.skills.list(scopeId,context),acceptedGoals,settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:this.host.store.list<Schedule>('router-schedule').filter(p=>inScope(p)&&visible(p.entryId)).map(p=>({...p,lifecycle:schedulePlanState(p,this.now())})),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r),quietDigest:digests.get(r.id),pendingNotifications:this.pendingNotifications(r),lifecycle:scheduledRunLifecycle(r,this.host.store.deliveries().filter(m=>!m.channel.address.routerInbox&&!!r.triggerId&&this.notificationForLifecycle(m.id,r.triggerId)))})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
  }
  private requireManager(scopeId:string,context?:ScopeContext){
   this.host.scopes.scope(scopeId)
@@ -88,6 +91,9 @@ export class RouterProactive {
   const store=this.host.store
   if(x.action==='settings.put'){
    if(!x.settings)throw Error('settings required');const previous=this.controls(x.scopeId);this.revision(previous.revision,x.expectedRevision)
+   const quiet=x.settings.quietHours
+   if(quiet?.sourceId&&!this.host.scopes.bindings().some(e=>e.scopeId===x.scopeId&&e.sourceId===quiet.sourceId&&this.host.scopes.sourceActive(e)&&(context?e.id===context.route.entryId:!e.privateActor)))throw Error('Notification source is not available in this scope')
+   if(quiet?.scheduleId){const plan=store.get<Schedule>('router-schedule',stableDigest([x.scopeId,quiet.scheduleId]));if(!plan)throw Error('Notification topic is not available in this scope');this.checkControlEntry(plan.entryId,context)}
    const next={...x.settings,...(x.settings.quietHours===undefined&&previous.quietHours!==undefined?{quietHours:previous.quietHours}:{}),scopeId:x.scopeId,revision:previous.revision+1};store.put('router-proactive-settings',x.scopeId,next);return next
   }
   if(x.action==='duty.put'){
@@ -109,9 +115,12 @@ export class RouterProactive {
   const planId=x.schedule?.id??x.id??'',key=stableDigest([x.scopeId,planId]),old=store.get<Schedule>('router-schedule',key)
   if(old)this.checkControlEntry(old.entryId,context)
   this.revision(old?.revision??0,x.expectedRevision)
+  if(old?.endedAt!==undefined){if(x.action==='schedule.end')return old;throw Error('This plan has ended; create a separately authorized new plan')}
   if(x.action==='schedule.put'){
    if(!x.schedule)throw Error('schedule required')
-   const spec=x.schedule,anchor=store.triggers.get(spec.triggerId)
+   const spec=x.schedule
+   if(spec.quietPriority==='urgent'&&(context||spec.notification==='silent'))throw Error('A quiet-hours exception needs an explicit operator and a non-silent plan')
+   const anchor=store.triggers.get(spec.triggerId)
    if(!anchor||!anchor.human||this.runForTrigger(anchor.id))throw Error('Schedule needs an original human authorization')
    const a=this.host.routerIngress.get(anchor.id),c=a&&this.host.scopes.context(anchor,a.discussion)
    if(!c||c.route.scopeId!==x.scopeId||this.host.routerIngress.authority(anchor.id).strength!=='explicit'||!this.host.scopes.canManage(c))throw Error('Schedule anchor requires a current explicit scope manager')
@@ -120,16 +129,34 @@ export class RouterProactive {
    if(entry.privateActor&&!context)throw Error('Operator cannot impersonate a private message author')
    if(spec.skill){if(spec.mode!=='standalone')throw Error('Saved skills start a new goal');this.host.skills.reusable(spec.skill,x.scopeId,entry.id,c)}
    if(spec.ticketId){this.host.scopes.checkTask(spec.ticketId,c,true);this.host.scopes.checkTaskEntry(this.host.scopes.ownership(spec.ticketId)!,entry.id,'result')}
-   const next:Schedule={...spec,scopeId:x.scopeId,entryId:entry.id,bindingRevision:entry.revision,revision:(old?.revision??0)+1,createdAt:old?.createdAt??this.now(),nextAt:nextTime(spec.timing,Math.max(this.now(),Date.parse(spec.timing.startAt)))}
+   const snoozeUntil=old?.snoozeUntil, next:Schedule={...spec,snoozeUntil,scopeId:x.scopeId,entryId:entry.id,bindingRevision:entry.revision,revision:(old?.revision??0)+1,createdAt:old?.createdAt??this.now(),nextAt:nextTime(spec.timing,Math.max(this.now(),Date.parse(spec.timing.startAt),snoozeUntil??0))}
    if(next.active&&next.nextAt===undefined)throw Error('No future occurrence in the selected time range')
    store.put('router-schedule',key,next);return next
   }
   if(!old)throw Error('Unknown schedule')
-  if(x.action==='schedule.run'){if(!old.active)throw Error('Resume this schedule before running');this.validatePlan(old);return this.launch(old,this.now(),'manual:'+x.operationId)}
+  if(x.action==='schedule.end'){
+   const next={...old,active:false,nextAt:undefined,snoozeUntil:undefined,endedAt:this.now(),revision:old.revision+1}
+   store.put('router-schedule',key,next)
+   for(const m of store.deliveries())if(m.status==='pending'&&!m.channel.address.routerInbox){
+    const owner=store.get<NotificationOwner>('router-reply-owner',m.id)
+    const runs=owner?this.notificationRuns(owner):undefined
+    if(runs?.some(r=>r.scopeId===old.scopeId&&r.scheduleId===old.id))store.outbox.withdraw(m.id)
+   }
+   return next
+  }
+  if(x.action==='schedule.snooze'){
+   const now=this.now(),until=x.snoozeUntil
+   if(!old.active||until===undefined||until<=now||until>now+30*86400000)throw Error('Snooze an active schedule from now to at most 30 days')
+   this.validatePlan(old)
+   const next={...old,snoozeUntil:until,nextAt:nextTime(old.timing,Math.max(until,old.nextAt??until)),revision:old.revision+1}
+   if(next.nextAt===undefined)throw Error('No scheduled occurrence remains after snooze')
+   store.put('router-schedule',key,next);return next
+  }
+  if(x.action==='schedule.run'){if((old.snoozeUntil??0)>this.now())throw Error('Resume this schedule before running');if(!old.active)throw Error('Resume this schedule before running');this.validatePlan(old);return this.launch(old,this.now(),'manual:'+x.operationId)}
   if(!['schedule.pause','schedule.resume'].includes(x.action))throw Error('Unknown action')
   const active=x.action==='schedule.resume'
   if(active)this.validatePlan(old)
-  const next={...old,active,revision:old.revision+1,...(active?{nextAt:nextTime(old.timing,this.now())}:{})}
+  const next={...old,active,snoozeUntil:undefined,revision:old.revision+1,...(active?{nextAt:nextTime(old.timing,this.now())}:{})}
   if(active&&next.nextAt===undefined)throw Error('Schedule has no future occurrence')
   store.put('router-schedule',key,next);return next
  }
@@ -138,7 +165,7 @@ export class RouterProactive {
   if(context&&context.route.entryId!==entryId||!context&&e.privateActor)throw Error('Use the authorized entry to manage this object')
  }
  private validatePlan(p:Schedule){
-  scheduleSchema.parse(Object.fromEntries(Object.entries(p).filter(([k])=>['id','name','triggerId','prompt','timing','mode','ticketId','notification','active','skill'].includes(k))))
+  scheduleSchema.parse(Object.fromEntries(Object.entries(p).filter(([k])=>['id','name','triggerId','prompt','timing','mode','ticketId','notification','active','skill','quietPriority'].includes(k))))
   const trigger=this.host.store.triggers.get(p.triggerId)
   if(!trigger?.human||this.runForTrigger(p.triggerId))throw Error('Schedule authority unavailable')
   this.host.routerIngress.authority(p.triggerId)
@@ -168,10 +195,9 @@ export class RouterProactive {
  private authority(id:string):Mandate|undefined{
   const run=this.runForTrigger(id);if(!run)return
   if(['cancelled','skipped','failed'].includes(run.state))throw Error('Scheduled run is no longer authorized')
-  if(run.state==='queued'){
-   const current=this.host.store.get<Schedule>('router-schedule',stableDigest([run.scopeId,run.scheduleId]))
-   if(!current?.active||current.revision!==run.spec.revision)throw Error('Schedule changed or paused before dispatch')
-  }
+  const current=this.host.store.get<Schedule>('router-schedule',stableDigest([run.scopeId,run.scheduleId]))
+  if(current?.endedAt!==undefined)throw Error('Schedule has been permanently ended')
+  if(run.state==='queued'&&(!current?.active||current.revision!==run.spec.revision||(current.snoozeUntil??0)>this.now()))throw Error('Schedule changed or paused before dispatch')
   const {mandate}=this.validatePlan(run.spec),trigger=this.host.store.triggers.get(id)
   if(!trigger||stableDigest(trigger)!==run.triggerHash)throw Error('Scheduled source integrity mismatch')
   this.host.scopes.assertTrigger(trigger)
@@ -187,17 +213,36 @@ export class RouterProactive {
  }
  noteTask(triggerId:string,ticketId:string){const run=this.runForTrigger(triggerId);if(run&&!run.taskIds.includes(ticketId)){this.host.store.put('router-schedule-run',run.id,{...run,taskIds:[...run.taskIds,ticketId]});if(run.state==='cancelled'&&!this.host.store.tickets.get(ticketId)?.ended)this.host.engine.stopTicket(ticketId,'Scheduled run already cancelled')}}
  notify(triggerId:string){return this.runForTrigger(triggerId)?.spec.notification!=='silent'}
+ private notificationForLifecycle(id:string,triggerId:string){const owner=this.host.store.get<NotificationOwner>('router-reply-owner',id);return !owner?.quietDigest&&!!owner?.inputs?.includes(triggerId)}
  private pendingNotifications(run:ScheduledRun){return !!run.triggerId&&this.host.store.deliveries().some(m=>m.status==='pending'&&!m.channel.address.routerInbox&&(this.host.store.get<{inputs?:string[]}>('router-reply-owner',m.id)?.inputs??[]).includes(run.triggerId!))}
  /** Only wholly scheduled provenance is eligible. Human/mixed input and internal
   * Worker reports never inherit notification delay from a scheduled ancestor. */
- notificationDelay(message:Delivery,owner?:{triggerId:string;inputs:string[]}){
+ private notificationRuns(owner:NotificationOwner){
+  if(!owner.inputs?.length)return
+  const primary=this.runForTrigger(owner.triggerId)
+  if(!primary)return
+  const candidates=owner.inputs.map(id=>this.runForTrigger(id))
+  if(candidates.some(r=>!r||r.scopeId!==primary.scopeId))return
+  return [...new Map([primary,...(candidates as ScheduledRun[])].map(r=>[r.id,r])).values()]
+ }
+ notificationDelay(message:Delivery,owner?:NotificationOwner){
   const store=this.host.store,old=store.get<{baseNextAt:number;until:number}>('scheduled-notification-delay',message.id)
   if(old&&!owner){store.outbox.withdraw(message.id);return {nextAt:message.nextAt,quiet:true}}
-  const runs=owner?.inputs.length?owner.inputs.map(id=>this.runForTrigger(id)):[]
-  const run=owner&&this.runForTrigger(owner.triggerId)
-  const eligible=!message.channel.address.routerInbox&&run&&runs.length&&runs.every(r=>r&&r.scopeId===run.scopeId)
-  if(!eligible&&!old)return {nextAt:message.nextAt,quiet:false}
-  const now=this.now(),raw=eligible?this.controls(run.scopeId).quietHours:undefined,key=stableDigest(raw??null),minute=Math.floor(now/60000)
+  const runs=owner&&!message.channel.address.routerInbox?this.notificationRuns(owner):undefined
+  if(!runs&&!old)return {nextAt:message.nextAt,quiet:false}
+  const now=this.now()
+  const plans=runs?.map(r=>store.get<Schedule>('router-schedule',stableDigest([r.scopeId,r.scheduleId])))??[]
+  if(owner?.quietDigest||plans.some(p=>p?.endedAt!==undefined)){
+   store.outbox.withdraw(message.id);return {nextAt:message.nextAt,quiet:true}
+  }
+  const scopeId=runs?.[0]?.scopeId,rule=scopeId?this.controls(scopeId).quietHours:undefined
+  const sourceMatch=!rule?.sourceId||rule.sourceId===message.channel.source
+  const topicMatch=!rule?.scheduleId||runs?.some(r=>r.scheduleId===rule.scheduleId)
+  // Urgency is an operator grant on the exact plan revision, not a model
+  // or message label. A mixed grant can never lift quiet hours for the group.
+  const sameEntry=!!runs?.every(r=>r.spec.entryId===runs[0]!.spec.entryId)
+  const urgent=sameEntry&&!!runs?.every((r,i)=>r.spec.quietPriority==='urgent'&&plans[i]?.quietPriority==='urgent'&&plans[i]?.revision===r.revision)
+  const raw=sourceMatch&&topicMatch&&!urgent?rule:undefined,key=stableDigest(raw??null),minute=Math.floor(now/60000)
   let cached=this.quietCache.get(key)
   if(!cached||cached.minute!==minute){
    const parsed=quietHoursSchema.nullable().optional().safeParse(raw)
@@ -205,7 +250,15 @@ export class RouterProactive {
    if(this.quietCache.size>=256)this.quietCache.clear()
    this.quietCache.set(key,cached)
   }
-  const until=cached.until
+  if(cached.until!==undefined&&raw?.handling==='digest'&&owner&&runs&&sameEntry&&message.attempts===0){
+   // Digest metadata shares the actual outbox owner's provenance/tombstones.
+   // It is never a new outbound message and never contains the original text.
+   const quietDigest={runIds:runs.map(r=>r.id),at:now,sourceId:message.channel.source}
+   store.atomic(()=>{store.outbox.withdraw(message.id);store.put('router-reply-owner',message.id,{...owner,quietDigest})})
+   return {nextAt:message.nextAt,quiet:true}
+  }
+  const snooze=plans.reduce((max,p)=>Math.max(max,p?.snoozeUntil??0),0)
+  const until=Math.max(cached.until??0,snooze>now?snooze:0)||undefined
   // An explicit retry or a new failure may have replaced next_at since our write.
   const baseNextAt=old&&message.nextAt===old.until?old.baseNextAt:message.nextAt
   const nextAt=Math.max(baseNextAt,until??0)
@@ -235,7 +288,7 @@ export class RouterProactive {
    if(b.strength==='inferred'&&last+settings.cooldownMs>now)continue
    store.enqueue('router-batch:'+b.id+':'+b.dueAt,'router-batch',{batchId:b.id,discussion:b.discussion})
   }
-  for(const p of store.list<Schedule>('router-schedule'))if(p.active&&p.nextAt!==undefined&&p.nextAt<=now){
+  for(const p of store.list<Schedule>('router-schedule'))if(p.active&&p.endedAt===undefined&&(p.snoozeUntil??0)<=now&&p.nextAt!==undefined&&p.nextAt<=now){
    store.atomic(()=>{
     const due=latestDue(p.timing,p.nextAt!,Math.min(now,p.timing.endAt?Date.parse(p.timing.endAt):now))
     const next={...p,nextAt:nextTime(p.timing,Math.max(now,due)+1)}
@@ -294,7 +347,8 @@ export class RouterProactive {
    r.taskIds=this.ownedTasks(r)
    const jobs=store.db.prepare('SELECT id,kind,state,payload,error FROM jobs').all().filter(j=>{try{return JSON.parse(String(j.payload)).triggerId===r.triggerId}catch{return false}})
    const messages=store.deliveries().filter(d=>(store.get<any>('router-reply-owner',d.id)?.inputs??[]).includes(r.triggerId!))
-   const delivery=messages.some(m=>['failed','uncertain','held','dropped'].includes(m.status))?'failed':messages.some(m=>m.status!=='sent')?'pending':messages.length?'sent':'none'
+   const external=messages.filter(m=>!store.get<NotificationOwner>('router-reply-owner',m.id)?.quietDigest)
+   const delivery=external.some(m=>['failed','uncertain','held','dropped'].includes(m.status))?'failed':external.some(m=>m.status!=='sent')?'pending':external.length?'sent':'none'
    const pendingReports=store.deliveries().some(d=>d.ticketId&&r.taskIds.includes(d.ticketId)&&!['sent','dropped'].includes(d.status))||store.list<any>('router-inbox').some(m=>r.taskIds.includes(m.ticketId)&&!store.get('router-read',m.id))
    const tasks=r.taskIds.map(id=>store.tickets.get(id)),failed=jobs.some(j=>['failed','blocked','uncertain'].includes(String(j.state))),busy=pendingReports||jobs.some(j=>['pending','running'].includes(String(j.state)))
    let state=r.state
