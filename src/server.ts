@@ -54,6 +54,7 @@ import {browserRequest} from './browser-http.ts'
 import {serveWebhooks} from './webhook-http.ts'
 import {WebhookError} from './webhook-protocol.ts'
 import {enabledView,viewCatalog,viewArtifactReference,viewVersion} from './workspace-view-package.ts'
+import {ArtifactDiscussion,ArtifactDiscussionError} from './artifact-discussion.ts'
 import {viewQuerySchema,workspaceViewData} from './workspace-view-data.ts'
 
 export async function serve(runtime: Runtime,options:{configurationPreview?:boolean;createRuntime?:(config:Config,activationId?:string,startupSourceIds?:readonly string[])=>Runtime|Promise<Runtime>;pluginGitHub?:PluginGitHub;clientHome?:string;clientName?:string}={}) {
@@ -386,6 +387,19 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='GET'&&path==='/router-scopes'){send(res,200,runtime.scopes.snapshot());return}
     if(req.method==='GET'&&path==='/router-proactive/state'){send(res,200,runtime.proactive.snapshot(new URL(req.url!,'http://localhost').searchParams.get('scopeId')??''));return}
+    if(path.startsWith('/api/artifact-discussions/')){
+      if(!['GET','POST'].includes(req.method??'')){send(res,405,{code:'method_not_allowed'});return}
+      if(options.configurationPreview){send(res,403,{code:'preview_restricted'});return}
+      if(new URL(req.url!,'http://localhost').search){send(res,400,{code:'invalid_discussion_query'});return}
+      const discussion=path.slice('/api/artifact-discussions/'.length)
+      const input=req.method==='POST'?await operatorBody(req):undefined
+      requireCurrentOperator(req)
+      const owner=account.status(req).user?.id??'local-operator'
+      const service=new ArtifactDiscussion(runtime)
+      try{send(res,200,req.method==='POST'?service.append(discussion,owner,input):service.read(discussion,owner))}
+      catch(error){if(error instanceof ArtifactDiscussionError){send(res,error.status,{code:error.code});return}throw error}
+      return
+    }
     if(path==='/artifact-catalog'){
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
       const params=new URL(req.url!,'http://localhost').searchParams

@@ -34,6 +34,7 @@ export function ArtifactResult({id,language='en'}:{id:string;language?:'en'|'zh-
    <div><dt>ID</dt><dd>{value.id}</dd></div><div><dt>SHA-256</dt><dd>{value.sha256}</dd></div>
   </dl><p>{L('Only available to authorized operators of this workspace. History cleanup may remove retained bytes. This record does not establish content acceptance, sending or publication.','仅当前工作区获授权的操作者可访问。历史清理可能删除保留的文件；此记录不表示内容已验收、发送或发布。')}</p>
   {download?<a href={download} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{L('Download this exact version','下载此固定版本')}</a>:<p role="status">{L('The retained file is no longer available.','保留的文件已不可用。')}</p>}
+  {download&&<p><a href={'#artifact-discussion/file/'+id+'/'+value.version+'/'+value.sha256}>{L('Discuss this version','讨论此版本')}</a></p>}
   <ArtifactReferenceDetails reference={value} current={download?'available':'unavailable'} L={L}/>
   </article>:null}
  </section>
