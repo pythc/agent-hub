@@ -190,6 +190,35 @@ export class ConnectorManagement {
  plan(value:unknown):{revision:number;source:SourceConfig;credentials:Record<string,string>}{
   return this.buildPlan(value)
  }
+ /** Review the exact new draft, not values retained only by the browser. */
+ newConnectionPlan(value:unknown){
+  const host=this.host(),registry=host.sourceRegistry,planned=this.plan(value),{source}=planned
+  const definition=this.definition(source.kind),digest=stableDigest(definition)
+  const availability=this.credentialAvailability(planned),credentialPaths=Object.values(definition.credentials)
+  const credentialMaterial=()=>credentialPaths.flatMap(path=>{
+   const ref=pointer(source,path)
+   if(typeof ref!=='string')return []
+   return [ref,Object.hasOwn(planned.credentials,ref)?planned.credentials[ref]!:credentialPresent(ref)?process.env[ref]!:''].filter(Boolean)
+  })
+  const secrets=credentialMaterial(),credentialBasis=this.sealed(secrets)
+  const redact=(value:string)=>secrets.some(secret=>value.includes(secret))?'':value
+  const fields=(definition.setup?.fields??[]).flatMap(field=>{
+   const path=fieldPath(definition,field)
+   if(credentialPaths.some(secret=>secret===path||secret.startsWith(path+'/')||path.startsWith(secret+'/')))return []
+   const value=pointer(source,path)
+   if(typeof value==='string')return [{field:field.name,values:[redact(value)]}]
+   if(Array.isArray(value)&&value.every((item):item is string=>typeof item==='string'))return [{field:field.name,values:value.map(redact)}]
+   return []
+  })
+  const review={revision:planned.revision,kind:source.kind,label:redact(source.label??definition.label),actorCount:source.allowedActors.length,fields,credentialAvailability:availability,startsDisabled:true as const}
+  const revalidate=()=>{
+   if(this.host()!==host||this.host().sourceRegistry!==registry)throw new ConnectorError('connector_conflict',409)
+   this.checkRevision(planned.revision)
+   if(stableDigest(this.definition(source.kind))!==digest||this.sealed(credentialMaterial())!==credentialBasis)throw new ConnectorError('connector_conflict',409)
+  }
+  revalidate()
+  return {...planned,review,revalidate}
+ }
  private buildPlan(value:unknown,original?:SourceConfig):{revision:number;source:SourceConfig;credentials:Record<string,string>}{
   const input=this.parseDraft(value);this.checkRevision(input.revision)
   const host=this.host(),definition=this.definition(input.kind),fields=definition.setup?.fields
