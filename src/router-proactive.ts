@@ -18,18 +18,20 @@ import {timingSchema,nextTime,latestDue,type Timing} from './schedule-time.ts'
 const id=z.string().min(1).max(300)
 const dutySchema=z.object({id,name:id,entryIds:z.array(id).min(1),instruction:z.string().min(1).max(16000),mode:z.enum(['off','observe','auto']).default('observe')}).strict()
 const settingsSchema=z.object({quietHours:quietHoursSchema.nullable().optional(),enabled:z.boolean(),debounceMs:z.number().int().min(0).max(30000).default(1500),maxWaitMs:z.number().int().min(1).max(60000).default(5000),cooldownMs:z.number().int().min(0).max(3600000).default(60000)}).strict().refine(x=>x.maxWaitMs>=x.debounceMs,'maxWaitMs must cover debounceMs')
+const reminderSchema=z.object({id,name:id,triggerId:id,timezone:z.string(),startAt:z.string()}).strict()
 const scheduleSchema=z.object({id,name:id,triggerId:id,skill:skillRefSchema.optional(),prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true)}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
-export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.run','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional()}).strict()
+export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.run','schedule.cancel','reminder.put','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional(),reminder:reminderSchema.optional()}).strict()
 type Command=z.infer<typeof proactiveCommandSchema>
 type Duty=z.infer<typeof dutySchema>&{scopeId:string;revision:number}
 type Controls=z.infer<typeof settingsSchema>&{scopeId:string;revision:number}
-type Schedule=z.infer<typeof scheduleSchema>&{scopeId:string;revision:number;entryId:string;bindingRevision:number;nextAt?:number;createdAt:number}
+type Schedule=z.infer<typeof scheduleSchema>&{scopeId:string;revision:number;entryId:string;bindingRevision:number;nextAt?:number;createdAt:number;reminder?:true;cancelledAt?:number;promotion?:{goalId:string;at:number}}
+export interface CommitmentOrigin {scheduleId:string;scopeId:string;entryId:string;discussion:string;owner:string;stopCondition:'explicit_cancel_or_authority_revoked'}
 export interface ScheduledRun {queuedAt?:number;startedAt?:number;firstDueAt?:number;triggerKind?:'scheduled'|'manual';goalId?:string;id:string;scheduleId:string;scopeId:string;revision:number;scheduledAt:number;createdAt:number;triggerId?:string;triggerHash?:string;spec:Schedule;state:'queued'|'running'|'waiting'|'completed'|'failed'|'cancelled'|'skipped';taskIds:string[];delivery:'none'|'pending'|'sent'|'failed';reason?:string;finishedAt?:number}
 export interface MessageBatch {id:string;scopeId:string;entryId:string;discussion:string;actor:string;strength:'explicit'|'inferred';policyVersion:string;settingsRevision:number;triggerIds:string[];firstAt:number;dueAt:number;state:'pending'|'evaluating'|'decided'|'failed';decision?:Intervention;manifest?:ContextManifest;reason?:string}
 export type Intervention=Assessment|{action:'clarify';reason:string;question:string}
 const terminal=new Set(['completed','failed','cancelled','skipped'])
 const defaults={enabled:false,debounceMs:1500,maxWaitMs:5000,cooldownMs:60000,revision:0}
-export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing a schedule only affects future runs; run.cancel stops the selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm} for scheduled external notifications only; null disables it. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
+export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. Create a simple one-time reminder only after an unambiguous request by the current human, using reminder.put with {id,name,triggerId,timezone,startAt} from exact /remind <ISO time with offset> <IANA zone> <text>, with no model turn on delivery. Hypothetical requests are not reminders. schedule.cancel retires an unpromoted plan, unlike pause. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing a schedule only affects future runs; run.cancel stops the selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm} for scheduled external notifications only; null disables it. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'},reminder:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
 
 /** Durable host extension. Time creates source events; Eval itself never schedules a wake. */
 export class RouterProactive {
@@ -60,8 +62,57 @@ export class RouterProactive {
   this.host.scopes.scope(scopeId)
   const inScope=(v:{scopeId:string})=>v.scopeId===scopeId
   const visible=(entryId:string)=>context?entryId===context.route.entryId:!this.host.scopes.bindings().find(e=>e.id===entryId)?.privateActor
+  const plans=this.host.store.list<Schedule>('router-schedule').filter(inScope)
+  const visiblePlan=(p:Schedule)=>{
+   if(!visible(p.entryId))return false
+   if(!p.reminder&&!p.promotion&&!p.cancelledAt)return true
+   try{return this.host.scopes.readOnly(()=>this.layerVisible(this.validatePlan(p).context,context))}catch{return false}
+  }
+  const plansById=new Map(plans.map(p=>[p.id,p] as const))
   const acceptedGoals=context?[]:this.host.goals.snapshot().filter(g=>g.scopeId===scopeId&&g.state==='completed'&&g.finalRoundId&&g.nodes?.every(n=>n.workerId)).map(g=>({id:g.id,title:g.title,skill:g.contract?.skill}))
-  return {skills:this.host.skills.list(scopeId,context),acceptedGoals,settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:this.host.store.list<Schedule>('router-schedule').filter(p=>inScope(p)&&visible(p.entryId)).map(p=>({...p,lifecycle:schedulePlanState(p,this.now())})),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r),pendingNotifications:this.pendingNotifications(r),lifecycle:scheduledRunLifecycle(r,this.host.store.deliveries().filter(m=>!m.channel.address.routerInbox&&!!r.triggerId&&(this.host.store.get<{inputs?:string[]}>('router-reply-owner',m.id)?.inputs??[]).includes(r.triggerId)))})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
+  const commitments=this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>this.commitmentLayers(scopeId,context)))
+  return {commitments,skills:this.host.skills.list(scopeId,context),acceptedGoals,settings:this.controls(scopeId),duties:this.duties().filter(d=>inScope(d)&&d.entryIds.every(visible)),schedules:plans.filter(visiblePlan).map(p=>({...p,lifecycle:schedulePlanState(p,this.now())})),runs:this.host.store.list<ScheduledRun>('router-schedule-run').filter(r=>inScope(r)&&r.spec&&visible(r.spec.entryId)&&visiblePlan(plansById.get(r.scheduleId)??r.spec)).slice(-100).map(r=>({...r,activeWork:this.unsettled(r),pendingNotifications:this.pendingNotifications(r),lifecycle:scheduledRunLifecycle(r,this.host.store.deliveries().filter(m=>!m.channel.address.routerInbox&&!!r.triggerId&&(this.host.store.get<{inputs?:string[]}>('router-reply-owner',m.id)?.inputs??[]).includes(r.triggerId)))})),decisions:this.host.store.list<MessageBatch>('router-batch').filter(b=>inScope(b)&&visible(b.entryId)).slice(-100)}
+ }
+ private layerVisible(owner:ScopeContext,current?:ScopeContext){
+  return current?owner.route.entryId===current.route.entryId&&owner.route.discussion===current.route.discussion&&owner.actor===current.actor:!this.host.scopes.binding(owner.route.entryId).privateActor
+ }
+ private checkPlanOwner(plan:Schedule,current?:ScopeContext){
+  if(!current)return
+  const original=this.host.store.triggers.get(plan.triggerId),admission=this.host.routerIngress.get(plan.triggerId)
+  if(!original||this.host.scopes.actor(original)!==current.actor||admission?.discussion!==current.route.discussion)throw Error('Use the original owner and conversation to manage this commitment')
+ }
+ private commitmentLayers(scopeId:string,context?:ScopeContext){
+  const plans=this.host.store.list<Schedule>('router-schedule').filter(p=>p.scopeId===scopeId)
+  const goals=context?this.host.goals.list(context):this.host.goals.snapshot().filter(g=>g.scopeId===scopeId)
+  const rows=plans.flatMap(p=>{
+   let authority:ReturnType<RouterProactive['validatePlan']>
+   try{authority=this.validatePlan(p)}catch{return []}
+   const owner=authority.context.actor
+   if(!this.layerVisible(authority.context,context))return []
+   const goal=p.promotion&&goals.find(g=>g.id===p.promotion?.goalId)
+   const once=p.timing.kind==='once'&&p.mode==='standalone'&&!p.skill
+   const promotable=!p.promotion&&!p.cancelledAt&&p.mode==='standalone'&&!p.skill&&!p.timing.endAt
+   return [{id:p.id,revision:p.revision,title:p.name,scopeId,entryId:p.entryId,owner,kind:once?'reminder' as const:'commitment' as const,state:p.promotion?(goal?.state==='cancelled'?'cancelled':'promoted'):p.cancelledAt?'cancelled':schedulePlanState(p,this.now()).state,stopCondition:'explicit_cancel_or_authority_revoked' as const,...(p.active&&!p.promotion?{nextAt:p.nextAt}:{}),...(p.promotion?{goalId:p.promotion.goalId}:{}),...(promotable?{promoteText:'/promote-reminder '+encodeURIComponent(p.id)}:{})}]
+  })
+  return [...rows,...goals.map(g=>({id:g.id,revision:g.revision,title:g.title,scopeId,entryId:g.entryId,owner:g.actor,kind:'goal' as const,state:g.state,stopCondition:'explicit_cancel_or_authority_revoked' as const,...(g.commitmentOrigin?{scheduleId:g.commitmentOrigin.scheduleId}:{})}))]
+ }
+ /** Called inside the same transaction as insertion of the authorized Goal. */
+ promotePlan(origin:NonNullable<import('./router-goals.ts').GoalCommand['promotesSchedule']>,goalId:string,current:ScopeContext):CommitmentOrigin{
+  const store=this.host.store,key=stableDigest([current.route.scopeId,origin.id]),p=store.get<Schedule>('router-schedule',key)
+  if(!p||p.cancelledAt||p.promotion||p.mode!=='standalone'||p.skill||p.timing.endAt)throw Error('Commitment is not available for promotion')
+  this.revision(p.revision,origin.expectedRevision)
+  const prior=this.validatePlan(p).context
+  if(prior.actor!==current.actor||prior.route.entryId!==current.route.entryId||prior.route.discussion!==current.route.discussion)throw Error('Promotion requires the original owner and conversation')
+  if(store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===p.scopeId&&r.scheduleId===p.id&&(this.unsettled(r)||this.unconfirmedDelivery(r))))throw Error('Settle prior runs and deliveries before promotion')
+  store.requireCommitmentLayersSchema()
+  store.put('router-schedule',key,{...p,active:false,nextAt:undefined,revision:p.revision+1,promotion:{goalId,at:this.now()}})
+  return {scheduleId:p.id,scopeId:p.scopeId,entryId:p.entryId,discussion:prior.route.discussion,owner:prior.actor,stopCondition:'explicit_cancel_or_authority_revoked'}
+ }
+ promotedSourceCurrent(link:CommitmentOrigin,goalId:string){
+  const p=this.host.store.get<Schedule>('router-schedule',stableDigest([link.scopeId,link.scheduleId]))
+  if(!p||p.promotion?.goalId!==goalId||p.active||p.cancelledAt)throw Error('Promoted commitment is no longer authorized')
+  const {context}=this.validatePlan(p)
+  if(context.actor!==link.owner||context.route.entryId!==link.entryId||context.route.discussion!==link.discussion)throw Error('Promoted commitment owner or conversation changed')
  }
  private requireManager(scopeId:string,context?:ScopeContext){
   this.host.scopes.scope(scopeId)
@@ -74,6 +125,7 @@ export class RouterProactive {
   if(context){this.host.scopes.assertCurrent(context);if(context.route.scopeId!==x.scopeId)throw Error('Outside Router scope')}
   if(x.action==='list')return this.snapshot(x.scopeId,context)
   this.requireManager(x.scopeId,context)
+  if(context?.trigger.text.trim().startsWith('/remind ')&&x.action!=='reminder.put')throw Error('Use the reminder action for this request')
   if(!x.operationId||x.expectedRevision===undefined)throw Error('Mutation requires operationId and expectedRevision')
   const key=stableDigest([x.scopeId,context?.actor??'operator',context?.route.entryId??'operator',x.operationId]),fingerprint=stableDigest(x)
   return this.host.store.atomic(()=>{
@@ -99,6 +151,7 @@ export class RouterProactive {
   if(x.action==='run.cancel'){
    const run=store.get<ScheduledRun>('router-schedule-run',x.id??'');if(!run||run.scopeId!==x.scopeId)throw Error('Unknown run');this.revision(run.revision,x.expectedRevision)
    this.checkControlEntry(run.spec.entryId,context)
+   if(run.spec.reminder)this.checkPlanOwner(run.spec,context)
    if(terminal.has(run.state)&&!this.unsettled(run)&&!this.pendingNotifications(run))return run
    const taskIds=this.ownedTasks(run)
    const goal=run.goalId&&this.host.goals.get(run.goalId)
@@ -106,9 +159,41 @@ export class RouterProactive {
    for(const id of taskIds){const t=store.tickets.get(id);if(t&&!t.ended)this.host.engine.stopTicket(id,'Scheduled run stopped by a person')}
    const next={...run,taskIds,state:'cancelled' as const,finishedAt:this.now()};store.put('router-schedule-run',run.id,next);if(run.triggerId)this.host.abortScheduledRun(run.triggerId);return next
   }
+  if(x.action==='reminder.put'){
+   if(!x.reminder||x.schedule||x.expectedRevision!==0)throw Error('A new reminder requires reminder details and revision zero')
+   const {id,name,triggerId,timezone,startAt}=x.reminder
+   if(!store.triggers.get(triggerId)?.channel)throw Error('The authorized conversation has no reply channel')
+   if(context&&context.trigger.text.trim()!=='/remind '+startAt+' '+timezone+' '+name)throw Error('Use /remind <ISO time with offset> <IANA zone> <text>, or create it in the management panel')
+   const key=stableDigest([x.scopeId,id])
+   if(store.get('router-schedule',key))throw Error('Reminder already exists')
+   if(context){
+    const previous=store.list<Schedule>('router-schedule').find(p=>p.scopeId===x.scopeId&&p.triggerId===triggerId&&p.reminder)
+    if(previous)return previous
+   }
+   const result=this.apply({...x,action:'schedule.put',reminder:undefined,schedule:{id,name,triggerId,prompt:name,timing:timingSchema.parse({kind:'once',timezone,startAt}),mode:'standalone',notification:'always',active:true}},context) as Schedule
+   store.requireCommitmentLayersSchema()
+   const next={...result,reminder:true as const}
+   store.put('router-schedule',key,next)
+   return next
+  }
   const planId=x.schedule?.id??x.id??'',key=stableDigest([x.scopeId,planId]),old=store.get<Schedule>('router-schedule',key)
-  if(old)this.checkControlEntry(old.entryId,context)
+  if(old){this.checkControlEntry(old.entryId,context);if(old.reminder||old.promotion||old.cancelledAt)this.checkPlanOwner(old,context)}
   this.revision(old?.revision??0,x.expectedRevision)
+  if(old?.promotion)throw Error('The commitment was promoted; manage the goal instead')
+  if(old?.cancelledAt)throw Error('The commitment is cancelled; create a new one')
+  if(old?.reminder&&(x.action==='schedule.put'||x.action==='schedule.run'||x.action==='schedule.resume'&&store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===old.scopeId&&r.scheduleId===old.id)))throw Error('A one-time reminder cannot be edited or run again; cancel and create a new one')
+  if(x.action==='schedule.cancel'){
+   if(!old)throw Error('Unknown schedule')
+   this.checkPlanOwner(old,context)
+   // Cancel each settled/active receipt and withdraw queued notifications using the existing run control.
+   for(const run of store.list<ScheduledRun>('router-schedule-run'))if(run.scopeId===old.scopeId&&run.scheduleId===old.id&&(this.unsettled(run)||this.pendingNotifications(run))){
+    this.apply({...x,action:'run.cancel',id:run.id,expectedRevision:run.revision},context)
+   }
+   store.requireCommitmentLayersSchema()
+   const stopped={...old,active:false,nextAt:undefined,revision:old.revision+1,cancelledAt:this.now()}
+   store.put('router-schedule',key,stopped)
+   return stopped
+  }
   if(x.action==='schedule.put'){
    if(!x.schedule)throw Error('schedule required')
    const spec=x.schedule,anchor=store.triggers.get(spec.triggerId)
@@ -167,6 +252,11 @@ export class RouterProactive {
  }
  private authority(id:string):Mandate|undefined{
   const run=this.runForTrigger(id);if(!run)return
+  if(run.spec.reminder){
+   const plan=this.host.store.get<Schedule>('router-schedule',stableDigest([run.scopeId,run.scheduleId]))
+   if(!plan?.reminder||plan.cancelledAt||plan.promotion)throw Error('Reminder is no longer authorized')
+   this.validatePlan(plan)
+  }
   if(['cancelled','skipped','failed'].includes(run.state))throw Error('Scheduled run is no longer authorized')
   if(run.state==='queued'){
    const current=this.host.store.get<Schedule>('router-schedule',stableDigest([run.scopeId,run.scheduleId]))
@@ -187,6 +277,9 @@ export class RouterProactive {
  }
  noteTask(triggerId:string,ticketId:string){const run=this.runForTrigger(triggerId);if(run&&!run.taskIds.includes(ticketId)){this.host.store.put('router-schedule-run',run.id,{...run,taskIds:[...run.taskIds,ticketId]});if(run.state==='cancelled'&&!this.host.store.tickets.get(ticketId)?.ended)this.host.engine.stopTicket(ticketId,'Scheduled run already cancelled')}}
  notify(triggerId:string){return this.runForTrigger(triggerId)?.spec.notification!=='silent'}
+ private unconfirmedDelivery(run:ScheduledRun){
+  return !!run.triggerId&&this.host.store.deliveries().some(m=>['pending','sending','uncertain','held','failed'].includes(m.status)&&(this.host.store.get<{inputs?:string[]}>('router-reply-owner',m.id)?.inputs??[]).includes(run.triggerId!))
+ }
  private pendingNotifications(run:ScheduledRun){return !!run.triggerId&&this.host.store.deliveries().some(m=>m.status==='pending'&&!m.channel.address.routerInbox&&(this.host.store.get<{inputs?:string[]}>('router-reply-owner',m.id)?.inputs??[]).includes(run.triggerId!))}
  /** Only wholly scheduled provenance is eligible. Human/mixed input and internal
   * Worker reports never inherit notification delay from a scheduled ancestor. */
@@ -253,19 +346,33 @@ export class RouterProactive {
   if(store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===p.scopeId&&r.scheduleId===p.id&&this.unsettled(r)))return skip('Previous run is still active')
   if(p.timing.endAt&&this.now()>Date.parse(p.timing.endAt))return skip('Schedule end time passed')
   try{
-   const {trigger:anchor,mandate}=this.validatePlan(p)
+   const {trigger:anchor,mandate,context}=this.validatePlan(p)
    if(p.mode==='continue'){
     const task=store.tickets.get(p.ticketId!)
     if(!task||task.ended)return skip('Existing task is ended or unavailable; only a new human input can resume it')
    }
    const thread=p.mode==='continue'?anchor.threads[0]!.id:'schedule-'+id
    const trigger:Trigger={...anchor,id:'scheduled:'+id,human:false,addressed:undefined,at:new Date(this.now()).toISOString(),text:p.prompt,threads:[{...anchor.threads[0]!,id:thread}],meta:{...anchor.meta,scope:this.host.scopes.binding(p.entryId).nativeId,scheduledRun:id,origin:'scheduler'}}
-   const discussion=trigger.source+':'+thread
+   const discussion=p.reminder?context.route.discussion:trigger.source+':'+thread
+   if(p.reminder){
+    if(!anchor.channel)return skip('Reminder delivery channel unavailable')
+    // Keep the synthetic trigger bound to the original conversation for the
+    // same dispatch/quiet-hours/revocation checks as other scheduled replies.
+    trigger.threads=anchor.threads
+   }
    store.triggers.save(trigger)
    this.host.scopes.context(trigger,discussion)
    run.triggerId=trigger.id;run.triggerHash=stableDigest(trigger);run.queuedAt=this.now()
    store.put('router-schedule-run',id,run)
    store.put('router-admission',trigger.id,{triggerId:trigger.id,discussion,policyVersion:mandate.policyVersion,state:'accepted',reason:'Standing schedule authorization',at:trigger.at,mandate:{...mandate,scope:p.prompt}} satisfies RouterAdmission)
+   if(p.reminder){
+    const messageId='schedule-reminder:'+id
+    store.put('router-reply-owner',messageId,{discussion,triggerId:trigger.id,inputs:[trigger.id]})
+    store.outbox.send({id:messageId,channel:anchor.channel!,kind:'notice',text:p.name})
+    const next={...run,state:'completed' as const,delivery:'pending' as const,finishedAt:this.now()}
+    store.put('router-schedule-run',id,next)
+    return next
+   }
    store.enqueue('router:schedule:'+id,p.skill?'router-skill-run':p.mode==='continue'?'router-scheduled-followup':'router',{discussion,triggerId:trigger.id,runId:id})
    return run
   }catch(error){return skip(String(error))}
