@@ -14,7 +14,8 @@ export const GOAL_REPLACEMENT_DB_SCHEMA=17
 export const ASYNC_WORKER_DB_SCHEMA=18
 export const TASK_ASSIGNMENT_DB_SCHEMA=19
 export const PROJECT_INTEGRATION_DB_SCHEMA=20
-export const MAX_DB_SCHEMA=PROJECT_INTEGRATION_DB_SCHEMA
+export const EFFECT_RECEIPT_DB_SCHEMA=21
+export const MAX_DB_SCHEMA=EFFECT_RECEIPT_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
@@ -94,6 +95,7 @@ export class Store implements Repositories {
   requireTaskAssignmentSchema(){this.db.exec('PRAGMA user_version='+Math.max(TASK_ASSIGNMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireAsyncWorkerSchema(){this.db.exec('PRAGMA user_version='+Math.max(ASYNC_WORKER_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireGoalReplacementSchema(){this.db.exec('PRAGMA user_version='+Math.max(GOAL_REPLACEMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
+  requireEffectReceiptSchema(){this.db.exec('PRAGMA user_version='+Math.max(EFFECT_RECEIPT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireWorkflowSchema(){this.db.exec('PRAGMA user_version='+Math.max(WORKFLOW_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireCodeProjectSchema(){this.db.exec('PRAGMA user_version='+Math.max(PROJECT_INTEGRATION_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireEvolutionSchema(){this.db.exec('PRAGMA user_version='+Math.max(EVOLUTION_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}

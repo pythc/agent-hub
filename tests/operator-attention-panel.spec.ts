@@ -189,3 +189,23 @@ it('uses readable titles on existing cards and details while keeping task action
  await button(card,'查看详情').onclick();expect(f.apiCalls[0][0]).toBe('/entry-workspace/task/task-1');const dialog=f.get('opTaskDialog()');expect(walk(dialog).find(n=>n.tagName==='h2').textContent).toBe('[Bug] Review the result');expect(f.get('operator.drawer.id')).toBe('task-1')
  expect(text(f.get("opAttentionCard({id:'legacy',title:'Human task',entryId:'local'})"))).toContain('Human task')
 })
+function effectProposal(state='applied'){
+ return {effectSummary:{schema:1,kind:state==='applied'?'confirmed':state==='observed'?'observed':'unknown',attemptedAt:1000,observedAt:2000},effectReceiptVersion:1,id:'operation',sourceId:'source',originTriggerId:'trigger',entryRevision:1,ownerEpoch:2,dataRevision:3,target:{issueId:'configured-alias'},view:{label:'Change status',account:'account',issue:'remote-issue',current:{name:'Open'}},next:{id:'done',name:'Done'},state,effectReceipt:{schema:1,producer:'workflow_status',localOperationId:'operation',requestDigest:'a'.repeat(64),target:{sourceId:'source',accountId:'account',issueId:'remote-issue'},authorization:{originTriggerId:'trigger',entryRevision:1,ownerEpoch:2,dataRevision:3,sourceIdentityDigest:'b'.repeat(64)},query:{kind:'workflow_state',supported:true},state:state==='applied'?'confirmed':state==='observed'?'observed':'unknown',remoteOperationId:null,remote:{objectId:'remote-issue',revision:'PRIVATE_REVISION',stateId:'done'},attemptedAt:1000,observedAt:2000}}
+}
+it('shows bounded effect evidence without claiming observed state proves this writer',()=>{
+ const f=fixture();f.context.proposal=effectProposal();expect(f.get('workflowOutcome(proposal)')).toContain('本次写入已由回执和回读确认');const body=text(f.get('workflowEffectDetails(proposal)'));expect(body).toContain('效果证据');expect(body).toContain('UTC');expect(body).not.toMatch(/PRIVATE|operation|remote-issue|aaaaaaa|bbbbbbb/)
+ f.context.proposal=effectProposal('observed');expect(f.get('workflowOutcome(proposal)')).toContain('写入方未确认');expect(text(f.get('workflowEffectDetails(proposal)'))).not.toContain('本次写入已由回执');expect(f.apiCalls).toEqual([])
+})
+it('keeps legacy receipts and malformed or inconsistent effect evidence explicitly unknown',()=>{
+ const f=fixture(),legacy:any=effectProposal();delete legacy.effectReceipt;delete legacy.effectReceiptVersion;delete legacy.effectSummary;f.context.proposal=legacy;expect(f.get('workflowOutcome(proposal)')).toContain('历史回执，未捕获统一证据')
+ for(const change of [(v:any)=>v.effectSummary.schema=2,(v:any)=>v.effectSummary.kind='observed',(v:any)=>delete v.effectSummary.observedAt,(v:any)=>v.effectSummary.observedAt=-1,(v:any)=>v.effectSummary.kind='PRIVATE_SECRET',(v:any)=>v.effectSummary.observedAt=0]){const p=effectProposal();change(p);f.context.proposal=p;expect(f.get('workflowOutcome(proposal)')).toContain('写入结果未知');expect(text(f.get('workflowEffectDetails(proposal)'))).not.toContain('PRIVATE_SECRET')}
+ let calls=0;const p=effectProposal();Object.defineProperty(p.effectSummary,'kind',{get(){calls++;throw Error('PRIVATE')}});f.context.proposal=p;expect(f.get('workflowOutcome(proposal)')).toContain('写入结果未知');expect(calls).toBe(0)
+})
+it('retains reconcile as the only uncertain workflow control and adds no effect retry',()=>{
+ const f=fixture();f.context.proposal=effectProposal('uncertain');f.get('operator.work={attention:[],projectReviews:[],workflowActions:[proposal]}');const tree=f.get('opAttention()');expect(button(tree,'核对远端状态')).toBeTruthy();expect(walk(tree).filter(n=>n.tagName==='button'&&/重试|Retry|执行/.test(n.textContent))).toEqual([]);expect(f.apiCalls).toEqual([])
+})
+
+it('never derives confirmation from embedded receipt shape without canonical summary',()=>{
+ const f=fixture();for(const change of [(p:any)=>delete p.effectSummary,(p:any)=>{delete p.effectSummary;delete p.effectReceipt},(p:any)=>{delete p.effectSummary;delete p.effectReceiptVersion},(p:any)=>p.effectSummary={schema:1,kind:'unknown'},(p:any)=>p.effectSummary={schema:1,kind:'legacy'}]){const p=effectProposal();change(p);f.context.proposal=p;expect(f.get('workflowOutcome(proposal)')).toContain('写入结果未知')}
+ const p:any=effectProposal();p.effectSummary={schema:1,kind:'confirmed',attemptedAt:1000,observedAt:2000,raw:'PRIVATE_SECRET',requestDigest:'PRIVATE_DIGEST'};f.context.proposal=p;expect(f.get('workflowOutcome(proposal)')).toContain('本次写入已由回执和回读确认');expect(text(f.get('workflowEffectDetails(proposal)'))).not.toContain('PRIVATE')
+})

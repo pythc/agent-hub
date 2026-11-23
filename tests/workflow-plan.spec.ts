@@ -168,3 +168,16 @@ it.each(['missing','unknown','expired'])('HTTP plan cannot bypass %s Worker auth
  const response=await fetch(s.url+'/worker',{method:'POST',headers:{'content-type':'application/json',...(kind==='missing'?{}:{authorization:'Bearer '+(kind==='unknown'?'unknown':token)})},body:JSON.stringify({name:'superagent_workflow',args:{action:'plan',sourceId:'local',target:'local-issue',stateId:'done'}})})
  expect(response.ok).toBe(false);expect(f.adapter.workflowState).not.toHaveBeenCalled();expect(f.writes).toBe(0)
 })
+
+it('keeps malformed new effect evidence visible as unknown in decision operations',async()=>{
+ const f=await planFixture(),p=await f.propose()
+ await f.h.workflows.decide({id:p.id,decision:'approve'})
+ const saved=f.h.store.get<any>('workflow-action',p.id)
+ for(const effectReceipt of [undefined,null,{...saved.effectReceipt,localOperationId:'different'}]){
+  f.h.store.put('workflow-action',p.id,{...saved,effectReceipt})
+  const before=db(f.h)
+  expect(f.read()!.operations.items).toMatchObject([{execution:'unknown'}])
+  expect(db(f.h)).toBe(before)
+ }
+ expect(f.writes).toBe(1)
+})
