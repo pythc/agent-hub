@@ -1,3 +1,4 @@
+import {ArtifactHandoffStatus} from './artifact-handoff-status.tsx'
 import {ArtifactReferenceDetails} from './artifact-reference-details.tsx'
 import {useEffect,useState} from 'react'
 import type {ArtifactReference} from '../../src/artifact-reference.ts'
@@ -32,8 +33,9 @@ export function ArtifactResult({id,language='en'}:{id:string;language?:'en'|'zh-
    <div><dt>{L('Type','类型')}</dt><dd>{value.mediaType}</dd></div>
    <div><dt>{L('Size','大小')}</dt><dd>{value.bytes.toLocaleString()} {L('bytes','字节')}</dd></div>
    <div><dt>ID</dt><dd>{value.id}</dd></div><div><dt>SHA-256</dt><dd>{value.sha256}</dd></div>
-  </dl><p>{L('Only available to authorized operators of this workspace. History cleanup may remove retained bytes. This record does not establish content acceptance, sending or publication.','仅当前工作区获授权的操作者可访问。历史清理可能删除保留的文件；此记录不表示内容已验收、发送或发布。')}</p>
-  {download?<a href={download} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{L('Download this exact version','下载此固定版本')}</a>:<p role="status">{L('The retained file is no longer available.','保留的文件已不可用。')}</p>}
+  </dl><p>{L('Only available to authorized operators of this workspace. History cleanup may remove retained bytes. Private workspace access is not proof of sending or publication.','仅当前工作区获授权的操作者可访问。历史清理可能删除保留的文件；工作区内访问不代表已发送或发布。')}</p>
+  {download?<a href={download} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{L('Download private workspace copy','下载工作区内副本')}</a>:<p role="status">{L('The retained file is no longer available.','保留的文件已不可用。')}</p>}
+  <ArtifactHandoffStatus key={contextKey+':'+value.id+':'+revision} reference={value} language={language}/>
   <ArtifactReferenceDetails reference={value} current={download?'available':'unavailable'} L={L}/>
   </article>:null}
  </section>

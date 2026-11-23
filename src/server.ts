@@ -1,3 +1,4 @@
+import {artifactHandoff,HandoffConflict} from './artifact-handoff.ts'
 import {LocalDiagnostics,LocalDiagnosticError} from './local-diagnostics.ts'
 import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
@@ -384,6 +385,15 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     if(req.method==='GET'&&path==='/router-management/catalog'){
       send(res,200,{sources:runtime.config.sources.filter(s=>s.enabled).map(s=>({id:s.id,name:s.label??s.id,kind:s.kind})),workers:runtime.manager.list().workers.map(w=>({id:w.id,label:w.label})),backends:[...new Set(runtime.manager.list().workers.map(w=>w.backend))],tasks:runtime.store.tickets.list().map(t=>({id:t.id,title:t.title})),contexts:runtime.store.list<any>('router-admission').filter(a=>a.state==='accepted'&&runtime.store.triggers.get(a.triggerId)?.human&&!runtime.memory.cleanup.blocked('trigger',a.triggerId)&&runtime.store.get<any>('router-route',a.triggerId)&&!runtime.scopes.binding(runtime.store.get<any>('router-route',a.triggerId).entryId).privateActor&&runtime.scopes.sourceActive(runtime.scopes.binding(runtime.store.get<any>('router-route',a.triggerId).entryId))).map(a=>{const route=runtime.store.get<any>('router-route',a.triggerId),entry=runtime.scopes.binding(route.entryId);return {id:a.triggerId,scopeId:route.scopeId,entryId:entry.id,title:runtime.store.triggers.get(a.triggerId)?.text.slice(0,70),conversationId:runtime.store.get<any>('chat-run',a.triggerId)?.conversationId,label:entry.nativeId+' · '+a.at}})});return
     }
+    const handoffRoute=path.match(/^\/artifact-handoffs\/([a-f0-9]{64})$/)
+    if(handoffRoute){
+      requireCurrentOperator(req)
+      if(req.method!=='GET'&&req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
+      const input=req.method==='POST'?z.object({action:z.literal('withdraw'),receiptId:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(await operatorBody(req)):undefined
+      try{send(res,200,artifactHandoff(runtime,handoffRoute[1]!,input?.receiptId))}
+      catch(error){if(error instanceof HandoffConflict){send(res,409,{code:'handoff_changed'});return}send(res,404,{code:'handoff_unavailable'})}
+      return
+    }
     if(req.method==='GET'&&path==='/router-scopes'){send(res,200,runtime.scopes.snapshot());return}
     if(req.method==='GET'&&path==='/router-proactive/state'){send(res,200,runtime.proactive.snapshot(new URL(req.url!,'http://localhost').searchParams.get('scopeId')??''));return}
     if(path==='/artifact-catalog'){
@@ -400,7 +410,18 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       catch{send(res,404,{code:'artifact_unavailable'})}return
     }
     if(req.method==='GET'&&path.startsWith('/goal-artifacts/')){
-      const {artifact,bytes}=runtime.artifacts.download(path.slice('/goal-artifacts/'.length))
+      const id=path.slice('/goal-artifacts/'.length)
+      const handoffReceipts=new URL(req.url!,'http://localhost').searchParams.getAll('handoffReceipt')
+      if(handoffReceipts.length){
+        requireCurrentOperator(req)
+        const receipt=handoffReceipts[0]!
+        if(handoffReceipts.length!==1||!/^[a-f0-9]{64}$/.test(receipt)){send(res,400,{code:'invalid_handoff_receipt'});return}
+        try{
+          const handoff=artifactHandoff(runtime,id)
+          if(handoff.delivery.state!=='ready'||handoff.delivery.receiptId!==receipt){send(res,409,{code:'handoff_changed'});return}
+        }catch{send(res,404,{code:'handoff_unavailable'});return}
+      }
+      const {artifact,bytes}=runtime.artifacts.download(id)
       res.writeHead(200,{'content-type':artifact.mime,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(artifact.path.split('/').at(-1)!),'cache-control':'no-store','x-content-type-options':'nosniff'})
       res.end(bytes);return
     }
