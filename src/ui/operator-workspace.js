@@ -11,7 +11,7 @@ Object.assign(icons, {
   conversations:'M3 4h14v10H8l-5 4V4zM17 9h4v12l-5-4h-5v-3',search:'M21 21l-6-6M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0'
 })
 const opPages = () => ({
-  home: L('Workspace', '工作区'), attention: L('Needs your attention', '待我处理'),
+  home: L('Workspace', '工作区'), attention: L('Work inbox', '工作收件箱'),
   activity: L('Tasks', '任务'), 'active-tasks': L('Tasks', '任务'), catalog: L('Conversation entries', '会话入口'),
   catalogue: L('New connection', '新建接入'), detail: entryName(entryState.selected),
   models: L('Model connections', '模型连接'), 'model-new': L('New model connection', '新建模型连接'),
@@ -44,9 +44,9 @@ async function readOperatorWork() {
   }
 }
 // A transient rendering cache of the existing GET projection, never permission.
-operator.attentionView={bridge:null,unsubscribe:null,key:'',binding:null,request:0,controller:null,snapshot:null,loaded:false,busy:false,failed:false,drawer:null,focus:''}
-const attentionKinds=['task_question','native_question','native_approval','workflow_review','project_review','effect_unknown']
-const attentionStates=['needs_reply','waiting_permission','needs_review','outcome_unknown','expired','unavailable','stale']
+operator.attentionView={bridge:null,unsubscribe:null,key:'',binding:null,request:0,controller:null,snapshot:null,loaded:false,busy:false,failed:false,receiptController:null,receiptError:false,drawer:null,focus:''}
+const attentionKinds=['task_question','native_question','native_approval','workflow_review','project_review','effect_unknown','open_work']
+const attentionStates=['needs_reply','waiting_permission','needs_review','outcome_unknown','expired','unavailable','stale','in_progress']
 function attentionContextKey(c){return JSON.stringify([c.state,c.managed,c.activeId,c.epoch,c.accountId,c.sessionIsolation])}
 function operatorAuthenticationEnded(error,captured){
  const now=operator.attentionView.bridge?.context()
@@ -54,7 +54,7 @@ function operatorAuthenticationEnded(error,captured){
 }
 function attentionActive(){return S.authed&&S.surface==='entries'&&entryState.role==='operator'&&entryState.page==='attention'&&(typeof configurationHost==='undefined'||configurationHost.active())}
 function attentionReset(){
- const v=operator.attentionView;v.request++;v.controller?.abort();v.controller=null;v.snapshot=null;v.loaded=false;v.busy=false;v.failed=false;v.binding=null;v.key=''
+ const v=operator.attentionView;v.request++;v.controller?.abort();v.controller=null;v.receiptController?.abort();v.receiptController=null;v.receiptError=false;v.snapshot=null;v.loaded=false;v.busy=false;v.failed=false;v.binding=null;v.key=''
  if(v.drawer){v.drawer=null;const dialog=document.getElementById('operator-task');if(dialog?.open)dialog.close();dialog?.remove()}
 }
 function attentionPageChanged(){
@@ -77,33 +77,56 @@ function attentionCurrent(binding,key){
 function attentionDTO(value,offset){
  const integer=n=>Number.isSafeInteger(n)&&n>=0,time=n=>integer(n)&&n<=8.64e15,ref=s=>typeof s==='string'&&s.length>0&&s.length<=500
  const sources=['Local operator','Feishu','Slack','WeCom','GitHub','HTTP events','Delegated team','Connection']
- if(value?.schema!==1||value.readOnly!==true||!time(value.observedAt)||!integer(value.total)||value.offset!==offset||value.limit!==25||typeof value.more!=='boolean'||value.more!==(value.offset+value.limit<value.total)||!Array.isArray(value.items)||value.items.length!==Math.min(value.limit,Math.max(0,value.total-value.offset)))throw Error('attention_invalid')
- const validStates={task_question:['needs_reply','stale'],native_question:['needs_reply','expired','unavailable'],native_approval:['waiting_permission','expired','unavailable'],workflow_review:['needs_review','stale'],project_review:['needs_review','stale'],effect_unknown:['outcome_unknown']}
+ if(value?.schema!==1||value.readOnly!==true||!time(value.observedAt)||!integer(value.total)||!integer(value.unread)||value.unread>value.total||value.offset!==offset||value.limit!==25||typeof value.more!=='boolean'||value.more!==(value.offset+value.limit<value.total)||!Array.isArray(value.items)||value.items.length!==Math.min(value.limit,Math.max(0,value.total-value.offset)))throw Error('attention_invalid')
+ const validStates={task_question:['needs_reply','stale'],native_question:['needs_reply','expired','unavailable'],native_approval:['waiting_permission','expired','unavailable'],workflow_review:['needs_review','stale'],project_review:['needs_review','stale'],effect_unknown:['outcome_unknown'],open_work:['in_progress']}
  const seen=new Set(),items=value.items.map(item=>{
-  if(!item||!ref(item.id)||!/^([a-z_]+):[a-f0-9]{64}$/.test(item.id)||seen.has(item.id)||!attentionKinds.includes(item.kind)||!attentionStates.includes(item.state)||!validStates[item.kind]?.includes(item.state)||!sources.includes(item.sourceLabel)||!(item.createdAt===null||time(item.createdAt))||!(item.expiresAt===null||time(item.expiresAt))||typeof item.observed!=='string'||!/^[a-f0-9]{64}$/.test(item.observed)||!item.next||!['task','records','workflow','project_review'].includes(item.next.kind)||!ref(item.next.id)||item.taskRef!==undefined&&(!ref(item.taskRef?.id)||item.taskRef.assignmentId!==undefined&&!ref(item.taskRef.assignmentId)))throw Error('attention_invalid')
+  if(!item||!ref(item.id)||!/^([a-z_]+):[a-f0-9]{64}$/.test(item.id)||seen.has(item.id)||!attentionKinds.includes(item.kind)||!attentionStates.includes(item.state)||!validStates[item.kind]?.includes(item.state)||!sources.includes(item.sourceLabel)||typeof item.read!=='boolean'||!(item.createdAt===null||time(item.createdAt))||!(item.expiresAt===null||time(item.expiresAt))||typeof item.observed!=='string'||!/^[a-f0-9]{64}$/.test(item.observed)||!item.next||!['task','records','workflow','project_review'].includes(item.next.kind)||!ref(item.next.id)||item.taskRef!==undefined&&(!ref(item.taskRef?.id)||item.taskRef.assignmentId!==undefined&&!ref(item.taskRef.assignmentId)))throw Error('attention_invalid')
   seen.add(item.id)
-  return {id:item.id,kind:item.kind,state:item.state,sourceLabel:item.sourceLabel,createdAt:item.createdAt,expiresAt:item.expiresAt,next:{kind:item.next.kind,id:item.next.id},...(item.taskRef?{taskRef:{id:item.taskRef.id}}:{})}
+  return {id:item.id,kind:item.kind,state:item.state,read:item.read,observed:item.observed,sourceLabel:item.sourceLabel,createdAt:item.createdAt,expiresAt:item.expiresAt,next:{kind:item.next.kind,id:item.next.id},...(item.taskRef?{taskRef:{id:item.taskRef.id}}:{})}
  })
- return {observedAt:value.observedAt,total:value.total,offset:value.offset,limit:value.limit,more:value.more,items}
+ return {observedAt:value.observedAt,total:value.total,unread:value.unread,offset:value.offset,limit:value.limit,more:value.more,items}
 }
 async function readAttentionProjection(offset=0,expectedBinding=operator.attentionView.binding,expectedKey=operator.attentionView.key){
  const v=operator.attentionView
  if(!attentionActive()||expectedBinding&&!attentionCurrent(expectedBinding,expectedKey))return
  if(!v.binding){attentionPageChanged();return}
- if(v.busy)return
+ if(v.busy||v.receiptController)return
  const binding=v.binding,key=v.key,request=++v.request,controller=new AbortController()
  v.controller=controller;v.busy=true;v.loaded=true
  const current=()=>request===v.request&&!controller.signal.aborted&&attentionCurrent(binding,key)
  try{
-  const raw=await binding.request('/entry-workspace/attention?offset='+offset+'&limit=25',undefined,false,binding.context.activeId,controller.signal)
+  const raw=await binding.request('/entry-workspace/attention?inbox=1&offset='+offset+'&limit=25',undefined,false,binding.context.activeId,controller.signal)
   if(!current())return
   const snapshot=attentionDTO(raw,offset);v.snapshot=snapshot;v.failed=false
  }catch(error){if(operatorAuthenticationEnded(error,binding.context)){entryError(error);render()}else if(current())v.failed=true}
  finally{if(request===v.request&&v.binding===binding&&v.key===key){v.busy=false;v.controller=null;if(!attentionCurrent(binding,key))attentionReset();else if(typeof editingProjectReview==='undefined'||!editingProjectReview())render()}}
 }
+async function markInboxRead(item,binding,key){
+ const v=operator.attentionView
+ if(!attentionCurrent(binding,key)||v.busy||v.receiptController||!v.snapshot?.items.some(row=>row.id===item.id&&row.observed===item.observed&&!row.read))return
+ const controller=new AbortController()
+ v.receiptController=controller;v.receiptError=false
+ let refresh=false
+ try{
+  const result=await binding.request('/entry-workspace/attention/read',{id:item.id,observed:item.observed},false,binding.context.activeId,controller.signal)
+  if(result?.read!==true)throw Error('attention_receipt_invalid')
+  refresh=true
+ }catch(error){
+  if(operatorAuthenticationEnded(error,binding.context)){entryError(error);render()}
+  else if(attentionCurrent(binding,key)&&!controller.signal.aborted){v.receiptError=true;refresh=error.status===409}
+ }finally{
+  if(v.receiptController===controller){
+   v.receiptController=null
+   if(attentionCurrent(binding,key)){
+    if(refresh)void readAttentionProjection(v.snapshot?.offset??0,binding,key)
+    else render()
+   }
+  }
+ }
+}
 function attentionLabel(item){
- const kinds={task_question:['Task question','任务提问'],native_question:['Execution question','助手提问'],native_approval:['Action confirmation','操作确认'],workflow_review:['External change','外部变更'],project_review:['Project review','项目验收'],effect_unknown:['Operation record','操作记录']}
- const states={needs_reply:['Needs a reply','需要回复'],waiting_permission:['Waiting for confirmation','等待确认'],needs_review:['Needs review','等待核对'],outcome_unknown:['Outcome unknown','结果待核查'],expired:['Expired','已到期'],unavailable:['Unavailable','暂不可用'],stale:['Changed since the request','事项已变化']}
+ const kinds={task_question:['Task question','任务提问'],native_question:['Execution question','助手提问'],native_approval:['Action confirmation','操作确认'],workflow_review:['External change','外部变更'],project_review:['Project review','项目验收'],effect_unknown:['Operation record','操作记录'],open_work:['Open task','未结束任务']}
+ const states={needs_reply:['Needs a reply','需要回复'],waiting_permission:['Waiting for confirmation','等待确认'],needs_review:['Needs review','等待核对'],outcome_unknown:['Outcome unknown','结果待核查'],expired:['Expired','已到期'],unavailable:['Unavailable','暂不可用'],stale:['Changed since the request','事项已变化'],in_progress:['Still open','尚未结束']}
  return L(...kinds[item.kind])+' · '+L(...states[item.state])
 }
 function attentionSourceLabel(value){
@@ -126,6 +149,12 @@ function attentionTarget(item){
  if(item.next.kind==='project_review'&&(operator.work?.projectReviews||[]).some(p=>p.id===item.next.id))return 'attention-project-'+item.next.id
  if(item.taskRef&&(operator.work?.attention||[]).some(t=>t.id===item.taskRef.id))return 'attention-'+item.taskRef.id
  return null
+}
+function inboxTaskLabel(item){
+ if(!item.taskRef)return ''
+ const id=item.taskRef.id,work=operator.work
+ const task=[...(work?.activeTasks||[]),...(work?.attention||[]),...(work?.tasks||[])].find(row=>row.id===id)
+ return typeof task?.displayTitle==='string'&&task.displayTitle?task.displayTitle:id.slice(0,12)
 }
 function openAttentionRecord(item,binding,key){
  const v=operator.attentionView,currentItem=v.snapshot?.items.find(row=>row.id===item.id);if(!attentionCurrent(binding,key)||!currentItem)return
@@ -150,6 +179,13 @@ function attentionRecordDialog(){
  if(item.state==='stale')body.append(el('p','',L('The original request changed. Review current facts first.','原事项已变化，请先核对当前情况。')))
  if(item.state==='outcome_unknown')body.append(el('p','',L('Check what happened before repeating any work.','请先核查实际结果，勿直接重复执行。')))
  const target=attentionTarget(item)
+ if(item.kind==='open_work'&&item.taskRef){
+  const label=inboxTaskLabel(item);if(label)body.append(el('p','',label))
+  body.append(opButton(L('Open existing task','打开已有任务'),()=>{
+   if(!attentionCurrent(d.binding,d.key)||!v.snapshot?.items.some(row=>row.id===item.id&&row.observed===item.observed))return
+   closeAttentionRecord(d);void openOperatorTask(item.taskRef.id)
+  },'button'))
+ }
  if(target)body.append(opButton(L('Find existing item','定位已有事项'),()=>{
   if(!attentionCurrent(d.binding,d.key))return
   closeAttentionRecord();const node=document.getElementById(target);node?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});node?.focus({preventScroll:true})
@@ -167,10 +203,14 @@ function attentionSupplement(){
  if(!snapshot){const phase=v.bridge?.context().state,blocked=phase!=='ready'&&phase!=='pending';const text=el('p','',blocked?L('Open an available workspace or sign in again.','请打开可用工作区，或重新登录。'):v.failed?L('Request status is unavailable. Existing items below still work.','暂时无法读取逐项状态，原有事项仍可处理。'):L('Loading request status…','正在读取逐项状态…'));text.setAttribute('role',v.failed?'alert':'status');box.append(text);if(v.failed)box.append(opButton(L('Refresh status','刷新状态'),()=>void readAttentionProjection(0,binding,key),'button'));return box}
  const time=el('time','attention-observed',L('Read at: ','读取于：')+attentionTime(snapshot.observedAt));time.dateTime=new Date(snapshot.observedAt).toISOString();box.append(time)
  if(v.failed||operator.error){const error=el('p','attention-update-failed',L('Update failed. Showing records from the time above.','更新失败，显示上述时间读取的记录。'));error.setAttribute('role','alert');box.append(error)}
- const items=snapshot.items.filter(item=>!attentionCovered(item))
+ const count=el('p','attention-unread',L('Unread: ','未读：')+snapshot.unread);count.setAttribute('role','status');box.append(count)
+ if(v.receiptError){const error=el('p','attention-update-failed',L('Could not mark this version as read. Check the current item and try again.','未能标记此版本为已读，请查看当前事项后重试。'));error.setAttribute('role','alert');box.append(error)}
+ const items=snapshot.items
  for(const [index,item] of items.entries()){
   const open=opButton(L('View record','查看记录'),()=>openAttentionRecord(item,binding,key),'button');open.id='attention-record-'+index
-  box.append(add(el('article','attention-record-row'),add(el('div'),el('h3','',attentionLabel(item)),el('p','',attentionSourceLabel(item.sourceLabel)+' · '+attentionTime(item.createdAt))),open))
+  const mark=item.read?null:opButton(L('Mark as read','标记已读'),()=>void markInboxRead(item,binding,key),'button')
+  if(mark)mark.disabled=v.busy||!!v.receiptController
+  box.append(add(el('article','attention-record-row'),add(el('div'),el('h3','',attentionLabel(item)+(item.kind==='open_work'?' · '+inboxTaskLabel(item):'')),el('p','',attentionSourceLabel(item.sourceLabel)+' · '+attentionTime(item.createdAt)),el('small','',item.read?L('Read','已读'):L('Unread','未读'))),add(el('div','actions'),open,mark)))
  }
  if(snapshot.offset||snapshot.more)box.append(add(el('div','actions'),snapshot.offset?opButton(L('Previous page','上一页'),()=>void readAttentionProjection(Math.max(0,snapshot.offset-snapshot.limit),binding,key),'button'):null,snapshot.more?opButton(L('Next page','下一页'),()=>void readAttentionProjection(snapshot.offset+snapshot.limit,binding,key),'button'):null))
  return box
@@ -346,7 +386,7 @@ function projectReviewCard(review,editable) {
 }
 function opAttention() {
   const items = operator.work?.attention || []
-  const result = [opHeading(L('Needs your attention', '待我处理'), null,
+  const result = [opHeading(L('Work inbox', '工作收件箱'), L('Reading does not resolve a request or stop work.', '标记已读不会处理请求，也不会停止任务。'),
     opButton(L('Refresh', '刷新'), refreshEntries, 'button', 'refresh')),attentionSupplement()]
   for (const [label, list] of [
     [L('Needs a reply', '需要回复'), items.filter(task => !task.deliveryUncertain && !task.approvalIds?.length)],
