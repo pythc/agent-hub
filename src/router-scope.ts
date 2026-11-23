@@ -1,3 +1,4 @@
+import {accountFence} from './connector-account.ts'
 import {z} from 'zod'
 import {randomUUID} from 'node:crypto'
 import type {Config} from './config.ts'
@@ -43,9 +44,16 @@ export class RouterScopes {
  actor(t:Trigger){return JSON.stringify([t.actor.source,t.actor.id])}
  nativeId(t:Trigger){return String(t.meta.chat??t.meta.scope??t.threads[0]?.id??'')}
  entry(t:Trigger){return this.bindings().find(b=>b.sourceId===t.source&&b.nativeId===this.nativeId(t))}
- sourceActive(b:EntryBinding){const s=this.config.sources.find(s=>s.id===b.sourceId);return !!(b.active&&this.store.get<any>('source-entry-state',b.id)?.available!==false&&s?.enabled&&this.registry.allowsScope(s,b.nativeId))}
+ sourceActive(b:EntryBinding){
+  const s=this.config.sources.find(s=>s.id===b.sourceId)
+  const saved=this.store.get<{namespace:string}>('source-identity',b.sourceId)
+  return !!(b.active&&s?.enabled&&!accountFence(this.store,b.sourceId)&&
+   (s.kind==='local'||saved?.namespace===b.accountNamespace)&&
+   this.store.get<any>('source-entry-state',b.id)?.available!==false&&this.registry.allowsScope(s,b.nativeId))
+ }
  triggerRestriction(t:Trigger):'input_changed'|'entry_unavailable'|'member_unavailable'|undefined {
   if(this.store.get('source-invalid-trigger',t.id))return 'input_changed'
+  if(accountFence(this.store,t.source))return 'entry_unavailable'
   if(!this.enabled())return
   const entry=this.entry(t)
   if(!entry||!this.sourceActive(entry))return 'entry_unavailable'
@@ -95,6 +103,7 @@ export class RouterScopes {
   if(x.action==='entry.bind'){
    const scope=this.scope(x.scopeId),source=this.config.sources.find(s=>s.id===x.sourceId)
    if(!source||!scope.sourceIds.includes(source.id))throw Error('Source is outside management scope')
+   if(accountFence(this.store,source.id))throw Error('Connector account changed; configure a separately bound source')
    if(!this.registry.allowsScope(source,x.nativeId))throw Error('Entry is outside configured source')
    const identity=this.store.get<any>('source-identity',source.id)
    if(source.kind!=='local'&&!identity)throw Error('Verify source account before binding')

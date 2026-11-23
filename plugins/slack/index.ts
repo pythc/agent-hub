@@ -52,10 +52,13 @@ export class SlackSource extends MessageSource {
   }
   private allowed(channel:string){return this.options.channels.includes(channel)}
   validThread(thread:string){const i=thread.indexOf(':');return i>0&&this.allowed(thread.slice(0,i))&&timestamp(thread.slice(i+1))}
-  async identity(){
+  async identity(mode?:'observe'){
     const identity=await this.api('POST','auth.test')
-    if(identity.team_id!==this.options.teamId||!identity.user_id)throw Error('Slack workspace identity mismatch')
-    this.account={id:identity.team_id+':'+identity.user_id,type:identity.bot_id?'bot':'user',verified:true,user:identity.user_id}
+    if(typeof identity.team_id!=='string'||!identity.team_id||typeof identity.user_id!=='string'||!identity.user_id)throw Error('Slack workspace identity unavailable')
+    const observed={id:identity.team_id+':'+identity.user_id,type:identity.bot_id?'bot':'user',verified:true,user:identity.user_id}
+    if(mode==='observe')return observed
+    if(identity.team_id!==this.options.teamId)throw Error('Slack workspace identity mismatch')
+    this.account=observed
     const saved=this.current?.store.get<any>('source-identity',this.config.id)
     if(saved&&saved.principal!==this.account.id)throw Error('Slack connection account changed')
     return this.account

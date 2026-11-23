@@ -1,3 +1,4 @@
+import {accountFence} from './connector-account.ts'
 import {managedConnections} from './managed-config.ts'
 import {sourceDeployment} from './connector-config.ts'
 import {ProcessSource} from './plugin-process.ts'
@@ -86,6 +87,7 @@ export class ConnectorManagement {
  private invalidation(record:SavedDiagnostic):string|undefined {
   try{
    const host=this.host(),config=host.config.sources.find(s=>s.id===record.sourceId)
+   if(accountFence(host.store,record.sourceId))return 'verified_account_changed'
    if(!config||host.settings.current().revision!==record.revision||this.fingerprint(config)!==record.fingerprint)return 'configuration_changed'
    const basis=this.basis(config,record.level),old=record.basis
    if(!old||old.lifecycle!==basis.lifecycle)return 'evidence_lifecycle_changed'
@@ -182,7 +184,8 @@ export class ConnectorManagement {
     const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
     return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
-   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
+   const account=accountFence(host.store,config.id),verified=host.store.get<{namespace:string}>('source-identity',config.id)
+   return {accountBinding:account?{state:'quarantined' as const,reason:account.reason}:verified?{state:'verified' as const}:null,repairAvailable:!account&&this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
   }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them

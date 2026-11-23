@@ -64,10 +64,13 @@ export class LinearSource extends MessageSource {
     if(typeof next!=='string'||!next||next.length>1000||next===previous)throw Error('Linear pagination did not advance')
     return next
   }
-  async identity(){
+  async identity(mode?:'observe'){
     const data=await this.api(`query AgentHubIdentity { viewer { ${userFields} } organization { id } }`)
-    if(data.organization?.id!==this.options.workspaceId||!uuid(data.viewer?.id)||typeof data.viewer.app!=='boolean'||data.viewer.active!==true)throw Error('Linear workspace or account identity mismatch')
-    this.account={id:this.options.workspaceId+':'+data.viewer.id,user:data.viewer.id,type:data.viewer.app?'bot':'user',verified:true}
+    if(!uuid(data.organization?.id)||!uuid(data.viewer?.id)||typeof data.viewer.app!=='boolean'||data.viewer.active!==true)throw Error('Linear workspace or account identity unavailable')
+    const observed={id:data.organization.id+':'+data.viewer.id,user:data.viewer.id,type:data.viewer.app?'bot':'user',verified:true}
+    if(mode==='observe')return observed
+    if(data.organization.id!==this.options.workspaceId)throw Error('Linear workspace identity mismatch')
+    this.account=observed
     const saved=this.current?.store.get<any>('source-identity',this.config.id)
     if(saved&&saved.principal!==this.account.id)throw Error('Linear connection account changed')
     return this.account
