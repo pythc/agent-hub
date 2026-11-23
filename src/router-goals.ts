@@ -1,3 +1,5 @@
+import {candidateNoticePrefix,notificationCandidateId,projectReviewCandidate,type NotificationCandidate} from './notification-candidate.ts'
+import type {ChannelRef} from './vendor/dsh-core/index.ts'
 import {projectIntegrationSummary} from './project-integration-summary.ts'
 import {z} from 'zod'
 import {startCodeProject,type GoalProject,type CodeReceipt} from './project-code.ts'
@@ -130,7 +132,29 @@ export class RouterGoals {
   const run=this.host.proactive.runForTrigger(g.triggerId)
   return run?this.host.store.triggers.get(run.spec.triggerId):this.host.webhooks.notificationAnchor(g.triggerId)
  }
- notice(g:RouterGoal,text:string,review=false){
+ private pendingReviewCandidate(g:RouterGoal,channel:ChannelRef):NotificationCandidate|undefined{
+  const project=g.project,review=project?.review
+  if(!project||!review||review.state!=='pending'||g.state!=='needs_input'||g.supersededBy||g.finalRoundId!==review.roundId)return
+  const round=this.host.store.get<VerificationRound>('goal-verification',review.roundId)
+  const node=g.nodes?.find(n=>n.id===project.integration)
+  const delivery=node?.ticketId&&this.host.store.get<GoalDelivery>('goal-delivery',node.ticketId)
+  const receipt=delivery&&this.host.projectCode.receipt(delivery.id)
+  if(!round||round.goalId!==g.id||round.scopeId!==g.scopeId||round.entryId!==g.entryId||round.nodeId||round.state!=='passed'||
+   !delivery||delivery.id!==review.deliveryId||!receipt||receipt.head!==review.head||receipt.error||receipt.test?.exit!==0||
+   !this.host.verification.current(round,g,{readOnly:true}))return
+  return projectReviewCandidate({scopeId:g.scopeId,entryId:g.entryId,bindingRevision:g.bindingRevision,actor:g.actor,goalId:g.id,channel,
+   reviewId:review.id,roundId:review.roundId,deliveryId:review.deliveryId,head:review.head})
+ }
+ currentNotification(id:string,goalId:string|undefined,channel:ChannelRef,candidate:NotificationCandidate|undefined):boolean{
+  if(candidate?.schema!==1||candidate.kind!=='project-review-pending'||!goalId)return false
+  try{
+   const goal=this.get(goalId),currentChannel=goal&&this.projectRequester(goal)?.channel
+   if(!goal||!currentChannel||!this.host.proactive.notify(goal.triggerId)||stableDigest(channel)!==stableDigest(currentChannel))return false
+   const current=this.pendingReviewCandidate(goal,currentChannel)
+   return !!current&&current.topicKey===candidate.topicKey&&current.factRevision===candidate.factRevision&&(notificationCandidateId(current)===id||!id.startsWith(candidateNoticePrefix)&&this.host.store.get<string>('notification-legacy-alias',notificationCandidateId(current))===id)
+  }catch{return false}
+ }
+ notice(g:RouterGoal,text:string,review=false,pendingReview=false){
   try{
    const {trigger}=this.anchor(g)
    const channel=g.project?this.projectRequester(g)?.channel:trigger.channel
@@ -142,10 +166,28 @@ export class RouterGoals {
     const manifest={...saved,taskOwners:saved.taskOwners.map(t=>({...t,dataRevision:this.host.scopes.ownership(t.id)?.dataRevision??1}))}
     this.host.memory.validate(manifest);return manifest
    })
-   const id='goal-notice:'+stableDigest([g.id,g.revision,text])
+   const latest=pendingReview?this.get(g.id):undefined
+   const candidate=latest&&this.pendingReviewCandidate(latest,channel)
+   if(pendingReview&&(!candidate||stableDigest(latest?.project?.review)!==stableDigest(g.project?.review)))return
+   const legacyId='goal-notice:'+stableDigest([g.id,g.revision,text])
+   const id=candidate?notificationCandidateId(candidate):legacyId
    // The run remains the authority for delayed delivery to its original requester's channel.
-   this.host.store.put('router-reply-owner',id,{goalId:g.id,discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests})
-   this.host.store.outbox.send({id,channel,kind:'reply',text:review?text:'目标「'+g.title+'」尚未完成：'+text})
+   this.host.store.atomic(()=>{
+    // Retain the original owner/evidence and delivery state, even if the new copy differs.
+    if(candidate){
+     if(this.host.store.outbox.status(id)!==undefined||this.host.store.get('notification-legacy-alias',id))return
+     // An exact legacy record may already have sent this review. Keep its
+     // receipt and bind the typed fact without enqueueing a second copy.
+     const legacy=this.host.store.get<{goalId?:string;triggerId:string;manifests?:ContextManifest[]}>('router-reply-owner',legacyId)
+     if(this.host.store.outbox.status(legacyId)!==undefined&&legacy?.goalId===g.id&&legacy.triggerId===g.triggerId&&Array.isArray(legacy.manifests)){
+      this.host.store.put('notification-legacy-alias',id,legacyId)
+      this.host.store.put('router-reply-owner',legacyId,{...legacy,candidate})
+      return
+     }
+    }
+    this.host.store.put('router-reply-owner',id,{goalId:g.id,discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests,...(candidate?{candidate}:{})})
+    this.host.store.outbox.send({id,channel,kind:'reply',text:review?text:'目标「'+g.title+'」尚未完成：'+text})
+   })
   }catch{}
  }
  tick(){
@@ -226,7 +268,7 @@ export class RouterGoals {
  }
  private reviewNotice(g:RouterGoal,code:CodeReceipt){
   const p=g.project!,id=p.review!.id,prefix=this.host.sources.get(p.sourceId)?.verificationCommand,command=prefix?prefix+' ':''
-  this.notice(g,['请验收「'+g.title+'」。','提交 '+code.head,'通过 '+code.test!.command,code.diffStat,'通过请回复「'+command+'验收通过 '+id+'」，需修改请回复「'+command+'退回 '+id+' 修改意见」。也可在控制面查看补丁和测试输出。'].filter(Boolean).join('\n'),true)
+  this.notice(g,['请验收「'+g.title+'」。','提交 '+code.head,'通过 '+code.test!.command,code.diffStat,'通过请回复「'+command+'验收通过 '+id+'」，需修改请回复「'+command+'退回 '+id+' 修改意见」。也可在控制面查看补丁和测试输出。'].filter(Boolean).join('\n'),true,true)
  }
  operatorReview(id:string){
   const record=this.host.store.get<{goalId:string}>('project-review',id),g=record&&this.get(record.goalId)
