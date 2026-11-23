@@ -2,6 +2,7 @@ import {Ajv2020} from 'ajv/dist/2020.js'
 import {randomUUID} from 'node:crypto'
 import {mkdtempSync,rmSync,readFileSync,mkdirSync} from 'node:fs'
 import {join} from 'node:path'
+import {stableDigest} from './sources.ts'
 import {Script} from 'node:vm'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
@@ -93,6 +94,24 @@ export class PluginMarket {
     try{pkg=readPluginPackage(objectDirectory(host.config,target.digest),target.digest)}catch{return blocked('package_unavailable')}
     const manifest=pkg.manifest
     if(manifest.id!==installed.id||manifest.kind!==installed.kind||manifest.version!==target.version||JSON.stringify(packagePermissions(manifest))!==JSON.stringify([...target.permissions].sort()))return blocked('identity_mismatch')
+    // A market confirmation selects code, not a fresh grant for an existing
+    // connection. Keep the old adapter live if an update would expand authority.
+    const before=installed.active
+    const added=target.permissions.some(permission=>!before?.permissions.includes(permission))
+    if(connections.length&&before?.digest!==target.digest){
+      if(added||!before)return blocked('permission_migration_required')
+      try{
+        const prior=readPluginPackage(objectDirectory(host.config,before.digest),before.digest).manifest
+        const changed=manifest.scopesPath!==prior.scopesPath||
+          (manifest.repository!==undefined&&stableDigest(manifest.repository)!==stableDigest(prior.repository??null))||
+          Object.entries(manifest.credentials).some(([key,path])=>prior.credentials[key]!==path)||
+          manifest.tools.some(tool=>{
+            const old=prior.tools.find(t=>t.name===tool.name)
+            return !old||old.resource!==tool.resource||stableDigest(old.inputSchema)!==stableDigest(tool.inputSchema)
+          })
+        if(changed)return blocked('permission_migration_required')
+      }catch{return blocked('package_unavailable')}
+    }
     if(installed.stateVersion!==manifest.stateVersion||connections.some(s=>{const previous=host.store.get<{pluginId:string;stateVersion:number}>('plugin-installation',s.id);return previous&&(previous.pluginId!==manifest.id||previous.stateVersion!==manifest.stateVersion)}))return blocked('state_version_mismatch')
     try{
       // Match SourceRegistry validation exactly. No custom plugin code or any
@@ -136,7 +155,9 @@ export class PluginMarket {
     const connections=installed?.kind?host.config.sources.filter(s=>s.kind===installed.kind).map(s=>s.id):[]
     if(['disable','uninstall'].includes(input.action)&&connections.length)throw new MarketError('plugin_in_use','This connector still has configured connections: '+connections.join(', '))
     const restart=input.action!=='install'&&(installed?.category==='source')&&input.action!=='ignore'
-    const plan:MarketPlan={id:randomUUID(),action:input.action,pluginId:input.pluginId,catalogId:input.catalogId,revision:state.revision,settingsRevision:host.settings.current().revision,expiresAt:Date.now()+600000,plugin,origin,target,permissionsAdded:(target?.permissions??[]).filter(p=>!installed?.active?.permissions.includes(p)),restart,connections}
+    const plan:MarketPlan={id:randomUUID(),action:input.action,pluginId:input.pluginId,catalogId:input.catalogId,revision:state.revision,settingsRevision:host.settings.current().revision,expiresAt:Date.now()+600000,plugin,origin,target,permissionsAdded:(target?.permissions??[]).filter(p=>!installed?.active?.permissions.includes(p)),permissionsRemoved:(installed?.active?.permissions??[]).filter(p=>!target?.permissions.includes(p)),restart,connections}
+    if(installed?.category==='source'&&target&&['activate','enable','rollback'].includes(input.action)&&target.digest!==installed.active?.digest)
+      plan.invalidatedConnectionEvidence=connections
     if(input.action==='install'&&plugin?.category==='source')plan.sourceCompatibility={state:'not_checked',code:'download_required',connections:[]}
     else if(installed?.category==='source'&&target&&['activate','enable','rollback'].includes(input.action))plan.sourceCompatibility=this.sourceCompatibility(installed,target)
     host.store.put('plugin-market-plan',plan.id,plan);return {...plan,blockers:restart?marketBlockers(host):[]}

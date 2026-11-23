@@ -429,7 +429,9 @@ function entryVerificationContents() {
     '',
     done
       ? L('Reply verified in the selected software', '已在所选软件验证回复')
-      : L('Verify in the original conversation', '在原会话验证')
+      : verification.stale
+        ? L('Previous connection verification', '旧连接验证记录')
+        : L('Verify in the original conversation', '在原会话验证')
   )
   const instructions = el(
     'p',
@@ -462,7 +464,7 @@ function entryVerificationContents() {
     )
     list.append(line)
   }
-  const result = [
+  const result = verification.stale ? [title, list] : [
     title,
     instructions,
     entrySnippet(
@@ -471,6 +473,11 @@ function entryVerificationContents() {
     ),
     list
   ]
+  if (verification.stale)
+    result.push(el('p', 'alert warning', L(
+      'This receipt describes an older connection. Start a new verification for the current configuration.',
+      '这份回执仅记录旧连接，请重新验证当前配置。'
+    )))
   if (verification.expired)
     result.push(
       el(
@@ -482,7 +489,7 @@ function entryVerificationContents() {
         )
       )
     )
-  if (verification.observedSender) {
+  if (!verification.stale && verification.observedSender) {
     const sender = verification.observedSender
     result.push(
       add(
