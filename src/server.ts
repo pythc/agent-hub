@@ -1,3 +1,4 @@
+import {peopleIndex} from './people-index.ts'
 import {LocalDiagnostics,LocalDiagnosticError} from './local-diagnostics.ts'
 import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
@@ -259,6 +260,17 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(path==='/api/worker-templates/remove'){send(res,200,templates.remove(input));return}
       if(path==='/api/worker-templates/create'){send(res,200,await templates.create(input));return}
       send(res,404,{code:'not_found'});return
+    }
+    if(path==='/api/people-index'){
+      requireCurrentOperator(req)
+      res.setHeader('cache-control','no-store')
+      if(options.configurationPreview){send(res,403,{code:'preview_restricted'});return}
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      const query=new URL(req.url!,requestOrigin).searchParams,entryId=query.get('entryId'),actorId=query.get('actorId')
+      if(!entryId||!/^[a-f0-9]{64}$/.test(entryId)||query.getAll('entryId').length!==1||
+        query.getAll('actorId').length>1||[...query.keys()].some(key=>key!=='entryId'&&key!=='actorId')||
+        actorId!==null&&(actorId.length<1||actorId.length>300)){send(res,400,{code:'people_index_query_invalid'});return}
+      send(res,200,peopleIndex(runtime,entryId,actorId??undefined));return
     }
     if(path==='/api/local-diagnostics'||path==='/api/local-diagnostics/probe'){
       requireCurrentOperator(req)
