@@ -1,0 +1,334 @@
+{
+  "schemaVersion": 1,
+  "origin": "synthetic",
+  "dataset": {
+    "version": "v1",
+    "cases": [
+      {
+        "id": 1,
+        "category": "ordinary",
+        "expectedRoute": "IGNORE",
+        "expectedGate": "deny",
+        "expectedEffect": "none"
+      },
+      {
+        "id": 2,
+        "category": "ordinary",
+        "expectedRoute": "CONTINUE",
+        "expectedGate": "allow",
+        "expectedEffect": "resume"
+      },
+      {
+        "id": 3,
+        "category": "complex",
+        "expectedRoute": "REVIEW",
+        "expectedGate": "deny",
+        "expectedEffect": "none"
+      },
+      {
+        "id": 4,
+        "category": "complex",
+        "expectedRoute": "INTERVENE",
+        "expectedGate": "allow",
+        "expectedEffect": "start"
+      },
+      {
+        "id": 5,
+        "category": "quoted-instruction",
+        "expectedRoute": "IGNORE",
+        "expectedGate": "deny",
+        "expectedEffect": "none"
+      },
+      {
+        "id": 6,
+        "category": "ambiguous-owner",
+        "expectedRoute": "REVIEW",
+        "expectedGate": "deny",
+        "expectedEffect": "none"
+      },
+      {
+        "id": 7,
+        "category": "revoked-authority",
+        "expectedRoute": "REVIEW",
+        "expectedGate": "deny",
+        "expectedEffect": "none"
+      },
+      {
+        "id": 8,
+        "category": "stale-context",
+        "expectedRoute": "REVIEW",
+        "expectedGate": "deny",
+        "expectedEffect": "none"
+      },
+      {
+        "id": 9,
+        "category": "ordinary",
+        "expectedRoute": "STOP",
+        "expectedGate": "allow",
+        "expectedEffect": "stop"
+      }
+    ]
+  },
+  "off": {
+    "mode": "off",
+    "hostPolicyRevision": "1111111111111111111111111111111111111111",
+    "observations": [
+      {
+        "id": 1,
+        "hostRoute": "IGNORE",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 40,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 0,
+          "costUsdMicros": 12
+        }
+      },
+      {
+        "id": 2,
+        "hostRoute": "CONTINUE",
+        "hostGate": "allow",
+        "hostEffect": "resume",
+        "metrics": {
+          "routerLatencyMs": 55,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 0,
+          "costUsdMicros": 17
+        }
+      },
+      {
+        "id": 3,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 130,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 1,
+          "costUsdMicros": null
+        }
+      },
+      {
+        "id": 4,
+        "hostRoute": "INTERVENE",
+        "hostGate": "allow",
+        "hostEffect": "start",
+        "metrics": {
+          "routerLatencyMs": 112,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 0,
+          "costUsdMicros": 32
+        }
+      },
+      {
+        "id": 5,
+        "hostRoute": "IGNORE",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 38,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 0,
+          "costUsdMicros": 6
+        }
+      },
+      {
+        "id": 6,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 71,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 1,
+          "costUsdMicros": 12
+        }
+      },
+      {
+        "id": 7,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 82,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 0,
+          "costUsdMicros": 19
+        }
+      },
+      {
+        "id": 8,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 50,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 0,
+          "costUsdMicros": null
+        }
+      },
+      {
+        "id": 9,
+        "hostRoute": "STOP",
+        "hostGate": "allow",
+        "hostEffect": "stop",
+        "metrics": {
+          "routerLatencyMs": 44,
+          "auxiliaryLatencyMs": 0,
+          "reworkTurns": 0,
+          "costUsdMicros": 5
+        }
+      }
+    ]
+  },
+  "shadow": {
+    "mode": "shadow",
+    "hostPolicyRevision": "1111111111111111111111111111111111111111",
+    "auxiliaryPolicyRevision": "2222222222222222222222222222222222222222",
+    "observations": [
+      {
+        "id": 1,
+        "hostRoute": "IGNORE",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 42,
+          "auxiliaryLatencyMs": 5,
+          "reworkTurns": 0,
+          "costUsdMicros": 14
+        },
+        "auxiliary": {
+          "status": "ok",
+          "label": "IGNORE"
+        }
+      },
+      {
+        "id": 2,
+        "hostRoute": "CONTINUE",
+        "hostGate": "allow",
+        "hostEffect": "resume",
+        "metrics": {
+          "routerLatencyMs": 56,
+          "auxiliaryLatencyMs": 6,
+          "reworkTurns": 0,
+          "costUsdMicros": 19
+        },
+        "auxiliary": {
+          "status": "ok",
+          "label": "CONTINUE"
+        }
+      },
+      {
+        "id": 3,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 132,
+          "auxiliaryLatencyMs": 14,
+          "reworkTurns": 1,
+          "costUsdMicros": 45
+        },
+        "auxiliary": {
+          "status": "ok",
+          "label": "INTERVENE"
+        }
+      },
+      {
+        "id": 4,
+        "hostRoute": "INTERVENE",
+        "hostGate": "allow",
+        "hostEffect": "start",
+        "metrics": {
+          "routerLatencyMs": 115,
+          "auxiliaryLatencyMs": 12,
+          "reworkTurns": null,
+          "costUsdMicros": 35
+        },
+        "auxiliary": {
+          "status": "ok",
+          "label": "REVIEW"
+        }
+      },
+      {
+        "id": 5,
+        "hostRoute": "IGNORE",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 42,
+          "auxiliaryLatencyMs": 8,
+          "reworkTurns": 0,
+          "costUsdMicros": 8
+        },
+        "auxiliary": {
+          "status": "ok",
+          "label": "STOP"
+        }
+      },
+      {
+        "id": 6,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 74,
+          "auxiliaryLatencyMs": null,
+          "reworkTurns": 1,
+          "costUsdMicros": null
+        },
+        "auxiliary": {
+          "status": "unavailable"
+        }
+      },
+      {
+        "id": 7,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 81,
+          "auxiliaryLatencyMs": 8,
+          "reworkTurns": 0,
+          "costUsdMicros": 20
+        },
+        "auxiliary": {
+          "status": "ok",
+          "label": "CONTINUE"
+        }
+      },
+      {
+        "id": 8,
+        "hostRoute": "REVIEW",
+        "hostGate": "deny",
+        "hostEffect": "none",
+        "metrics": {
+          "routerLatencyMs": 51,
+          "auxiliaryLatencyMs": null,
+          "reworkTurns": 0,
+          "costUsdMicros": null
+        },
+        "auxiliary": {
+          "status": "stale"
+        }
+      },
+      {
+        "id": 9,
+        "hostRoute": "STOP",
+        "hostGate": "allow",
+        "hostEffect": "stop",
+        "metrics": {
+          "routerLatencyMs": 46,
+          "auxiliaryLatencyMs": null,
+          "reworkTurns": 0,
+          "costUsdMicros": 5
+        },
+        "auxiliary": {
+          "status": "skipped"
+        }
+      }
+    ]
+  }
+}
