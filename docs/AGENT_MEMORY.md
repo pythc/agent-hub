@@ -131,3 +131,24 @@ cross-lifetime consolidation, legacy candidate settlement, changes while waiting
 normal permanent corrections and inference guards. No live model/provider calls
 or browser acceptance were performed for this increment. This is not general
 semantic conflict resolution or completion of all O27 interaction work.
+
+### Conditional preferences and temporary exceptions
+
+Preference arbitration is local to the same owner, scope and entry. Related records
+share the same subject; no text-similarity guess links settings across projects.
+A stated preference wins over an inferred one; within that tier task, discussion,
+request phrase and expiry narrow applicability in that order. Equally ranked
+different values for a subject are not applied until the conflict is resolved.
+The detail page explains the latest request's decision without showing other
+entries' records. This does not grant any permissions to a task or tool.
+
+In the signed-in owner's Chat memory settings, open an active standing preference
+and add an exception with a future local date/time. Optionally restrict it to
+requests that contain a literal phrase; matching folds case and whitespace, but
+does not infer meaning. Only `request contains: <literal phrase>` is an executable
+text condition; historical free-form conditions are retained for editing rather
+than automatically applied. Expiry restores the standing preference without
+overwriting it. Revoke an exception to stop using that revision early, without
+forgetting the topic or deleting the source/retained revision history. The
+Chat mutation requires an owned Chat; group entries do not borrow a historical
+actor for this setting.
