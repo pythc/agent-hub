@@ -8,6 +8,7 @@ import {z} from 'zod'
 import {Ajv2020} from 'ajv/dist/2020.js'
 import {configSchema,type SourceConfig} from './config.ts'
 import type {Runtime} from './runtime.ts'
+import type {ManagementScope} from './router-scope.ts'
 import {pointer} from './plugin-package.ts'
 import {stableDigest} from './sources.ts'
 
@@ -173,6 +174,8 @@ export class ConnectorManagement {
  snapshot(){
   const host=this.host(),current=host.settings.current().revision
   const definitions=host.sourceRegistry.connectionDefinitions().map(d=>({kind:d.kind,label:d.label,pluginId:'pluginId'in d?d.pluginId:undefined,version:'version'in d?d.version:undefined,setup:d.setup,scopesPath:d.scopesPath,fields:d.setup?.fields.map(f=>({...f,path:fieldPath(d,f),credential:Object.values(d.credentials).includes(fieldPath(d,f))})),network:d.network,setupAvailable:!!d.setup?.fields.length&&d.setup.fields.every(field=>writableField(d,fieldPath(d,field)))}))
+  const managementScopes=new Map(host.store.list<ManagementScope>('management-scope').map(scope=>[scope.id,scope]))
+  const entries=host.scopes.bindings()
   const diagnostics=host.store.list<ConnectorDiagnostic>('connector-diagnostic').map(record=>{const safe=this.publicRecord(record);return safe.status==='running'&&!this.active.has(safe.id)?{...safe,status:'interrupted' as const,code:'probe_interrupted'}:safe})
   return {revision:current,definitions,instances:host.config.sources.filter(s=>!['local','delegation'].includes(s.kind)).map(config=>{
    const definition=this.definition(config.kind),scopes=host.sourceRegistry.scopes(config)??(definition.scopesPath?pointer(config,definition.scopesPath):[])??[]
@@ -182,8 +185,21 @@ export class ConnectorManagement {
     const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
     return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
-   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
-  }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
+   // Display only the intersection of current local configuration and active
+   // bindings. No scope IDs, task grants, or inferred provider access.
+   const bound=entries.filter(entry=>{
+    const owner=managementScopes.get(entry.scopeId)
+    return entry.sourceId===config.id&&entry.provider===config.kind&&!!owner&&owner.tenantId===entry.tenantId&&owner.sourceIds.includes(config.id)&&host.scopes.sourceActive(entry)
+   })
+   const mode=(configured:boolean)=>!config.enabled||!configured?'disabled' as const:'requires_context' as const
+   const capabilityMatrix={schema:1 as const,revision:current,sourceId:config.id,
+    verification:'not_verified' as const,scopeModel:managementScopes.size?'scoped' as const:'legacy' as const,
+    intersectionEntryCount:bound.length,groupHistoryEntryCount:bound.filter(entry=>entry.history==='group'&&!entry.privateActor).length,
+    modes:{events:mode(config.capabilities.events),replies:mode(config.capabilities.replies),
+     history:mode(config.capabilities.resources),files:mode(config.capabilities.resources),
+     mcp:'separate_connection' as const}}
+   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,capabilityMatrix,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
+  }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,authorization:enabled?'requires_worker_and_task' as const:'disabled' as const,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them
   * directly to Onboarding.sourcePlan and returns only its reviewed plan. */
