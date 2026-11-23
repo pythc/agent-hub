@@ -27,3 +27,15 @@ export function connectorCheckLabel(state:ConnectorCheckState,layer:ConnectorLay
  if(state==='passed')return ({configuration:['Fields valid','字段有效'],reachable:['Responded','有响应'],authentication:['Identity verified','身份已验证'],capabilities:['Directory readable','可读取成员目录']} as Record<ConnectorLayer,[string,string]>)[layer]
  return ({failed:['Check failed','检查未通过'],running:['Checking…','检查中…'],unsupported:['Check unavailable','暂不支持检查'],unknown:['Not verified','尚未验证'],stale:['Check again','需重新检查'],interrupted:['Check stopped','检查已中断'],not_checked:['Not checked','尚未检查']} as Record<Exclude<ConnectorCheckState,'passed'>,[string,string]>)[state]
 }
+
+
+/** Only describe the supported missing-proof contract. Old/malformed data
+ * stays unknown rather than implying a verified delivery or a failed send. */
+export function connectorMessageEvidence(record:unknown,sourceId:string,revision:number):'missing_proof'|'unknown'{
+ if(!record||typeof record!=='object')return 'unknown'
+ const value=record as {status?:unknown;evidence?:unknown}
+ if(value.status!=='not_tested'||!value.evidence||typeof value.evidence!=='object')return 'unknown'
+ const e=value.evidence as Record<string,unknown>
+ return e.schema===1&&e.revision===revision&&e.sourceId===sourceId&&e.reason==='no_binding_scoped_message_receipt'&&
+  e.providerAcceptance==='unrecorded'&&e.remoteMessageId==='unrecorded'&&e.independentObservation==='unrecorded'?'missing_proof':'unknown'
+}
