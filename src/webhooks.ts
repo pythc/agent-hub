@@ -43,12 +43,19 @@ export interface WebhookReceipt {id:string;grantId:string;identity:string;finger
 interface AutomationInput {id:string;grantId:string;receiptId:string;triggerHash:string;commandHash:string;mandate:Mandate}
 export interface WebhookDelivery {id:string;event_id:string;grant_id:string;goal_id:string;state:string;body:string;payload_hash:string;target:string;secret_env:string;attempts:number;next_at:number;created_at:number;error?:string}
 
+type CompletionPoll={lastAttempt:number|null;lastSuccess:number|null;coverage:'unknown'|'partial'|'complete';nextEligible:number|null;cursor:number;through:number|null}
+type CompletionNotice={completionEventId:string;grantId:string;goalId:string;observedAt:number}
+const completionPage=100
+const completionDisplayLimit=100
+const emptyCompletionPoll:CompletionPoll={lastAttempt:null,lastSuccess:null,coverage:'unknown',nextEligible:null,cursor:0,through:null}
+
 /** Host-owned grants, durable inbox and callback outbox. No second task engine. */
 export class Webhooks {
  private sends=new Map<string,{controller:AbortController;promise:Promise<void>}>()
  private closing=false
  readonly continuations:WebhookContinuations
  private reconcileAt=0
+ private completionPollFailure:CompletionPoll|undefined
  constructor(private host:Runtime,private now:()=>number=Date.now){
   host.store.db.exec(`
    CREATE TABLE IF NOT EXISTS webhook_inbox(id TEXT PRIMARY KEY, identity TEXT UNIQUE NOT NULL, grant_id TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, body TEXT NOT NULL);
@@ -310,7 +317,77 @@ export class Webhooks {
   if(g.callback.events.includes(type))this.host.store.db.prepare("INSERT INTO webhook_deliveries(id,event_id,grant_id,goal_id,state,body,payload_hash,target,secret_env,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run('dlv_'+stableDigest([eventId,g.id]),eventId,g.id,goal.id,'pending',body,stableDigest(body),g.callback.url,this.outboundKey(g),this.now())
  }
  delivery(id:string):WebhookDelivery|undefined {return this.host.store.db.prepare('SELECT * FROM webhook_deliveries WHERE id=?').get(id) as unknown as WebhookDelivery|undefined}
- snapshot(){return {configured:!!this.host.config.webhooks,protocol:webhookProtocol(this.host.store.db),waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id),rehearsal:this.rehearsalStatus(g)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
+ private completionPollStatus(){
+  const {lastAttempt,lastSuccess,coverage,nextEligible}=this.completionPollFailure??this.host.store.get<CompletionPoll>('webhook-completion-poll','latest')??emptyCompletionPoll
+  return {lastAttempt,lastSuccess,coverage,nextEligible:this.host.isPaused?null:nextEligible}
+ }
+ private currentCompletion(eventId:string,grantId:string,goalId:string){
+  return this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>{
+   const row=this.host.store.db.prepare("SELECT json_extract(body,'$.data.receiptId') receiptId,json_extract(body,'$.data.contractHash') contractHash,json_extract(body,'$.data.acceptance.roundId') roundId FROM webhook_events WHERE id=? AND goal_id=? AND json_extract(body,'$.type')='goal.completed'").get(eventId,goalId)
+   if(!row||typeof row.receiptId!=='string'||typeof row.roundId!=='string')return false
+   try{
+    const receipt=this.receipt(row.receiptId),g=this.grant(grantId),goal=this.host.goals.get(goalId)
+    if(!receipt||receipt.grantId!==grantId||receipt.goalId!==goalId||!g.callback.events.includes('goal.completed')||!goal||goal.state!=='completed'||goal.finalRoundId!==row.roundId||goal.scopeId!==g.scopeId||goal.entryId!==g.entryId||stableDigest(goal.contract)!==row.contractHash||this.host.scopes.binding(g.entryId).privateActor)return false
+    const input=this.host.store.get<AutomationInput>('webhook-input',goal.contract?.triggerId??goal.triggerId)
+    if(input?.grantId!==g.id||input.receiptId!==receipt.id)return false
+    this.approved(g)
+    if(this.host.memory.cleanup.blocked('router-goal',goal.id,goal))return false
+    this.continuations.assertCompletion(goal,g)
+    const round=this.host.store.get<VerificationRound>('goal-verification',row.roundId)
+    return !!round&&round.state==='passed'&&this.host.verification.current(round,goal,{readOnly:true})
+   }catch{return false}
+  }))
+ }
+ private completionDelivery(eventId:string,grantId:string){
+  const deliveryId='dlv_'+stableDigest([eventId,grantId])
+  const s=this.host.store.db.prepare('SELECT state FROM webhook_deliveries WHERE id=? AND event_id=? AND grant_id=?').get(deliveryId,eventId,grantId)
+  const acknowledged=this.host.store.db.prepare('SELECT 1 FROM webhook_attempts WHERE delivery_id=? AND status BETWEEN 200 AND 299 LIMIT 1').get(deliveryId)
+  return {confirmed:!!acknowledged,state:typeof s?.state==='string'?s.state:null}
+ }
+ private completionNotices(grantId:string){
+  const rows=this.host.store.db.prepare("SELECT body FROM records WHERE kind='webhook-completion-notice' AND json_extract(body,'$.grantId')=? ORDER BY json_extract(body,'$.observedAt') DESC,id DESC LIMIT ?").all(grantId,completionDisplayLimit+1)
+  return {partial:rows.length>completionDisplayLimit,items:rows.slice(0,completionDisplayLimit).flatMap(r=>{
+   const notice=JSON.parse(String(r.body)) as CompletionNotice
+   if(!this.currentCompletion(notice.completionEventId,grantId,notice.goalId))return []
+   return [{...notice,confirmed:this.completionDelivery(notice.completionEventId,grantId).confirmed}]
+  })}
+ }
+ /** Existing maintenance can run this; this observer only writes local facts. */
+ private checkCompletions(nextEligible:number){
+  const lastAttempt=this.now(),key='latest'
+  let prior=this.completionPollFailure??emptyCompletionPoll
+  try{
+   prior=this.host.store.get<CompletionPoll>('webhook-completion-poll',key)??emptyCompletionPoll
+   this.host.store.atomic(()=>{
+    const through=prior.through??Number(this.host.store.db.prepare('SELECT COALESCE(MAX(rowid),0) n FROM webhook_events').get()!.n)
+    // Scan a bounded high-water snapshot, not "all" from the first page. Use
+    // rowid for progress independent of authorization outcomes and delays.
+    const rows=this.host.store.db.prepare(`SELECT e.rowid cursor,e.id,e.goal_id,i.grant_id FROM webhook_events e
+     LEFT JOIN webhook_inbox i ON i.id=json_extract(e.body,'$.data.receiptId')
+     WHERE e.rowid>? AND e.rowid<=? AND json_extract(e.body,'$.type')='goal.completed'
+     ORDER BY e.rowid LIMIT ?`).all(prior.cursor,through,completionPage+1)
+    const page=rows.slice(0,completionPage)
+    for(const row of page){
+     if(typeof row.id!=='string'||typeof row.goal_id!=='string'||typeof row.grant_id!=='string')continue
+     const existing=this.host.store.get<CompletionNotice>('webhook-completion-notice',row.id)
+     if(existing)continue
+     const delivery=this.completionDelivery(row.id,row.grant_id)
+     if(!delivery.confirmed&&(!delivery.state||['dead','held'].includes(delivery.state))&&this.currentCompletion(row.id,row.grant_id,row.goal_id)){
+      this.host.store.put('webhook-completion-notice',row.id,{completionEventId:row.id,grantId:row.grant_id,goalId:row.goal_id,observedAt:lastAttempt} satisfies CompletionNotice)
+     }
+    }
+    const partial=rows.length>completionPage
+    this.host.store.put('webhook-completion-poll',key,{lastAttempt,lastSuccess:partial?prior.lastSuccess:this.now(),coverage:partial?'partial':'complete',nextEligible,cursor:partial?Number(page.at(-1)!.cursor):0,through:partial?through:null} satisfies CompletionPoll)
+   })
+   this.completionPollFailure=undefined
+  }catch{
+   // Keep a stable previously successful sweep and retry the same page. Error
+   // messages may include local artifact or configuration detail; omit them.
+   this.completionPollFailure={...prior,lastAttempt,coverage:'unknown',nextEligible}
+   try{this.host.store.put('webhook-completion-poll',key,this.completionPollFailure)}catch{}
+  }
+ }
+ snapshot(){return {completionPoll:this.completionPollStatus(),configured:!!this.host.config.webhooks,protocol:webhookProtocol(this.host.store.db),waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id),rehearsal:this.rehearsalStatus(g)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
  flush(){
   if(this.closing||this.host.isPaused)return
   for(const row of this.host.store.db.prepare("SELECT d.id FROM webhook_deliveries d JOIN records g ON g.kind='webhook-grant' AND g.id=d.grant_id WHERE d.state='pending' AND d.next_at<=? AND json_extract(g.body,'$.deliveryPaused')=0 ORDER BY d.created_at LIMIT 20").all(this.now())){
@@ -360,7 +437,7 @@ export class Webhooks {
  }
  detail(id:string){
   const g=this.grant(id),receipts=this.receipts(id),goalIds=new Set(receipts.flatMap(r=>r.goalId?[r.goalId]:[]))
-  return {grant:g,receipts:receipts.slice(-200),goals:[...goalIds].map(id=>this.host.goals.get(id)),events:this.host.store.db.prepare("SELECT e.body FROM webhook_events e JOIN webhook_inbox i ON i.id=json_extract(e.body,'$.data.receiptId') WHERE i.grant_id=? ORDER BY e.rowid DESC LIMIT 200").all(id).map(r=>JSON.parse(String(r.body)))}
+  return {grant:g,completionNotices:this.completionNotices(id),receipts:receipts.slice(-200),goals:[...goalIds].map(id=>this.host.goals.get(id)),events:this.host.store.db.prepare("SELECT e.body FROM webhook_events e JOIN webhook_inbox i ON i.id=json_extract(e.body,'$.data.receiptId') WHERE i.grant_id=? ORDER BY e.rowid DESC LIMIT 200").all(id).map(r=>JSON.parse(String(r.body)))}
  }
  requireV2(fresh=false){
   if(webhookProtocol(this.host.store.db)===2)return
@@ -386,6 +463,7 @@ export class Webhooks {
   this.continuations.advance()
   if(!force&&this.reconcileAt>this.now())return
   this.reconcileAt=this.now()+60000
+  this.checkCompletions(this.reconcileAt)
   let repaired=0
   // Outbox absence can only be compensated from a retained domain event, never
   // from a Worker claim. Retained IDs and event bytes remain unchanged.
