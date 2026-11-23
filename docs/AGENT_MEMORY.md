@@ -131,3 +131,32 @@ cross-lifetime consolidation, legacy candidate settlement, changes while waiting
 normal permanent corrections and inference guards. No live model/provider calls
 or browser acceptance were performed for this increment. This is not general
 semantic conflict resolution or completion of all O27 interaction work.
+
+### Memory changes and downstream dependencies
+
+The memory detail's edit/delete panel previews affected items in the current
+entry. Counts cover exact ID/revision links in visible notes, pending proposals,
+cached rankings, working summaries, method versions, and reminder plans. Notes
+can depend transitively on other notes. A replacement proposal also depends on
+the exact revision it was written to replace until the proposal is accepted.
+Memory deletion keeps the existing suppression/late-result fences. The host
+discards stale rankings and summaries before deriving new results, retaining
+unrelated entries. Hidden entries and copies outside the host are not counted.
+
+A private Chat owner may explicitly pin standing memory revisions when saving a
+working method. A changed, archived, revoked or expired dependency prevents that
+version from starting new work. Edit the method and review current references
+before saving a new version; the old version's history stays intact. The
+schedule command supports optional `reminderMemory: [{id, revision}]` for an
+explicitly requested, standalone reminder in the owning private Chat. It is not
+a shortcut for task, skill or external tool execution. A stale pinned version
+prevents new/queued reminder dispatch and withdraws only a still-pending,
+wholly scheduled notification. Create or update the reminder with fresh explicit
+authorization and the current note revision to resume; do not relink silently.
+
+Existing methods and schedules with no pinned memory revision keep their
+behavior. The host does not guess dependencies from words, dates or historical
+task input. Editing a memory cannot rewrite an approved task contract or recall
+an already-sent or uncertain external action, and does not imply deleting
+external copies. Existing context authority and source revocation checks remain
+in force.

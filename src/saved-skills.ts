@@ -2,6 +2,7 @@ import {z} from 'zod'
 import {skillParametersSchema,validateSkillParameters,bindSkillParameters,type SkillParameter} from './skill-parameters.ts'
 import type {Runtime} from './runtime.ts'
 import type {ScopeContext} from './router-scope.ts'
+import {memoryRevisionRefSchema,type MemoryRevisionRef} from './router-memory.ts'
 import {skillRefSchema,validateGraph} from './goal-contract.ts'
 import {automationTemplateSchema} from './webhooks.ts'
 import {stableDigest} from './sources.ts'
@@ -14,6 +15,8 @@ type Template=z.infer<typeof automationTemplateSchema>
 type Ref=z.infer<typeof skillRefSchema>
 export interface SkillVersion extends Ref {
   parameters?:SkillParameter[]
+  memoryOwner?:string
+  memoryRevisions?:MemoryRevisionRef[]
   validation?:'source'|'trial'
   scopeId:string
   entryId:string
@@ -24,7 +27,7 @@ export interface SkillVersion extends Ref {
 const id=z.string().min(1).max(300)
 const command=z.discriminatedUnion('action',[
   z.object({action:z.literal('draft'),goalId:id}).strict(),
-  z.object({action:z.literal('save'),goalId:id,expectedVersion:z.number().int().nonnegative(),template:automationTemplateSchema,parameters:skillParametersSchema}).strict(),
+  z.object({action:z.literal('save'),goalId:id,expectedVersion:z.number().int().nonnegative(),template:automationTemplateSchema,parameters:skillParametersSchema,memoryRevisions:z.array(memoryRevisionRefSchema).max(20).optional()}).strict(),
   z.object({action:z.literal('run'),skill:skillRefSchema,triggerId:id,authorizationQuote:z.string().min(1).max(16000),operationId:id,inputs:z.record(z.string(),z.string()).optional()}).strict(),
   z.object({action:z.literal('retire'),skill:skillRefSchema,scopeId:id,entryId:id,expectedRevision:z.number().int().nonnegative()}).strict(),
 ])
@@ -39,12 +42,12 @@ export class SavedSkills {
   }
   list(scopeId:string,context?:ScopeContext){
     if(context)this.host.scopes.assertCurrent(context)
-    return this.versions().filter(v=>v.template&&v.scopeId===scopeId&&this.visible(scopeId,v.entryId,context)).map(v=>({id:v.id,version:v.version,entryId:v.entryId,goalId:v.goalId,title:v.template.title,objective:v.template.objective,parameters:v.parameters??[],...this.status(v)}))
+    return this.versions().filter(v=>v.template&&v.scopeId===scopeId&&(!v.memoryOwner||v.memoryOwner===context?.actor)&&this.visible(scopeId,v.entryId,context)).map(v=>({id:v.id,version:v.version,entryId:v.entryId,goalId:v.goalId,title:v.template.title,objective:v.template.objective,parameters:v.parameters??[],...this.status(v)}))
       .sort((a,b)=>a.title.localeCompare(b.title)||b.version-a.version)
   }
   resolve(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
     const item=this.host.store.get<SkillVersion>('skill-version',stableDigest([ref.id,ref.version]))
-    if(!item?.template||item.scopeId!==scopeId||item.entryId!==entryId||!this.visible(scopeId,entryId,context))throw Error('Skill version is unavailable in this entry')
+    if(!item?.template||item.memoryOwner&&item.memoryOwner!==context?.actor||item.scopeId!==scopeId||item.entryId!==entryId||!this.visible(scopeId,entryId,context))throw Error('Skill version is unavailable in this entry')
     return item
   }
   status(item:SkillVersion){
@@ -53,7 +56,7 @@ export class SavedSkills {
       .filter(g=>g.scopeId===item.scopeId&&g.entryId===item.entryId&&g.contract?.skill?.id===item.id&&g.contract.skill.version===item.version)
     const passed=outcomes.filter(g=>g.state==='completed'&&g.finalRoundId&&this.host.store.get<{state:string}>('goal-verification',g.finalRoundId)?.state==='passed')
     const failed=outcomes.filter(g=>g.state==='held'&&this.host.store.list<{goalId:string;state:string}>('goal-verification').some(r=>r.goalId===g.id&&['failed','insufficient'].includes(r.state)))
-    return {state:lifecycle?.state??(item.validation!=='trial'||passed.length?'active':'candidate'),revision:lifecycle?.revision??0,passed:passed.length,failed:failed.length,validation:item.validation??'legacy'}
+    return {state:lifecycle?.state??(item.memoryRevisions?.some(ref=>!this.host.memory.currentRevision(ref,item.scopeId,item.entryId))?'memory_changed':undefined)??(item.validation!=='trial'||passed.length?'active':'candidate'),revision:lifecycle?.revision??0,passed:passed.length,failed:failed.length,validation:item.validation??'legacy'}
   }
   reusable(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
     const item=this.resolve(ref,scopeId,entryId,context)
@@ -111,7 +114,8 @@ export class SavedSkills {
   }
   execute(ref:Ref,context:ScopeContext,operationId:string,quote:string,inputs?:Record<string,string>){
     const item=this.resolve(ref,context.route.scopeId,context.route.entryId,context),state=this.status(item).state
-    if(state==='retired'||state==='candidate'&&!context.trigger.human)throw Error('This method requires a new explicit trial or has been retired')
+    if(state==='retired'||state==='memory_changed'||state==='candidate'&&!context.trigger.human)throw Error('This method requires a new explicit trial or has been retired')
+    if(item.memoryRevisions?.length)this.host.memory.assertOwnedStandingRevisions(context,item.memoryRevisions)
     const template=bindSkillParameters(item.template,item.parameters??[],inputs)
     this.workers(template,context.route.scopeId)
     return this.host.goals.command({...template,action:'start',operationId,expectedRevision:0,authorizationQuote:quote},context,undefined,ref)
@@ -141,19 +145,24 @@ export class SavedSkills {
     const versions=this.versions().filter(v=>v.id===id).sort((a,b)=>b.version-a.version)
     const latest=versions[0]
     if(input.action==='draft'){
-      if(latest)return latest
+      if(latest){if(latest.memoryOwner&&latest.memoryOwner!==context?.actor)throw Error('Skill version unavailable');return latest}
       const nodes=goal.nodes?.map(({id,title,instruction,workerId,teamTargetId,dependsOn,criterionIds,derivedFrom,supports,outputs})=>({id,title,instruction,workerId,teamTargetId,dependsOn,criterionIds,derivedFrom,supports,outputs}))
       const template=automationTemplateSchema.parse({title:goal.title,objective:goal.objective,criteria:goal.criteria,nodes,plan:goal.plan,maxTurns:goal.maxTurns,maxParallel:goal.maxParallel,maxRepairs:goal.maxRepairs,maxReplans:goal.maxReplans})
       return {id,version:0,scopeId:goal.scopeId,entryId:goal.entryId,goalId:goal.id,acceptanceId:goal.finalRoundId,template}
+    }
+    const memoryRevisions=input.memoryRevisions??latest?.memoryRevisions??[]
+    if(memoryRevisions.length||latest?.memoryRevisions?.length){
+      if(!context||this.host.scopes.binding(goal.entryId).privateActor!==context.actor||!this.host.scopes.canManage(context)||latest?.memoryOwner&&latest.memoryOwner!==context.actor)throw Error('Only the owning entry manager may link or detach memory dependencies')
+      if(memoryRevisions.length)this.host.memory.assertOwnedStandingRevisions(context,memoryRevisions)
     }
     validateSkillParameters(input.template,input.parameters)
     this.workers(input.template,goal.scopeId)
     if(!goal.nodes?.length||goal.nodes.some(node=>!node.workerId))throw Error('A reusable method requires a local Worker plan')
     if(input.expectedVersion!==(latest?.version??0))throw Error('Skill changed. Refresh the version before saving.')
-    if(latest&&this.status(latest).state!=='retired'&&stableDigest([latest.template,latest.parameters??[]])===stableDigest([input.template,input.parameters]))return latest
+    if(latest&&!['retired','memory_changed'].includes(this.status(latest).state)&&stableDigest([latest.template,latest.parameters??[],latest.memoryRevisions??[]])===stableDigest([input.template,input.parameters,memoryRevisions]))return latest
     const original=this.command({action:'draft',goalId:goal.id},context) as SkillVersion
-    const sourceAccepted=!latest&&!input.parameters.length&&stableDigest(original.template)===stableDigest(input.template)
-    const item:SkillVersion={id,scopeId:goal.scopeId,entryId:goal.entryId,goalId:goal.id,acceptanceId:goal.finalRoundId,version:input.expectedVersion+1,template:input.template,parameters:input.parameters,validation:sourceAccepted?'source':'trial'}
+    const sourceAccepted=!latest&&!input.parameters.length&&!memoryRevisions.length&&stableDigest(original.template)===stableDigest(input.template)
+    const item:SkillVersion={id,scopeId:goal.scopeId,entryId:goal.entryId,goalId:goal.id,acceptanceId:goal.finalRoundId,version:input.expectedVersion+1,template:input.template,parameters:input.parameters,...(memoryRevisions.length?{memoryRevisions,memoryOwner:context!.actor}:{}),validation:sourceAccepted?'source':'trial'}
     this.host.store.atomic(()=>{this.host.store.requireEvolutionSchema();this.host.store.put('skill-version',stableDigest([id,item.version]),item)})
     return item
   }
