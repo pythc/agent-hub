@@ -13,7 +13,7 @@ export interface TaskStatusProjection {
  observedAt:number
  execution:{state:ExecutionStatus}
  effects:{state:EffectStatus;receiptCount:number}
- acceptance:{state:AcceptanceStatus;freshness:'current'|'stale'|'unknown'|'not_recorded'}
+ acceptance:{state:AcceptanceStatus;freshness:'current'|'stale'|'unknown'|'not_recorded';evidence?:{program:number;independent:number;integrationCommit?:string}}
  delivery:{state:DeliveryStatus;counts:{total:number;pending:number;retry_wait:number;sending:number;uncertain:number;held:number;dropped:number;recorded:number};evidence:'none'|'host_record';scope:'local'|'external'|'mixed'|'not_recorded'}
 }
 
@@ -85,7 +85,17 @@ function acceptance(host:Runtime,ticket:Ticket):TaskStatusProjection['acceptance
  if(taskRefs[0]!.assignmentId!==assignment?.id||taskRefs[0]!.inputRevision!==(owner?.dataRevision??1)||round.state==='stale')return {state:'stale',freshness:'stale'}
  // The existing verifier owns freshness. Its explicit read-only mode neither
  // registers artifacts nor repairs memory/revocation state on a GET request.
- try{return host.verification.current(round,goal,{readOnly:true})?{state:round.state as AcceptanceStatus,freshness:'current'}:{state:'stale',freshness:'stale'}}catch{return {...unknownAcceptance}}
+ try{
+  const freshness=host.verification.freshness(round,goal,{readOnly:true})
+  if(freshness==='unknown')return {...unknownAcceptance}
+  if(freshness==='stale')return {state:'stale',freshness}
+  const integration=snapshot.binding?.integration
+  return {state:round.state as AcceptanceStatus,freshness,evidence:{
+   program:round.checks.filter(c=>c.method==='program').length,
+   independent:round.checks.filter(c=>c.method==='agent').length,
+   ...(integration?.state==='recorded'?{integrationCommit:integration.commit}:{})
+  }}
+ }catch{return {...unknownAcceptance}}
 }
 function delivery(host:Runtime,ticket:Ticket,all:Delivery[]):TaskStatusProjection['delivery'] {
  const assignment=ticket.assignments.at(-1),saved=host.store.get<Run>('run',ticket.id),run=saved?.assignmentId===assignment?.id?saved:undefined

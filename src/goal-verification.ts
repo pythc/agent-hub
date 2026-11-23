@@ -12,9 +12,17 @@ import {scopeBudget} from './context-budget.ts'
 import {inlineEvidenceBudget,evidenceAccess,type GoalEvidence as Evidence} from './goal-evidence.ts'
 import type {DelegationBinding} from './delegation/goals.ts'
 import {taskView} from './task-context.ts'
+import {currentTaskAssignment} from './task-assignment-contract.ts'
 
 export interface GoalDelivery {id:string;goalId:string;ticketId:string;triggerId:string;scopeId:string;assignmentId:string;report:WorkerReport;reply?:string;inputRevision:number;at:number}
-interface Snapshot {contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];delegations?:DelegationBinding[];evidence:Evidence[];finalCommit?:string}
+interface VerificationBinding {
+ schema:1
+ goalContractDigest:string|null
+ taskInputs:{ticketId:string;assignmentContractDigest:string|null;inputDigest:string}[]
+ evidenceDigest:string
+ integration:{state:'recorded';commit:string;receiptDigest:string}|{state:'not_applicable'|'not_in_scope'}
+}
+interface Snapshot {binding?:VerificationBinding;contract:string;tasks:{ticketId:string;assignmentId:string;reportHash:string;inputRevision:number}[];delegations?:DelegationBinding[];evidence:Evidence[];finalCommit?:string}
 export interface VerificationCheck {criterionId:string;verdict:'passed'|'failed'|'insufficient';explanation:string;evidenceIds:string[];method:'program'|'agent'}
 export interface VerificationRound {id:string;goalId:string;nodeId?:string;triggerId:string;scopeId:string;entryId:string;ticketIds:string[];delegationIds?:string[];state:'pending'|'running'|'passed'|'failed'|'insufficient'|'errored'|'stale';snapshot:Snapshot;checks:VerificationCheck[];attempts:number;error?:string;at:number;finishedAt?:number;threadId?:string}
 const verdict=z.object({checks:z.array(z.object({criterionId:z.string(),verdict:z.enum(['passed','failed','insufficient']),explanation:z.string().min(1).max(8000),evidenceIds:z.array(z.string()).min(1)}).strict()).min(1)}).strict()
@@ -132,7 +140,8 @@ export class GoalVerification {
    for(const owner of owners)for(const id of closure([owner]))if(id!==owner)ancestors.add(id)
    return {id:cr.id,ancestors}
   })
-  const tasks:Snapshot['tasks']=[],delegations:DelegationBinding[]=[],evidence:Evidence[]=[];let evidenceBytes=0,finalCommit:string|undefined
+  const tasks:Snapshot['tasks']=[],delegations:DelegationBinding[]=[],evidence:Evidence[]=[],taskInputs:VerificationBinding['taskInputs']=[];let evidenceBytes=0,finalCommit:string|undefined
+  let integration:VerificationBinding['integration']={state:g.project?'not_in_scope':'not_applicable'}
   const add=(value:Omit<Evidence,'id'|'hash'>)=>{const hash=stableDigest(value),id='evidence-'+hash,item={...value,id,hash};evidenceBytes+=Buffer.byteLength(JSON.stringify(item));if(evidenceBytes>512*1024)throw Error('Acceptance evidence exceeds 512 KiB; declare smaller artifacts');evidence.push(item)}
   if(nodes.some(n=>n.teamTargetId)){
    const receipt=this.host.store.db.prepare("SELECT body FROM records WHERE kind='goal-receipt' AND json_extract(body,'$.goalId')=? ORDER BY rowid LIMIT 1").get(g.id)
@@ -162,6 +171,13 @@ export class GoalVerification {
    if(!proposal||proposal.assignmentId!==task.assignments.at(-1)?.id||proposal.inputRevision!==(this.host.scopes.ownership(n.ticketId)?.dataRevision??1))throw Error('Delivery no longer matches the current task input')
    if(requireSettled&&!this.host.goals.effectsSettled(n.ticketId))throw Error('Task has unfinished or uncertain effects')
    tasks.push({ticketId:n.ticketId,assignmentId:proposal.assignmentId,reportHash:stableDigest(proposal),inputRevision:proposal.inputRevision})
+   const contract=currentTaskAssignment(this.host,n.ticketId)
+   if(contract){
+    const {digest,createdAt,...body}=contract
+    if(contract.ticketId!==n.ticketId||stableDigest(body)!==digest||this.host.memory.cleanup.blocked('task-assignment-contract',n.ticketId,contract))throw Error('Task contract evidence is unavailable')
+   }
+   const inputs=taskView(this.host.store,task).inputs
+   taskInputs.push({ticketId:n.ticketId,assignmentContractDigest:contract?.digest??null,inputDigest:stableDigest({inputs,triggers:inputs.flatMap(input=>input.kind==='trigger'?[this.host.store.triggers.get(input.triggerId)??null]:[]),manifest:manifest??null})})
    const assigned=this.criteria(g,n),ids=assigned.map(cr=>cr.id),code=g.project?this.host.projectCode.receipt(proposal.id):undefined
    // Ancestor artifacts support downstream semantic claims. Keep deterministic
    // file-check ownership unchanged, including same-named files in other tasks.
@@ -169,7 +185,10 @@ export class GoalVerification {
    if(g.project){
     if(!code?.head||code.error)throw Error('Accepted project commit is missing')
     this.host.projectCode.validateReceipt(g,n,code)
-    if(!node&&n.id===g.project.integration)finalCommit=code.head
+    if(n.id===g.project.integration){
+     integration={state:'recorded',commit:code.head,receiptDigest:stableDigest(code)}
+     if(!node)finalCommit=code.head
+    }
     add({kind:'execution',ticketId:n.ticketId,key:'project-commit',content:JSON.stringify({base:g.project.base,head:code.head,parents:code.parents,ownership:code.ownership,stages:code.stages,test:code.test,diffStat:code.diffStat,diff:code.diff}),criterionIds:citeIds(ids)})
    }
    add({kind:'execution',ticketId:n.ticketId,key:'host-execution',content:this.execution(n.ticketId),criterionIds:citeIds(ids)})
@@ -179,7 +198,7 @@ export class GoalVerification {
     add({kind:'report',ticketId:n.ticketId,key:'watchdog-observation',criterionIds:citeIds(ids),content:JSON.stringify({id:r.id,assignmentId:r.assignmentId,contractHash:r.contractHash,at:r.at,judgment:r.judgment,observation:r.observation??null})})
    }
    add({kind:'report',ticketId:n.ticketId,key:'delivery',content:JSON.stringify({report:proposal.report,reply:proposal.reply}),criterionIds:citeIds(ids)})
-   const followups=taskView(this.host.store,task).inputs.flatMap(input=>input.kind==='trigger'&&input.human&&!input.context?[{inputId:input.id,triggerId:input.triggerId,text:this.host.store.triggers.get(input.triggerId)?.text,note:input.note}]:[])
+   const followups=inputs.flatMap(input=>input.kind==='trigger'&&input.human&&!input.context?[{inputId:input.id,triggerId:input.triggerId,text:this.host.store.triggers.get(input.triggerId)?.text,note:input.note}]:[])
    if(followups.length)add({kind:'report',ticketId:n.ticketId,key:'admitted-followups',content:JSON.stringify({basis:'Human follow-ups admitted to this task. Evaluate clarifications within the immutable mandate; these do not grant wider authority.',followups}),criterionIds:citeIds(ids)})
    // Overall acceptance also inspects the released bytes of files owned by earlier nodes.
    const fileCriteria=!node&&n.id===g.project?.integration?g.criteria:assigned
@@ -196,16 +215,31 @@ export class GoalVerification {
    }
   }
   if(Buffer.byteLength(JSON.stringify(evidence))>512*1024)throw Error('Acceptance evidence exceeds 512 KiB; declare smaller artifacts')
-  return {contract:stableDigest({objective:g.objective,...(g.contract?.details?{details:g.contract.details}:{}),criteria:g.criteria,nodes:nodes.map(n=>({id:n.id,instruction:n.instruction,criterionIds:n.criterionIds,supports:n.supports,outputs:n.outputs,dependsOn:n.dependsOn,...(n.teamTargetId?{teamTargetId:n.teamTargetId}:{}),prerequisites:n.dependsOn.map(id=>{const dep=g.nodes?.find(d=>d.id===id);return {id,state:dep?.state,roundId:dep?.roundId}})}))}),tasks,...(delegations.length?{delegations}:{}),evidence,...(finalCommit?{finalCommit}:{})}
+  const binding:VerificationBinding={schema:1,goalContractDigest:g.contract?stableDigest(g.contract):null,taskInputs,evidenceDigest:stableDigest(evidence.map(({id,hash})=>({id,hash}))),integration}
+  return {binding,contract:stableDigest({objective:g.objective,...(g.contract?.details?{details:g.contract.details}:{}),criteria:g.criteria,nodes:nodes.map(n=>({id:n.id,instruction:n.instruction,criterionIds:n.criterionIds,supports:n.supports,outputs:n.outputs,dependsOn:n.dependsOn,...(n.teamTargetId?{teamTargetId:n.teamTargetId}:{}),prerequisites:n.dependsOn.map(id=>{const dep=g.nodes?.find(d=>d.id===id);return {id,state:dep?.state,roundId:dep?.roundId}})}))}),tasks,...(delegations.length?{delegations}:{}),evidence,...(finalCommit?{finalCommit}:{})}
+ }
+ freshness(round:VerificationRound,g:RouterGoal,options:{readOnly?:boolean}={}):'current'|'stale'|'unknown' {
+  const compare=():'current'|'stale'|'unknown'=>{
+   if(round.state==='stale'||round.goalId!==g.id||round.scopeId!==g.scopeId||round.entryId!==g.entryId||round.triggerId!==g.triggerId)return 'stale'
+   const node=round.nodeId?g.nodes?.find(n=>n.id===round.nodeId):undefined
+   if(round.nodeId&&!node)return 'stale'
+   // Observation cannot create a route or try to repair a missing evidence source.
+   if(options.readOnly&&!this.host.store.get('router-route',g.triggerId))return 'unknown'
+   const {binding,...legacy}=this.snapshot(g,node,false,options)
+   if(!round.snapshot.binding){
+    // Older in-flight rounds retain their historical contract for orchestration.
+    // The read model does not present those rounds as newly bound evidence.
+    if(stableDigest(legacy)!==stableDigest(round.snapshot))return 'stale'
+    return options.readOnly?'unknown':'current'
+   }
+   if(stableDigest({...legacy,binding})!==stableDigest(round.snapshot))return 'stale'
+   if(options.readOnly&&(!binding?.goalContractDigest||binding.taskInputs.some(t=>!t.assignmentContractDigest)))return 'unknown'
+   return 'current'
+  }
+  try{return options.readOnly?this.host.scopes.readOnly(()=>this.host.memory.readOnly(compare)):compare()}catch{return 'unknown'}
  }
  current(round:VerificationRound,g:RouterGoal,options:{readOnly?:boolean}={}):boolean {
-  const compare=()=>{
-   // Context lookup may create a route when one is missing. Observation must
-   // fail closed rather than establish a new authorization fact on a GET.
-   if(options.readOnly&&!this.host.store.get('router-route',g.triggerId))return false
-   return stableDigest(this.snapshot(g,round.nodeId?g.nodes?.find(n=>n.id===round.nodeId):undefined,false,options))===stableDigest(round.snapshot)
-  }
-  try{return options.readOnly?this.host.scopes.readOnly(()=>this.host.memory.readOnly(compare)):compare()}catch{return false}
+  return this.freshness(round,g,options)==='current'
  }
  ensure(g:RouterGoal,node?:GoalNode):VerificationRound {
   const snapshot=this.snapshot(g,node,false),id='verify-'+stableDigest([g.id,node?.id??'goal',snapshot])
@@ -215,9 +249,10 @@ export class GoalVerification {
   this.host.store.atomic(()=>{this.host.store.put('goal-verification',id,round);this.host.store.enqueue('goal-verify:'+id,'goal-verify',{roundId:id,goalId:g.id,triggerId:g.triggerId,discussion:g.discussion})})
   return round
  }
- private program(cr:GoalCriterion,snapshot:Pick<Snapshot,'evidence'>):VerificationCheck {
-  const check=cr.check!,items=snapshot.evidence.filter(e=>e.kind==='file'&&e.key===check.path&&e.criterionIds.includes(cr.id))
-  let passed=items.length>0,reason='Declared artifact matches the deterministic check'
+ private program(cr:GoalCriterion,snapshot:Pick<Snapshot,'evidence'|'finalCommit'>):VerificationCheck {
+  const check=cr.check!,items=snapshot.evidence.filter(e=>e.kind==='file'&&e.key===check.path&&e.criterionIds.includes(cr.id)&&(!snapshot.finalCommit||e.commit===snapshot.finalCommit))
+  if(!items.length)return {criterionId:cr.id,verdict:'insufficient',explanation:'No declared artifact evidence recorded for this check',evidenceIds:[],method:'program'}
+  let passed=true,reason='Declared artifact matches the deterministic check'
   for(const e of items){
    if(e.missing){passed=false;reason='Required artifact is missing';continue}
    if(check.kind==='xlsx_cell_equals'){

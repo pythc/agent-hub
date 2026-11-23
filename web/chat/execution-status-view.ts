@@ -1,7 +1,7 @@
 import type {TaskStatusProjection} from '../../src/execution-status.ts'
 
 export type StatusState<K extends 'execution'|'effects'|'acceptance'|'delivery'>=TaskStatusProjection[K]['state']|'unknown'
-export type StatusView={observedAt:number|null;available:boolean;execution:StatusState<'execution'>;effects:StatusState<'effects'>;receiptCount:number|null;acceptance:StatusState<'acceptance'>;freshness:TaskStatusProjection['acceptance']['freshness'];delivery:StatusState<'delivery'>;counts:TaskStatusProjection['delivery']['counts']|null;scope:TaskStatusProjection['delivery']['scope']|'unknown';hostRecord:boolean}
+export type StatusView={observedAt:number|null;available:boolean;execution:StatusState<'execution'>;effects:StatusState<'effects'>;receiptCount:number|null;acceptance:StatusState<'acceptance'>;freshness:TaskStatusProjection['acceptance']['freshness'];acceptanceEvidence?:TaskStatusProjection['acceptance']['evidence'];delivery:StatusState<'delivery'>;counts:TaskStatusProjection['delivery']['counts']|null;scope:TaskStatusProjection['delivery']['scope']|'unknown';hostRecord:boolean}
 const object=(value:unknown):Record<string,unknown>|undefined=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:undefined
 function statusState<S extends string>(value:unknown,allowed:readonly S[]):S|'unknown'{return typeof value==='string'&&(allowed as readonly string[]).includes(value)?value as S:'unknown'}
 const count=(value:unknown):number|null=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null
@@ -36,12 +36,16 @@ export function readTaskStatus(value:unknown):StatusView{
  const execution=object(root.execution),effects=object(root.effects),acceptance=object(root.acceptance),delivery=object(root.delivery)
  const receiptCount=count(effects?.receiptCount),freshness=statusState(acceptance?.freshness,['current','stale','unknown','not_recorded'] as const)
  let acceptanceState:StatusState<'acceptance'>=statusState(acceptance?.state,['not_recorded','pending','running','passed','failed','insufficient','errored','stale'] as const)
- if(freshness==='stale'||freshness!=='current'&&['passed','failed','insufficient','errored'].includes(acceptanceState))acceptanceState='stale'
+ if(freshness==='unknown')acceptanceState='unknown'
+ if(freshness==='stale'||freshness==='not_recorded'&&['passed','failed','insufficient','errored'].includes(acceptanceState))acceptanceState='stale'
+ const bound=freshness==='current'?object(acceptance?.evidence):null,program=count(bound?.program),independent=count(bound?.independent)
+ const integrationCommit=typeof bound?.integrationCommit==='string'&&/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(bound.integrationCommit)?bound.integrationCommit:undefined
+ const acceptanceEvidence=program!==null&&independent!==null?{program,independent,...(integrationCommit?{integrationCommit}:{})}:undefined
  let effectState=statusState(effects?.state,['not_recorded','in_progress','recorded','unknown'] as const)
  if(effectState==='recorded'&&(receiptCount===null||receiptCount===0))effectState='unknown'
  let deliveryState:StatusState<'delivery'>=statusState(delivery?.state,['not_recorded','pending','retry_wait','sending','uncertain','held','dropped','recorded','partial'] as const)
  const counts=deliveryCounts(delivery?.counts),scope=statusState(delivery?.scope,['local','external','mixed','not_recorded'] as const)
  const validDelivery=counts!==null&&compatibleDelivery(deliveryState,counts,scope,delivery?.evidence)
  if(!validDelivery)deliveryState='unknown'
- return {available:true,observedAt,execution:statusState(execution?.state,['not_started','queued','running','waiting_input','interrupted','failed','cancelled','finished'] as const),effects:effectState,receiptCount,acceptance:acceptanceState,freshness,delivery:deliveryState,counts:validDelivery?counts:null,scope:validDelivery?scope:'unknown',hostRecord:validDelivery&&delivery?.evidence==='host_record'}
+ return {available:true,observedAt,execution:statusState(execution?.state,['not_started','queued','running','waiting_input','interrupted','failed','cancelled','finished'] as const),effects:effectState,receiptCount,acceptance:acceptanceState,freshness,acceptanceEvidence,delivery:deliveryState,counts:validDelivery?counts:null,scope:validDelivery?scope:'unknown',hostRecord:validDelivery&&delivery?.evidence==='host_record'}
 }
