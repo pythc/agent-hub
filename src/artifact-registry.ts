@@ -12,6 +12,16 @@ export const artifactRegistrationSchema=z.discriminatedUnion('kind',[
  if(value.kind==='chat-attachment'&&value.referenceId!==stableDigest(['chat-attachment-version',value.id,value.sha256]))ctx.addIssue({code:'custom',message:'Attachment reference identity mismatch'})
 })
 export type ArtifactRegistration=z.infer<typeof artifactRegistrationSchema>
+export function goalArtifactRegistration(source:{id:string;version:number;sha256:string}):Extract<ArtifactRegistration,{kind:'goal-artifact'}>{
+ const registration=artifactRegistrationSchema.parse({schema:1,kind:'goal-artifact',domain:'operator_workspace',id:source.id,version:source.version,sha256:source.sha256,retention:'subject_to_history_cleanup',publication:'not_tracked',acceptance:'not_tracked'})
+ if(registration.kind!=='goal-artifact')throw Error('Invalid goal artifact registration')
+ return registration
+}
+/** Match validated source-local evidence, without ever using it as authorization. */
+export function matchesArtifactRegistration(value:unknown,expected:ArtifactRegistration):boolean{
+ const parsed=artifactRegistrationSchema.safeParse(value)
+ return parsed.success&&stableDigest(parsed.data)===stableDigest(expected)
+}
 /** Call only after the source resolver has checked current access. No lookup or persistence occurs. */
 export function operatorArtifactRegistration(reference:ArtifactReference|WorkspaceViewArtifactReference):Extract<ArtifactRegistration,{domain:'operator_workspace'}>{
  if(reference.schema!==1)throw Error('Invalid artifact reference schema')

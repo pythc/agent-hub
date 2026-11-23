@@ -10,11 +10,13 @@ import type {RouterGoal} from './router-goals.ts'
 import type {WorkOwner} from './work.ts'
 import {stableDigest} from './sources.ts'
 import {atomicPrivateFile} from './managed-config.ts'
+import {goalArtifactRegistration,matchesArtifactRegistration,type ArtifactRegistration} from './artifact-registry.ts'
 
 const mimeTypes:Record<string,string>={'.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pdf':'application/pdf','.mp4':'video/mp4','.png':'image/png'}
 export interface ArtifactVersion {id:string;goalId:string;ticketId:string;nodeId:string;path:string;version:number;sha256:string;size:number;mime:string}
 import type {ArtifactReference} from './artifact-reference.ts'
 export type {ArtifactReference} from './artifact-reference.ts'
+type RetainedArtifactVersion=ArtifactVersion & {committedRegistration?:Extract<ArtifactRegistration,{kind:'goal-artifact'}>}
 type CellCheck=Extract<NonNullable<GoalCriterion['check']>,{kind:'xlsx_cell_equals'}>
 
 /** Read the same file descriptor used to check the workspace boundary and size. */
@@ -66,7 +68,7 @@ export class GoalArtifacts {
     if(!mime)return {content:bytes.toString('utf8')}
     const sha256=createHash('sha256').update(bytes).digest('hex'),id=stableDigest([goal.id,nodeId,path,sha256])
     const store=this.host.store
-    let artifact=store.get<ArtifactVersion>('goal-artifact',id)
+    let artifact=store.get<RetainedArtifactVersion>('goal-artifact',id)
     if(!artifact){
       if(options.readOnly)throw Error('Artifact observation is not retained')
       artifact=store.atomic(()=>{
@@ -74,7 +76,7 @@ export class GoalArtifacts {
         const item={id,goalId:goal.id,nodeId,ticketId,path,version:Number(count.n)+1,sha256,size:bytes.length,mime}
         if(this.host.memory.cleanup.blocked('goal-artifact',id,item))throw Error('Artifact history was deleted')
         store.requireWorkflowSchema()
-        store.put('goal-artifact',id,item)
+        store.put('goal-artifact',id,{...item,committedRegistration:goalArtifactRegistration(item)} satisfies RetainedArtifactVersion)
         store.db.prepare('INSERT INTO goal_artifact_bytes VALUES(?,?)').run(id,bytes)
         return item
       })
@@ -90,17 +92,21 @@ export class GoalArtifacts {
         store.put('workbook-observation',cache,{artifactId:id,ticketId,observation})
       }
     }
-    return {artifact,content:JSON.stringify({kind:'binary_artifact',artifact,observation:observation??'File identity only. Content has not been inspected.'})}
+    // Do not expose the internal registration record to model/verification evidence.
+    const {committedRegistration:_,...publicArtifact}=artifact
+    return {artifact:publicArtifact,content:JSON.stringify({kind:'binary_artifact',artifact:publicArtifact,observation:observation??'File identity only. Content has not been inspected.'})}
   }
-  private bytes(id:string){
-    const row=this.host.store.db.prepare('SELECT bytes FROM goal_artifact_bytes WHERE id=?').get(id)
+  private bytes(artifact:ArtifactVersion){
+    const row=this.host.store.db.prepare('SELECT bytes FROM goal_artifact_bytes WHERE id=?').get(artifact.id)
     if(!row)throw Error('Artifact version unavailable')
-    return Buffer.from(row.bytes as Uint8Array)
+    const bytes=Buffer.from(row.bytes as Uint8Array)
+    if(bytes.length!==artifact.size||createHash('sha256').update(bytes).digest('hex')!==artifact.sha256)throw Error('Artifact version unavailable')
+    return bytes
   }
   private operatorVersion(id:string){
-    const artifact=this.host.store.get<ArtifactVersion>('goal-artifact',id)
+    const artifact=this.host.store.get<RetainedArtifactVersion>('goal-artifact',id)
     const goal=artifact?.goalId&&this.host.goals.get(artifact.goalId)
-    if(!artifact?.mime||!goal||this.host.scopes.binding(goal.entryId).privateActor)throw Error('Artifact is outside the operator workspace')
+    if(!artifact?.mime||artifact.id!==id||!goal||this.host.memory.cleanup.blocked('goal-artifact',id,artifact)||this.host.scopes.binding(goal.entryId).privateActor)throw Error('Artifact is outside the operator workspace')
     this.host.goals.context(goal)
     return artifact
   }
@@ -109,12 +115,14 @@ export class GoalArtifacts {
       const artifact=this.operatorVersion(id)
       const retained=!!this.host.store.db.prepare('SELECT 1 FROM goal_artifact_bytes WHERE id=?').get(id)
       const category:ArtifactReference['category']=artifact.mime===mimeTypes['.xlsx']?'spreadsheet':artifact.mime==='application/pdf'?'document':artifact.mime.startsWith('image/')?'image':artifact.mime.startsWith('video/')?'video':'file'
-      return {schema:1,kind:'goal-artifact',id:artifact.id,version:artifact.version,sha256:artifact.sha256,name:basename(artifact.path),mediaType:artifact.mime,bytes:artifact.size,category,visibility:'operator_workspace',retention:'subject_to_history_cleanup',availability:retained?'retained':'unavailable',publication:'not_tracked',downloadPath:retained?'/goal-artifacts/'+encodeURIComponent(artifact.id):null}
+      return {schema:1,kind:'goal-artifact',id:artifact.id,version:artifact.version,sha256:artifact.sha256,name:basename(artifact.path),mediaType:artifact.mime,bytes:artifact.size,category,visibility:'operator_workspace',retention:'subject_to_history_cleanup',availability:retained?'retained':'unavailable',publication:'not_tracked',registrationState:matchesArtifactRegistration(artifact.committedRegistration,goalArtifactRegistration(artifact))?'recorded':'source_only',downloadPath:retained?'/goal-artifacts/'+encodeURIComponent(artifact.id):null}
     }))
   }
   download(id:string){
-    const artifact=this.operatorVersion(id)
-    return {artifact,bytes:this.bytes(id)}
+    return this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>{
+      const {committedRegistration:_,...artifact}=this.operatorVersion(id)
+      return {artifact,bytes:this.bytes(artifact)}
+    }))
   }
   open(owner:WorkOwner,id:string){
     const goal=this.host.goals.forTask(owner.ticketId)
@@ -127,7 +135,7 @@ export class GoalArtifacts {
     const artifact=round.snapshot.evidence.find(e=>e.artifact?.id===id)!.artifact!
     const assetId=stableDigest([owner.ticketId,id]),directory=join(this.host.config.stateDir,'assets',assetId)
     const path=join(directory,basename(artifact.path))
-    atomicPrivateFile(path,this.bytes(id),0o400)
+    atomicPrivateFile(path,this.bytes(artifact),0o400)
     const asset={id:assetId,path,name:basename(path),bytes:artifact.size,ticketId:owner.ticketId,artifactId:id,resource:'asset/'+assetId}
     this.host.store.put('asset',assetId,asset)
     return {...asset,version:artifact.version,sha256:artifact.sha256}

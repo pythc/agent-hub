@@ -8,7 +8,7 @@ The response uses keyset pagination: task versions by ID, then enabled View pack
 
 The page uses the captured workspace transport and cancels stale reads on unmount, retry and workspace invalidation. File links keep fixed version identity; View links use the dedicated workspace-bound entry and open the currently enabled package, not a historical package or runtime snapshot. Metadata, bundle, runtime data and navigation revalidation all retain the captured workspace binding; managed frame navigation is limited to explicitly selected configuration pages. Both destinations reauthorize independently. Same-page hash navigation preserves an explicit workspace query.
 
-No writes, new object grants, publication, external delivery, history retention changes or main merge are introduced. Metadata is not evidence of acceptance or publication.
+Catalog reads do not write. No new object grants, publication, external delivery, history retention changes or main merge are introduced. Metadata is not evidence of acceptance or publication.
 
 ## Verification
 
@@ -18,4 +18,4 @@ No writes, new object grants, publication, external delivery, history retention 
 - Full suite and remote exact-head CI/container evidence: recorded in the PR when complete. Known environment failures must be compared against the unchanged base, not presented as a full local pass.
 - Browser visual, mobile, keyboard and reduced-motion interaction checks and real IM: deferred, not passed.
 
-O32 remains open: this slice is not a persistent cross-kind registry, does not globally index conversation attachments and does not add historical attachment/View resolution. Overall completed-item count is unchanged.
+The current source-owned registry extends this projection with explicit registration status and prior committed View reference links. A prior link is only a candidate: the separate exact-version resolver verifies the retained package and accepts no runtime execution requests. Goal file bytes are checked by length and SHA-256 at download; fixed conversation attachment downloads remain scoped to the conversation. The old evidence above applies only to the original projection, not this revision. O32 remains open for the user's validation.

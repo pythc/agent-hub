@@ -1,3 +1,5 @@
+export type ArtifactRegistrationState='recorded'|'source_only'
+
 /** Metadata only: a retained local version is not proof of acceptance or publication. */
 export interface ArtifactReference {
  schema:1
@@ -13,6 +15,7 @@ export interface ArtifactReference {
  retention:'subject_to_history_cleanup'
  availability:'retained'|'unavailable'
  publication:'not_tracked'
+ registrationState?:ArtifactRegistrationState
  downloadPath:string|null
 }
 

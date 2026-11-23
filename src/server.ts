@@ -1,5 +1,5 @@
 import {LocalDiagnostics,LocalDiagnosticError} from './local-diagnostics.ts'
-import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
+import {artifactCatalog,ArtifactCatalogCursorError,exactViewRegistrationState} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
 import {ConnectorManagement,ConnectorError} from './connector-management.ts'
 import {ExecutionTrace,TraceError} from './execution-trace.ts'
@@ -366,7 +366,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       const versionMatch=path.match(/^\/api\/workspace-views\/([a-z][a-z0-9_-]{0,63})\/versions\/([a-f0-9]{64})$/)
       if(versionMatch){
         if(new URL(req.url!,'http://localhost').search){send(res,400,{code:'invalid_view_version_query'});return}
-        try{send(res,200,viewVersion(runtime.config,versionMatch[1]!,versionMatch[2]!))}catch{send(res,404,{code:'view_unavailable'})}return
+        try{
+          const version=viewVersion(runtime.config,versionMatch[1]!,versionMatch[2]!)
+          const registrationState=exactViewRegistrationState(runtime,version.reference)
+          send(res,200,registrationState==='recorded'?{...version,registrationState}:version)
+        }catch{send(res,404,{code:'view_unavailable'})}return
       }
       const match=path.match(/^\/api\/workspace-views\/([a-z][a-z0-9_-]{0,63})\/(bundle|runtime)$/)
       if(!match){send(res,404,{code:'view_not_found'});return}
@@ -400,7 +404,9 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       catch{send(res,404,{code:'artifact_unavailable'})}return
     }
     if(req.method==='GET'&&path.startsWith('/goal-artifacts/')){
-      const {artifact,bytes}=runtime.artifacts.download(path.slice('/goal-artifacts/'.length))
+      let file:ReturnType<typeof runtime.artifacts.download>
+      try{file=runtime.artifacts.download(path.slice('/goal-artifacts/'.length))}catch{send(res,404,{code:'artifact_unavailable'});return}
+      const {artifact,bytes}=file
       res.writeHead(200,{'content-type':artifact.mime,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(artifact.path.split('/').at(-1)!),'cache-control':'no-store','x-content-type-options':'nosniff'})
       res.end(bytes);return
     }
