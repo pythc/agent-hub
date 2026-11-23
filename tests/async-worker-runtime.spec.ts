@@ -5,12 +5,13 @@ import {afterEach,expect,it,vi} from 'vitest'
 import {ExecutionTrace} from '../src/execution-trace.ts'
 import {Runtime} from '../src/runtime.ts'
 import {configSchema} from '../src/config.ts'
+import {stableDigest} from '../src/sources.ts'
 import type {Model,ModelRequest} from '../src/model.ts'
 import {observe,type WorkerAttempt,type WorkerEventReceipt} from '../src/async-worker-inbox.ts'
 const roots:string[]=[],hosts:Runtime[]=[]
 afterEach(async()=>{vi.restoreAllMocks();for(const h of hosts.splice(0))await h.close();for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true})})
 const report=JSON.stringify({state:'ready',summary:'PRIVATE report',reply:'PRIVATE result',question:null,askedBy:null,handbacks:[]})
-async function fixture(model:Model,sandboxDriver:'disabled'|'bubblewrap'='disabled'){
+async function fixture(model:Model,sandboxDriver:'disabled'|'bubblewrap'='disabled',task='Analyze material'){
  const root=mkdtempSync(join(tmpdir(),'async-worker-runtime-'));roots.push(root)
  const config=configSchema.parse({stateDir:join(root,'state'),acceptMode:'auto',work:{sandboxDriver,autoRecover:false},execution:{router:{mode:'host'},management:{enabled:true,maxWorkers:1},workers:[{id:'one',backend:'codex'}]},sources:[{id:'local',kind:'local',cwd:root,workspace:{mode:'source'},allowedActors:['alice']}]})
  const host=new Runtime(config,{model});hosts.push(host)
@@ -18,7 +19,7 @@ async function fixture(model:Model,sandboxDriver:'disabled'|'bubblewrap'='disabl
  host.scopes.command({action:'entry.bind',operationId:'entry',expectedRevision:0,scopeId:'team',sourceId:'local',accountNamespace:'local',nativeId:'topic',history:'group'})
  const received=host.receive('local','alice',{id:'human',thread:'topic',scope:'topic',text:'Analyze the supplied material.',addressed:true})as {triggerId:string}
  const context=host.scopes.context(host.store.triggers.get(received.triggerId)!,'local:topic')!
- const assignment=await host.manager.call({action:'assign',id:'one',revision:0,requestId:'work',text:'Analyze material'},{discussion:'local:topic',trigger:context.trigger,scoped:context})
+ const assignment=await host.manager.call({action:'assign',id:'one',revision:0,requestId:'work',text:task},{discussion:'local:topic',trigger:context.trigger,scoped:context})
  return {host,config,context,ticketId:assignment.ticketId}
 }
 async function until(host:Runtime,predicate:()=>boolean){for(let i=0;i<300;i++){if(predicate())return;await host.tick();await new Promise(r=>setTimeout(r,5))}throw Error('Runtime did not settle')}
@@ -101,24 +102,62 @@ it('real history deletion redacts async tombstones and late retained callbacks c
  const effect=vi.fn();expect(()=>observe(f.host,attempt,{kind:'result',payload:report,nativeTurnId:'worker-done'},effect)).toThrow()
  expect(effect).not.toHaveBeenCalled();expect(kinds.map(kind=>f.host.store.list(kind))).toEqual(tombstones)
 })
-it.each(['resolve','reject'] as const)('archives an invalidated running %s and starts a fresh activation without steering changed-basis input',async mode=>{
+it.each(['resolve','reject'] as const)('archives an invalidated running %s and verifies the corrected artifact from the fresh activation',async mode=>{
  const steer=vi.fn(async(_text:string,onRead?:()=>void)=>{onRead?.()})
- const requests:ModelRequest[]=[];let release!:()=>void;const gate=new Promise<void>(r=>release=r)
- const f=await fixture({async run(r){if(r.role==='worker'){requests.push(r);const number=requests.length;if(number===1){r.onTurn?.('worker-first');r.onActive?.({steer,interrupt:async()=>{}});await gate;if(mode==='reject')throw Error('First model rejected after the input changed')}return {threadId:'worker',turnId:'worker-'+number,text:JSON.stringify({state:'ready',summary:number===1?'Old answer':'Updated answer',reply:number===1?'OLD RESULT':'NEW RESULT',question:null,askedBy:null,handbacks:[]})}}return {threadId:'router',turnId:'router',text:'{"reply":""}'}}})
+ const requests:ModelRequest[]=[],reports:string[]=[]
+ let release!:()=>void;const gate=new Promise<void>(r=>release=r)
+ const f=await fixture({async run(r){
+  if(r.role!=='worker')return {threadId:'router',turnId:'router',text:'{"reply":""}'}
+  requests.push(r);const number=requests.length
+  const value=/Corrected units: (\d+)/.exec(r.input)?.[1]??/Initial units: (\d+)/.exec(r.input)?.[1]
+  const artifact=JSON.stringify({units:value===undefined?null:Number(value)})
+  const text=JSON.stringify({state:'ready',summary:'Counted units',reply:artifact,question:null,askedBy:null,handbacks:[]})
+  reports.push(text)
+  if(number===1){
+   r.onTurn?.('worker-first');r.onActive?.({steer,interrupt:async()=>{}})
+   await gate
+   if(mode==='reject')throw Error('First model rejected after the input changed')
+  }
+  return {threadId:'worker',turnId:'worker-'+number,text}
+ }},'disabled','Report the supplied unit count as JSON. Initial units: 17.')
  await until(f.host,()=>requests.length===1)
  const firstAssignment=f.host.store.tickets.get(f.ticketId)!.assignments.at(-1)!.id
- const incoming=f.host.receive('local','alice',{id:'follow-up',thread:'topic',scope:'topic',text:'Use the revised source material instead.',addressed:true})as {triggerId:string}
+ const original=f.host.store.list<WorkerAttempt>('async-worker-attempt')[0]!
+ const correction='Corrected units: 29.'
+ const incoming=f.host.receive('local','alice',{id:'follow-up',thread:'topic',scope:'topic',text:correction,addressed:true})as {triggerId:string}
  const context=f.host.scopes.context(f.host.store.triggers.get(incoming.triggerId)!,'local:topic')!
- await f.host.manager.call({action:'send',ticketId:f.ticketId,revision:0,requestId:'follow-up-send',text:'Use the revised source material instead.'},{discussion:'local:topic',trigger:context.trigger,scoped:context})
+ await f.host.manager.call({action:'send',ticketId:f.ticketId,revision:0,requestId:'follow-up-send',text:correction},{discussion:'local:topic',trigger:context.trigger,scoped:context})
  await f.host.deliverLiveInputs(f.ticketId);expect(steer).not.toHaveBeenCalled()
  release()
  await until(f.host,()=>requests.length===2&&f.host.store.list<WorkerEventReceipt>('async-worker-event').some(e=>e.kind==='result'&&e.disposition==='applied'))
  expect(f.host.store.tickets.get(f.ticketId)!.assignments.at(-1)!.id).toBe(firstAssignment)
- expect(requests[1]!.input).toContain('Use the revised source material instead.')
- const results=f.host.store.list<WorkerEventReceipt>('async-worker-event').filter(e=>e.kind!=='progress')
- expect(results.filter(e=>e.disposition==='archived')).toHaveLength(1);expect(results.filter(e=>e.disposition==='applied')).toHaveLength(1)
- expect(f.host.store.deliveries().some(d=>d.text==='OLD RESULT')).toBe(false)
- expect(f.host.store.get('run',f.ticketId)).toMatchObject({phase:'idle',result:'NEW RESULT'})
+ expect(requests[1]!.input).toContain(correction)
+ const events=f.host.store.list<WorkerEventReceipt>('async-worker-event').filter(e=>e.kind!=='progress')
+ const archived=events.filter(e=>e.disposition==='archived'),applied=events.filter(e=>e.disposition==='applied')
+ expect(archived).toHaveLength(1);expect(applied).toHaveLength(1)
+ expect(archived[0]!.attemptId).toBe(original.id)
+ expect(JSON.parse(reports[0]!).reply).toBe('{"units":17}')
+ const current=f.host.store.list<WorkerAttempt>('async-worker-attempt').find(attempt=>attempt.id!==original.id)!
+ expect(current.basis.dataRevision).toBe((original.basis.dataRevision??1)+1)
+ // Test-only verifier: distinguish an independently checked artifact from a delivery receipt.
+ const verify=(receipt:WorkerEventReceipt|undefined,rawReport:string)=>{
+  const artifact=f.host.store.get<{result:string}>('run',f.ticketId)?.result
+  const pointer=f.host.store.get<{attemptId:string}>('async-worker-current',f.ticketId)
+  return receipt?.kind==='result'&&receipt.disposition==='applied'
+   &&receipt.ticketId===f.ticketId&&receipt.assignmentId===firstAssignment
+   &&receipt.attemptId===current.id&&pointer?.attemptId===current.id
+   &&receipt.basis.dataRevision===f.host.scopes.ownership(f.ticketId)?.dataRevision
+   &&stableDigest(receipt.basis)===stableDigest(current.basis)
+   &&receipt.payloadDigest===stableDigest(rawReport)
+   &&JSON.parse(rawReport).reply===artifact&&artifact==='{"units":29}'
+ }
+ expect(verify(applied[0],reports[1]!)).toBe(true)
+ expect(f.host.store.get('run',f.ticketId)).toMatchObject({phase:'idle',result:'{"units":29}'})
+ expect(f.host.store.deliveries().some(d=>d.text==='{"units":17}')).toBe(false)
+ expect(verify(undefined,reports[1]!)).toBe(false)
+ expect(verify(archived[0],reports[0]!)).toBe(false)
+ expect(verify({...applied[0]!,basis:original.basis},reports[1]!)).toBe(false)
+ expect(verify(applied[0],reports[0]!)).toBe(false)
 })
 it('rechecks the root attempt after an awaited tool prompt refresh before any shell effect',async()=>{
  let captured:ModelRequest|undefined,finish!:()=>void,refreshStarted!:()=>void,refreshDone!:()=>void
