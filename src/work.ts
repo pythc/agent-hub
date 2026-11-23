@@ -1,5 +1,5 @@
 import {execFileSync, type ChildProcess} from 'node:child_process'
-import {randomUUID} from 'node:crypto'
+import {createHash,randomUUID} from 'node:crypto'
 import {mkdirSync,readFileSync,writeFileSync,existsSync,lstatSync,realpathSync} from 'node:fs'
 import {dirname,join} from 'node:path'
 import {startSandboxRunner} from './sandbox.ts'
@@ -9,7 +9,11 @@ import {projectWorkspace} from './project-code.ts'
 import {hostPrivateFiles} from './private-files.ts'
 
 export interface WorkOwner {leaseId?:string;ticketId:string;assignmentId:string;cwd:string;sandbox:'read-only'|'workspace-write';agentId?:string;depth:number;network?:boolean}
+export type ResourceKey=`workspace:${string}`|`git-common:${string}`
 export interface WorkItem extends WorkOwner {
+ resourceKeys?:ResourceKey[]
+ cancellation?:{state:'requested'|'stopped'|'unconfirmed';requestedAt:number;effects:'may_remain'}
+
  schedulerReleasedAt?:number;
  schedulerBackendId?:string;
  id:string;kind:'shell'|'agent';state:'starting'|'running'|'completed'|'failed'|'cancelled'|'interrupted';
@@ -35,6 +39,18 @@ function linkedGitDirectory(cwd:string){
   if(registered.includes('worktree '+realpathSync(cwd)))return common
  }catch{return undefined}
 }
+function resourceKey(kind:'workspace'|'git-common',location:string):ResourceKey {
+ return `${kind}:${createHash('sha256').update(realpathSync(location)).digest('hex')}`
+}
+function writeResources(cwd:string,linked?:string):ResourceKey[] {
+ let common=linked
+ if(!common)try{const local=join(cwd,'.git');if(lstatSync(local).isDirectory())common=local}catch{}
+ return [resourceKey('workspace',cwd),...(common?[resourceKey('git-common',common)]:[])]
+}
+function groupStopped(pid:number|undefined){
+ if(!pid||process.platform==='win32')return false
+ try{process.kill(-pid,0);return false}catch(error){return (error as NodeJS.ErrnoException).code==='ESRCH'}
+}
 const terminal=(item:WorkItem)=>!['starting','running'].includes(item.state)
 /** Work survives a model turn. A process restart interrupts work rather than silently replaying it. */
 export class WorkManager {
@@ -42,6 +58,7 @@ export class WorkManager {
  private waits=new Map<string,number>()
  private runners=new Map<string,ChildProcess>()
  private stopping=false
+ private cancelling=new Map<string,Promise<void>>()
   readonly recovered:Promise<void>
  readonly directory:string
  constructor(readonly store:Store,readonly config:Config,private hooks:WorkHooks){
@@ -49,22 +66,22 @@ export class WorkManager {
   const interrupted=this.list().filter(item=>!terminal(item))
   for(const item of interrupted){
    // The runner's parent/lock monitor kills its own process group. Never signal a stale PID here.
-   this.put({...item,state:'interrupted',endedAt:Date.now(),error:'Host restarted; inspect the retained output before repeating work'})
+   this.put({...item,state:'interrupted',...(item.cancellation?{cancellation:{...item.cancellation,state:'unconfirmed'}}:{}),endedAt:Date.now(),error:'Host restarted; inspect the retained output before repeating work'})
   }
   this.recovered=(async()=>{
-   const recovery=this.list().filter(w=>w.state==='interrupted'&&!w.schedulerReleasedAt)
-   const release=(item:WorkItem)=>{const current=this.store.get<WorkItem>('work',item.id);if(current?.state==='interrupted'&&!current.schedulerReleasedAt)this.put({...current,schedulerReleasedAt:Date.now()})}
+   const recovery=this.list().filter(w=>(w.state==='interrupted'||w.state==='cancelled'&&w.cancellation?.state==='unconfirmed')&&!w.schedulerReleasedAt)
+   const release=(item:WorkItem)=>this.releaseShell(item.id)
    // Agent activations belong to the previous host process; none can still invoke
    // this new host's managed tools. Keep their uncertain outputs, not a phantom slot.
-   for(const item of recovery.filter(w=>w.kind==='agent'))release(item)
+   for(const item of recovery.filter(w=>w.kind==='agent'))this.put({...item,schedulerReleasedAt:Date.now()})
    const shells=recovery.filter(w=>w.kind==='shell');if(!shells.length)return
    for(let n=0;n<35;n++){
     const waiting=shells.filter(w=>{
      // A dead runner PID (or its result file) cannot prove its descendants
      // stopped: the lock monitor lived in that runner. Probe the POSIX group;
      // never send a termination signal to a potentially reused PID/group.
-     if(!w.pid||process.platform==='win32')return true
-     try{process.kill(-w.pid,0);return true}catch(error:any){if(error.code==='ESRCH'){release(w);return false}return true}
+      if(!groupStopped(w.pid))return true
+     release(w);return false
     })
     if(!waiting.length)return
     await new Promise(r=>setTimeout(r,100))
@@ -75,16 +92,35 @@ export class WorkManager {
  }
  list(ticketId?:string){return this.store.list<WorkItem>('work').filter(w=>!ticketId||w.ticketId===ticketId)}
  private put(item:WorkItem){this.store.put('work',item.id,item);return item}
+ private releaseShell(id:string,noRunner=false){
+  const current=this.store.get<WorkItem>('work',id)
+  if(!current||current.kind!=='shell'||!terminal(current)||current.schedulerReleasedAt||!(noRunner||groupStopped(current.pid)))return
+  this.put({...current,schedulerReleasedAt:Date.now(),...(current.cancellation?{cancellation:{...current.cancellation,state:'stopped'}}:{})})
+ }
+ private latestActive(item:WorkItem){
+  const current=this.store.get<WorkItem>('work',item.id)
+  return current&&!terminal(current)&&!current.cancellation&&current.leaseId===item.leaseId?current:undefined
+ }
  private assert(owner:WorkOwner){if(this.stopping||!this.hooks.valid(owner))throw Error('This assignment no longer owns work tools')}
  private matching(owner:WorkOwner,item:WorkItem){return item.ticketId===owner.ticketId&&item.assignmentId===owner.assignmentId&&item.agentId===owner.agentId}
  private own(owner:WorkOwner,id:string){this.assert(owner);const item=this.store.get<WorkItem>('work',id);if(!item||!this.matching(owner,item))throw Error('Work item is outside this worker');return item}
  private key(owner:WorkOwner,requestId:string){return owner.ticketId+':'+owner.assignmentId+':'+(owner.agentId??'root')+':'+requestId}
- private create(owner:WorkOwner,kind:WorkItem['kind'],requestId:string,body:{command?:string;prompt?:string}){
+ private create(owner:WorkOwner,kind:WorkItem['kind'],requestId:string,body:{command?:string;prompt?:string},resourceKeys?:ResourceKey[]){
   this.assert(owner)
   const key=this.key(owner,requestId),previous=this.store.get<string>('work-request',key)
   if(previous){const item=this.own(owner,previous);if(item.kind!==kind||item.command!==body.command||item.prompt!==body.prompt)throw Error('Work request id reused with different content');return {item,fresh:false}}
   return this.store.atomic(()=>{
-   const item:WorkItem={...owner,...body,id:randomUUID(),kind,state:'starting',createdAt:Date.now(),notify:'auto'}
+   if(resourceKeys?.length)for(const candidate of this.list()){
+    if(candidate.kind!=='shell'||candidate.sandbox!=='workspace-write'||candidate.schedulerReleasedAt)continue
+    if(terminal(candidate))this.releaseShell(candidate.id)
+    const current=this.store.get<WorkItem>('work',candidate.id)!
+    if(current.schedulerReleasedAt||!current.resourceKeys&&terminal(current)&&current.state!=='interrupted')continue
+    // Old hosts did not persist keys: derive them only from the retained authorized cwd.
+    let held=current.resourceKeys
+    if(!held)try{held=writeResources(current.cwd,linkedGitDirectory(current.cwd))}catch{if(current.cwd===owner.cwd)throw Error('Previous write shutdown is unconfirmed in this workspace; inspect retained work');continue}
+    if(held.some(key=>resourceKeys.includes(key)))throw Error('Another managed write holds this workspace; wait for confirmed shutdown, then reread before retrying')
+   }
+   const item:WorkItem={...owner,...body,...(resourceKeys?.length?{resourceKeys}:{}),id:randomUUID(),kind,state:'starting',createdAt:Date.now(),notify:'auto'}
    this.put(item);this.store.put('work-request',key,item.id);return {item,fresh:true}
   })
  }
@@ -92,20 +128,41 @@ export class WorkManager {
   if(this.config.work.sandboxDriver==='disabled')throw Error('Managed shell is disabled; configure a sandbox driver before requesting commands')
   if(this.config.work.sandboxDriver==='seatbelt'&&process.platform!=='darwin')throw Error('Seatbelt sandbox requires macOS')
   if(this.config.work.sandboxDriver==='bubblewrap'&&process.platform!=='linux')throw Error('Bubblewrap sandbox requires Linux')
-  const {item,fresh}=this.create(owner,'shell',requestId,{command})
+  this.assert(owner)
+  const gitDirectory=owner.cwd===projectWorkspace(this.config.stateDir,owner.ticketId)?undefined:linkedGitDirectory(owner.cwd)
+  const keys=owner.sandbox==='workspace-write'?writeResources(owner.cwd,gitDirectory):undefined
+  const {item,fresh}=this.create(owner,'shell',requestId,{command},keys)
   if(fresh){
-   const spec=join(this.directory,item.id+'.spec.json')
-   const gitDirectory=owner.cwd===projectWorkspace(this.config.stateDir,owner.ticketId)?undefined:linkedGitDirectory(owner.cwd)
-   const attachments=this.store.list<any>('asset').filter(a=>a.ticketId===owner.ticketId).map(a=>a.path)
-   writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,sandboxDriver:this.config.work.sandboxDriver,network:this.config.work.network&&(owner.network??true),privateState:this.config.stateDir,privatePaths:hostPrivateFiles(),gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
+   let child:ChildProcess|undefined
    try{
-    const child=startSandboxRunner(spec)
-    this.runners.set(item.id,child)
-    child.once('error',()=>{this.put({...this.store.get<WorkItem>('work',item.id)!,state:'failed',endedAt:Date.now(),error:'Unable to start managed command'})})
-    child.once('exit',()=>{this.runners.delete(item.id);const current=this.store.get<WorkItem>('work',item.id);if(current&&['starting','running'].includes(current.state)&&!existsSync(join(this.directory,item.id+'.result.json')))this.put({...current,state:'interrupted',endedAt:Date.now(),error:'Managed runner exited without a durable receipt; inspect retained output before retrying'})})
-    await new Promise<void>((resolve,reject)=>{child.once('spawn',()=>resolve());child.once('error',reject)})
-    this.put({...item,state:'running',pid:child.pid})
-   }catch(error){this.put({...item,state:'failed',endedAt:Date.now(),error:String(error)})}
+    const spec=join(this.directory,item.id+'.spec.json')
+    const attachments=this.store.list<any>('asset').filter(a=>a.ticketId===owner.ticketId).map(a=>a.path)
+    writeFileSync(spec,JSON.stringify({id:item.id,command,cwd:owner.cwd,sandbox:owner.sandbox,codex:this.config.codex,sandboxDriver:this.config.work.sandboxDriver,network:this.config.work.network&&(owner.network??true),privateState:this.config.stateDir,privatePaths:hostPrivateFiles(),gitDirectory,attachments,hostPid:process.pid,hostLock:join(this.config.stateDir,'host.lock'),directory:this.directory,maxOutputBytes:this.config.work.maxOutputBytes}),{mode:0o600,flag:'wx'})
+    const running=startSandboxRunner(spec);child=running
+    this.runners.set(item.id,running)
+    // spawn() returns its PID synchronously when launched. Record it before yielding
+    // so a concurrent stop never misses the live runner.
+    this.put({...item,pid:running.pid})
+    running.once('error',()=>{
+     const current=this.latestActive(item)
+     if(current)this.put({...current,state:'failed',endedAt:Date.now(),error:'Unable to start managed command'})
+     this.releaseShell(item.id,!running.pid)
+    })
+    running.once('close',()=>{
+     this.runners.delete(item.id)
+     const current=this.latestActive(item)
+     if(current&&!existsSync(join(this.directory,item.id+'.result.json')))this.put({...current,state:'interrupted',endedAt:Date.now(),error:'Managed runner exited without a durable receipt; inspect retained output before retrying'})
+     this.releaseShell(item.id,!running.pid)
+    })
+    await new Promise<void>((resolve,reject)=>{running.once('spawn',()=>resolve());running.once('error',reject)})
+    const current=this.latestActive(item)
+    if(current&&this.hooks.valid(current))this.put({...current,state:'running',pid:running.pid})
+    else if(current)await this.cancel(current,'Assignment ended',true)
+   }catch(error){
+    const current=this.latestActive(item)
+    if(current)this.put({...current,state:'failed',endedAt:Date.now(),error:String(error)})
+    this.releaseShell(item.id,!child?.pid)
+   }
   }
   return this.wait(owner,item.id,yieldMs)
  }
@@ -120,12 +177,12 @@ export class WorkManager {
    const controller=new AbortController()
    const current=this.put({...item,state:'running'})
    const promise=this.hooks.agent(current,controller.signal).then(result=>{
-    const latest=this.store.get<WorkItem>('work',item.id)!
-    if(terminal(latest)||this.stopping)return
+    const latest=this.latestActive(item)
+    if(!latest||this.stopping||!this.hooks.valid(latest))return
     this.put({...latest,state:'completed',endedAt:Date.now(),threadId:result.threadId,result:result.result})
    }).catch(error=>{
-    const latest=this.store.get<WorkItem>('work',item.id)!
-    if(!terminal(latest))this.put({...latest,state:controller.signal.aborted?'cancelled':'failed',endedAt:Date.now(),error:String(error).slice(0,1000)})
+    const latest=this.latestActive(item)
+    if(latest&&this.hooks.valid(latest))this.put({...latest,state:controller.signal.aborted?'cancelled':'failed',endedAt:Date.now(),error:String(error).slice(0,1000)})
    }).finally(async()=>{
     await this.cancelOwned(item.ticketId,item.assignmentId,item.id,'Subagent ended')
     this.agents.delete(item.id)
@@ -168,18 +225,19 @@ export class WorkManager {
   }
   for(let item of this.list()){
    item=this.store.get<WorkItem>('work',item.id)!
-   if(item.kind==='shell'&&!terminal(item)){
+   if(!terminal(item)&&!item.cancellation&&!this.hooks.valid(item)){await this.cancel(item,'Assignment ended',true);continue}
+   if(item.kind==='shell'&&!terminal(item)&&!item.cancellation){
     const path=join(this.directory,item.id+'.result.json')
     if(existsSync(path)){
      try{const result=JSON.parse(readFileSync(path,'utf8'));if(result.id!==item.id)throw Error('Runner identity mismatch');item=this.put({...item,state:result.error?'failed':result.exitCode===0?'completed':'failed',endedAt:result.endedAt,exitCode:result.exitCode,result,error:result.error})}
      catch{item=this.put({...item,state:'failed',endedAt:Date.now(),error:'Invalid managed-command result'})}
     }
    }
-   if(!terminal(item)&&!this.hooks.valid(item)){await this.cancel(item,'Assignment ended',true);continue}
-   if(!terminal(item)&&item.deadline&&Date.now()>=item.deadline&&item.kind==='shell'){
+   if(item.kind==='shell'&&terminal(item)&&!item.schedulerReleasedAt){this.releaseShell(item.id);item=this.store.get<WorkItem>('work',item.id)!}
+   if(!terminal(item)&&!item.cancellation&&item.deadline&&Date.now()>=item.deadline&&item.kind==='shell'){
     await this.cancel(item,'Background turn deadline reached',false);item=this.store.get<WorkItem>('work',item.id)!
    }
-   if(terminal(item)&&item.notify==='auto'&&!this.waits.has(item.id)&&!this.stopping&&this.hooks.valid(item)){
+   if(terminal(item)&&item.cancellation?.state!=='unconfirmed'&&item.notify==='auto'&&!this.waits.has(item.id)&&!this.stopping&&this.hooks.valid(item)){
     // Queue the wake and record notification in the same transaction.
     this.store.atomic(()=>{const current=this.store.get<WorkItem>('work',item.id)!;if(current.notify==='auto'){this.hooks.wake(current);this.put({...current,notify:'sent'})}})
    }
@@ -197,21 +255,35 @@ export class WorkManager {
   }
  }
  private async cancel(item:WorkItem,reason:string,drop:boolean){
-  if(terminal(this.store.get<WorkItem>('work',item.id)!))return
-  this.put({...item,state:'cancelled',endedAt:Date.now(),error:reason,notify:drop?'dropped':item.notify})
-  if(item.kind==='agent'){
-   const active=this.agents.get(item.id);active?.controller.abort();await active?.promise
-  }else{
-   const child=this.runners.get(item.id)
-   if(child?.pid){
-    try{process.platform==='win32'?child.kill('SIGTERM'):process.kill(-child.pid,'SIGTERM')}catch{}
-    await new Promise<void>(resolve=>{
-     if(child.exitCode!==null)return resolve()
-     const timer=setTimeout(()=>{try{if(child.pid)process.platform==='win32'?child.kill('SIGKILL'):process.kill(-child.pid,'SIGKILL')}catch{}resolve()},2500)
-     child.once('close',()=>{clearTimeout(timer);resolve()})
-    })
+  const pending=this.cancelling.get(item.id)
+  if(pending)return pending
+  const latest=this.latestActive(item)
+  if(!latest)return
+  this.put({...latest,cancellation:{state:'requested',requestedAt:Date.now(),effects:'may_remain'},error:reason,notify:drop?'dropped':latest.notify})
+  const promise=Promise.resolve().then(async()=>{
+   let stopped=false
+   if(latest.kind==='agent'){
+    const active=this.agents.get(latest.id)
+    active?.controller.abort();try{await active?.promise;stopped=true}catch{}
+   }else{
+    const child=this.runners.get(latest.id)
+    if(child?.pid){
+     const pid=child.pid
+     try{process.platform==='win32'?child.kill('SIGTERM'):process.kill(-pid,'SIGTERM')}catch{}
+     await new Promise<void>(resolve=>{
+      const closed=()=>{clearTimeout(timer);resolve()}
+      const timer=setTimeout(()=>{child.removeListener('close',closed);try{process.platform==='win32'?child.kill('SIGKILL'):process.kill(-pid,'SIGKILL')}catch{}resolve()},2500)
+      child.once('close',closed)
+      if(groupStopped(pid)){child.removeListener('close',closed);closed()}
+     })
+    }
+    stopped=groupStopped(latest.pid)||!latest.pid&&!child?.pid
    }
-  }
+   const current=this.store.get<WorkItem>('work',latest.id)
+   if(current?.cancellation?.state==='requested'&&current.leaseId===latest.leaseId)this.put({...current,state:'cancelled',endedAt:Date.now(),cancellation:{...current.cancellation,state:stopped?'stopped':'unconfirmed'},...(stopped?{schedulerReleasedAt:Date.now()}:{})})
+  }).finally(()=>{this.cancelling.delete(item.id)})
+  this.cancelling.set(item.id,promise)
+  return promise
  }
  async stop(owner:WorkOwner,id:string){await this.cancel(this.own(owner,id),'Cancelled by worker',false);return this.view(this.store.get<WorkItem>('work',id)!)}
  async cancelOwned(ticketId:string,assignmentId:string,agentId:string|undefined,reason:string){

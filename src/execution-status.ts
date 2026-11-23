@@ -11,7 +11,7 @@ export type DeliveryStatus='not_recorded'|'pending'|'retry_wait'|'sending'|'unce
 export interface TaskStatusProjection {
  schema:1
  observedAt:number
- execution:{state:ExecutionStatus}
+ execution:{state:ExecutionStatus;cancellation?:'requested'|'stopped'|'unconfirmed'}
  effects:{state:EffectStatus;receiptCount:number}
  acceptance:{state:AcceptanceStatus;freshness:'current'|'stale'|'unknown'|'not_recorded'}
  delivery:{state:DeliveryStatus;counts:{total:number;pending:number;retry_wait:number;sending:number;uncertain:number;held:number;dropped:number;recorded:number};evidence:'none'|'host_record';scope:'local'|'external'|'mixed'|'not_recorded'}
@@ -52,7 +52,7 @@ function effects(host:Runtime,ticket:Ticket,deliveries:Delivery[]):TaskStatusPro
   else if(!closed.includes(state??''))unknown=true
  }
  for(const kind of ['tool-receipt','browser-receipt'])for(const {value:r} of recordRows(host,kind))if(r.ticketId===ticket.id)observe(r.state,['running'],['complete'])
- for(const r of host.work.list(ticket.id))observe(r.state,['starting','running'],['completed','failed','cancelled'])
+ for(const r of host.work.list(ticket.id)){observe(r.state,['starting','running'],['completed','failed','cancelled']);if(r.cancellation?.effects==='may_remain')unknown=true}
  for(const {value:r} of recordRows(host,'workflow-action'))if(r.ticketId===ticket.id)observe(r.state,['pending','applying'],['applied','declined','stale','observed'])
  for(const {key,value:r} of recordRows(host,'pr-delivery'))if(r.ticketId===ticket.id||r.id===ticket.id||key.startsWith(ticket.id+':'))observe(r.phase,['pushing','creating'],['pushed','draft'])
  for(const {value:r} of recordRows(host,'review-action'))if(r.ticketId===ticket.id)observe(r.phase,[],['resolved','stale'])
@@ -140,5 +140,8 @@ function delivery(host:Runtime,ticket:Ticket,all:Delivery[]):TaskStatusProjectio
 export function projectTaskStatus(host:Runtime,ticket:Ticket,observedAt=Date.now()):TaskStatusProjection {
  if(host.memory.cleanup.blocked('ticket',ticket.id,ticket))throw Error('status_task_unavailable')
  const deliveries=associatedDeliveries(host,ticket.id)
- return {schema:1,observedAt,execution:{state:execution(host,ticket,observedAt)},effects:effects(host,ticket,deliveries),acceptance:acceptance(host,ticket),delivery:delivery(host,ticket,deliveries)}
+ const assignment=ticket.assignments.at(-1)
+ const cancellations=host.work.list(ticket.id).filter(item=>item.assignmentId===assignment?.id).map(item=>item.cancellation?.state)
+ const cancellation=(['unconfirmed','requested','stopped'] as const).find(state=>cancellations.includes(state))
+ return {schema:1,observedAt,execution:{state:execution(host,ticket,observedAt),...(cancellation?{cancellation}:{})},effects:effects(host,ticket,deliveries),acceptance:acceptance(host,ticket),delivery:delivery(host,ticket,deliveries)}
 }
