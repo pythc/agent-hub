@@ -103,7 +103,13 @@ lines.on('line',line=>{
       emit({type:'result',id:message.id,result,operations:[]})
     } catch(error) {
       await context.checkpoint()
-      emit({type:'result',id:message.id,error:true,operations:[]})
+      // Serialize an allowlisted hint only. The host determines whether an effect may have happened.
+      const kind=error?.connectorFailure?.kind
+      const delay=error?.connectorFailure?.retryAfterMs
+      const failure=['auth_required','throttled','timeout','terminal','unknown'].includes(kind)
+        ? {kind,...(kind==='throttled'&&Number.isSafeInteger(delay)&&delay>=0?{retryAfterMs:Math.min(delay,86400000)}:{})}
+        : undefined
+      emit({type:'result',id:message.id,error:true,...(failure?{failure}:{}),operations:[]})
     } finally {active=false;flushEvents()}
   }).catch(()=>process.exit(2))
 })

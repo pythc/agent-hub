@@ -1,3 +1,4 @@
+import {ConnectorOperationError,readFailureHint} from './connector-recovery.ts'
 import {randomBytes,createHmac} from 'node:crypto'
 import type {StatusTarget,TransitionView} from './workflow-actions.ts'
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process'
@@ -23,6 +24,8 @@ const ref=z.object({source:z.string(),id:z.string()}).strict()
 const triggerSchema=z.object({id:z.string().min(1).max(1000),source:z.string(),threads:z.array(ref).min(1).max(20),actor:ref,human:z.boolean(),addressed:z.enum(['direct','indirect']).optional(),at:z.string().datetime({offset:true}),text:z.string().max(100000),meta:z.record(z.string(),z.unknown()),channel:z.object({source:z.string(),thread:z.string(),address:z.record(z.string(),z.string())}).strict().optional()}).strict()
 const quote=(s:string)=>"'"+s.replaceAll("'","'\\''")+"'"
 export interface PluginProcessOptions {sandboxDriver:SandboxDriver;codex:string;stateDir:string;readPaths?:string[];timeoutMs?:number}
+const readOnlyMethods = new Set(['identity','context','read','members','workflowState','mergeSnapshot','repositoryPull','reviewGraph'])
+
 /** One connection, one process. The child receives no host DB, task-control API or ambient credentials. */
 export class ProcessSource extends MessageSource {
   private readonly diagnosticKey=randomBytes(32)
@@ -34,7 +37,7 @@ export class ProcessSource extends MessageSource {
   private sourceContext?:SourceContext
   private sequence=0
   private stateAck=0
-  private pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
+  private pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>;method:unknown}>()
   private scratch?:string
   private stopped=false
   private ready?:Promise<any>
@@ -211,21 +214,30 @@ export class ProcessSource extends MessageSource {
       this.apply(message.operations)
       this.pending.delete(message.id);clearTimeout(pending.timer)
       // Plugin diagnostics may contain tokens or payloads; they are never copied to host audit/error text.
-      if(message.error)pending.reject(Error('Plugin operation failed ('+this.pkg.manifest.id+')'))
+      if(message.error){
+        const hint=readFailureHint(message.failure)
+        // Read-only knowledge comes from the dispatched host method, not from the plugin.
+        const readOnly=readOnlyMethods.has(String(pending.method))
+        pending.reject(hint?new ConnectorOperationError(hint.kind,!readOnly,hint.retryAfterMs):Error('Plugin operation failed ('+this.pkg.manifest.id+')'))
+      }
       else pending.resolve(message.result)
     }catch{this.fail(Error('Plugin protocol or source boundary violation'),child)}
   }
   private request(body:Record<string,unknown>){
     const id=++this.sequence,child=this.child!
     return new Promise<any>((resolve,reject)=>{
-      const timer=setTimeout(()=>this.fail(Error('Plugin operation timed out'),child),this.options.timeoutMs??60000)
-      this.pending.set(id,{resolve,reject,timer})
+      const timer=setTimeout(()=>this.fail(new ConnectorOperationError('timeout',true),child),this.options.timeoutMs??60000)
+      this.pending.set(id,{resolve,reject,timer,method:body.method})
       child.stdin.write(JSON.stringify({...body,id})+'\n',error=>{if(error)this.fail(Error('Plugin process is unavailable'),child)})
     })
   }
   private fail(error:Error,child=this.child){
     if(child!==this.child)return
-    for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(error)}this.pending.clear()
+    for(const p of this.pending.values()){
+      clearTimeout(p.timer)
+      const readOnly=readOnlyMethods.has(String(p.method))
+      p.reject(error instanceof ConnectorOperationError && readOnly ? new ConnectorOperationError(error.connectorFailure.kind,false) : error)
+    }this.pending.clear()
     if(child){try{if(process.platform!=='win32'&&child.pid)process.kill(-child.pid,'SIGKILL');else child.kill('SIGKILL')}catch{}}
     this.child=undefined;this.ready=undefined
   }
@@ -261,6 +273,7 @@ export class ProcessSource extends MessageSource {
     const work=this.serial.then(async()=>{
       this.guard(method,args);if(method==='webhook'&&(this.pkg.manifest.network||Object.keys(this.pkg.manifest.credentials).length||this.pkg.manifest.methods.some(m=>m!=='webhook'&&m!=='close')))throw Error('Webhook normalizer must be isolated without network, credentials or other capabilities');await this.launch();this.guard(method,args)
       if(!['identity','probe','close'].includes(method)&&this.hostStore&&this.pkg.manifest.methods.includes('identity')){
+        // If this read-only request fails, the requested operation has not started.
         const identity=await this.request({type:'call',method:'identity',args:[],snapshot:this.snapshot(),stateAck:this.stateAck}),saved=this.hostStore.get<any>('source-identity',this.config.id)
         if(saved&&saved.principal!==identity?.id)throw Error('Plugin connection account changed')
         this.guard(method,args)
@@ -300,7 +313,7 @@ export class ProcessSource extends MessageSource {
   async context(thread:string){if(!this.validThread(thread)||!this.active().capabilities.resources)throw Error('Thread is unavailable');const result=await this.invoke('context',thread);if(!this.validThread(thread)||!this.active().capabilities.resources)throw Error('Thread access revoked');return result}
   async deliver(message:OutboundMessage){
     if(!this.active().capabilities.replies||message.channel.source!==this.config.id||!this.validThread(message.channel.thread))throw Error('Reply is outside plugin source')
-    try{await this.invoke('deliver',message)}catch{throw new UncertainDelivery('Plugin reply outcome unknown; reconcile destination before retry')}
+    try{await this.invoke('deliver',message)}catch(error){if(error instanceof ConnectorOperationError)throw error;throw new UncertainDelivery('Plugin reply outcome unknown; reconcile destination before retry')}
   }
   async close(){
     try{if(this.child&&this.pkg.manifest.methods.includes('close'))await this.invoke('close')}finally{this.stopped=true;this.fail(Error('Plugin closed'));if(this.scratch)rmSync(this.scratch,{recursive:true,force:true})}

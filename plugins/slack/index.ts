@@ -1,6 +1,7 @@
+import {ConnectorOperationError,requestFailure,retryDelay} from '../../src/connector-recovery.ts'
 import {record,recordPages} from '../records.ts'
 import {createHash} from 'node:crypto'
-import {MessageSource,UncertainDelivery,bodyDigest,type SourceContext} from '../../src/sources.ts'
+import {MessageSource,bodyDigest,type SourceContext} from '../../src/sources.ts'
 import type {SourceConfig} from '../../src/config.ts'
 import type {Trigger,OutboundMessage} from '../../src/vendor/dsh-core/index.ts'
 
@@ -39,15 +40,24 @@ export class SlackSource extends MessageSource {
   constructor(config:SourceConfig,api?:Request){super(config);this.api=api??this.request.bind(this)}
   private async request(method:string,operation:string,input:Record<string,unknown>={}){
     if(!/^[a-z]+(?:\.[a-zA-Z]+)+$/.test(operation))throw Error('Invalid Slack API operation')
-    const token=process.env[operation==='apps.connections.open'?(this.options.appTokenEnv??''):this.options.tokenEnv];if(!token)throw Error('Slack credential is unavailable')
+    const token=process.env[operation==='apps.connections.open'?(this.options.appTokenEnv??''):this.options.tokenEnv];if(!token)throw new ConnectorOperationError('auth_required',false)
     const base=new URL(this.options.apiBase??'https://slack.com/api/')
     if(base.href!=='https://slack.com/api/'&&!(base.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(base.hostname)))throw Error('Slack API must use its official origin or a local test service')
     const url=new URL(operation,base)
     if(method==='GET')for(const [key,value] of Object.entries(input))if(value!==undefined)url.searchParams.set(key,String(value))
-    const response=await fetch(url,{method,headers:{authorization:'Bearer '+token,'content-type':'application/json; charset=utf-8'},...(method==='POST'?{body:JSON.stringify(input)}:{}),redirect:'error',signal:AbortSignal.timeout(15000)})
-    if(response.status===429){const after=Number(response.headers.get('retry-after'));if(this.current&&Number.isFinite(after))this.current.store.put('plugin-state','retryAt',Date.now()+Math.min(86400,Math.max(1,after))*1000);throw Error('Slack rate limited')}
-    const result=await response.json() as any
-    if(!response.ok||!result.ok)throw Error('Slack API rejected operation: '+String(result.error??response.status).slice(0,80))
+    const write=operation==='chat.postMessage'||operation==='apps.connections.open'
+    const response=await fetch(url,{method,headers:{authorization:'Bearer '+token,'content-type':'application/json; charset=utf-8'},...(method==='POST'?{body:JSON.stringify(input)}:{}),redirect:'error',signal:AbortSignal.timeout(15000)}).catch(error=>{throw requestFailure(error,write)})
+    if(response.status===429){
+      const after=retryDelay(response.headers.get('retry-after'))??60_000
+      this.current?.store.put('plugin-state','retryAt',Date.now()+Math.max(1000,after))
+      throw new ConnectorOperationError('throttled',write,after)
+    }
+    if(response.status===401||response.status===403)throw new ConnectorOperationError('auth_required',write)
+    const result=await response.json().catch(error=>{throw requestFailure(error,write)}) as any
+    if(!response.ok||!result?.ok){
+      const auth=['invalid_auth','not_authed','missing_scope','token_revoked','token_expired','account_inactive'].includes(result?.error)
+      throw new ConnectorOperationError(auth?'auth_required':response.ok?'terminal':'unknown',write)
+    }
     return result
   }
   private allowed(channel:string){return this.options.channels.includes(channel)}
@@ -215,7 +225,7 @@ export class SlackSource extends MessageSource {
     // client_msg_id aids reconciliation; it does not promise exactly-once delivery.
     const h=createHash('sha256').update(message.id).digest('hex'),client_msg_id=h.slice(0,8)+'-'+h.slice(8,12)+'-4'+h.slice(13,16)+'-a'+h.slice(17,20)+'-'+h.slice(20,32)
     try{const sent=await this.api('POST','chat.postMessage',{channel:chat,thread_ts:root,text:message.text,client_msg_id,unfurl_links:false,unfurl_media:false});if(sent.channel!==chat||!timestamp(sent.ts))throw Error('Invalid Slack delivery receipt')}
-    catch{throw new UncertainDelivery('Slack reply outcome unknown; reconcile destination before retry')}
+    catch(error){throw requestFailure(error,true)}
   }
 }
 export default {create:(config:SourceConfig)=>new SlackSource(config)}

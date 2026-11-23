@@ -1,3 +1,4 @@
+import {ConnectorOperationError,recoveryText,requestFailure} from './connector-recovery.ts'
 import {schedulerAdmission} from './scheduler-admission.ts'
 import {orderSchedulerJobs,observeSchedulerJob,recordSchedulerAdmission,type SchedulerFairness} from './scheduler-order.ts'
 import {validateTaskAssignment,bindTaskAssignmentLease,validateAssignmentLease,restrictAssignmentExecution} from './task-assignment-contract.ts'
@@ -16,7 +17,7 @@ import { join } from 'node:path'
 import { Engine, latestAssignment, runningAssignment, followupOwners, ticketStage, type Candidate, type Assignment, type Ticket, type Trigger, type TicketInput, type WorkerReport } from './vendor/dsh-core/index.ts'
 import { Store, type Run, type Job } from './store.ts'
 import { makePolicy, makeScope } from './policy.ts'
-import { UncertainDelivery, incomingSchema, bodyDigest,stableDigest, type Source, type Incoming, type SourceChange } from './sources.ts'
+import { incomingSchema, bodyDigest,stableDigest, type Source, type Incoming, type SourceChange } from './sources.ts'
 import type { Config } from './config.ts'
 import { Approvals } from './approvals.ts'
 import type { NativeControl } from './model.ts'
@@ -1426,7 +1427,12 @@ export class Runtime {
       try {
         if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
         this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
-      catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
+      catch (error) {
+        // A generic adapter error after invocation is not proof the destination was unchanged.
+        const recovery=(error instanceof ConnectorOperationError?error:requestFailure(error,true)).connectorFailure
+        this.store.deliveryFailed(message.id,message.attempts+1,recoveryText(recovery),recovery.effectUnknown,recovery)
+        if(recovery.effectUnknown)blocked.add(channel);else blocked.delete(channel)
+      }
     }
   }
   private holdLegacyTask(ticketId:string){

@@ -1,3 +1,4 @@
+import {ConnectorOperationError} from './connector-recovery.ts'
 import {managedConnections} from './managed-config.ts'
 import {sourceDeployment} from './connector-config.ts'
 import {ProcessSource} from './plugin-process.ts'
@@ -332,6 +333,9 @@ export class ConnectorManagement {
    }catch(error){
     if(error instanceof ConnectorError&&error.code==='connector_conflict'){status='stale';code='configuration_changed'}
     else if(controller.signal.aborted){status='interrupted';code='probe_interrupted'}
+    else if(error instanceof ConnectorOperationError&&!error.connectorFailure.effectUnknown){
+     status='failed';code='provider_'+error.connectorFailure.kind
+    }
     else{status='failed';code=input.level==='reachable'?'service_unreachable':input.level==='authentication'?'authentication_not_verified':input.level==='capabilities'?'directory_not_verified':'configuration_invalid'}
    }
    if(!currentMatches()){code=this.invalidation(record)??'configuration_changed';status=code==='credential_basis_unavailable'?'unknown':'stale';checkedCapabilities=undefined;checkedScopes=undefined}

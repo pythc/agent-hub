@@ -1,3 +1,4 @@
+import type {ConnectorFailure} from './connector-recovery.ts'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -17,7 +18,7 @@ export const PROJECT_INTEGRATION_DB_SCHEMA=20
 export const MAX_DB_SCHEMA=PROJECT_INTEGRATION_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
-export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
+export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string; recovery?: ConnectorFailure }
 export interface Run {
   ticketId: string; assignmentId: string; threadId?: string; cwd: string
   phase: 'idle' | 'starting' | 'running' | 'background' | 'interrupted' | 'uncertain' | 'human' | 'delivering' | 'merging'
@@ -171,9 +172,19 @@ export class Store implements Repositories {
       ...(r.error ? { error: String(r.error) } : {}),
     }))
   }
-  retryDelivery(id:string):void { this.db.prepare("UPDATE outbox SET status='pending',next_at=0 WHERE id=? AND status IN ('uncertain','pending')").run(id) }
+  retryDelivery(id:string):void {
+    const r=this.db.prepare("SELECT status, json_extract(body, '$.recovery.effectUnknown') AS effect_unknown FROM outbox WHERE id=?").get(id)
+    if(r?.status==='uncertain'&&r.effect_unknown===1)throw Error('Delivery effect is unknown. Reconcile the original destination before issuing a new request.')
+    this.db.prepare("UPDATE outbox SET status='pending',next_at=0 WHERE id=? AND status IN ('uncertain','pending')").run(id)
+  }
   delivered(id: string): void { this.db.prepare("UPDATE outbox SET status='sent',error=NULL WHERE id=?").run(id) }
-  deliveryFailed(id: string, attempts: number, error: string, uncertain = false): void {
+  deliveryFailed(id: string, attempts: number, error: string, uncertain = false, recovery?:ConnectorFailure): void {
+    if(recovery){
+      // Do not automatically replay or retarget classified external operations.
+      this.db.prepare("UPDATE outbox SET status=?,attempts=?,next_at=?,error=?,body=json_set(body,'$.recovery',json(?)) WHERE id=? AND status='sending'")
+        .run(recovery.effectUnknown?'uncertain':'dropped',attempts,Date.now()+(recovery.retryAfterMs??0),error,JSON.stringify(recovery),id)
+      return
+    }
     this.db.prepare('UPDATE outbox SET status=?,attempts=?,next_at=?,error=? WHERE id=?')
       .run(uncertain ? 'uncertain' : 'pending', attempts, Date.now() + Math.min(300_000, 1000 * 2 ** Math.min(attempts, 9)), error, id)
   }

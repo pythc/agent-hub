@@ -1,5 +1,6 @@
+import {ConnectorOperationError,requestFailure,retryDelay} from '../../src/connector-recovery.ts'
 import {createHash} from 'node:crypto'
-import {MessageSource,UncertainDelivery,bodyDigest,record,type SourceContext,type SourceConfig,type Trigger,type OutboundMessage} from '../sdk.ts'
+import {MessageSource,bodyDigest,record,type SourceContext,type SourceConfig,type Trigger,type OutboundMessage} from '../sdk.ts'
 
 import type {StatusTarget,TransitionView} from '../../src/workflow-actions.ts'
 
@@ -29,27 +30,31 @@ export class LinearSource extends MessageSource {
   constructor(config:SourceConfig,api?:Request,private readonly beforeWorkflowWrite?:()=>Promise<void>){super(config);this.api=api??this.request.bind(this)}
 
   private async request(query:string,variables:Record<string,unknown>={}){
-    if((this.current?.store.get<number>('plugin-state','retryAt')??0)>Date.now())throw Error('Linear retry window has not elapsed')
+    const now=Date.now(),retryAt=this.current?.store.get<number>('plugin-state','retryAt')??0
+    if(retryAt>now)throw new ConnectorOperationError('throttled',false,retryAt-now)
+    const write=/^\s*mutation\b/.test(query)
     const token=process.env[this.options.tokenEnv]
-    if(!token)throw Error('Linear credential is unavailable')
+    if(!token)throw new ConnectorOperationError('auth_required',false)
     const url=new URL(this.options.apiBase??'https://api.linear.app/graphql')
     if(url.href!=='https://api.linear.app/graphql'&&!(url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname)&&!url.username&&!url.password))throw Error('Linear API must use its official endpoint or a local test service')
-    const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json',authorization:(this.options.authType==='oauth'?'Bearer ':'')+token},body:JSON.stringify({query,variables}),redirect:'error',signal:AbortSignal.timeout(15000)})
-    if(response.status===429){this.defer(response.headers.get('retry-after'));throw Error('Linear rate limited')}
-    if(!response.ok)throw Error('Linear HTTP request failed: '+response.status)
+    const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json',authorization:(this.options.authType==='oauth'?'Bearer ':'')+token},body:JSON.stringify({query,variables}),redirect:'error',signal:AbortSignal.timeout(15000)}).catch(error=>{throw requestFailure(error,write)})
+    if(response.status===429)throw new ConnectorOperationError('throttled',write,this.defer(response.headers.get('retry-after')))
+    if(response.status===401||response.status===403)throw new ConnectorOperationError('auth_required',write)
+    if(!response.ok)throw new ConnectorOperationError('unknown',write)
     const reader=response.body?.getReader();if(!reader)throw Error('Linear response is empty')
     const chunks:Uint8Array[]=[];let size=0
-    try{for(;;){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>4_000_000)throw Error('Linear response exceeds limit');chunks.push(chunk.value)}}finally{await reader.cancel()}
+    try{for(;;){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>4_000_000)throw Error('Linear response exceeds limit');chunks.push(chunk.value)}}catch(error){throw requestFailure(error,write)}finally{await reader.cancel().catch(()=>{})}
     const result=JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    if(result.errors?.length){
-      if(result.errors.some((e:any)=>e.extensions?.code==='RATELIMITED'))this.defer(response.headers.get('retry-after'))
-      // Never expose server text that could contain request content or credentials.
-      throw Error('Linear GraphQL operation failed; partial data rejected')
+    if(Array.isArray(result?.errors)&&result.errors.length){
+      // Partial data may come from a successful mutation; never certify no effect.
+      const limited=result.errors.some((e:any)=>e?.extensions?.code==='RATELIMITED')
+      const auth=result.errors.every((e:any)=>['UNAUTHENTICATED','FORBIDDEN'].includes(e?.extensions?.code))
+      throw new ConnectorOperationError(limited?'throttled':auth?'auth_required':'terminal',write,limited?this.defer(response.headers.get('retry-after')):undefined)
     }
     if(!result.data||typeof result.data!=='object')throw Error('Linear response has no data')
     return result.data
   }
-  private defer(value:string|null){const seconds=Number(value);this.current?.store.put('plugin-state','retryAt',Date.now()+Math.min(86400,Number.isFinite(seconds)&&seconds>0?seconds:60)*1000)}
+  private defer(value:string|null){const delay=Math.max(1000,retryDelay(value)??60_000);this.current?.store.put('plugin-state','retryAt',Date.now()+delay);return delay}
   private allowed(team:unknown):team is string{return typeof team==='string'&&this.options.teams.includes(team)}
   private allowedIssue(id:unknown):id is string{return uuid(id)&&(!this.options.issueIds||this.options.issueIds.includes(id))}
   validThread(thread:string){const [team,id,...extra]=thread.split(':');return extra.length===0&&this.allowed(team)&&this.allowedIssue(id)}
@@ -231,7 +236,7 @@ export class LinearSource extends MessageSource {
       const data=await this.api('mutation AgentHubReply($input:CommentCreateInput!){commentCreate(input:$input){success comment{id body issue{id team{id}}}}}',{input:{id,issueId,body:message.text}})
       if(data.commentCreate?.success!==true||data.commentCreate.comment?.id!==id||data.commentCreate.comment.body!==message.text)throw Error('Linear comment receipt mismatch')
       this.assertIssue(data.commentCreate.comment.issue,team!,issueId!)
-    }catch{throw new UncertainDelivery('Linear reply outcome unknown; reconcile the deterministic comment ID before retry')}
+    }catch(error){throw requestFailure(error,true)}
   }
 }
 export default {create:(config:SourceConfig,context:SourceContext)=>new LinearSource(config,undefined,context.beforeExternalWrite)}
