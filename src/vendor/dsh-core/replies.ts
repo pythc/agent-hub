@@ -2,7 +2,7 @@
 import { key } from './ids.ts'
 import { UserError } from './errors.ts'
 import { latestAssignment, liveTicket, ticketOutcome } from './model.ts'
-import type { ChannelRef, Ticket, Trigger } from './model.ts'
+import type { Ticket, Trigger } from './model.ts'
 import type { ReplyStatus } from './ports.ts'
 import { EnginePart } from './part.ts'
 
@@ -41,7 +41,7 @@ export class Replies extends EnginePart {
    * and a person wrote it.
    */
   acknowledgeAccepted(ticketId: string, trigger: Trigger, text: string): void {
-    if (trigger.channel && trigger.human) this.options.outbox.send({ id: key('ack', trigger.id), channel: trigger.channel, text, kind: 'acknowledgement', ticketId })
+    if (trigger.channel && trigger.human) this.options.outbox.send({ id: key('ack', trigger.id), channel: trigger.channel, text, kind: 'acknowledgement', ticketId }, trigger.id)
   }
   /** Withdraw a ticket's question for a person from the outbox, unless it went out already. */
   withdrawAttention(attentionId: string): void { this.options.outbox.withdraw(key('attention-reply', attentionId)) }
@@ -57,7 +57,7 @@ export class Replies extends EnginePart {
     const existing = this.options.outbox.status(id)
     if (!existing && !trigger.human) throw new UserError('ackNotPerson')
     // Preserve the automatic or first queued acknowledgement.
-    if (!existing) this.options.outbox.send({ id, channel: trigger.channel, text: request.text, kind: 'acknowledgement', ticketId: ticket.id })
+    if (!existing) this.options.outbox.send({ id, channel: trigger.channel, text: request.text, kind: 'acknowledgement', ticketId: ticket.id }, trigger.id)
     this.takeUp(ticket.id, trigger.id)
     return { id, status: this.options.outbox.status(id) ?? 'pending', reused: existing !== undefined }
   }
@@ -81,15 +81,13 @@ export class Replies extends EnginePart {
     const ready = !ticket || !trigger || ticket.answers?.includes(trigger.id)
     if (request.purpose === 'answer' && !ready && !existing) throw new UserError('noAnswer')
     const asker = attention?.triggerId ? this.repo.triggers.get(attention.triggerId) : undefined
-    const channel = request.purpose === 'answer' ? trigger!.channel : asker?.channel ?? (ticket ? this.sourceChannel(ticket) : undefined)
-    if (!channel) throw new UserError('noChannel')
-    this.options.outbox.send({ id, channel, text: request.text, kind: 'reply', ...ticket ? { ticketId: ticket.id } : {} })
+    const origin = request.purpose === 'answer' ? trigger : attention?.triggerId ? asker : ticket ? this.source(ticket) : undefined
+    if (!origin?.channel) throw new UserError('noChannel')
+    this.options.outbox.send({ id, channel: origin.channel, text: request.text, kind: 'reply', ...ticket ? { ticketId: ticket.id } : {} }, origin.id)
     if (request.purpose === 'answer' && ticket && trigger && ticket.answers?.includes(trigger.id)) {
       ticket.answers = ticket.answers.filter(item => item !== trigger.id)
       this.repo.tickets.save(ticket)
     }
     return { id, status: this.options.outbox.status(id) ?? 'pending', reused: existing !== undefined }
   }
-  /** The conversation a ticket started in: its origin Trigger's Channel, else its first Channel. */
-  private sourceChannel(ticket: Ticket): ChannelRef | undefined { return this.source(ticket)?.channel ?? ticket.channels[0] }
 }

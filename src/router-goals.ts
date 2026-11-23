@@ -133,8 +133,9 @@ export class RouterGoals {
  notice(g:RouterGoal,text:string,review=false){
   try{
    const {trigger}=this.anchor(g)
-   const channel=g.project?this.projectRequester(g)?.channel:trigger.channel
-   if(!channel||g.project&&!this.host.proactive.notify(g.triggerId))return
+   const destination=g.project?this.projectRequester(g):trigger
+   const channel=destination?.channel
+   if(!destination||!channel||g.project&&!this.host.proactive.notify(g.triggerId))return
    const ids=[...new Set([...(g.contextIds??[]),...this.host.replanning.contexts(g.id)])]
    const manifests=ids.map(id=>{
     const saved=this.host.store.get<ContextManifest>('context-manifest',id);if(!saved)throw Error('Goal context unavailable')
@@ -145,7 +146,7 @@ export class RouterGoals {
    const id='goal-notice:'+stableDigest([g.id,g.revision,text])
    // The run remains the authority for delayed delivery to its original requester's channel.
    this.host.store.put('router-reply-owner',id,{goalId:g.id,discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests})
-   this.host.store.outbox.send({id,channel,kind:'reply',text:review?text:'目标「'+g.title+'」尚未完成：'+text})
+   this.host.store.outbox.send({id,channel,kind:'reply',text:review?text:'目标「'+g.title+'」尚未完成：'+text},destination.id)
   }catch{}
  }
  tick(){

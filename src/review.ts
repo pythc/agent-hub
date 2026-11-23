@@ -30,7 +30,7 @@ export class Reviews {
   if(!this.host.validWork(owner))throw Error('Review assignment ended during verification')
   this.host.store.atomic(()=>{
    this.host.store.put('review-action',key,record)
-   if(messageId)this.host.store.outbox.send({id:messageId,ticketId:owner.ticketId,kind:'reply',channel:trigger.channel!,text:reason})
+   if(messageId)this.host.store.outbox.send({id:messageId,ticketId:owner.ticketId,kind:'reply',channel:trigger.channel!,text:reason},trigger.id)
   })
   return record
  }
