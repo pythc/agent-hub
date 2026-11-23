@@ -1,9 +1,56 @@
 import {useEffect,useState} from 'react'
 import type {ArtifactCatalog} from '../../src/artifact-catalog.ts'
+import type {GoalArtifacts} from '../../src/goal-artifacts.ts'
+import type {ArtifactReference} from '../../src/artifact-reference.ts'
 import {useWorkspaceTransport} from './workspace-context.tsx'
 import {parseArtifactCatalog} from './artifact-catalog-model.ts'
 import {ArtifactReferenceDetails} from './artifact-reference-details.tsx'
 import './worker-templates.css'
+type CleanupImpact=ReturnType<GoalArtifacts['cleanupImpact']>
+type Localize=(en:string,zh:string)=>string
+
+function parseCleanupImpact(value:unknown,ref:ArtifactReference):CleanupImpact|null{
+ const p=value as CleanupImpact
+ if(!p||p.schema!==1||p.artifactId!==ref.id||p.version!==ref.version||typeof p.retained!=='boolean'||
+   p.card!=='not_supported'||p.linkRevocation!=='not_tracked'||p.recovery!=='not_supported'||
+   p.thirdPartyCopies!=='outside_management'||p.mutationAvailable!==false||!p.series||
+   typeof p.series.truncated!=='boolean'||!Number.isInteger(p.series.versions)||
+   p.series.versions<0||p.series.versions>200||!Number.isInteger(p.series.retainedVersions)||
+   p.series.retainedVersions<0||p.series.retainedVersions>p.series.versions)return null
+ return p
+}
+
+function CleanupImpactPanel({reference,L}:{reference:ArtifactReference;L:Localize}){
+ const {binding,contextKey,readSignal}=useWorkspaceTransport()
+ const [open,setOpen]=useState(false),[result,setResult]=useState<CleanupImpact|null>(null),[error,setError]=useState(false)
+ const {id,version}=reference
+ useEffect(()=>{
+  if(!open)return
+  const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal])
+  setError(false);setResult(null)
+  void binding.request<unknown>('/goal-artifact-versions/'+encodeURIComponent(id)+'/cleanup-impact',undefined,false,undefined,signal).then(data=>{
+   if(signal.aborted)return
+   const impact=parseCleanupImpact(data,reference)
+   if(!impact)throw Error('cleanup_impact_unavailable')
+   setResult(impact)
+  }).catch(()=>{if(!signal.aborted)setError(true)})
+  return()=>controller.abort()
+ },[binding,contextKey,id,version,open,readSignal])
+ return <div>
+  <button type="button" aria-expanded={open} disabled={readSignal.aborted} onClick={()=>{setResult(null);setError(false);setOpen(v=>!v)}}>{open?L('Hide cleanup impact','收起清理影响'):L('Preview cleanup impact','预览清理影响')}</button>
+  {open&&!readSignal.aborted?<section aria-label={L('Cleanup impact','清理影响')}>
+   <p>{L('Read-only preview. This does not delete anything or revoke any link.','仅预览，不会删除内容或撤回链接。')}</p>
+   {error?<p role="status">{L('Preview unavailable for this version. Refresh to try again.','此版本暂不能预览，请刷新重试。')}</p>:result?<ul>
+    <li>{L('This version: ','只看此版本：')}{result.retained?L('retained local bytes','本地仍保留文件内容'):L('no retained local bytes','本地未保留文件内容')}</li>
+    <li>{L('All versions of this same task output: ','同一任务产物的全部版本：')}{result.series.truncated?L('sample only: ','仅为部分记录：'):null}{L(`${result.series.versions} visible versions; ${result.series.retainedVersions} with local bytes`,`可见 ${result.series.versions} 个版本，其中 ${result.series.retainedVersions} 个保留本地内容`)}</li>
+    <li>{L('Removing a card is not a separate action. This preview cannot delete a version or a series.','当前不支持单独移除卡片；此预览不能删除单个版本或全部版本。')}</li>
+    <li>{L('Link revocation is separate and this source does not track published links. Downloaded, cached, and third-party copies are not managed here.','链接撤回是独立操作；此来源没有发布链接记录，已下载、缓存及第三方副本不在管理范围内。')}</li>
+    <li>{L('No per-artifact recovery period is available.','暂不支持按产物恢复，没有可承诺的恢复期限。')}</li>
+   </ul>:<p role="status">{L('Reading cleanup impact…','正在读取清理影响…')}</p>}
+  </section>:null}
+ </div>
+}
+
 export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
  const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh
@@ -32,6 +79,7 @@ export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
    <h2>{label[language]}</h2>
    <a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#artifact-view/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current workspace view','打开当前工作区视图')}</a>
    {reference.kind==='workspace-view'?<p><a href={'#artifact-view-version/'+reference.id+'/'+reference.version} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{L('Inspect this fixed version','查看此固定版本')}</a></p>:null}
+   {reference.kind==='goal-artifact'?<CleanupImpactPanel key={contextKey+':'+reference.id+':'+reference.version} reference={reference} L={L}/>:null}
    <ArtifactReferenceDetails reference={reference} current={reference.kind==='goal-artifact'&&reference.availability==='unavailable'?'unavailable':'unchecked'} L={L}/>
   </article>)}
  </section>
