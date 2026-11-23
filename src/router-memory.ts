@@ -8,13 +8,14 @@ import type {Trigger} from './vendor/dsh-core/index.ts'
 import type {RouterScopes,ScopeContext} from './router-scope.ts'
 import {stableDigest,bodyDigest,sourceChangeSchema,type SourceChange} from './sources.ts'
 import type {ToolSpec} from './model.ts'
+import {isPreferenceException} from './preference-resolution.ts'
 import {assertNoMemorySecret,memoryLearningSchema,type MemoryLearning} from './memory-policy.ts'
 import {HistoryCleanup,planHistory,planChatHistory,type HistoryPlan} from './history-cleanup.ts'
 import {detectExplicitMemory,renderMemory,type MemoryKind} from './vendor/weknora/primitives.ts'
 
 const id=z.string().min(1).max(300)
 export interface MemoryEvidence {id:string;parentId?:string;tenantId:string;scopeId:string;entryId:string;sourceId:string;actor:string;version:number;hash:string;text:string;locator:string;occurredAt?:string;capturedAt:number;revoked:boolean}
-export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;origin?:'explicit'|'manual'|'extracted'|'consolidated'|'experience';learning?:MemoryLearning;importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;topicAliases?:string[]}
+export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;origin?:'explicit'|'manual'|'extracted'|'consolidated'|'experience';learning?:MemoryLearning;importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;exceptionRevoked?:boolean;topicAliases?:string[]}
 export interface MemoryProjection extends MemoryFact {freshness:{status:'verified'|'unverified'|'unavailable'|'stale';capturedAt:number;checkedAt?:number;sourceVersions:{id:string;version:number}[]};access:{audienceEntry:string;sourceEntry:string;mode:'origin'|'published_revision';revision:number;shareId?:string}}
 export interface MemoryShare {id:string;factId:string;revision:number;targetEntry:string;active:boolean;expiresAt?:number;publishedAt?:number}
 export interface MemoryCapture {tenantId:string;scopeId:string;generation:number;epoch:number;sourceVersions:{id:string;version:number}[]}
@@ -27,6 +28,7 @@ export const memoryCommandSchema=z.discriminatedUnion('action',[
  z.object({action:z.literal('share'),...base,id,targetEntry:id,expiresAt:z.number().int().positive().optional()}).strict(),
  z.object({action:z.literal('unshare'),...base,id,targetEntry:id}).strict(),
  z.object({action:z.literal('forget'),...base,id}).strict(),
+ z.object({action:z.literal('exception.revoke'),...base,id}).strict(),
  z.object({action:z.literal('source.delete'),...base,id}).strict(),
  z.object({action:z.literal('clear'),...base}).strict(),
  z.object({action:z.literal('history.delete'),...base}).strict(),
@@ -314,6 +316,12 @@ export class RouterMemory {
    for(const ref of fact.replaces??[]){const target=this.fact(ref.id)!;this.store.put('memory-version',target.id+':'+target.revision,target);this.save({...target,state:'superseded',revision:target.revision+1})}
    const next={...fact,state:'active' as const,protected:true,revision:fact.revision+1};this.store.put('memory-version',fact.id+':'+fact.revision,fact);this.save(next);return next
   }
+  if(x.action==='exception.revoke'){
+   if(!operator||fact.owner!==c.actor||fact.entryId!==c.route.entryId||fact.state!=='active'||!isPreferenceException(fact))throw Error('Preference exception unavailable')
+   this.store.put('memory-version',fact.id+':'+fact.revision,fact)
+   this.save({...fact,archived:true,exceptionRevoked:true,revision:fact.revision+1})
+   return {id:fact.id,revision:fact.revision+1,revoked:true}
+  }
   if(x.action==='forget'){this.revoke(c,{action:'forget',id:fact.id,generation:this.generation(fact.scopeId)});return {status:'stopped_using',localMemory:'verified',conversationHistory:'retained',external:'not_managed'}}
   if(!manager||fact.visibility==='private')throw Error('Publishing requires the group data manager; private memory is not group knowledge')
   const target=this.scopes.binding(x.targetEntry)
@@ -337,7 +345,7 @@ export class RouterMemory {
   while(changed){changed=false;for(const f of this.store.list<MemoryFact>('memory-fact'))if(f.dependencies?.length&&['active','candidate','disputed'].includes(f.state)&&!this.supported(f)){this.store.put('memory-version',f.id+':'+f.revision,wipe?{...f,subject:'',content:'',learning:undefined,state:'tombstoned'}:f);this.save({...f,...(wipe?{subject:'',content:'',learning:undefined}:{}),state:'revoked',revision:f.revision+1});changed=true}}
  }
  private queryChanged(tenantId:string){this.store.put('memory-query-version',tenantId,(this.store.get<number>('memory-query-version',tenantId)??0)+1)}
- private save(f:MemoryFact){this.queryChanged(f.tenantId);this.store.put('memory-fact',f.id,f);this.store.db.prepare('DELETE FROM memory_search WHERE id=?').run(f.id);if(f.state==='active')this.store.db.prepare('INSERT INTO memory_search(id,body) VALUES(?,?)').run(f.id,f.subject+' '+f.content)}
+ private save(f:MemoryFact){this.queryChanged(f.tenantId);this.store.put('memory-fact',f.id,f);this.store.db.prepare('DELETE FROM memory_search WHERE id=?').run(f.id);if(f.state==='active'&&!f.archived)this.store.db.prepare('INSERT INTO memory_search(id,body) VALUES(?,?)').run(f.id,f.subject+' '+f.content)}
  private revoke(c:ScopeContext,input:Pick<Revocation,'action'|'generation'>&Partial<Pick<Revocation,'id'|'targetEntry'>>){
   const previous=readRevocations(this.stateDir).at(-1)
   const at=Math.max(Date.now(),(this.store.get<number>('memory-clock','last')??0)+1)

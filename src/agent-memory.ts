@@ -12,6 +12,7 @@ import {observeExperience,extractExperience} from './memory-experience.ts'
 import type {RouterGoal} from './router-goals.ts'
 import type {VerificationRound} from './goal-verification.ts'
 import {verifyMemoryRelevance} from './memory-relevance.ts'
+import {resolvePreferences} from './preference-resolution.ts'
 import {reflectMemories,reflectionContext,reflectionView,pruneReflections} from './memory-reflection.ts'
 
 export interface MemoryObservation {id:string;kind?:'experience';parentSourceId?:string;space:string;triggerId:string;discussion:string;scopeId:string;entryId:string;actor:string;session:string;sourceId:string;start?:number;end?:number;generation:number;epoch:number;policyRevision:number;sequence:number;state:'pending'|'running'|'done'|'held'|'stale';attempts:number;nextAt:number;lease?:string;error?:string}
@@ -85,7 +86,8 @@ export class AgentMemory {
   do{const page=this.host.memory.query(c,{limit:50,candidates,cursor});items.push(...page.items);cursor=page.cursor}while(cursor)
   return items.filter(f=>!['profile','preference','interest'].includes(f.kind??'fact')||f.owner===c.actor)
  }
- applicable(c:ScopeContext){return this.authorized(c).filter(f=>!f.learning?.discussion||f.learning.discussion===c.route.discussion)}
+ selectedPreferences(c:ScopeContext,items=this.authorized(c)){return resolvePreferences(items,c,this.now())}
+ applicable(c:ScopeContext){return this.selectedPreferences(c).items.filter(f=>!f.learning?.discussion||f.learning.discussion===c.route.discussion)}
  cooperation(c:ScopeContext){
   // Derived from current visible revisions: deleting or changing a source removes
   // its contribution immediately, without a stale second summary store.
@@ -105,7 +107,13 @@ export class AgentMemory {
    // Explicit operator confirm/edit does not pass through this automatic boundary.
    const automatic=['extracted','consolidated','experience'].includes(current.origin??'')
    const incompatible=automatic&&targets.some(({f})=>!!f&&(f.scopeId!==current.scopeId||f.tenantId!==current.tenantId||f.entryId!==current.entryId||f.owner!==current.owner||!sameMemoryApplicability(f,current)))
-   if(incompatible||targets.some(({ref,f})=>!f||f.state!=='active'||f.revision!==ref.revision||current.learning?.inferred&&(f.protected||f.learning?.inferred!==true))||current.proposalAction==='forget'){
+   const revokedException=automatic&&current.kind==='preference'&&this.host.store.list<MemoryFact>('memory-fact').some(f=>
+    f.exceptionRevoked&&f.generation===current.generation&&f.tenantId===current.tenantId&&f.scopeId===current.scopeId&&
+    f.entryId===current.entryId&&f.owner===current.owner&&normalizeMemory(f.subject)===normalizeMemory(current.subject)&&
+    normalizeMemory(f.content)===normalizeMemory(current.content)&&f.learning?.discussion===current.learning?.discussion&&
+    (f.learning?.condition??'')===(current.learning?.condition??'')&&
+    (current.expiresAt!==undefined||!!current.learning?.discussion||!!current.learning?.condition?.trim()))
+   if(incompatible||revokedException||targets.some(({ref,f})=>!f||f.state!=='active'||f.revision!==ref.revision||current.learning?.inferred&&(f.protected||f.learning?.inferred!==true))||current.proposalAction==='forget'){
     this.host.store.put('memory-version',current.id+':'+current.revision,current)
     this.host.store.put('memory-fact',current.id,{...current,archived:true,revision:current.revision+1})
     return {id:current.id,status:'not_applied'}
@@ -387,7 +395,7 @@ export class AgentMemory {
    this.host.memory.command(c,{action:'forget',operationId:'forget-topic:'+topic.id+':'+f.revision,expectedRevision:f.revision,id:f.id},true)
    this.host.store.db.prepare("DELETE FROM records WHERE kind='memory-topic' AND id=?").run(topic.id);return {forgotten:true}
   }
-  const f=this.host.memory.fact(x.id??'');if(!f||f.scopeId!==c.route.scopeId||f.entryId!==c.route.entryId||f.owner!==c.actor||f.revision!==x.expectedRevision||f.generation!==this.host.memory.generation(f.scopeId))throw Error('Memory revision or owner changed')
+  const f=this.host.memory.fact(x.id??'');if(!f||f.exceptionRevoked||f.scopeId!==c.route.scopeId||f.entryId!==c.route.entryId||f.owner!==c.actor||f.revision!==x.expectedRevision||f.generation!==this.host.memory.generation(f.scopeId))throw Error('Memory revision or owner changed')
   this.host.store.put('memory-version',f.id+':'+f.revision,f);this.host.store.put('memory-fact',f.id,{...f,archived:x.action==='archive',revision:f.revision+1});this.reconcile();return {id:f.id,archived:x.action==='archive'}
  }
 }

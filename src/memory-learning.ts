@@ -20,7 +20,10 @@ Do not extract general knowledge, quoted documents, assistant claims, credential
 Use add for new information; update/delete must identify an existing note by its supplied index.
 Each memory needs a source message index and an EXACT quote from that message supporting the observation.
 Mark inferred=false only for preferences the speaker actually states; mark generalizations inferred=true.
-Describe when each preference applies in condition; use an empty condition only for a general preference.
+Use an empty condition when discussion scope or expiry fully expresses the applicability.
+For a request-specific preference, use "request contains: <literal phrase>" only when the speaker specifies an exact literal.
+Otherwise preserve a descriptive condition, which the host will not automatically treat as true.
+Reuse the same topic for a preference and its exceptions; do not assign separate subjects to opposing values.
 Use scope=discussion for temporary instructions such as "this time", "today's task", or a one-off exception.
 Use scope=entry for enduring preferences in this project or entry. Do not turn one task choice into a permanent trait.
 Update only the same preference under the same conditions. A narrower exception coexists with the general preference.
