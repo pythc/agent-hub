@@ -170,6 +170,53 @@ function resourceResetIdentity(){
  resourceView.controller?.abort()
  Object.assign(resourceView,{identity,data:null,busy:false,failed:false,loaded:false,request:resourceView.request+1,controller:null})
 }
+function resourceAccounting(value){
+ if(value===undefined)return null
+ const n=x=>Number.isSafeInteger(x)&&x>=0,nullable=x=>x===null||n(x),t=x=>n(x)&&x<=8640000000000000
+ const safeLabel=x=>typeof x==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,99}$/.test(x)
+ const task=value?.task,models=value?.models,tools=value?.tools,poll=value?.polling,context=value?.lastContextCheck
+ if(!task||!['distinct','linkedCalls','unlinkedCalls'].every(k=>n(task[k]))||task.distinct>task.linkedCalls||!nullable(task.linkedTokens)||!nullable(task.unlinkedTokens)||
+    !Array.isArray(models)||models.length>22||!models.every(row=>row&&n(row.calls)&&n(row.usageCalls)&&row.usageCalls<=row.calls&&nullable(row.totalTokens)&&(row.bucket==='identified'?safeLabel(row.backend)&&safeLabel(row.model):['unattributed','other'].includes(row.bucket)&&row.backend===null&&row.model===null))||
+    !tools||!n(tools.retainedCalls)||!n(tools.unknownState)||!['running','completed','failed','interrupted'].every(k=>n(tools.states?.[k]))||
+    !poll||!['observedSources','healthy','retrying','error'].every(k=>n(poll[k]))||!(poll.lastCheckAt===null||t(poll.lastCheckAt))||poll.calls!==null||
+    !(context===null||context&&['api-wire','native-protocol'].includes(context.basis)&&t(context.at)&&['measuredBytes','reservedBytes','hardLimitBytes'].every(k=>n(context[k]))&&context.hardLimitBytes>0&&context.status===(context.measuredBytes<=context.hardLimitBytes-context.reservedBytes?'within_budget':'exceeded'))||
+    value.cost?.estimated!==null||value.cost.billed!==null||value.cost.reason!=='no_price_or_bill_evidence')throw Error('resource_usage_invalid')
+ return {task,models,tools,poll,context}
+}
+function resourcePaintAccounting(element,data,format,date){
+ element.replaceChildren()
+ if(!data)return
+ const {task,models,tools,poll,context}=data
+ const unavailable=L('Not recorded','尚无记录')
+ const tokens=n=>n===null?unavailable:format(n)+' tokens'
+ const addLine=(en,zh,value)=>element.append(el('p','resource-note',L(en,zh)+value))
+ addLine('Task-linked calls: ','任务关联调用：',L(
+   format(task.linkedCalls)+' across '+format(task.distinct)+' tasks ('+tokens(task.linkedTokens)+'); unlinked: '+format(task.unlinkedCalls)+' ('+tokens(task.unlinkedTokens)+').',
+   format(task.linkedCalls)+' 次，来自 '+format(task.distinct)+' 个任务（'+tokens(task.linkedTokens)+'）；未关联 '+format(task.unlinkedCalls)+' 次（'+tokens(task.unlinkedTokens)+'）。'))
+ element.append(el('h3','',L('Selected models','选用模型')))
+ if(!models.length)element.append(el('p','resource-note',unavailable))
+ else{
+  const list=el('ul')
+  for(const row of models){
+   const model=row.bucket==='identified'?row.backend+' / '+row.model:row.bucket==='other'?L('Other selected models','其余选用模型'):L('Unattributed or multiple attempts','归属不明或多次尝试')
+   list.append(el('li','',model+' · '+L(format(row.usageCalls)+'/'+format(row.calls)+' calls reporting usage',format(row.calls)+' 次调用中 '+format(row.usageCalls)+' 次有用量')+' · '+tokens(row.totalTokens)))
+  }
+  element.append(list)
+ }
+ element.append(el('p','resource-note',L('Task and model totals cover only this host ledger, excluding the separate background observer.','按任务、模型分组仅覆盖本机账本，不包括独立后台观察器。')))
+ addLine('Retained tool calls: ','保留的工具调用：',format(tools.retainedCalls)+' · '+L('running / completed / failed / interrupted / unknown: ','运行／完成／失败／中断／未知：')+[tools.states.running,tools.states.completed,tools.states.failed,tools.states.interrupted,tools.unknownState].map(format).join(' / '))
+ addLine('Latest polling health: ','最近轮询状态：',poll.observedSources===0?unavailable:L('healthy / retrying / error: ','健康／重试／错误：')+[poll.healthy,poll.retrying,poll.error].map(format).join(' / ')+' · '+date(poll.lastCheckAt))
+ element.append(el('p','resource-note',L('Polling call counts and cost are not metered here. Tool rows are retained activity, not invoices.','这里没有轮询调用量或费用计量；工具记录也不是账单。')))
+ if(context){
+ addLine('Last context check: ','最近一次上下文检查：',date(context.at)+' · '+context.basis+' · '+L('measured / reserved / hard limit','实测／预留／硬上限')+': '+[context.measuredBytes,context.reservedBytes,context.hardLimitBytes].map(format).join(' / ')+' B · '+(context.status==='exceeded'?L('over limit','已超限'):L('within limit','未超限')))
+  // The three inputs are checked safe integers, but the sum may not be.
+  const delta=BigInt(context.hardLimitBytes)-BigInt(context.reservedBytes)-BigInt(context.measuredBytes)
+  if(delta<0n)addLine('Above the hard limit at that check: ','当次检查超出硬上限：',format(-delta)+' B')
+  else addLine('Space below the hard limit at that check: ','当次检查距硬上限：',format(delta)+' B')
+  element.append(el('p','resource-note',L('This difference includes the reservation for that recorded check. It is not current capacity, remaining tokens, or a billing estimate.','该差值计入当次检查的预留量，不代表当前可用空间、剩余 token 或费用估算。')))
+ }
+ addLine('Estimated or billed cost: ','估算费用或实际账单：',L('unavailable; no price or invoice evidence.','不可用，缺少单价或账单凭据。'))
+}
 function resourceSnapshot(value){
  const number=n=>Number.isSafeInteger(n)&&n>=0,time=n=>number(n)&&n<=8640000000000000,fields=['inputTokens','cachedInputTokens','cacheWriteInputTokens','outputTokens','reasoningOutputTokens','totalTokens'],counts=['calls','reportedCalls','unknownCalls','partialCalls','steps'],purposes=['router','worker','subagent','verification','replanning','plan_review','memory','auxiliary','watchdog'],states=['starting','running','completed','failed','cancelled','interrupted']
  const row=r=>r&&counts.every(key=>number(r[key]))&&r.reportedCalls<=r.calls&&r.unknownCalls===r.calls-r.reportedCalls&&r.partialCalls<=r.reportedCalls&&r.tokens&&fields.every(key=>r.tokens[key]===null||number(r.tokens[key]))
@@ -181,7 +228,7 @@ function resourceSnapshot(value){
  const workFields=['retainedItems','unrecognizedStateItems','deadlineItems','pastDeadlineItems','invalidDeadlineItems'],limits=['maxAgentsPerTicket','maxDepth','backgroundTimeoutMs','maxOutputBytesPerShell']
  if(!work||!workFields.every(key=>number(work[key]))||!work.states||!states.every(key=>number(work.states[key]))||total([...states.map(key=>({n:work.states[key]})),{n:work.unrecognizedStateItems}],'n')!==work.retainedItems||work.pastDeadlineItems>work.deadlineItems||work.deadlineItems>work.states.starting+work.states.running||work.invalidDeadlineItems>work.states.starting+work.states.running-work.deadlineItems||!work.limits||!limits.every(key=>number(work.limits[key])&&work.limits[key]>0))throw Error('resource_usage_invalid')
  const pick=(item,keys)=>Object.fromEntries(keys.map(key=>[key,item[key]]))
- return {schema:1,scope:'host',observedAt:value.observedAt,settingsRevision:value.settingsRevision,usage:{...pick(usage,['calls','reportedCalls','unknownCalls','partialCalls','legacyUntrackedCalls','since']),totalTokens:usage.tokens.totalTokens,watchdogUnavailable:usage.watchdogUnavailable===true},context:pick(context,[...contextFields,'lastCheckAt']),work:{...pick(work,workFields),states:pick(work.states,states),limits:pick(work.limits,limits)}}
+ return {schema:1,scope:'host',observedAt:value.observedAt,settingsRevision:value.settingsRevision,accounting:resourceAccounting(value.accounting),usage:{...pick(usage,['calls','reportedCalls','unknownCalls','partialCalls','legacyUntrackedCalls','since']),totalTokens:usage.tokens.totalTokens,watchdogUnavailable:usage.watchdogUnavailable===true},context:pick(context,[...contextFields,'lastCheckAt']),work:{...pick(work,workFields),states:pick(work.states,states),limits:pick(work.limits,limits)}}
 }
 function resourceAuthorized(){const phase=resourceView.bridge?.context().state??workspaceContext.transportPhase;return S.authed&&(!phase||phase==='ready')}
 function resourceVisible(){const root=resourceView.root;return !!(root?.isConnected&&!document.hidden&&root.getClientRects().length&&resourceAuthorized()&&(typeof configurationHost==='undefined'||configurationHost.active()))}
@@ -196,6 +243,7 @@ function resourcePaint(){
  fields.time.hidden=!data;if(data){fields.time.dateTime=new Date(data.observedAt).toISOString();fields.time.textContent=L('Updated ','更新于 ')+date(data.observedAt)}
  fields.failure.hidden=!resourceView.failed;fields.failure.textContent=data?L('Refresh failed. Showing earlier data from the time above.','刷新失败，暂显示上方时间的数据。'):L('Usage could not be loaded. Try refreshing.','无法读取用量，请重试刷新。')
  fields.metrics.hidden=!data;fields.details.hidden=!data;fields.coverage.hidden=!data;fields.note.hidden=!data;fields.observer.hidden=!data?.usage.watchdogUnavailable;fields.legacy.hidden=!data?.usage.legacyUntrackedCalls
+ resourcePaintAccounting(fields.accounting,data?.accounting,format,date)
  if(!data){fields.time.dateTime='';for(const node of [...Object.values(fields.values),...Object.values(fields.extraValues)])node.textContent='—';for(const node of [fields.time,fields.coverage,fields.note,fields.observer,fields.legacy,fields.contextTime])node.textContent='';return}
  fields.values.tokens.textContent=data.usage.totalTokens===null?L('No data','暂无数据'):format(data.usage.totalTokens)
  fields.coverage.textContent=data.usage.calls===0?L('No calls recorded.','尚无调用记录。'):L(format(data.usage.reportedCalls)+' of '+format(data.usage.calls)+' calls supplied usage',format(data.usage.calls)+' 次调用中 '+format(data.usage.reportedCalls)+' 次提供用量')+(data.usage.partialCalls?L('; '+format(data.usage.partialCalls)+' incomplete.','，'+format(data.usage.partialCalls)+' 次不完整。'):L('.','。'))
@@ -226,9 +274,9 @@ function resourcePanel(){
   ['context.retainedActivities','Context checks','上下文检查'],['context.withinBudgetActivities','Within limit','未超限'],['context.exceededActivities','Over limit','已超限'],['context.unrecognizedActivities','Unrecognized checks','无法识别的检查'],
   ['work.retainedItems','Work records','工作记录'],['work.states.starting','Starting','启动中'],['work.states.running','Running','运行中'],['work.states.completed','Completed','已完成'],['work.states.failed','Failed','失败'],['work.states.cancelled','Cancelled','已取消'],['work.states.interrupted','Interrupted','已中断'],['work.unrecognizedStateItems','Unrecognized work states','无法识别的工作状态'],['work.deadlineItems','Active work with deadlines','设定期限的进行中工作'],['work.pastDeadlineItems','Past deadline','已超过期限'],['work.invalidDeadlineItems','Invalid deadlines','无法识别的期限'],
   ['work.limits.maxAgentsPerTicket','Subagents per task limit','单任务子 Agent 上限'],['work.limits.maxDepth','Nesting depth limit','嵌套层数上限'],['work.limits.backgroundTimeoutMs','Background timeout (ms)','后台超时（毫秒）'],['work.limits.maxOutputBytesPerShell','Stored shell output limit (bytes)','Shell 输出保留上限（字节）']])metric(extra,key,en,zh,extraValues)
- const contextTime=el('p','resource-context-time');details.append(el('summary','',L('Details and limits','明细与上限')),el('p','',L('These saved records do not show free capacity. Overdue work may still be running.','这些记录不代表当前可用名额，超过期限的工作也可能仍在继续。')),contextTime,extra)
+ const accounting=el('div','resource-accounting'),contextTime=el('p','resource-context-time');details.append(el('summary','',L('Details and limits','明细与上限')),el('p','',L('These saved records do not show free capacity. Overdue work may still be running.','这些记录不代表当前可用名额，超过期限的工作也可能仍在继续。')),contextTime,extra,accounting)
  root.append(add(el('div','resource-heading'),add(el('div'),title,state),refresh),time,failure,metrics,coverage,note,observer,legacy,details)
- root.resourceFields={state,time,refresh,failure,metrics,coverage,note,observer,legacy,values,details,extraValues,contextTime};resourceView.root=root
+ root.resourceFields={state,time,refresh,failure,metrics,coverage,note,observer,legacy,values,details,extraValues,contextTime,accounting};resourceView.root=root
  queueMicrotask(()=>{resourcePaint();if(!resourceView.loaded)void resourceRefresh()})
  return root
 }
