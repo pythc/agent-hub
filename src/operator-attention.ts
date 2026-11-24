@@ -9,17 +9,17 @@ import {makePolicy} from './policy.ts'
 import {stableDigest} from './sources.ts'
 import {taskView} from './task-context.ts'
 
-export type AttentionKind='task_question'|'native_question'|'native_approval'|'workflow_review'|'project_review'|'effect_unknown'
-export type AttentionState='needs_reply'|'waiting_permission'|'needs_review'|'outcome_unknown'|'expired'|'unavailable'|'stale'
+export type AttentionKind='task_question'|'native_question'|'native_approval'|'workflow_review'|'project_review'|'effect_unknown'|'open_work'
+export type AttentionState='needs_reply'|'waiting_permission'|'needs_review'|'outcome_unknown'|'expired'|'unavailable'|'stale'|'in_progress'
 export interface OperatorAttentionItem {
  id:string;kind:AttentionKind;state:AttentionState
  taskRef?:{id:string;assignmentId?:string}
- sourceLabel:string;createdAt:number|null;expiresAt:number|null;observed:string
+ read?:boolean;sourceLabel:string;createdAt:number|null;expiresAt:number|null;observed:string
  /** Navigation descriptors only. These are never permission or mutation tokens. */
  next:{kind:'task'|'records'|'workflow'|'project_review';id:string}
 }
 export interface OperatorAttentionSnapshot {
- schema:1;readOnly:true;observedAt:number;total:number;offset:number;limit:number;more:boolean;items:OperatorAttentionItem[]
+ schema:1;readOnly:true;observedAt:number;total:number;offset:number;limit:number;more:boolean;unread?:number;items:OperatorAttentionItem[]
 }
 const timestamp=(v:unknown):number|null=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0&&v<=8.64e15?v:null
 const labels:Record<string,string>={local:'Local operator',feishu:'Feishu',slack:'Slack',wecom:'WeCom',github:'GitHub',webhook:'HTTP events',delegation:'Delegated team'}
@@ -86,18 +86,41 @@ function approvalState(host:Runtime,ticket:Ticket,item:Approval,now:number,expir
 /** A synchronous view of existing facts. No new inbox, decision or authorization exists here. */
 export class OperatorAttention {
  constructor(private readonly host:()=>Runtime){}
- snapshot(offset=0,limit=25,now=Date.now()):OperatorAttentionSnapshot {
+ snapshot(offset=0,limit=25,now=Date.now(),reader?:string):OperatorAttentionSnapshot {
   if(!Number.isSafeInteger(offset)||offset<0||offset>1_000_000||!Number.isSafeInteger(limit)||limit<1||limit>100||timestamp(now)===null)throw Error('operator_attention_query_invalid')
+  const items=this.project(now,reader)
+  return {schema:1,readOnly:true,observedAt:now,total:items.length,offset,limit,more:offset+limit<items.length,
+   ...(reader?{unread:items.filter(item=>!item.read).length}:{}),items:items.slice(offset,offset+limit)}
+ }
+ private stampId(reader:string,id:string){return stableDigest([reader,id])}
+ /** Presentation only: never answers, approves, cancels, or issues a task. */
+ markRead(reader:string,id:string,observed:string,now=Date.now()){
+  const host=this.host()
+  return host.store.atomic(()=>{
+   const current=this.project(now,reader).find(item=>item.id===id)
+   if(!current||current.observed!==observed)return false
+   if(!current.read)host.store.put('operator-inbox-read',this.stampId(reader,id),{observed})
+   return true
+  })
+ }
+ private project(now:number,reader?:string){
   const host=this.host()
   return host.scopes.readOnly(()=>host.memory.readOnly(()=>{
    const items:OperatorAttentionItem[]=[],visible=new Map(host.store.tickets.list().filter(t=>taskVisible(host,t)).map(t=>[t.id,t]))
    const add=(kind:AttentionKind,key:string,state:AttentionState,sourceId:string,createdAt:unknown,expiresAt:unknown,facts:unknown,next:OperatorAttentionItem['next'],ticket?:Ticket)=>{
     const owner=ticket&&host.scopes.ownership(ticket.id),assignment=ticket?.assignments.at(-1)
     const family=next.kind==='workflow'?'workflow':kind==='native_approval'||kind==='native_question'?'native_request':kind
-    items.push({id:family+':'+stableDigest([family,key]),kind,state,...(ticket?{taskRef:{id:ticket.id,...(assignment?{assignmentId:assignment.id}:{})}}:{}),sourceLabel:sourceLabel(host,sourceId),createdAt:timestamp(createdAt),expiresAt:timestamp(expiresAt),observed:stableDigest({kind,key,state,facts,revision:host.settings.current().revision,owner,assignment:assignment?.id}),next})
+    const id=family+':'+stableDigest([family,key]),observed=stableDigest({kind,key,state,facts,revision:host.settings.current().revision,owner,assignment:assignment?.id})
+    items.push({id,kind,state,...(ticket?{taskRef:{id:ticket.id,...(assignment?{assignmentId:assignment.id}:{})}}:{}),sourceLabel:sourceLabel(host,sourceId),createdAt:timestamp(createdAt),expiresAt:timestamp(expiresAt),observed,next,
+     ...(reader?{read:host.store.get<{observed:string}>('operator-inbox-read',this.stampId(reader,id))?.observed===observed}:{})})
    }
    for(const ticket of visible.values()){
     const view=taskView(host.store,ticket)
+    if(reader&&currentTask(host,ticket)){
+     const run=host.store.get<Run>('run',ticket.id),assignment=view.assignments.at(-1)
+     add('open_work',ticket.id,'in_progress',ticket.mandate.actor.source,Date.parse(ticket.createdAt),null,
+      {ticketUpdatedAt:ticket.updatedAt,phase:run?.phase,assignmentState:assignment?.state},{kind:'task',id:ticket.id},ticket)
+    }
     if(currentTask(host,ticket)&&view.attention?.id){
      const assignment=view.assignments.at(-1)
      const state=assignment?.state==='running'&&assignment.report?.state==='blocked'?'needs_reply':'stale'
@@ -173,8 +196,8 @@ export class OperatorAttention {
     const ticket=visible.get(ids[0]!)!
     add('effect_unknown','outbox:'+delivery.id,'outcome_unknown',ticket.mandate.actor.source,null,null,{status:delivery.status,attempts:delivery.attempts,taskIds:ids},{kind:'records',id:ticket.id},ticket)
    }
-   items.sort((a,b)=>(b.createdAt??-1)-(a.createdAt??-1)||a.id.localeCompare(b.id))
-   return {schema:1,readOnly:true,observedAt:now,total:items.length,offset,limit,more:offset+limit<items.length,items:items.slice(offset,offset+limit)}
+   items.sort((a,b)=>Number(a.kind==='open_work')-Number(b.kind==='open_work')||(b.createdAt??-1)-(a.createdAt??-1)||a.id.localeCompare(b.id))
+   return items
   }))
  }
 }

@@ -196,3 +196,24 @@ These are proposed implementation slices; this document save performs none of th
 ## 7. Evidence and scope limits
 
 This document supplies source/type references, proposed interfaces, compatibility risks and a small-commit order. It contains no runtime or CI/AppArmor edits, no database migration, no new tests, no actual-service verification and no completed O07/O08/O09 claim. Historical trace tests and prior screenshots do not validate future slices. G01 can be reviewed as a draft while G00 is blocked; final freeze and release/acceptance gates remain separate.
+
+### O37: Work inbox implementation boundary
+
+The operator Work inbox extends the existing scoped attention projection rather
+than installing a separate queue. It reads actual open tickets, task questions,
+native requests, workflow/project reviews and unknown outcomes through existing
+visibility and cleanup checks. The inbox has no payload or action endpoint for
+those requests. Its links lead to the original task or review controls, where
+existing rules for execution, approvals and file versions still apply.
+
+The only inbox write is an authenticated, same-origin “mark as read” receipt for
+one visible observation. It is scoped to the operator identity and current host
+store, stores only a digest, and replaces the previous digest for the same item.
+The server rejects a stale receipt instead of marking a newer request as seen.
+Opening or closing details does not create, accept or cancel work; marking as read
+does not remove an item or change its state in Chat or other surfaces.
+
+This version does not invent notification candidates from scheduled delivery
+rows. Those rows do not provide the revisioned candidate and explicit accept,
+dismiss or snooze transitions needed here. Proposal acceptance and notification
+snooze/dismiss are not available in this increment.
