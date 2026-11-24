@@ -286,6 +286,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
         const query=Object.fromEntries(new URL(req.url!,requestOrigin).searchParams)
         if(path==='/api/execution-trace'){send(res,200,trace.snapshot(query));return}
         if(path==='/api/execution-trace/events'){send(res,200,trace.events(query));return}
+        if(path==='/api/execution-trace/progress'){send(res,200,trace.progress(query));return}
       }
       if(path==='/api/execution-trace/recovery-package'&&req.method==='POST'){
         if(new URL(req.url!,requestOrigin).search){send(res,400,{code:'trace_query_unsupported'});return}

@@ -1,3 +1,4 @@
+import {progressSnapshot} from './progress-snapshot.ts'
 import {projectIntegrationForTask,type ProjectIntegrationSummary} from './project-integration-summary.ts'
 import {taskQueueSummary,type TaskQueueSummary} from './scheduler-status.ts'
 import {assignmentContractView} from './task-assignment-contract.ts'
@@ -199,6 +200,17 @@ export class ExecutionTrace {
   const source=host.config.sources.find(s=>s.id===ticket.mandate.actor.source)
   if(!source?.enabled||!source.allowedActors.includes(ticket.mandate.actor.id))return false
   return host.memory.readOnly(()=>host.validWork({ticketId:ticket.id,assignmentId:run.assignmentId,cwd:run.cwd,sandbox:source.sandbox,depth:0}))
+ }
+ progress(value:unknown){
+  const query=z.object({ticketId:id,revision:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict().parse(value),host=this.current()
+  return host.scopes.readOnly(()=>host.memory.readOnly(()=>{
+   const ticket=host.store.tickets.get(query.ticketId)
+   if(!ticket||!visible(host,query.ticketId)||!this.readAllowed(host,ticket))throw new TraceError('trace_task_missing',404)
+   const owner=host.scopes.ownership(query.ticketId)
+   if(owner&&host.scopes.binding(owner.originEntry).privateActor)throw new TraceError('trace_task_missing',404)
+   const cursor=Number(host.store.db.prepare(`SELECT COALESCE(MAX(seq),0) AS seq FROM audit WHERE ${eventPredicate} AND COALESCE(json_extract(body,'$.ticketId'),json_extract(body,'$.data.ticketId'))=?`).get(query.ticketId)!.seq)
+   return progressSnapshot(host,query.ticketId,cursor,query.revision)
+  }))
  }
  snapshot(value:unknown={}){
   const query=traceSnapshotSchema.parse(value),host=this.current()

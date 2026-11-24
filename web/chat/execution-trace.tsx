@@ -1,3 +1,4 @@
+import {TaskProgressSnapshot} from './progress-snapshot.tsx'
 import {RecoveryPackageExport} from './recovery-package-export.tsx'
 import {RecoverySummary} from './recovery-summary.tsx'
 import {useEffect,useRef,useState,type ReactNode} from 'react'
@@ -253,6 +254,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     review_configuration:L('Review the current backend configuration; do not switch accounts to bypass the problem.','请核对当前后端配置，不要通过切换账号绕过问题。'),
     inspect:L('Inspect current state before choosing a recovery action.','先核对当前状态，再选择恢复操作。'),
    })[task.blocker.resolution]}{task.blocker.retryPolicy.notBefore?<span>{L(' Scheduled retry no earlier than: ',' 已有重试计划不早于：')}{new Date(task.blocker.retryPolicy.notBefore).toLocaleString()}</span>:null}</p>:null}
+   <TaskProgressSnapshot key={task.id} ticketId={task.id} language={language}/>
    <ProjectIntegrationEvidence value={task.projectIntegration} language={language}/>
    <TaskQueueSummary value={task.queue} language={language}/>
    <TaskAssignmentSummary value={task.assignment} language={language}/>
@@ -263,7 +265,6 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
    {confirmResume&&confirmResume===basis?<div className="trace-confirm" role="group" aria-label={L('Confirm repair','确认修复')}><p>{L('Have you checked or repaired the reported problem? Continue once using the same account and session. This does not verify credentials or replay uncertain effects.','已核查或修复所报问题？将使用同一账号和会话继续一次；这不代表凭据验证成功，也不会重放效果未知的操作。')}</p><button disabled={busy} onClick={()=>void recover('resume_session',true,confirmResume)}>{L('Checked, continue once','已核查，继续一次')}</button><button onClick={()=>setConfirmResume('')}>{L('Cancel','取消')}</button></div>:null}
    {confirmStop&&confirmStop===basis?<div className="trace-confirm" role="group" aria-label={L('Confirm stop','确认停止')}><p>{L('Stop this task? Earlier actions will not be undone.','停止此任务？先前已发生的操作不会因此撤销。')}</p><button className="trace-primary" disabled={busy} onClick={()=>void recover('cancel',false,confirmStop)}>{L('Stop task','停止任务')}</button><button onClick={()=>setConfirmStop('')}>{L('Keep working','继续运行')}</button></div>:null}
    <details className="trace-records"><summary>{L('View records','查看记录')}</summary><div className="trace-records-body"><dl className="trace-facts"><div><dt>{L('Session reference','会话编号')}</dt><dd>{task.sessionRef??L('Not started','尚未启动')}</dd></div><div><dt>{L('Result','结果')}</dt><dd>{task.hasResult?L('Saved','已保留'):L('Not recorded','尚无记录')}</dd></div><div><dt>{L('Backend','执行后端')}</dt><dd>{task.backendId??L('Not recorded','尚无记录')}</dd></div></dl>
-    <div className="trace-evidence" aria-label={L('Evidence checks','证据核查')}><div><GitCommitHorizontal size={16}/><span>{L('Commit','提交')}</span><strong>{task.evidence.commit==='recorded'?task.evidence.commitRef?.slice(0,12):L('Unverified','未验证')}</strong></div><div><FileCheck2 size={16}/><span>{L('Tests','测试')}</span><strong>{task.evidence.tests==='unverified'?L('Unverified','未验证'):task.evidence.tests==='passed'?L('Passed','通过'):L('Failed','失败')}</strong></div><div><CheckCircle2 size={16}/><span>{L('Deployment','部署')}</span><strong>{L('Unverified','未验证')}</strong></div></div>
     {timeline}
    </div></details>
   </article>:timeline}
