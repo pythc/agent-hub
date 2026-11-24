@@ -1,5 +1,5 @@
 import type {ArtifactCatalog} from '../../src/artifact-catalog.ts'
-import {artifactReference} from './artifact-result-model.ts'
+import {artifactReference,registrationStateValid} from './artifact-result-model.ts'
 export function parseArtifactCatalog(input:unknown):ArtifactCatalog|null{
  const data=input as ArtifactCatalog
  if(!data||data.schema!==1||typeof data.truncated!=='boolean'||!Array.isArray(data.items)||data.items.length>100)return null
@@ -17,6 +17,16 @@ export function parseArtifactCatalog(input:unknown):ArtifactCatalog|null{
   // Optional for compatibility with older servers. Never treat supplied provenance as authority.
   const registration=item.registration
   if(registration!==undefined&&(!registration||Object.keys(registration).length!==9||registration.schema!==1||registration.kind!==ref.kind||registration.domain!=='operator_workspace'||registration.id!==ref.id||registration.version!==ref.version||registration.sha256!==ref.sha256||registration.retention!==ref.retention||registration.publication!=='not_tracked'||registration.acceptance!=='not_tracked'))return null
+  if(!registrationStateValid(item.registrationState)||item.registrationState!==undefined&&!registration)return null
+  if(ref.kind==='goal-artifact'&&item.registrationState!==undefined&&item.registrationState!==ref.registrationState)return null
+  if(item.previousVersions!==undefined){
+   if(ref.kind!=='workspace-view'||!Array.isArray(item.previousVersions)||item.previousVersions.length>2)return null
+   const digests=new Set([ref.version])
+   for(const entry of item.previousVersions){
+    if(!entry||Object.keys(entry).length!==2||typeof entry.version!=='string'||!/^[a-f0-9]{64}$/.test(entry.version)||digests.has(entry.version)||typeof entry.packageVersion!=='string'||!entry.packageVersion||entry.packageVersion.length>100)return null
+    digests.add(entry.version)
+   }
+  }
   const key=ref.kind+':'+ref.id
   if(seen.has(key))return null
   seen.add(key)

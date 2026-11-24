@@ -28,11 +28,12 @@ export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
   {value?.truncated?<p role="status">{L('More entries may remain. Each page checks current access; this is not a snapshot.','可能还有后续条目。每页重新检查当前权限，此目录不是快照。')}</p>:null}
   {value&&!value.items.length?<p>{L('No visible artifacts on this page.','本页无可见产物。')}</p>:null}
   <nav aria-label={L('Artifact pages','产物分页')}><button type="button" disabled={loading||!history.length} onClick={()=>{setResult(null);setLoading(true);setCursor(history.at(-1)!);setHistory(history.slice(0,-1))}}>{L('Previous page','上一页')}</button><button type="button" disabled={loading||!value?.nextCursor} onClick={()=>{if(!value?.nextCursor)return;setResult(null);setLoading(true);setHistory([...history,cursor]);setCursor(value.nextCursor)}}>{L('Next page','下一页')}</button></nav>
-  {value?.items.map(({reference,label})=><article className="template-review" key={reference.kind+':'+reference.id}>
+  {value?.items.map(({reference,label,registrationState,previousVersions})=><article className="template-review" key={reference.kind+':'+reference.id}>
    <h2>{label[language]}</h2>
    <a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#artifact-view/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current workspace view','打开当前工作区视图')}</a>
    {reference.kind==='workspace-view'?<p><a href={'#artifact-view-version/'+reference.id+'/'+reference.version} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{L('Inspect this fixed version','查看此固定版本')}</a></p>:null}
-   <ArtifactReferenceDetails reference={reference} current={reference.kind==='goal-artifact'&&reference.availability==='unavailable'?'unavailable':'unchecked'} L={L}/>
+   {reference.kind==='workspace-view'&&previousVersions?.length?<details><summary>{L('Previous version references','旧版本引用')}</summary><ul>{previousVersions.map(version=><li key={version.version}><a href={'#artifact-view-version/'+reference.id+'/'+version.version} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{version.packageVersion} · {version.version.slice(0,12)}</a>{' · '}{L('Availability checked on open','打开时检查可用性')}</li>)}</ul></details>:null}
+   <ArtifactReferenceDetails reference={reference} registrationState={registrationState} current={reference.kind==='goal-artifact'&&reference.availability==='unavailable'?'unavailable':'unchecked'} L={L}/>
   </article>)}
  </section>
 }

@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto'
-import {attachmentArtifactRegistration,type ArtifactRegistration} from './artifact-registry.ts'
-import type {ChatArtifactReference} from './artifact-reference.ts'
+import {attachmentArtifactRegistration,matchesArtifactRegistration,type ArtifactRegistration} from './artifact-registry.ts'
+import type {ArtifactRegistrationState,ChatArtifactReference} from './artifact-reference.ts'
 import {constants,closeSync,fstatSync,openSync,readSync,createWriteStream,copyFileSync,mkdirSync,readFileSync,rmSync} from 'node:fs'
 import {dirname,extname,join} from 'node:path'
 import {pipeline} from 'node:stream/promises'
@@ -10,7 +10,7 @@ import {stableDigest} from './sources.ts'
 
 export const chatUploadLimits={maxBytes:25*1024*1024,maxFiles:10}
 type AttachmentRegistration=Extract<ArtifactRegistration,{kind:'chat-attachment'}>
-export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string;reference?:ChatArtifactReference;registration?:AttachmentRegistration}
+export interface ChatAttachment {id:string;name:string;mimeType:string;bytes:number;url:string;previewUrl?:string;reference?:ChatArtifactReference;registration?:AttachmentRegistration;registrationState?:ArtifactRegistrationState}
 interface Upload {id:string;kind:'chat-upload';conversationId:string;name:string;mimeType:string;bytes:number;path:string;createdAt:number;state:'uploading'|'ready';triggerId?:string;previewType?:string;sha256?:string;committedRegistration?:AttachmentRegistration}
 interface Conversation {id:string;owner:string;discussion:string;archived:boolean}
 
@@ -30,7 +30,7 @@ export class ChatAttachments {
     const reference:ChatArtifactReference={schema:1,kind:'chat-attachment',id:row.sha256?stableDigest(['chat-attachment-version',row.id,row.sha256]):row.id,version:row.sha256?1:null,sha256:row.sha256??null,visibility:'conversation',retention:'subject_to_history_cleanup',publication:'not_tracked'}
     const candidate=includeRegistration?attachmentArtifactRegistration(reference,{conversationId:row.conversationId,uploadId:row.id}):null
     const registration=candidate?.kind==='chat-attachment'?candidate:undefined
-    return {reference,...(registration?{registration}:{}),id:row.id,name:row.name,mimeType:row.mimeType,bytes:row.bytes,url,...(row.previewType?{previewUrl:url+'?preview=1'}:{})}
+    return {reference,...(registration?{registration,registrationState:matchesArtifactRegistration(row.committedRegistration,registration)?'recorded' as const:'source_only' as const}:{}),id:row.id,name:row.name,mimeType:row.mimeType,bytes:row.bytes,url,...(row.previewType?{previewUrl:url+'?preview=1'}:{})}
   }
   private row(id:string,conversationId:string){
     const row=this.host.store.get<Upload>('asset',id)
@@ -62,7 +62,7 @@ export class ChatAttachments {
       // Draft reads still project from the original row; this is not an access grant.
       row.committedRegistration=attachment.registration
       this.host.store.put('asset',id,row)
-      return attachment
+      return this.public(row,true)
     }catch(error){this.discard(row);throw error}
   }
   remove(conversationId:string,owner:string,id:string){
