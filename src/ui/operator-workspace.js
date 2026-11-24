@@ -44,7 +44,7 @@ async function readOperatorWork() {
   }
 }
 // A transient rendering cache of the existing GET projection, never permission.
-operator.attentionView={bridge:null,unsubscribe:null,key:'',binding:null,request:0,controller:null,snapshot:null,loaded:false,busy:false,failed:false,receiptController:null,receiptError:false,drawer:null,focus:''}
+operator.attentionView={bridge:null,unsubscribe:null,key:'',binding:null,request:0,controller:null,snapshot:null,loaded:false,busy:false,failed:false,receiptController:null,receiptError:false,drawer:null,drawerChanged:false,focus:''}
 const attentionKinds=['task_question','native_question','native_approval','workflow_review','project_review','effect_unknown','open_work']
 const attentionStates=['needs_reply','waiting_permission','needs_review','outcome_unknown','expired','unavailable','stale','in_progress']
 function attentionContextKey(c){return JSON.stringify([c.state,c.managed,c.activeId,c.epoch,c.accountId,c.sessionIsolation])}
@@ -54,7 +54,7 @@ function operatorAuthenticationEnded(error,captured){
 }
 function attentionActive(){return S.authed&&S.surface==='entries'&&entryState.role==='operator'&&entryState.page==='attention'&&(typeof configurationHost==='undefined'||configurationHost.active())}
 function attentionReset(){
- const v=operator.attentionView;v.request++;v.controller?.abort();v.controller=null;v.receiptController?.abort();v.receiptController=null;v.receiptError=false;v.snapshot=null;v.loaded=false;v.busy=false;v.failed=false;v.binding=null;v.key=''
+ const v=operator.attentionView;v.request++;v.controller?.abort();v.controller=null;v.receiptController?.abort();v.receiptController=null;v.receiptError=false;v.snapshot=null;v.loaded=false;v.busy=false;v.failed=false;v.binding=null;v.key='';v.drawerChanged=false;v.focus=''
  if(v.drawer){v.drawer=null;const dialog=document.getElementById('operator-task');if(dialog?.open)dialog.close();dialog?.remove()}
 }
 function attentionPageChanged(){
@@ -94,12 +94,36 @@ async function readAttentionProjection(offset=0,expectedBinding=operator.attenti
  const binding=v.binding,key=v.key,request=++v.request,controller=new AbortController()
  v.controller=controller;v.busy=true;v.loaded=true
  const current=()=>request===v.request&&!controller.signal.aborted&&attentionCurrent(binding,key)
+ let dismissed=false
+ const readPage=async page=>attentionDTO(await binding.request('/entry-workspace/attention?inbox=1&offset='+page+'&limit=25',undefined,false,binding.context.activeId,controller.signal),page)
+ const publish=snapshot=>{
+  v.snapshot=snapshot;v.failed=false
+  if(!v.drawer)return
+  const row=snapshot.items.find(item=>sameAttentionObservation(item,v.drawer.item))
+  if(row){v.drawer.item=row;v.drawer.observedAt=snapshot.observedAt;return}
+  closeAttentionRecord(v.drawer)
+  v.drawerChanged=true;dismissed=true
+ }
  try{
-  const raw=await binding.request('/entry-workspace/attention?inbox=1&offset='+offset+'&limit=25',undefined,false,binding.context.activeId,controller.signal)
+  const snapshot=await readPage(offset)
   if(!current())return
-  const snapshot=attentionDTO(raw,offset);v.snapshot=snapshot;v.failed=false
+  publish(snapshot)
+  // Recover when items resolve and the previously selected page no longer exists.
+  if(offset>0&&!snapshot.items.length){
+   const first=await readPage(0)
+   if(current())publish(first)
+  }
  }catch(error){if(operatorAuthenticationEnded(error,binding.context)){entryError(error);render()}else if(current())v.failed=true}
- finally{if(request===v.request&&v.binding===binding&&v.key===key){v.busy=false;v.controller=null;if(!attentionCurrent(binding,key))attentionReset();else if(typeof editingProjectReview==='undefined'||!editingProjectReview())render()}}
+ finally{
+  if(request===v.request&&v.binding===binding&&v.key===key){
+   v.busy=false;v.controller=null
+   if(!attentionCurrent(binding,key))attentionReset()
+   else if(typeof editingProjectReview==='undefined'||!editingProjectReview()){
+    render()
+    if(dismissed)document.getElementById('attention-record-changed')?.focus({preventScroll:true})
+   }
+  }
+ }
 }
 async function markInboxRead(item,binding,key){
  const v=operator.attentionView
@@ -156,9 +180,15 @@ function inboxTaskLabel(item){
  const task=[...(work?.activeTasks||[]),...(work?.attention||[]),...(work?.tasks||[])].find(row=>row.id===id)
  return typeof task?.displayTitle==='string'&&task.displayTitle?task.displayTitle:id.slice(0,12)
 }
+function sameAttentionObservation(row,item){return row.id===item.id&&row.observed===item.observed}
+function attentionRecordCurrent(drawer){
+ const v=operator.attentionView
+ return v.drawer===drawer&&attentionCurrent(drawer.binding,drawer.key)&&!v.failed&&v.snapshot?.items.some(row=>sameAttentionObservation(row,drawer.item))
+}
 function openAttentionRecord(item,binding,key){
- const v=operator.attentionView,currentItem=v.snapshot?.items.find(row=>row.id===item.id);if(!attentionCurrent(binding,key)||!currentItem)return
- v.focus=document.activeElement?.id||'';clearOperatorTaskView()
+ const v=operator.attentionView,currentItem=v.snapshot?.items.find(row=>sameAttentionObservation(row,item))
+ if(!attentionCurrent(binding,key)||!currentItem)return
+ v.focus=document.activeElement?.id||'';v.drawerChanged=false;clearOperatorTaskView()
  v.drawer={item:currentItem,observedAt:v.snapshot.observedAt,binding,key};render()
 }
 function closeAttentionRecord(expected=operator.attentionView.drawer){
@@ -178,21 +208,22 @@ function attentionRecordDialog(){
  if(item.state==='unavailable')body.append(el('p','',L('This request cannot be answered here.','此请求无法在此处理。')))
  if(item.state==='stale')body.append(el('p','',L('The original request changed. Review current facts first.','原事项已变化，请先核对当前情况。')))
  if(item.state==='outcome_unknown')body.append(el('p','',L('Check what happened before repeating any work.','请先核查实际结果，勿直接重复执行。')))
- const target=attentionTarget(item)
+ const actionable=attentionRecordCurrent(d),target=actionable?attentionTarget(item):null
  if(item.kind==='open_work'&&item.taskRef){
   const label=inboxTaskLabel(item);if(label)body.append(el('p','',label))
-  body.append(opButton(L('Open existing task','打开已有任务'),()=>{
-   if(!attentionCurrent(d.binding,d.key)||!v.snapshot?.items.some(row=>row.id===item.id&&row.observed===item.observed))return
+  if(actionable)body.append(opButton(L('Open existing task','打开已有任务'),()=>{
+   if(!attentionRecordCurrent(d))return
    closeAttentionRecord(d);void openOperatorTask(item.taskRef.id)
   },'button'))
  }
  if(target)body.append(opButton(L('Find existing item','定位已有事项'),()=>{
-  if(!attentionCurrent(d.binding,d.key))return
-  closeAttentionRecord();const node=document.getElementById(target);node?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});node?.focus({preventScroll:true})
+  if(!attentionRecordCurrent(d))return
+  closeAttentionRecord(d);const node=document.getElementById(target);node?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});node?.focus({preventScroll:true})
  },'button'))
  const records=el('a','button',L('Open all execution records','打开全部执行记录')),url=new URL('/configure#execution-trace',location.origin)
  if(d.binding.context.managed)url.searchParams.set('workspace',d.binding.context.activeId)
- records.href=url.href;records.onclick=event=>{if(!attentionCurrent(d.binding,d.key)){event.preventDefault();return}attentionReset()};body.append(records)
+ records.href=url.href;records.onclick=event=>{if(!attentionRecordCurrent(d)){event.preventDefault();return}attentionReset()};if(actionable)body.append(records)
+ if(!actionable)body.append(el('p','',L('Refresh the inbox to verify this record before opening its source.','请先刷新收件箱核对此记录，再打开来源。')))
  dialog.append(add(el('div','drawer-header'),el('span','',L('Record details','记录详情')),opButton(L('Close details','关闭详情'),()=>closeAttentionRecord(d),'icon-button','close')),body)
  dialog.oncancel=event=>{event.preventDefault();closeAttentionRecord(d)}
  return dialog
@@ -205,9 +236,11 @@ function attentionSupplement(){
  if(v.failed||operator.error){const error=el('p','attention-update-failed',L('Update failed. Showing records from the time above.','更新失败，显示上述时间读取的记录。'));error.setAttribute('role','alert');box.append(error)}
  const count=el('p','attention-unread',L('Unread: ','未读：')+snapshot.unread);count.setAttribute('role','status');box.append(count)
  if(v.receiptError){const error=el('p','attention-update-failed',L('Could not mark this version as read. Check the current item and try again.','未能标记此版本为已读，请查看当前事项后重试。'));error.setAttribute('role','alert');box.append(error)}
+ if(v.drawerChanged){const changed=el('p','',L('The open record changed or is no longer on this page. Check the current inbox.','打开的记录已变化或不再位于本页。请查看当前收件箱。'));changed.id='attention-record-changed';changed.tabIndex=-1;changed.setAttribute('role','status');box.append(changed)}
  const items=snapshot.items
- for(const [index,item] of items.entries()){
-  const open=opButton(L('View record','查看记录'),()=>openAttentionRecord(item,binding,key),'button');open.id='attention-record-'+index
+ if(!items.length&&snapshot.offset===0)box.append(el('p','',L('No records in the inbox.','收件箱暂无记录。')))
+ for(const item of items){
+  const open=opButton(L('View record','查看记录'),()=>openAttentionRecord(item,binding,key),'button');open.id='attention-record-'+item.id
   const mark=item.read?null:opButton(L('Mark as read','标记已读'),()=>void markInboxRead(item,binding,key),'button')
   if(mark)mark.disabled=v.busy||!!v.receiptController
   box.append(add(el('article','attention-record-row'),add(el('div'),el('h3','',attentionLabel(item)+(item.kind==='open_work'?' · '+inboxTaskLabel(item):'')),el('p','',attentionSourceLabel(item.sourceLabel)+' · '+attentionTime(item.createdAt)),el('small','',item.read?L('Read','已读'):L('Unread','未读'))),add(el('div','actions'),open,mark)))
