@@ -23,11 +23,36 @@ function parse(value:unknown,path:string){
  return d
 }
 const discussionLabels={'comment':['Comment','评论'],'proposed-change':['Proposed change','修改建议']} as const
+type Localize=(en:string,zh:string)=>string
+
+function VersionNotes({entries,language,L}:{entries:Entry[];language:'en'|'zh-CN';L:Localize}){
+ const [filter,setFilter]=useState<'all'|Entry['kind']>('all')
+ const [location,setLocation]=useState<'all'|'whole'|Selection['kind']>('all')
+ const shown=entries.filter(entry=>(filter==='all'||entry.kind===filter)&&(location==='all'||(entry.selection?.kind??'whole')===location))
+ const selectionLabel=(s:Selection|undefined)=>!s?L('Whole version','整个版本'):s.kind==='page'?L('Page ','第 ')+s.page+(language==='en'?'':' 页'):L('Lines ','行 ')+s.start+'–'+s.end
+ if(!entries.length)return <p>{L('No notes yet.','还没有备注。')}</p>
+ return <>
+  <fieldset>
+   <legend>{L('Filter notes on this version','筛选当前版本的备注')}</legend>
+   <label>{L('Note type','备注类型')} <select value={filter} onChange={event=>setFilter(event.target.value as typeof filter)}>
+    <option value="all">{L('All types','全部类型')}</option><option value="comment">{L('Comments','评论')}</option><option value="proposed-change">{L('Proposed changes','修改建议')}</option>
+   </select></label>{' '}
+   <label>{L('Note location','备注位置')} <select value={location} onChange={event=>setLocation(event.target.value as typeof location)}>
+    <option value="all">{L('All locations','全部位置')}</option><option value="whole">{L('Whole version','整个版本')}</option><option value="page">{L('Page','页')}</option><option value="lines">{L('Line range','行范围')}</option>
+   </select></label>
+  </fieldset>
+  {!shown.length?<p role="status">{L('No notes match these filters.','没有符合筛选条件的备注。')}</p>:<ol>{shown.map(e=><li key={e.id}>
+   <strong>{L(discussionLabels[e.kind][0],discussionLabels[e.kind][1])}</strong>{' · '}{selectionLabel(e.selection)}
+   <time dateTime={new Date(e.at).toISOString()}> · {new Date(e.at).toLocaleString(language)}</time>
+   <p style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{e.text}</p>
+  </li>)}</ol>}
+ </>
+}
 
 export function ArtifactDiscussionPage({path,language='en'}:{path:string;language?:'en'|'zh-CN'}){
  const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh
- const [result,setResult]=useState<{key:string;value:Discussion}|null>(null),[status,setStatus]=useState<'loading'|'ready'|'unavailable'|'uncertain'>('loading')
+ const [result,setResult]=useState<{key:string;signal:AbortSignal;value:Discussion}|null>(null),[status,setStatus]=useState<'loading'|'ready'|'unavailable'|'uncertain'>('loading')
  const [revision,setRevision]=useState(0),[busy,setBusy]=useState(false),[invalid,setInvalid]=useState(false)
  const [text,setText]=useState(''),[kind,setKind]=useState<Entry['kind']>('comment')
  const [location,setLocation]=useState<'whole'|'page'|'lines'>('whole'),[start,setStart]=useState(''),[end,setEnd]=useState('')
@@ -45,11 +70,11 @@ export function ArtifactDiscussionPage({path,language='en'}:{path:string;languag
   if(!pathSyntax.test(path)){setStatus('unavailable');return()=>controller.abort()}
   void binding.request<unknown>(url,undefined,false,undefined,signal).then(data=>{
    if(signal.aborted||epoch!==requestEpoch.current)return
-   const value=parse(data,path);setResult({key,value});setStatus('ready')
+   const value=parse(data,path);setResult({key,signal:readSignal,value});setStatus('ready')
   }).catch(()=>{if(!signal.aborted&&epoch===requestEpoch.current){setResult(null);setStatus('unavailable')}})
   return()=>controller.abort()
  },[binding,key,path,readSignal,revision,url])
- const discussion=!readSignal.aborted&&result?.key===key?result.value:null
+ const discussion=!readSignal.aborted&&result?.key===key&&result.signal===readSignal?result.value:null
  const pathParts=path.split('/')
  const back=pathSyntax.test(path)?pathParts[0]==='file'?'#artifact/'+pathParts[1]:pathParts[0]==='view'?'#artifact-view-version/'+pathParts.slice(1).join('/'):'/chat':'#artifacts'
  const pathLabel=pathParts[0]==='attachment'?L('Back to conversations','返回会话'):L('Back to version','返回版本')
@@ -71,13 +96,12 @@ export function ArtifactDiscussionPage({path,language='en'}:{path:string;languag
   inFlight.current=true;requestEpoch.current++;setBusy(true);setInvalid(false)
   try{
    const value=parse(await binding.request<unknown>(url,{...request,operationId:op.id}),path)
-   if(live.current&&!readSignal.aborted){setResult({key,value});setStatus('ready');setText('');operation.current=null}
+   if(live.current&&!readSignal.aborted){setResult({key,signal:readSignal,value});setStatus('ready');setText('');operation.current=null}
   }catch{
    // Drop all earlier results; neither a cached source nor an ambiguous write is proof of access.
    if(live.current&&!readSignal.aborted){setResult(null);setStatus('uncertain')}
   }finally{inFlight.current=false;if(live.current&&!readSignal.aborted)setBusy(false)}
  }
- const selectionLabel=(s:Selection|undefined)=>!s?L('Whole version','整个版本'):s.kind==='page'?L('Page ','第 ')+s.page+(language==='en'?'':' 页'):L('Lines ','行 ')+s.start+'–'+s.end
  return <section className="templates-page" aria-label={L('Version discussion','版本讨论')}>
   <header className="templates-heading"><h1>{L('Version discussion','版本讨论')}</h1><button type="button" disabled={busy||status==='loading'} onClick={()=>setRevision(n=>n+1)}>{L('Refresh','刷新')}</button></header>
   <a href={back}>{pathLabel}</a>
@@ -85,11 +109,7 @@ export function ArtifactDiscussionPage({path,language='en'}:{path:string;languag
   {status==='loading'?<p role="status">{L('Loading discussion…','正在读取讨论…')}</p>:status==='uncertain'?<p role="alert">{L('Could not confirm the save. Refresh to check. If you retry without editing, the same request is reused.','无法确认是否保存。请刷新后核对，不修改内容直接重试会沿用同一请求。')}</p>:status==='unavailable'?<p role="alert">{L('This version or discussion is unavailable in this workspace.','此版本或讨论在当前工作区不可用。')}</p>:null}
   {discussion&&<article className="template-review">
    <p>{L('Source version','来源版本')}: <code style={{overflowWrap:'anywhere'}}>{discussion.source.version}</code></p>
-   {!discussion.entries.length?<p>{L('No notes yet.','还没有备注。')}</p>:<ol>{discussion.entries.map(e=><li key={e.id}>
-    <strong>{L(discussionLabels[e.kind][0],discussionLabels[e.kind][1])}</strong>{' · '}{selectionLabel(e.selection)}
-    <time dateTime={new Date(e.at).toISOString()}> · {new Date(e.at).toLocaleString(language)}</time>
-    <p style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{e.text}</p>
-   </li>)}</ol>}
+   <VersionNotes key={JSON.stringify([key,discussion.sourceSnapshot])} entries={discussion.entries} language={language} L={L}/>
    {discussion.entries.length===discussion.limit?<p role="status">{L('This version has reached its note limit.','此版本已达到备注上限。')}</p>:
     <form onSubmit={event=>void append(event)}>
      <fieldset disabled={busy}>
