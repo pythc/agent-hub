@@ -1,3 +1,4 @@
+import {schedulePlanState} from './schedule-lifecycle.ts'
 import {randomUUID} from 'node:crypto'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
@@ -369,12 +370,20 @@ export class AgentMemory {
   const same=(v:{scopeId:string;entryId:string})=>v.scopeId===root.scopeId&&v.entryId===root.entryId
   const matches=(refs?:{id:string;revision:number}[])=>refs?.some(ref=>affected.has(key(ref)))??false
   const store=this.host.store
+  const now=Date.now(),reminderDetailsLimit=8
+  const linkedReminders=this.host.scopes.binding(c.route.entryId).privateActor===c.actor
+   ?store.list<{name:string;revision:number;scopeId:string;entryId:string;memoryOwner?:string;active:boolean;nextAt?:number;reminderMemory?:{id:string;revision:number}[]}>('router-schedule')
+    .filter(r=>same(r)&&r.memoryOwner===c.actor&&matches(r.reminderMemory))
+    .map(r=>{const {state,nextDueAt}=schedulePlanState(r,now);return {name:r.name,revision:r.revision,state,nextDueAt,active:r.active,direct:r.reminderMemory?.some(ref=>key(ref)===key(root))??false}})
+   :[]
+  const ordered=linkedReminders.sort((a,b)=>(a.nextDueAt??Infinity)-(b.nextDueAt??Infinity)||Number(b.active)-Number(a.active))
   return {
    notes:queue.slice(1).filter(f=>f.state==='active').length,candidates:queue.filter(f=>f.state==='candidate'||f.state==='disputed').length-Number(root.state==='candidate'||root.state==='disputed'),
    caches:[...this.queries.values()].filter(q=>q.space===this.space(c)&&matches(q.inputs)).length,
    summaries:store.list<import('./memory-reflection.ts').MemoryReflection>('memory-reflection').filter(r=>same(r)&&r.actor===c.actor&&matches(r.inputs??r.points.flatMap(p=>p.refs))).length,
    skills:store.list<import('./saved-skills.ts').SkillVersion>('skill-version').filter(r=>same(r)&&r.memoryOwner===c.actor&&matches(r.memoryRevisions)).length,
-   reminders:store.list<{scopeId:string;entryId:string;memoryOwner?:string;active:boolean;reminderMemory?:{id:string;revision:number}[]}>('router-schedule').filter(r=>same(r)&&r.memoryOwner===c.actor&&r.active&&matches(r.reminderMemory)).length,
+   reminders:linkedReminders.filter(r=>r.active).length,
+   reminderDetails:{total:ordered.length,plans:ordered.slice(0,reminderDetailsLimit).map(({active:_,...plan})=>plan)},
   }
  }
  manage(c:ScopeContext,value:unknown){

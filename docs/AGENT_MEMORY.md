@@ -141,7 +141,12 @@ can depend transitively on other notes. A replacement proposal also depends on
 the exact revision it was written to replace until the proposal is accepted.
 Memory deletion keeps the existing suppression/late-result fences. The host
 discards stale rankings and summaries before deriving new results, retaining
-unrelated entries. Hidden entries and copies outside the host are not counted.
+unrelated entries. Hidden entries and copies outside the host are not counted. The
+preview refreshes on opening edit or delete and rejects a response for a
+different note revision. It shows up to eight linked reminder plans from the
+same private entry and owner, with plan revision, next run where applicable,
+and whether the dependency is direct or through another note. These are plan
+states, not delivery receipts. The preview cannot create, rebind or run a plan.
 
 A private Chat owner may explicitly pin standing memory revisions when saving a
 working method. A changed, archived, revoked or expired dependency prevents that
