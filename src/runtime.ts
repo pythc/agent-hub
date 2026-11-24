@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { Engine, latestAssignment, runningAssignment, followupOwners, ticketStage, type Candidate, type Assignment, type Ticket, type Trigger, type TicketInput, type WorkerReport } from './vendor/dsh-core/index.ts'
 import { Store, type Run, type Job } from './store.ts'
 import { belongsToAudience, originalDestination } from './destination-binding.ts'
+import { curatedSummaryAllowed, isCuratedSummary } from './curated-summary.ts'
 import { makePolicy, makeScope } from './policy.ts'
 import { UncertainDelivery, incomingSchema, bodyDigest,stableDigest, type Source, type Incoming, type SourceChange } from './sources.ts'
 import type { Config } from './config.ts'
@@ -1379,6 +1380,11 @@ export class Runtime {
       if(message.status==='sending'||message.status==='uncertain'||message.attempts<3)blocked.add(channel)
       if(this.closing)return
       if (message.status !== 'pending') continue
+      if(!curatedSummaryAllowed(this,message)){
+        this.store.blockDelivery(message.id,'The curated summary approval or audience is no longer current')
+        this.store.audit({type:'router.curated-summary-blocked',id:message.id})
+        blocked.delete(channel);continue
+      }
       const replyOwner=this.store.get<{goalId?:string;discussion:string;triggerId:string;inputs:string[];workerEvents?:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
       // Old queued derived notices lack the context used to compose them; a
       // current input must recreate them instead of assuming their provenance.
@@ -1449,7 +1455,13 @@ export class Runtime {
       try {
         if(source.config.kind==='delegation')await this.delegation.deliver(outbound);else await source.deliver(outbound)
         this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
-      catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
+      catch (error) {
+        // A curator approves one release, not provider retries. Even a generic
+        // adapter error could occur after its message was delivered.
+        const summary=isCuratedSummary(message.id), uncertain=summary||error instanceof UncertainDelivery
+        this.store.deliveryFailed(message.id,message.attempts+1,summary?'Curated summary send outcome unknown; reconcile the destination':String(error).slice(0,300),uncertain)
+        if(!uncertain&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel)
+      }
     }
   }
   private holdLegacyTask(ticketId:string){
