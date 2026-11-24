@@ -235,6 +235,15 @@ function ExecutionTraceContent({language,workspace}:{language:'en'|'zh-CN';works
   finally{if(isCurrent()){await refreshRef.current();if(isCurrent())setBusy(false)}}
  }
  const guidance=task?.next==='reconcile'?L('Check the actual outcome before trying again.','请先核查实际结果，再决定是否重试。'):task?.next==='answer_approval'?L('This task needs permission. Use its existing approval controls.','任务需要授权，请在原任务中处理。'):task?.next==='reconnect'?L('Review the connection and verify authentication before continuing.','请先检查连接配置并验证认证状态。'):task?.next==='review_context'?L('Access changed. Review it before continuing.','访问权限已变更，请核对后再继续。'):task?.next==='follow_up'?L('The Worker needs your reply in the original conversation.','Worker 等待你的回复，请回到原会话继续。'):null
+ const evidenceGroups=[
+  {key:'acceptanceProblems',label:L('Tasks with current acceptance problems','当前验收需处理的任务'),rows:[] as TraceTask[]},
+  {key:'effectsUnknown',label:L('Tasks with unknown effects','效果未知的任务'),rows:[] as TraceTask[]},
+ ] as const
+ if(snapshot?.quality)for(const item of snapshot.tasks){
+  const status=readTaskStatus(item.status)
+  if(status.freshness==='current'&&['failed','insufficient','errored'].includes(status.acceptance))evidenceGroups[0].rows.push(item)
+  if(status.effects==='unknown')evidenceGroups[1].rows.push(item)
+ }
  const receiptLabels={progress:L('Worker progress','Worker 进展'),blocked:L('Worker blocked','Worker 受阻'),result:L('Worker result','Worker 结果')}
  const timeline=<>
   <div className="trace-timeline-heading"><h2>{L('Activity','动态记录')}</h2></div>
@@ -253,7 +262,10 @@ function ExecutionTraceContent({language,workspace}:{language:'en'|'zh-CN';works
     <div><dt>{L('Acceptance not confirmed','尚未确认验收')}</dt><dd>{snapshot.quality.acceptanceUnconfirmed}</dd></div>
     <div><dt>{L('Effects unknown','效果未知')}</dt><dd>{snapshot.quality.effectsUnknown}</dd></div>
     <div><dt>{L('Send recorded, receipt unconfirmed','记录已发出，未确认收到')}</dt><dd>{snapshot.quality.deliveryRecorded}</dd></div>
-   </dl><p>{L('These layers are counted independently for this task list. Finished execution and a recorded send are not proof of acceptance or receipt.','各层按当前任务列表独立计数。执行结束不等于验收，记录已发不等于对方收到。')}</p></div></details>:null}
+   </dl>{evidenceGroups.map(group=>snapshot.quality?.[group.key]===group.rows.length&&group.rows.length>0?<details key={group.key}>
+    <summary>{group.label} ({group.rows.length})</summary>
+    <ul>{group.rows.map(item=><li key={item.id}><button type="button" disabled={busy} onClick={()=>{setSelected(item.id);document.getElementById('trace-task')?.focus()}}>{taskName(item)}</button></li>)}</ul>
+   </details>:null)}<p>{L('These layers are counted independently for this task list. Finished execution and a recorded send are not proof of acceptance or receipt.','各层按当前任务列表独立计数。执行结束不等于验收，记录已发不等于对方收到。')}</p></div></details>:null}
   {actionError||error?<p className="trace-notice trace-error" role="alert">{failure(actionError||error)}<button onClick={()=>{setActionError('');void refreshRef.current(true)}}>{L('Try refresh','重试刷新')}</button></p>:null}
   {notice?<p className="trace-notice" role="status"><Check size={16}/>{notice}</p>:null}
   <div className="trace-toolbar"><label htmlFor="trace-task">{L('Task','任务')}</label><select id="trace-task" aria-label={L('Show','显示')} value={selected} onChange={e=>setSelected(e.target.value)}><option value="">{L('All tasks','全部任务')}</option>{snapshot?.tasks.map(t=><option value={t.id} key={t.id}>{taskName(t)}</option>)}</select></div>
