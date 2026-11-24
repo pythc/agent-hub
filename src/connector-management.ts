@@ -10,13 +10,16 @@ import {configSchema,type SourceConfig} from './config.ts'
 import type {Runtime} from './runtime.ts'
 import {pointer} from './plugin-package.ts'
 import {stableDigest} from './sources.ts'
+import {discoverConnectorTargets,TargetDiscoveryError,type TargetDiscoveryAuth} from './connector-target-discovery.ts'
 
 const id=z.string().regex(/^[a-z][a-z0-9_-]{0,100}$/)
 const revision=z.number().int().nonnegative()
 const credentialPresent=(name:string)=>Object.hasOwn(process.env,name)&&typeof process.env[name]==='string'&&process.env[name]!.length>0
 const draftSchema=z.object({revision,kind:id,label:z.string().trim().min(1).max(100),actors:z.array(z.string().trim().min(1).max(200)).max(100),intent:z.literal('draft').optional(),fields:z.record(z.string().max(100),z.union([z.string().max(16000),z.array(z.string().max(300)).max(100)])).default({}),credentials:z.record(z.string().max(100),z.string().min(1).max(16000)).default({}),credentialMode:z.enum(['value','environment']).default('value')}).strict()
 export const connectorProbeSchema=z.object({sourceId:id,revision,level:z.enum(['configuration','reachable','authentication','capabilities']),requestId:z.string().uuid()}).strict()
-const controlSchema=z.object({sourceId:id,revision,enabled:z.boolean(),requestId:z.string().uuid()}).strict()
+const controlSchema=z.object({sourceId:id,revision,enabled:z.boolean(),requestId:z.string().uuid(),activation:z.object({expiresAt:z.number().int().nonnegative(),token:z.string().regex(/^[0-9a-f]{64}$/)}).strict().optional()}).strict()
+const discoverySchema=z.object({revision,kind:id,fields:z.record(z.string().max(100),z.string().max(200)),credentials:z.record(z.string().max(100),z.string().min(1).max(4096))}).strict()
+const activationSchema=z.object({sourceId:id,revision}).strict()
 export type ConnectorLayer=z.infer<typeof connectorProbeSchema>['level']
 export type DiagnosticStatus='running'|'passed'|'failed'|'unsupported'|'unknown'|'stale'|'interrupted'
 export interface ConnectorDiagnostic {
@@ -28,7 +31,7 @@ export interface ConnectorFieldIssue {field:string;code:ConnectorIssueCode}
 const issueCodes:readonly string[]=['required','invalid_format','invalid_environment_reference','credential_unavailable','too_many','unsupported_field']
 /** Only declared field names and fixed codes may cross the error boundary. */
 export class ConnectorError extends Error {
- constructor(readonly code:'connector_invalid'|'connector_conflict'|'connector_missing'|'connector_disabled'|'connector_unsupported'|'connector_request_conflict'|'connector_busy'|'connector_actors_required',readonly status=400,readonly issues?:ConnectorFieldIssue[]){super(code)}
+ constructor(readonly code:'connector_invalid'|'connector_conflict'|'connector_missing'|'connector_disabled'|'connector_unsupported'|'connector_request_conflict'|'connector_busy'|'connector_actors_required'|'connector_activation_required'|'connector_discovery_unavailable'|'connector_discovery_throttled'|'connector_discovery_identity',readonly status=400,readonly issues?:ConnectorFieldIssue[]){super(code)}
 }
 const safeParse=<T>(schema:z.ZodType<T>,value:unknown):T=>{const parsed=schema.safeParse(value);if(!parsed.success)throw new ConnectorError('connector_invalid');return parsed.data}
 interface EvidenceBasis {lifecycle:string;adapter:string;credentials?:string;known:boolean;missing:boolean;restart?:boolean}
@@ -172,7 +175,7 @@ export class ConnectorManagement {
  }
  snapshot(){
   const host=this.host(),current=host.settings.current().revision
-  const definitions=host.sourceRegistry.connectionDefinitions().map(d=>({kind:d.kind,label:d.label,pluginId:'pluginId'in d?d.pluginId:undefined,version:'version'in d?d.version:undefined,setup:d.setup,scopesPath:d.scopesPath,fields:d.setup?.fields.map(f=>({...f,path:fieldPath(d,f),credential:Object.values(d.credentials).includes(fieldPath(d,f))})),network:d.network,setupAvailable:!!d.setup?.fields.length&&d.setup.fields.every(field=>writableField(d,fieldPath(d,field)))}))
+  const definitions=host.sourceRegistry.connectionDefinitions().map(d=>({kind:d.kind,label:d.label,pluginId:'pluginId'in d?d.pluginId:undefined,version:'version'in d?d.version:undefined,setup:d.setup,scopesPath:d.scopesPath,fields:d.setup?.fields.map(f=>({...f,path:fieldPath(d,f),credential:Object.values(d.credentials).includes(fieldPath(d,f))})),network:d.network,targetDiscoveryAvailable:!!this.discoveryFields(d),setupAvailable:!!d.setup?.fields.length&&d.setup.fields.every(field=>writableField(d,fieldPath(d,field)))}))
   const diagnostics=host.store.list<ConnectorDiagnostic>('connector-diagnostic').map(record=>{const safe=this.publicRecord(record);return safe.status==='running'&&!this.active.has(safe.id)?{...safe,status:'interrupted' as const,code:'probe_interrupted'}:safe})
   return {revision:current,definitions,instances:host.config.sources.filter(s=>!['local','delegation'].includes(s.kind)).map(config=>{
    const definition=this.definition(config.kind),scopes=host.sourceRegistry.scopes(config)??(definition.scopesPath?pointer(config,definition.scopesPath):[])??[]
@@ -182,13 +185,42 @@ export class ConnectorManagement {
     const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
     return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
-   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
+   return {repairAvailable:this.repairAvailable(config),activationReviewRequired:this.wizardCreated(config.id),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
   }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them
   * directly to Onboarding.sourcePlan and returns only its reviewed plan. */
  plan(value:unknown):{revision:number;source:SourceConfig;credentials:Record<string,string>}{
   return this.buildPlan(value)
+ }
+ /** Review the exact new draft, not values retained only by the browser. */
+ newConnectionPlan(value:unknown){
+  const host=this.host(),registry=host.sourceRegistry,planned=this.plan(value),{source}=planned
+  const definition=this.definition(source.kind),digest=stableDigest(definition)
+  const availability=this.credentialAvailability(planned),credentialPaths=Object.values(definition.credentials)
+  const credentialMaterial=()=>credentialPaths.flatMap(path=>{
+   const ref=pointer(source,path)
+   if(typeof ref!=='string')return []
+   return [ref,Object.hasOwn(planned.credentials,ref)?planned.credentials[ref]!:credentialPresent(ref)?process.env[ref]!:''].filter(Boolean)
+  })
+  const secrets=credentialMaterial(),credentialBasis=this.sealed(secrets)
+  const redact=(value:string)=>secrets.some(secret=>value.includes(secret))?'':value
+  const fields=(definition.setup?.fields??[]).flatMap(field=>{
+   const path=fieldPath(definition,field)
+   if(credentialPaths.some(secret=>secret===path||secret.startsWith(path+'/')||path.startsWith(secret+'/')))return []
+   const value=pointer(source,path)
+   if(typeof value==='string')return [{field:field.name,values:[redact(value)]}]
+   if(Array.isArray(value)&&value.every((item):item is string=>typeof item==='string'))return [{field:field.name,values:value.map(redact)}]
+   return []
+  })
+  const review={revision:planned.revision,kind:source.kind,label:redact(source.label??definition.label),actorCount:source.allowedActors.length,fields,credentialAvailability:availability,startsDisabled:true as const}
+  const revalidate=()=>{
+   if(this.host()!==host||this.host().sourceRegistry!==registry)throw new ConnectorError('connector_conflict',409)
+   this.checkRevision(planned.revision)
+   if(stableDigest(this.definition(source.kind))!==digest||this.sealed(credentialMaterial())!==credentialBasis)throw new ConnectorError('connector_conflict',409)
+  }
+  revalidate()
+  return {...planned,review,revalidate}
  }
  private buildPlan(value:unknown,original?:SourceConfig):{revision:number;source:SourceConfig;credentials:Record<string,string>}{
   const input=this.parseDraft(value);this.checkRevision(input.revision)
@@ -258,14 +290,97 @@ export class ConnectorManagement {
   try{const plan=this.plan(value);return {valid:true,revision:plan.revision,code:'configuration_valid',networkTested:false,realCall:false,startsDisabled:true,credentialAvailability:this.credentialAvailability(plan)}}
   catch(error){if(error instanceof ConnectorError&&error.code==='connector_invalid')return {valid:false,code:error.code,networkTested:false,realCall:false,issues:error.issues??[]};throw error}
  }
+ private discoveryFields(d:Definition){
+  const names=(path:string,credential:boolean)=>d.setup?.fields.find(f=>fieldPath(d,f)===path&&Object.values(d.credentials).includes(path)===credential)?.name
+  if(d.kind==='feishu'&&(!('pluginId'in d)||d.pluginId==='agenthub-feishu')&&d.scopesPath==='/feishu/chats'&&names('/feishu/chats',false)){
+   const appId=names('/feishu/appIdEnv',true),secret=names('/feishu/appSecretEnv',true)
+   if(appId&&secret)return {kind:'feishu' as const,appId,secret}
+  }
+  if(d.kind==='slack'&&'pluginId'in d&&d.pluginId==='agenthub-slack'&&d.scopesPath==='/options/channels'&&names('/options/channels',false)){
+   const token=names('/options/tokenEnv',true),teamId=names('/options/teamId',false)
+   if(token&&teamId)return {kind:'slack' as const,token,teamId}
+  }
+ }
+ private discovering=false
+ private discoveryCooldownUntil=0
+ async discoverTargets(value:unknown,authorize:()=>void,signal:AbortSignal){
+  const input=safeParse(discoverySchema,value),host=this.host(),registry=host.sourceRegistry
+  this.checkRevision(input.revision)
+  const definition=this.definition(input.kind),fields=this.discoveryFields(definition),digest=stableDigest(definition)
+  if(!fields)throw new ConnectorError('connector_unsupported',409)
+  const check=()=>{
+   authorize()
+   if(this.host()!==host||host.sourceRegistry!==registry||stableDigest(this.definition(input.kind))!==digest)throw new ConnectorError('connector_conflict',409)
+   this.checkRevision(input.revision)
+  }
+  check()
+  let auth:TargetDiscoveryAuth
+  if(fields.kind==='feishu'){
+   const appId=input.credentials[fields.appId],secret=input.credentials[fields.secret]
+   if(Object.keys(input.credentials).length!==2||Object.keys(input.fields).length!==0||!appId||!/^cli_[A-Za-z0-9]{6,128}$/.test(appId)||!secret||!/^[-_A-Za-z0-9]{8,256}$/.test(secret))throw new ConnectorError('connector_invalid')
+   auth={kind:'feishu',appId,secret}
+  }else{
+   const token=input.credentials[fields.token],teamId=input.fields[fields.teamId]
+   if(Object.keys(input.credentials).length!==1||Object.keys(input.fields).length!==1||!token||!/^xoxb-[-_A-Za-z0-9]{8,4090}$/.test(token)||!teamId||!/^T[A-Z0-9]{1,96}$/.test(teamId))throw new ConnectorError('connector_invalid')
+   auth={kind:'slack',token,teamId}
+  }
+  if(this.discovering||this.now()<this.discoveryCooldownUntil)throw new ConnectorError('connector_busy',409)
+  try{
+   this.discovering=true
+   const result=await discoverConnectorTargets(auth,check,signal,this.options.fetch)
+   return {revision:input.revision,kind:input.kind,...result}
+  }catch(error){
+   check() // Never convert session/workspace changes into provider errors.
+   if(error instanceof TargetDiscoveryError){
+    if(error.code==='connector_discovery_throttled')this.discoveryCooldownUntil=this.now()+60_000
+    throw new ConnectorError(error.code,error.code==='connector_discovery_throttled'?429:502)
+   }
+   throw new ConnectorError('connector_discovery_unavailable',502)
+  }finally{this.discovering=false}
+ }
+ private wizardCreated(sourceId:string){
+  return this.host().store.list<{receipt?:{sourceId?:string}}>('onboarding-deployment').some(record=>record.receipt?.sourceId===sourceId)
+ }
+ private activationScope(source:SourceConfig){
+  const native=this.host().sourceRegistry.scopes(source),host=source.listenScopes
+  const targets=native&&host?native.filter(scope=>host.includes(scope)):native??host
+  const ids=targets===undefined?null:[...new Set(targets)].sort()
+  return {ids,mode:ids===null?'not_declared' as const:'configured' as const,count:ids?.length??null}
+ }
+ private activationBasis(source:SourceConfig,rev:number,expiresAt:number){
+  return this.sealed(['connector-activation-v1',this.identity(this.host()),rev,expiresAt,this.fingerprint(source),stableDigest(this.definition(source.kind)),this.activationScope(source)])
+ }
+ activationReview(value:unknown){
+  const input=safeParse(activationSchema,value)
+  this.checkRevision(input.revision)
+  const source=this.source(input.sourceId)
+  if(source.enabled||!this.wizardCreated(source.id)||!this.configured(source))throw new ConnectorError('connector_unsupported',409)
+  this.checkAdmission(source)
+  const expiresAt=this.now()+300_000,{mode,count}=this.activationScope(source)
+  return {sourceId:source.id,revision:input.revision,expiresAt,token:this.activationBasis(source,input.revision,expiresAt),
+   capabilities:source.capabilities,actors:source.allowedActors.length,bots:source.allowedBots.length,
+   broaderAdmission:this.broaderAdmission(source),scope:{mode,count},externalAccessVerified:false as const}
+ }
+ private broaderAdmission(source:SourceConfig){
+  return Object.values(source.admission).some(rule=>rule.unlistedAddressed!=='ignore'||rule.unlistedUnaddressed!=='ignore')
+ }
+ private checkAdmission(source:SourceConfig){
+  if(source.capabilities.events&&!source.allowedActors.length&&!source.allowedBots.length&&!this.broaderAdmission(source))throw new ConnectorError('connector_actors_required',409,[{field:'actors',code:'required'}])
+ }
  control(value:unknown){
   const input=safeParse(controlSchema,value),host=this.host(),fingerprint=stableDigest(input),receipt=host.store.get<{fingerprint:string;result:unknown}>('connector-control',input.requestId)
   if(receipt){if(receipt.fingerprint!==fingerprint)throw new ConnectorError('connector_request_conflict',409);return receipt.result}
   this.checkRevision(input.revision);this.source(input.sourceId)
   const source=this.source(input.sourceId)
   if(['local','delegation'].includes(source.kind))throw new ConnectorError('connector_unsupported')
-  const deliberateAdmission=Object.values(source.admission).some(rule=>rule.unlistedAddressed!=='ignore'||rule.unlistedUnaddressed!=='ignore')
-  if(input.enabled&&source.capabilities.events&&!source.allowedActors.length&&!source.allowedBots.length&&!deliberateAdmission)throw new ConnectorError('connector_actors_required',409,[{field:'actors',code:'required'}])
+  if(input.enabled){
+   this.checkAdmission(source)
+   if(!source.enabled&&this.wizardCreated(source.id)){
+    const approval=input.activation
+    if(!approval||approval.expiresAt<=this.now()||approval.token!==this.activationBasis(source,input.revision,approval.expiresAt))throw new ConnectorError('connector_activation_required',409)
+    if(!this.configured(source))throw new ConnectorError('connector_unsupported',409)
+   }
+  }
   return host.store.atomic(()=>{
    this.checkRevision(input.revision)
    const saved=host.updateSettings(input.revision,{sources:host.config.sources.map(s=>s.id===input.sourceId?{...s,enabled:input.enabled}:s)})

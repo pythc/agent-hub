@@ -58,14 +58,15 @@ export class Onboarding {
   return this.view(plan)
  }
  /** Entry setup adds a source while retaining the selected execution backend and all existing conversations. */
- sourcePlan(revision:number,source:Config['sources'][number],credentials:Record<string,string>={}){
+ sourcePlan(revision:number,source:Config['sources'][number],credentials:Record<string,string>={},revalidate?:()=>void){
+  revalidate?.()
   const host=this.host();if(revision!==host.settings.current().revision)throw new OnboardingError('settings_conflict','Settings changed. Refresh the entry setup.',409)
   if(host.config.sources.some(s=>s.id===source.id))throw new OnboardingError('source_conflict','This entry already exists. Use its settings instead of replacing it.',409)
   for(const [id,p]of this.plans)if(p.expiresAt<Date.now())this.plans.delete(id)
   if(this.plans.size>=20)throw new OnboardingError('too_many_plans','Close old setup drafts or try again later.',429)
   const next=configSchema.parse(host.config);next.sources.push(configSchema.shape.sources.element.parse(source))
   const definition=next.backends[next.execution.backend]??{kind:'codex' as const}
-  const plan:Plan={id:randomUUID(),revision,expiresAt:Date.now()+600000,connection:{id:next.execution.backend,kind:definition.kind,label:connectionLabel(definition)},workspace:source.cwd,sourceId:source.id,channel:source.kind,next,credentials,entry:true}
+  const plan:Plan={id:randomUUID(),revision,expiresAt:Date.now()+600000,connection:{id:next.execution.backend,kind:definition.kind,label:connectionLabel(definition)},workspace:source.cwd,sourceId:source.id,channel:source.kind,next,credentials,entry:true,revalidate}
   this.plans.set(plan.id,plan);return this.view(plan)
  }
  /** Host-only repair recipe: authorization and exact immutable target were checked
@@ -118,7 +119,7 @@ export class Onboarding {
  }
  async check(id:string){
   const plan=this.current(id),host=this.host(),checks:Check[]=[]
-  if(plan.replaceSource)throw new OnboardingError('check_not_supported','Connection repair is local only; explicitly verify the connection after applying.')
+  if(plan.revalidate)throw new OnboardingError('check_not_supported','Connector setup is local only; explicitly verify the connection after applying.')
   if(this.preview){plan.lastCheck={ok:false,checks:[{id:'connection',status:'pending',code:'preview_not_connected'}],remoteVerified:false,preview:true};return plan.lastCheck}
   const definition=plan.next.backends[plan.connection.id]??{kind:'codex' as const};let remoteVerified=false
   if(definition.kind==='codex'){
@@ -174,9 +175,9 @@ export class Onboarding {
   let files:ReturnType<typeof prepareManagedConfig>|undefined,committed=false,preparationStarted=false
   try{
    authorize?.()
-   if(plan.replaceSource){
+   if(plan.replaceSource||plan.revalidate){
     this.current(id)
-    if(JSON.stringify(managedConnections(host.config.stateDir))!==JSON.stringify(connections)||JSON.stringify(managedSecrets(host.config.stateDir))!==JSON.stringify(secrets))throw new OnboardingError('settings_conflict','Managed configuration changed while waiting. Review the repair again.',409)
+    if(JSON.stringify(managedConnections(host.config.stateDir))!==JSON.stringify(connections)||JSON.stringify(managedSecrets(host.config.stateDir))!==JSON.stringify(secrets))throw new OnboardingError('settings_conflict','Managed configuration changed while waiting. Review the plan again.',409)
    }
    plan.revalidate?.()
    // Live edits/deletions may have superseded previously managed definitions.
