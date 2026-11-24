@@ -1,3 +1,4 @@
+import {candidateNoticePrefix,type NotificationCandidate} from './notification-candidate.ts'
 import {schedulerAdmission} from './scheduler-admission.ts'
 import {orderSchedulerJobs,observeSchedulerJob,recordSchedulerAdmission,type SchedulerFairness} from './scheduler-order.ts'
 import {validateTaskAssignment,bindTaskAssignmentLease,validateAssignmentLease,restrictAssignmentExecution} from './task-assignment-contract.ts'
@@ -1373,7 +1374,7 @@ export class Runtime {
       if(message.status==='sending'||message.status==='uncertain'||message.attempts<3)blocked.add(channel)
       if(this.closing)return
       if (message.status !== 'pending') continue
-      const replyOwner=this.store.get<{goalId?:string;discussion:string;triggerId:string;inputs:string[];workerEvents?:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
+      const replyOwner=this.store.get<{goalId?:string;discussion:string;triggerId:string;inputs:string[];workerEvents?:string[];manifest?:ContextManifest;manifests?:ContextManifest[];candidate?:NotificationCandidate}>('router-reply-owner',message.id)
       // Old queued derived notices lack the context used to compose them; a
       // current input must recreate them instead of assuming their provenance.
       if((message.id.startsWith('goal-notice:')&&!Array.isArray(replyOwner?.manifests))||(message.id.startsWith('router-clarify:')&&!replyOwner?.manifest)){
@@ -1396,6 +1397,9 @@ export class Runtime {
         if(replaced||(replyOwner.goalId&&!owner)){
           this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'goalContractReplaced'});blocked.delete(channel);continue
         }
+      }
+      if((message.id.startsWith(candidateNoticePrefix)||replyOwner?.candidate)&&!this.goals.currentNotification(message.id,replyOwner?.goalId,message.channel,replyOwner?.candidate)){
+        this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'notificationFactSuperseded'});blocked.delete(channel);continue
       }
       const notificationDelay=this.proactive.notificationDelay(message,replyOwner)
       if(notificationDelay.quiet||notificationDelay.nextAt>Date.now())continue

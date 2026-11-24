@@ -1,3 +1,5 @@
+import {candidateNoticePrefix,goalExecutionHeldCandidate,notificationCandidateId,projectReviewCandidate,type GoalHoldCause,type NotificationCandidate} from './notification-candidate.ts'
+import type {ChannelRef} from './vendor/dsh-core/index.ts'
 import {projectIntegrationSummary} from './project-integration-summary.ts'
 import {z} from 'zod'
 import {startCodeProject,type GoalProject,type CodeReceipt} from './project-code.ts'
@@ -25,6 +27,10 @@ export const goalCommandSchema=z.object({action:z.enum(['list','inspect','start'
 export interface RouterGoal {supersedes?:string;supersededBy?:string;project?:GoalProject;id:string;scopeId:string;entryId:string;discussion:string;actor:string;triggerId:string;bindingRevision:number;revision:number;title:string;objective:string;criteria:z.infer<typeof criterion>[];plan:string[];state:'active'|'waiting'|'needs_input'|'paused'|'held'|'completed'|'cancelled';taskIds:string[];delegationIds?:string[];contextIds?:string[];nextAction:string;reason?:string;nextAt?:number;turns:number;maxTurns:number;failures:number;lastFingerprint?:string;checks?:z.infer<typeof verification>[];at:number;nodes?:GoalNode[];maxParallel?:number;maxRepairs?:number;finalRoundId?:string;recovery?:GoalFailure;recoveryAttempts?:number;managed?:boolean;contract?:GoalContract;planRevision?:number;replans?:number;maxReplans?:number;replanId?:string}
 interface Wake {id:string;goalId:string;scopeId:string;entryId:string;triggerId:string;triggerHash:string;goalRevision:number;state:'queued'|'running'|'done'|'failed';at:number}
 const terminal=new Set(['completed','cancelled'])
+const executionHoldReason:Record<GoalHoldCause,string>={
+ 'repeated-failure':'Three goal turns failed; inspect retained effects before resuming',
+ 'turn-allowance':'Autonomous turn allowance reached; goal remains unresolved',
+}
 export const goalSpecs:ToolSpec[]=[{type:'function',name:'router_goal',description:'Own a long-running user goal across turns and restarts. Prefer nodes with exactly one of workerId (local Worker) or teamTargetId (authorized independent team), dependsOn and criterionIds for host scheduling. Remote nodes retain delegation handles and are independently verified; the host never invents a local Worker. Failed remote contracts are held for review rather than repeated. Do not call team_delegate assign or accept for a managed node. Use workspace-relative file paths for evidence and node outputs. For code changes, declare the changed source and test files or a diff so acceptance can inspect the implementation. Review the requested reply as a deliverable; the host routes it after acceptance. Each criterion may declare files, documents and a deterministic check (file_exists, text_contains, json_equals with JSON pointer, or xlsx_cell_equals with sheet, cell, expected and optional numeric sumRange). The host intercepts ready reports, independently verifies immutable artifacts, repairs failed checks on the same open task and completes the goal only after overall acceptance. inspect returns verification rounds and versioned replanning records. After a settled strategy failure the host may request a new execution graph from the Router model and independently review it. Original objective, authority and acceptance criteria are immutable; replanning cannot change them. Do not manually assign tasks already declared in nodes. Start only when the user asks for sustained/multistep work, with an exact authorizationQuote from the current human message, objective and acceptance criteria. For start, use expectedRevision=0 and assign every criterionId to a node, including the content of a requested reply. To replace an immutable goal, start a new explicitly authorized goal with supersedes {goalId,expectedRevision}; this cancels old execution and preserves its history. Optional details nonGoals/inputs/deadline must be exact excerpts from the current human message. Deadline is requested text only, not automatic expiry or extra permission. Mutations require operationId and expectedRevision. Keep plan/nextAction current. wait with needsHuman=false retains a durable wake; needsHuman=true requires a concrete question/reason. Worker completion does not complete the goal. The host completes accepted goals automatically; complete cannot bypass independent verification. pause/resume/cancel and raising maxTurns require a current explicit human. Reaching the turn allowance holds an unresolved goal; never claim success.',inputSchema:{type:'object',properties:{action:{type:'string',enum:goalCommandSchema.shape.action.options},details:{type:'object',properties:{nonGoals:{type:'array',items:{type:'string'}},inputs:{type:'array',items:{type:'string'}},deadline:{type:'string'}},additionalProperties:false},supersedes:{type:'object',properties:{goalId:{type:'string'},expectedRevision:{type:'integer'}},required:['goalId','expectedRevision'],additionalProperties:false},id:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},title:{type:'string'},objective:{type:'string'},authorizationQuote:{type:'string'},criteria:{type:'array',items:{type:'object',properties:{id:{type:'string'},description:{type:'string'},files:{type:'array',items:{type:'string'}},documents:{type:'array',items:{type:'string'}},check:{type:'object',properties:{kind:{type:'string',enum:['file_exists','text_contains','json_equals','xlsx_cell_equals']},path:{type:'string'},text:{type:'string'},pointer:{type:'string'},sheet:{type:'string'},cell:{type:'string'},sumRange:{type:'string'},expected:{}},required:['kind','path'],additionalProperties:false}},required:['id','description'],additionalProperties:false}},plan:{type:'array',items:{type:'string'}},nextAction:{type:'string'},reason:{type:'string'},wakeAfterSeconds:{type:'integer'},needsHuman:{type:'boolean'},checks:{type:'array',items:{type:'object',properties:{criterionId:{type:'string'},ticketId:{type:'string'},delegationId:{type:'string'},reportAt:{type:'string'},explanation:{type:'string'}},required:['criterionId','reportAt','explanation'],additionalProperties:false}},maxTurns:{type:'integer'},budget:{type:'object',properties:{maxMinutes:{type:'number'},maxUsd:{type:'number'}},additionalProperties:false},maxParallel:{type:'integer'},maxRepairs:{type:'integer'},maxReplans:{type:'integer'},nodes:{type:'array',items:{type:'object',properties:{id:{type:'string'},title:{type:'string'},instruction:{type:'string'},workerId:{type:'string'},teamTargetId:{type:'string'},dependsOn:{type:'array',items:{type:'string'}},criterionIds:{type:'array',items:{type:'string'}}},required:['id','title','instruction','criterionIds'],additionalProperties:false}}},required:['action'],additionalProperties:false}}]
 
 export class RouterGoals {
@@ -120,9 +126,17 @@ export class RouterGoals {
   const recovery=error?classifyGoalFailure(String(error),this.now(),latest.recoveryAttempts??0):undefined
   const retriable=recovery&&['transient','quota'].includes(recovery.kind)&&(latest.recoveryAttempts??0)<5
   const state=turns>=latest.maxTurns||error&&!retriable&&failures>=3?'held':latest.state
-  const reason=state==='held'?(failures>=3?'Three goal turns failed; inspect retained effects before resuming':'Autonomous turn allowance reached; goal remains unresolved'):latest.reason
-  this.host.store.put('router-goal',g.id,{...latest,turns,failures,state,reason,recovery,recoveryAttempts:error?(latest.recoveryAttempts??0)+1:0,nextAt:state==='held'?undefined:retriable?recovery.retryAt:latest.nextAt??this.now()+60000})
-  if(state==='held')this.notice({...latest,state,reason},reason!)
+  const holdCause:GoalHoldCause|undefined=state==='held'?(failures>=3?'repeated-failure':'turn-allowance'):undefined
+  const reason=holdCause?executionHoldReason[holdCause]:latest.reason
+  this.host.store.atomic(()=>{
+   const updated={...latest,turns,failures,state,reason,recovery,recoveryAttempts:error?(latest.recoveryAttempts??0)+1:0,nextAt:state==='held'?undefined:retriable?recovery.retryAt:latest.nextAt??this.now()+60000}
+   this.host.store.put('router-goal',g.id,updated)
+   if(holdCause){
+    // Only this host transition mints the typed hold fact, not matching model-authored wording.
+    this.host.store.put('goal-execution-hold',g.id,{cause:holdCause,triggerId:updated.triggerId})
+    this.notice(updated,()=>reason!,false,'goal-execution-held')
+   }
+  })
  }
  private projectRequester(g:RouterGoal){
   const trigger=this.host.store.triggers.get(g.triggerId)
@@ -130,11 +144,51 @@ export class RouterGoals {
   const run=this.host.proactive.runForTrigger(g.triggerId)
   return run?this.host.store.triggers.get(run.spec.triggerId):this.host.webhooks.notificationAnchor(g.triggerId)
  }
- notice(g:RouterGoal,text:string,review=false){
+ private pendingReviewCandidate(g:RouterGoal,channel:ChannelRef):NotificationCandidate|undefined{
+  const project=g.project,review=project?.review
+  if(!project||!review||review.state!=='pending'||g.state!=='needs_input'||g.supersededBy||g.finalRoundId!==review.roundId)return
+  const round=this.host.store.get<VerificationRound>('goal-verification',review.roundId)
+  const node=g.nodes?.find(n=>n.id===project.integration)
+  const delivery=node?.ticketId&&this.host.store.get<GoalDelivery>('goal-delivery',node.ticketId)
+  const receipt=delivery&&this.host.projectCode.receipt(delivery.id)
+  if(!round||round.goalId!==g.id||round.scopeId!==g.scopeId||round.entryId!==g.entryId||round.nodeId||round.state!=='passed'||
+   !delivery||delivery.id!==review.deliveryId||!receipt||receipt.head!==review.head||receipt.error||receipt.test?.exit!==0||
+   !this.host.verification.current(round,g,{readOnly:true}))return
+  return projectReviewCandidate({scopeId:g.scopeId,entryId:g.entryId,bindingRevision:g.bindingRevision,actor:g.actor,goalId:g.id,channel,
+   reviewId:review.id,roundId:review.roundId,deliveryId:review.deliveryId,head:review.head})
+ }
+ private executionHoldCandidate(g:RouterGoal,channel:ChannelRef){
+  const evidence=this.host.store.get<{cause:GoalHoldCause;triggerId:string}>('goal-execution-hold',g.id)
+  if(!evidence||g.state!=='held'||g.supersededBy||g.triggerId!==evidence.triggerId||g.reason!==executionHoldReason[evidence.cause])return
+  if(evidence.cause==='repeated-failure'?g.failures<3:evidence.cause!=='turn-allowance'||g.turns<g.maxTurns||g.failures>=3)return
+  return goalExecutionHeldCandidate({scopeId:g.scopeId,entryId:g.entryId,bindingRevision:g.bindingRevision,actor:g.actor,goalId:g.id,channel,cause:evidence.cause})
+ }
+ private notificationChannel(g:RouterGoal,trigger:Trigger){
+  return g.project?this.projectRequester(g)?.channel:trigger.channel
+ }
+ currentNotification(id:string,goalId:string|undefined,channel:ChannelRef,candidate:NotificationCandidate|undefined):boolean{
+  if(candidate?.schema!==1||!goalId)return false
+  try{
+   const goal=this.get(goalId)
+   if(!goal||!this.host.proactive.notify(goal.triggerId))return false
+   const currentChannel=this.notificationChannel(goal,this.anchor(goal).trigger)
+   if(!currentChannel||stableDigest(channel)!==stableDigest(currentChannel))return false
+   const current=candidate.kind==='project-review-pending'?this.pendingReviewCandidate(goal,currentChannel):
+    candidate.kind==='goal-execution-held'?this.executionHoldCandidate(goal,currentChannel):undefined
+   if(!current||current.topicKey!==candidate.topicKey||current.factRevision!==candidate.factRevision)return false
+   const key=notificationCandidateId(current),alias=this.host.store.get<string>('notification-legacy-alias',key)
+   return alias?alias===id: key===id
+  }catch{return false}
+ }
+ notice(g:RouterGoal,copy:string|(()=>string),review=false,kind?:NotificationCandidate['kind']){
   try{
    const {trigger}=this.anchor(g)
-   const channel=g.project?this.projectRequester(g)?.channel:trigger.channel
-   if(!channel||g.project&&!this.host.proactive.notify(g.triggerId))return
+   const channel=this.notificationChannel(g,trigger)
+   if(!channel||((g.project||kind)&&!this.host.proactive.notify(g.triggerId)))return
+   const latest=kind?this.get(g.id):undefined
+   const candidate=latest&&(kind==='project-review-pending'?this.pendingReviewCandidate(latest,channel):this.executionHoldCandidate(latest,channel))
+   if(kind&&(!candidate||!latest||latest.triggerId!==g.triggerId||
+     (kind==='project-review-pending'&&stableDigest(latest.project?.review)!==stableDigest(g.project?.review))))return
    const ids=[...new Set([...(g.contextIds??[]),...this.host.replanning.contexts(g.id)])]
    const manifests=ids.map(id=>{
     const saved=this.host.store.get<ContextManifest>('context-manifest',id);if(!saved)throw Error('Goal context unavailable')
@@ -142,10 +196,31 @@ export class RouterGoals {
     const manifest={...saved,taskOwners:saved.taskOwners.map(t=>({...t,dataRevision:this.host.scopes.ownership(t.id)?.dataRevision??1}))}
     this.host.memory.validate(manifest);return manifest
    })
-   const id='goal-notice:'+stableDigest([g.id,g.revision,text])
-   // The run remains the authority for delayed delivery to its original requester's channel.
-   this.host.store.put('router-reply-owner',id,{goalId:g.id,discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests})
-   this.host.store.outbox.send({id,channel,kind:'reply',text:review?text:'目标「'+g.title+'」尚未完成：'+text})
+   // Gate the typed fact, including dedupe, before evaluating the copy producer.
+   this.host.store.atomic(()=>{
+    const candidateId=candidate&&notificationCandidateId(candidate)
+    if(candidateId&&(this.host.store.outbox.status(candidateId)!==undefined||this.host.store.get('notification-legacy-alias',candidateId)))return
+    const text=typeof copy==='function'?copy():copy
+    const legacyId='goal-notice:'+stableDigest([g.id,g.revision,text])
+    if(candidate&&candidateId){
+     // An exact legacy record may already have sent this fact. Keep its receipt.
+     const legacy=this.host.store.get<{goalId?:string;triggerId:string;manifests?:ContextManifest[];candidate?:NotificationCandidate}>('router-reply-owner',legacyId)
+     if(this.host.store.outbox.status(legacyId)!==undefined&&legacy?.goalId===g.id&&legacy.triggerId===g.triggerId&&Array.isArray(legacy.manifests)&&(!legacy.candidate||notificationCandidateId(legacy.candidate)===candidateId)){
+      this.host.store.put('notification-legacy-alias',candidateId,legacyId)
+      this.host.store.put('router-reply-owner',legacyId,{...legacy,candidate})
+      return
+     }
+    }
+    let note=text
+    if(candidate?.kind==='goal-execution-held'&&g.failures>=3){
+     const prior=notificationCandidateId(goalExecutionHeldCandidate({...g,goalId:g.id,channel,cause:'turn-allowance'}))
+     const priorDelivery=this.host.store.get<string>('notification-legacy-alias',prior)??prior
+     if(this.host.store.outbox.status(priorDelivery)==='sent')note='Compared with the earlier turn-limit notice, the goal has now hit a repeated-failure threshold. '+text
+    }
+    const id=candidateId??legacyId
+    this.host.store.put('router-reply-owner',id,{goalId:g.id,discussion:g.discussion,triggerId:g.triggerId,inputs:[g.triggerId],manifests,...(candidate?{candidate}:{})})
+    this.host.store.outbox.send({id,channel,kind:'reply',text:review?note:'目标「'+g.title+'」尚未完成：'+note})
+   })
   }catch{}
  }
  tick(){
@@ -226,7 +301,7 @@ export class RouterGoals {
  }
  private reviewNotice(g:RouterGoal,code:CodeReceipt){
   const p=g.project!,id=p.review!.id,prefix=this.host.sources.get(p.sourceId)?.verificationCommand,command=prefix?prefix+' ':''
-  this.notice(g,['请验收「'+g.title+'」。','提交 '+code.head,'通过 '+code.test!.command,code.diffStat,'通过请回复「'+command+'验收通过 '+id+'」，需修改请回复「'+command+'退回 '+id+' 修改意见」。也可在控制面查看补丁和测试输出。'].filter(Boolean).join('\n'),true)
+  this.notice(g,()=>['请验收「'+g.title+'」。','提交 '+code.head,'通过 '+code.test!.command,code.diffStat,'通过请回复「'+command+'验收通过 '+id+'」，需修改请回复「'+command+'退回 '+id+' 修改意见」。也可在控制面查看补丁和测试输出。'].filter(Boolean).join('\n'),true,'project-review-pending')
  }
  operatorReview(id:string){
   const record=this.host.store.get<{goalId:string}>('project-review',id),g=record&&this.get(record.goalId)
