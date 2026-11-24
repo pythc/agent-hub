@@ -6,7 +6,7 @@ The operator workspace at `/configure#execution-trace` follows tasks, dispatch, 
 
 Existing `records`, `jobs`, `outbox` and `audit` tables remain authoritative. `ExecutionTrace(() => runtime)` installs observation-only SQLite triggers that append versioned `execution.trace` metadata to the existing audit ledger in the source write's transaction. Direct SQL job/outbox updates are observed. Rolling back an authoritative write rolls its event back too. The projection cannot dispatch work or change task/job/outbox state.
 
-`event:<audit.seq>` is a stable event ID; `audit.seq` is the monotonic cursor. Clients read after the returned cursor and drain `more` pages. Gaps belong to unrelated audit events. Event pages are bounded to 200 and task pages to 100; the UI keeps 600 loaded events. A cursor above the current ledger yields `trace_cursor_ahead`, requiring a fresh read after database restore. A page refresh replays retained events rather than inventing earlier transitions.
+`event:<audit.seq>` is a stable event ID; `audit.seq` is the monotonic cursor. Clients read after the returned cursor and drain `more` pages. Gaps belong to unrelated audit events. Event pages are bounded to 200 and task pages to 100; the UI keeps 600 loaded events. Clients should pass the previous response’s `visibility` token when continuing. A token for an older local visibility epoch yields `trace_visibility_changed` without returning rows; a cursor above the current ledger yields `trace_cursor_ahead`. Both require a fresh snapshot and replay from zero. Legacy clients may omit the token but do not get the server-side epoch fence. A page refresh replays retained events rather than inventing earlier transitions.
 
 Existing domain audit events (`ticket.created/resumed/ended`, `assignment.started/ended`) retain their original timestamps. First installation also captures current record/job/outbox states, explicitly marked **state at first capture**. Their observation timestamp is not presented as the time a historical transition occurred. A host restart does not duplicate baseline capture. Runtime replacement through configuration activation rebinds the service through its getter.
 
@@ -18,7 +18,11 @@ The projection selects enum states, host record IDs and result-presence flags. I
 
 Commit status comes only from a host `project-commit` receipt with a full hexadecimal commit ID. Test status comes from that receipt's recorded test exit code; commands/output are not returned. Acceptance exposes retained verdicts/counts, without explanatory model text. A retained external call receipt proves only that the host recorded the call; it does not prove an external side effect occurred or was undone.
 
-History-cleanup fences filter task and event reads, including late writes. Responses include a cleanup-plan digest; a mounted UI discards cached events when visibility changes. Recovery checks the cleanup fence before returning even an existing idempotent receipt.
+History-cleanup fences filter task and event reads, including late writes. The opaque visibility token rotates when the trace binds to a different store (including a new process) or cleanup plans change. An epoch change invalidates the UI’s cached task details, timeline, and recovery confirmations; the next snapshot and first page replace them instead of appending stale rows. Recovery checks the cleanup fence before returning even an existing idempotent receipt.
+
+Contract changes append a task-scoped audit entry in the same transaction as the revision pointer. Readback requires the matching retained, unblocked contract record and validates its digest; only the recorded revision number is added to the timeline. No earlier transitions are fabricated on an existing installation. Current assignment details continue to use the existing validated chain. Worker receipts continue to show only the validated kind and disposition, never receipt content. Neither projection changes approval or execution permissions.
+
+Snapshot quality counts cover only the returned page of visible tasks. Execution finished, current verification passed or requiring attention, unconfirmed verification, unknown effects, and sends recorded by the host are separate measurements. A stale or missing verification never counts as a pass; a host send record is not recipient confirmation. This increment adds no deployment verifier, external acceptance claim, or fault-injection harness.
 
 ## Recovery actions
 
@@ -38,7 +42,7 @@ All endpoints belong behind existing current-operator authentication and same-or
 | Endpoint | Method |
 | --- | --- |
 | `GET /api/execution-trace?offset=0&limit=50&ticketId=...` | `trace.snapshot(query)` |
-| `GET /api/execution-trace/events?cursor=0&limit=80&ticketId=...` | `trace.events(query)` |
+| `GET /api/execution-trace/events?cursor=0&limit=80&ticketId=...&visibility=...` | `trace.events(query)` |
 | `POST /api/execution-trace/recover` | `await trace.recover(body)` |
 
 Omit optional `ticketId` for global reads. Recovery body is `{ticketId, action, revision, observed, requestId}`; actions are `inspect`, `read_history`, `resume_session`, `cancel`. Strict schemas bound inputs. `TraceError` exposes only `code` and HTTP `status`; never serialize an underlying provider exception. React export: `ExecutionTrace({language})`.

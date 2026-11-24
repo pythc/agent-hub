@@ -1,9 +1,9 @@
 import {projectIntegrationForTask,type ProjectIntegrationSummary} from './project-integration-summary.ts'
 import {taskQueueSummary,type TaskQueueSummary} from './scheduler-status.ts'
-import {assignmentContractView} from './task-assignment-contract.ts'
+import {assignmentContractView,type TaskAssignmentContract} from './task-assignment-contract.ts'
 import {createRecoveryPackage} from './recovery-package.ts'
 import {recoveryManifest,type RecoveryManifest} from './recovery-manifest.ts'
-import {createHash} from 'node:crypto'
+import {createHash,randomUUID} from 'node:crypto'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import type {WorkerEventReceipt} from './async-worker-inbox.ts'
@@ -17,12 +17,13 @@ const stages=['task','assignment','run','approval','tool','result','acceptance',
 const states=['queued','running','waiting','ready','blocked','failed','cancelled','completed','interrupted','uncertain','pending','resolved','expired','passed','insufficient','errored','stale','sent','held','dropped','idle','starting','background','human','delivering','merging','complete','ended','observed','sending','applying','applied','declined'] as const
 export type TraceStage=typeof stages[number]
 export type TraceState=typeof states[number]
-export interface TraceEvent {id:string;cursor:number;at:string;stage:TraceStage;state:TraceState;ticketId?:string;entity:string;entityId:string;baseline:boolean;hasResult?:boolean;workerEvent?:{kind:WorkerEventReceipt['kind'];disposition:WorkerEventReceipt['disposition']}}
+export interface TraceEvent {id:string;cursor:number;at:string;stage:TraceStage;state:TraceState;ticketId?:string;entity:string;entityId:string;baseline:boolean;contractRevision?:number;hasResult?:boolean;workerEvent?:{kind:WorkerEventReceipt['kind'];disposition:WorkerEventReceipt['disposition']}}
 export class TraceError extends Error {
  constructor(readonly code:string,readonly status=409){super(code);this.name='TraceError'}
 }
 const id=z.string().min(1).max(400)
-export const traceQuerySchema=z.object({cursor:z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),ticketId:id.optional(),limit:z.coerce.number().int().min(1).max(200).default(80)}).strict()
+const epochSchema=z.string().regex(/^[a-f0-9]{64}$/)
+export const traceQuerySchema=z.object({cursor:z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),visibility:epochSchema.optional(),ticketId:id.optional(),limit:z.coerce.number().int().min(1).max(200).default(80)}).strict()
 export const traceSnapshotSchema=z.object({ticketId:id.optional(),offset:z.coerce.number().int().min(0).max(1000000).default(0),limit:z.coerce.number().int().min(1).max(100).default(50)}).strict()
 export const traceRecoverySchema=z.object({ticketId:id,action:z.enum(['inspect','read_history','resume_session','cancel']),revision:z.number().int().nonnegative(),requestId:z.string().min(1).max(200),observed:z.string().regex(/^[a-f0-9]{64}$/),repairConfirmed:z.boolean().optional()}).strict()
 type RecoveryInput=z.infer<typeof traceRecoverySchema>
@@ -30,6 +31,21 @@ type RecoveryResult={status:'inspected'|'history_verified'|'history_unavailable'
 interface RecoveryReceipt {fingerprint:string;state:'started'|'completed'|'uncertain';action:RecoveryInput['action'];ticketId:string;at:number;result?:RecoveryResult}
 export interface AsyncInboxSummary {schema:1;received:number;applied:number;archived:number;latest:{kind:'progress'|'blocked'|'result';disposition:'applied'|'archived';observedAt:number}|null}
 export interface TaskAssignmentSummary {schema:1;contractRevision?:number;objective:string;inputCount:number;interface?:{key:string;version:number;digest:string;inputs:string[];outputs:string[];acceptance:string[]};dependencyCount:number;tools:string[];connections:string[];workspace:{access:'read-only'|'workspace-write';scope:'whole_root';network:boolean;leaseCount:number};budget:{timeoutMs?:number;maxSteps?:number;maxToolCalls?:number;maxOutputTokens?:number};createdAt:number;blocker?:string}
+export interface TraceQuality {
+ shown:number; executionFinished:number; accepted:number; acceptanceProblems:number; acceptanceUnconfirmed:number; effectsUnknown:number; deliveryRecorded:number
+}
+function traceQuality(tasks:TraceTask[]):TraceQuality {
+ const counts:TraceQuality={shown:tasks.length,executionFinished:0,accepted:0,acceptanceProblems:0,acceptanceUnconfirmed:0,effectsUnknown:0,deliveryRecorded:0}
+ for(const {status} of tasks){
+  if(status.execution.state==='finished')counts.executionFinished++
+  if(status.acceptance.freshness==='current'&&status.acceptance.state==='passed')counts.accepted++
+  else if(status.acceptance.freshness==='current'&&['failed','insufficient','errored'].includes(status.acceptance.state))counts.acceptanceProblems++
+  else counts.acceptanceUnconfirmed++
+  if(status.effects.state==='unknown')counts.effectsUnknown++
+  if(status.delivery.state==='recorded')counts.deliveryRecorded++
+ }
+ return counts
+}
 export interface TraceTask {
  projectIntegration?:ProjectIntegrationSummary
  queue?:TaskQueueSummary
@@ -52,6 +68,7 @@ interface Projection {key?:string;kind:string;stage:TraceStage;state:(alias:stri
 const projections:Projection[]=[
  {kind:'ticket',stage:'task',ticket:a=>`${a}.id`,state:a=>`CASE WHEN ${field(a,'$.ended')} IS NOT NULL THEN CASE WHEN ${field(a,'$.ended.outcome')}='stopped' THEN 'cancelled' ELSE 'ended' END WHEN ${field(a,'$.attention')} IS NOT NULL THEN 'waiting' ELSE ${stateSQL(field(a,'$.assignments[#-1].report.state'),'queued')} END`,extra:a=>`,'assignmentId',${field(a,'$.assignments[#-1].id')}`},
  {kind:'worker-assignment',stage:'assignment',ticket:a=>`${a}.id`,state:()=>"'queued'",extra:a=>`,'workerId',${field(a,'$.workerId')}`},
+ {key:'assignment_revision',kind:'task-assignment-current',stage:'assignment',ticket:a=>`${a}.id`,state:()=>"'observed'",extra:a=>`,'contractRef',${field(a,'$.digest')}`},
  {kind:'run',stage:'run',ticket:a=>`${a}.id`,state:a=>stateSQL(field(a,'$.phase')),extra:a=>`,'hasResult',CASE WHEN json_type(${a}.body,'$.result')='text' AND length(${field(a,'$.result')})>0 THEN 1 ELSE 0 END,'assignmentId',${field(a,'$.assignmentId')}`},
  {kind:'approval',stage:'approval',ticket:a=>field(a,'$.ticketId'),state:a=>stateSQL(field(a,'$.status')),extra:a=>`,'expiresAt',${field(a,'$.expiresAt')}`},
  {kind:'execution-call',stage:'tool',ticket:a=>field(a,'$.ticketId'),state:a=>stateSQL(field(a,'$.state')),extra:a=>`,'callKind',CASE WHEN ${field(a,'$.kind')} IN ('router','worker','subagent','tool') THEN ${field(a,'$.kind')} ELSE 'tool' END`},
@@ -111,15 +128,18 @@ function classify(run:Run|undefined,ticket:Ticket){
 }
 export class ExecutionTrace {
  private bound?:Store
+ private storeEpoch=''
  private readonly inFlight=new Set<string>()
  constructor(private readonly host:()=>Runtime){this.current()}
- private current(){const host=this.host();if(host.store!==this.bound){installProjection(host.store);this.bound=host.store}return host}
- private visibility(host:Runtime){return stableDigest(host.store.db.prepare("SELECT id,body FROM records WHERE kind='history-plan' ORDER BY id").all())}
+ private current(){const host=this.host();if(host.store!==this.bound){installProjection(host.store);this.storeEpoch=randomUUID();this.bound=host.store}return host}
+ private visibility(host:Runtime){return stableDigest([this.storeEpoch,host.store.db.prepare("SELECT id,body FROM records WHERE kind='history-plan' ORDER BY id").all()])}
  private head(host:Runtime){return Number(host.store.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM audit').get()!.seq)}
  events(value:unknown={}){
   const query=traceQuerySchema.parse(value),host=this.current(),head=this.head(host)
-  if(query.cursor>head)throw new TraceError('trace_cursor_ahead')
   if(query.ticketId&&!visible(host,query.ticketId))throw new TraceError('trace_task_missing',404)
+  const visibility=this.visibility(host)
+  if(query.visibility&&query.visibility!==visibility)throw new TraceError('trace_visibility_changed')
+  if(query.cursor>head)throw new TraceError('trace_cursor_ahead')
   const rows=host.store.db.prepare(`SELECT seq,at,body FROM audit WHERE seq>? AND ${eventPredicate}${query.ticketId?" AND COALESCE(json_extract(body,'$.ticketId'),json_extract(body,'$.data.ticketId'))=?":''} ORDER BY seq LIMIT ?`).all(query.cursor,...(query.ticketId?[query.ticketId]:[]),query.limit+1)
   const page=rows.slice(0,query.limit),events:TraceEvent[]=[]
   for(const row of page){
@@ -135,9 +155,18 @@ export class ExecutionTrace {
    if(!old&&(body.schema!==1||!(stages as readonly unknown[]).includes(body.stage)))continue
    const stage:TraceStage=old?.stage??(body.stage==='tool'&&body.callKind&&body.callKind!=='tool'?'run':body.stage)
    const state=old?body.type==='ticket.ended'&&body.data?.outcome==='stopped'?'cancelled':old.state:enumState(body.state)
-   events.push({id:'event:'+row.seq,cursor:Number(row.seq),at:String(row.at),stage,state:enumState(state),...(typeof ticketId==='string'?{ticketId}:{}),entity:old?'domain':String(body.entity),entityId:opaque(String(body.entity??body.type)+':'+String(body.entityId??row.seq)),baseline:body.baseline===1,...(body.hasResult?{hasResult:true}:{})})
+   let contractRevision:number|undefined
+   if(!old&&body.entity==='task-assignment-current'){
+    if(typeof ticketId!=='string'||typeof body.contractRef!=='string'||!epochSchema.safeParse(body.contractRef).success)continue
+    const contract=host.store.get<TaskAssignmentContract>('task-assignment-revision',body.contractRef)
+    if(!contract||contract.ticketId!==ticketId||contract.digest!==body.contractRef||host.memory.cleanup.blocked('task-assignment-revision',contract.digest,contract)||host.memory.cleanup.blocked('task-assignment-contract',ticketId,contract))continue
+    const {digest,createdAt,...content}=contract
+    if(stableDigest(content)!==digest||typeof contract.revision!=='number'||!Number.isSafeInteger(contract.revision)||contract.revision<2)continue
+    contractRevision=contract.revision
+   }
+   events.push({id:'event:'+row.seq,cursor:Number(row.seq),at:String(row.at),stage,state:enumState(state),...(typeof ticketId==='string'?{ticketId}:{}),entity:old?'domain':String(body.entity),entityId:opaque(String(body.entity??body.type)+':'+String(body.entityId??row.seq)),baseline:body.baseline===1,...(contractRevision===undefined?{}:{contractRevision}),...(body.hasResult?{hasResult:true}:{})})
   }
-  return {events,visibility:this.visibility(host),cursor:rows.length>query.limit?Number(page.at(-1)!.seq):head,head,more:rows.length>query.limit,at:Date.now()}
+  return {events,visibility,cursor:rows.length>query.limit?Number(page.at(-1)!.seq):head,head,more:rows.length>query.limit,at:Date.now()}
  }
  // Bind repository receipts and their ownership links, not the wall-clock
  // observedAt or aggregate counts. Kept private: raw receipt contents never leave
@@ -206,7 +235,10 @@ export class ExecutionTrace {
   const all=host.store.tickets.list().filter(t=>visible(host,t.id)&&(!query.ticketId||t.id===query.ticketId)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))
   // GET observation must not materialize missing routes through nested authority checks.
   // Recovery calls task() directly and retains its existing execution semantics.
-  return host.scopes.readOnly(()=>({at:Date.now(),revision:host.settings.current().revision,visibility:this.visibility(host),cursor:this.head(host),total:all.length,offset:query.offset,more:query.offset+query.limit<all.length,tasks:all.slice(query.offset,query.offset+query.limit).map(t=>this.task(host,t))}))
+  return host.scopes.readOnly(()=>{
+   const tasks=all.slice(query.offset,query.offset+query.limit).map(t=>this.task(host,t))
+   return {at:Date.now(),revision:host.settings.current().revision,visibility:this.visibility(host),cursor:this.head(host),total:all.length,offset:query.offset,more:query.offset+query.limit<all.length,tasks,quality:traceQuality(tasks)}
+  })
  }
  exportRecoveryPackage(value:unknown){
   const input=z.object({ticketId:id,revision:z.number().int().nonnegative(),observed:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(value),host=this.host()
