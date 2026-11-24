@@ -79,3 +79,10 @@ Typical failure codes: `missing_credentials`, `timeout`, `http_401`, `http_429`,
 Existing configurations gain an off-by-default field; no source, account, model, browser or task settings are rewritten by this feature. Disable the layer to immediately return to the original path. Pending results are invalidated by the settings revision. Before downgrading to a binary that predates this field, remove `decision` from any manually edited config file; old strict config parsers reject unknown top-level keys. Back up state before any binary downgrade.
 
 Run `npm run typecheck`, `npm test`, and the isolated browser harness `examples/decision-acceptance.ts` + `tests/browser/decision.py`. The harness creates a temporary account/state and a loopback protocol fixture. Passing a local API base URL to the example exercises an actual local model instead. Keep these results distinct from hosted-provider validation and production deployment.
+
+## Compare an off and shadow policy offline
+
+Use the local, synthetic [shadow evaluation procedure](optimization/DECISION_SHADOW_EVALUATION.md)
+to compare two runs of the same labeled fixture set without loading workspace
+records, contacting an endpoint or executing a route. It does not apply a
+policy or qualify a provider for advisory mode.
