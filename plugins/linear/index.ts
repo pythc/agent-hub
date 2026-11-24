@@ -22,6 +22,7 @@ const pageFields='pageInfo { hasNextPage endCursor }'
 /** Issue/comment transport. Platform workflow state never completes an AgentHub goal. */
 export class LinearSource extends MessageSource {
   private current?:SourceContext
+  private localRetryAt=0
   private account?:{id:string;user:string;type:string;verified:true}
   private api:Request
   private get options(){return this.config.options as unknown as Options}
@@ -29,7 +30,7 @@ export class LinearSource extends MessageSource {
   constructor(config:SourceConfig,api?:Request,private readonly beforeWorkflowWrite?:()=>Promise<void>){super(config);this.api=api??this.request.bind(this)}
 
   private async request(query:string,variables:Record<string,unknown>={}){
-    if((this.current?.store.get<number>('plugin-state','retryAt')??0)>Date.now())throw Error('Linear retry window has not elapsed')
+    if(Math.max(this.localRetryAt,this.current?.store.get<number>('plugin-state','retryAt')??0)>Date.now())throw Error('Linear retry window has not elapsed')
     const token=process.env[this.options.tokenEnv]
     if(!token)throw Error('Linear credential is unavailable')
     const url=new URL(this.options.apiBase??'https://api.linear.app/graphql')
@@ -49,7 +50,11 @@ export class LinearSource extends MessageSource {
     if(!result.data||typeof result.data!=='object')throw Error('Linear response has no data')
     return result.data
   }
-  private defer(value:string|null){const seconds=Number(value);this.current?.store.put('plugin-state','retryAt',Date.now()+Math.min(86400,Number.isFinite(seconds)&&seconds>0?seconds:60)*1000)}
+  private defer(value:string|null){
+    const seconds=Number(value)
+    this.localRetryAt=Date.now()+Math.min(86400,Number.isFinite(seconds)&&seconds>0?Math.max(1,seconds):60)*1000
+    this.current?.store.put('plugin-state','retryAt',this.localRetryAt)
+  }
   private allowed(team:unknown):team is string{return typeof team==='string'&&this.options.teams.includes(team)}
   private allowedIssue(id:unknown):id is string{return uuid(id)&&(!this.options.issueIds||this.options.issueIds.includes(id))}
   validThread(thread:string){const [team,id,...extra]=thread.split(':');return extra.length===0&&this.allowed(team)&&this.allowedIssue(id)}

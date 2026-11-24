@@ -33,11 +33,13 @@ export class SlackSource extends MessageSource {
   private closing=false
   private api:Request
   private current?:SourceContext
+  private localRetryAt=0
   private account?:{id:string;type:string;verified:true;user:string}
   private get options(){return this.config.options as unknown as Options}
   override get verificationCommand(){return this.options.command??'/agent'}
   constructor(config:SourceConfig,api?:Request){super(config);this.api=api??this.request.bind(this)}
   private async request(method:string,operation:string,input:Record<string,unknown>={}){
+    if(Math.max(this.localRetryAt,this.current?.store.get<number>('plugin-state','retryAt')??0)>Date.now())throw Error('Slack retry window has not elapsed')
     if(!/^[a-z]+(?:\.[a-zA-Z]+)+$/.test(operation))throw Error('Invalid Slack API operation')
     const token=process.env[operation==='apps.connections.open'?(this.options.appTokenEnv??''):this.options.tokenEnv];if(!token)throw Error('Slack credential is unavailable')
     const base=new URL(this.options.apiBase??'https://slack.com/api/')
@@ -45,7 +47,12 @@ export class SlackSource extends MessageSource {
     const url=new URL(operation,base)
     if(method==='GET')for(const [key,value] of Object.entries(input))if(value!==undefined)url.searchParams.set(key,String(value))
     const response=await fetch(url,{method,headers:{authorization:'Bearer '+token,'content-type':'application/json; charset=utf-8'},...(method==='POST'?{body:JSON.stringify(input)}:{}),redirect:'error',signal:AbortSignal.timeout(15000)})
-    if(response.status===429){const after=Number(response.headers.get('retry-after'));if(this.current&&Number.isFinite(after))this.current.store.put('plugin-state','retryAt',Date.now()+Math.min(86400,Math.max(1,after))*1000);throw Error('Slack rate limited')}
+    if(response.status===429){
+      const after=Number(response.headers.get('retry-after'))
+      this.localRetryAt=Date.now()+Math.min(86400,Number.isFinite(after)&&after>0?Math.max(1,after):60)*1000
+      this.current?.store.put('plugin-state','retryAt',this.localRetryAt)
+      throw Error('Slack rate limited')
+    }
     const result=await response.json() as any
     if(!response.ok||!result.ok)throw Error('Slack API rejected operation: '+String(result.error??response.status).slice(0,80))
     return result

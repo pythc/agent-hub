@@ -1,4 +1,4 @@
-import {accountFence} from './connector-account.ts'
+import {accountFence,pinObservedAccount} from './connector-account.ts'
 import {managedConnections} from './managed-config.ts'
 import {sourceDeployment} from './connector-config.ts'
 import {ProcessSource} from './plugin-process.ts'
@@ -14,22 +14,27 @@ import {stableDigest} from './sources.ts'
 
 const id=z.string().regex(/^[a-z][a-z0-9_-]{0,100}$/)
 const revision=z.number().int().nonnegative()
+const targetKey=z.string().regex(/^[a-f0-9]{64}$/)
+const isolatedDirectoryKinds=new Set(['slack','linear'])
+const remoteProbeLimit=6,probeWindowMs=60_000
+interface ProbeWindow {account:string;startedAt:number;used:number}
+interface VerifiedAccount {namespace:string;revision:number}
 const credentialPresent=(name:string)=>Object.hasOwn(process.env,name)&&typeof process.env[name]==='string'&&process.env[name]!.length>0
 const draftSchema=z.object({revision,kind:id,label:z.string().trim().min(1).max(100),actors:z.array(z.string().trim().min(1).max(200)).max(100),intent:z.literal('draft').optional(),fields:z.record(z.string().max(100),z.union([z.string().max(16000),z.array(z.string().max(300)).max(100)])).default({}),credentials:z.record(z.string().max(100),z.string().min(1).max(16000)).default({}),credentialMode:z.enum(['value','environment']).default('value')}).strict()
-export const connectorProbeSchema=z.object({sourceId:id,revision,level:z.enum(['configuration','reachable','authentication','capabilities']),requestId:z.string().uuid()}).strict()
+export const connectorProbeSchema=z.object({sourceId:id,revision,level:z.enum(['configuration','reachable','authentication','capabilities']),requestId:z.string().uuid(),targetKey:targetKey.optional()}).strict().refine(x=>!x.targetKey||x.level==='capabilities')
 const controlSchema=z.object({sourceId:id,revision,enabled:z.boolean(),requestId:z.string().uuid()}).strict()
 export type ConnectorLayer=z.infer<typeof connectorProbeSchema>['level']
 export type DiagnosticStatus='running'|'passed'|'failed'|'unsupported'|'unknown'|'stale'|'interrupted'
 export interface ConnectorDiagnostic {
  id:string;sourceId:string;revision:number;level:ConnectorLayer;status:DiagnosticStatus;code:string;startedAt:number;finishedAt?:number
- checkedCapabilities?:'member_directory'[];checkedScopes?:number;realCall:false;evidenceMode:'configured-adapter'|'fixture'
+ checkedCapabilities?:'member_directory'[];checkedScopes?:number;targetKey?:string;realCall:false;evidenceMode:'configured-adapter'|'fixture'
 }
 export type ConnectorIssueCode='required'|'invalid_format'|'invalid_environment_reference'|'credential_unavailable'|'too_many'|'unsupported_field'
 export interface ConnectorFieldIssue {field:string;code:ConnectorIssueCode}
 const issueCodes:readonly string[]=['required','invalid_format','invalid_environment_reference','credential_unavailable','too_many','unsupported_field']
 /** Only declared field names and fixed codes may cross the error boundary. */
 export class ConnectorError extends Error {
- constructor(readonly code:'connector_invalid'|'connector_conflict'|'connector_missing'|'connector_disabled'|'connector_unsupported'|'connector_request_conflict'|'connector_busy'|'connector_actors_required',readonly status=400,readonly issues?:ConnectorFieldIssue[]){super(code)}
+ constructor(readonly code:'connector_invalid'|'connector_conflict'|'connector_missing'|'connector_disabled'|'connector_unsupported'|'connector_request_conflict'|'connector_busy'|'connector_actors_required'|'connector_target_unavailable'|'connector_probe_budget',readonly status=400,readonly issues?:ConnectorFieldIssue[]){super(code)}
 }
 const safeParse=<T>(schema:z.ZodType<T>,value:unknown):T=>{const parsed=schema.safeParse(value);if(!parsed.success)throw new ConnectorError('connector_invalid');return parsed.data}
 interface EvidenceBasis {lifecycle:string;adapter:string;credentials?:string;known:boolean;missing:boolean;restart?:boolean}
@@ -84,11 +89,12 @@ export class ConnectorManagement {
   })
   return {lifecycle,adapter:identity,credentials:this.sealed(material),known,missing,restart:adapter instanceof ProcessSource&&!adapter.diagnosticCredentialsCurrent(config)}
  }
- private invalidation(record:SavedDiagnostic):string|undefined {
+ private invalidation(record:SavedDiagnostic,validTargets?:ReadonlySet<string>):string|undefined {
   try{
    const host=this.host(),config=host.config.sources.find(s=>s.id===record.sourceId)
    if(accountFence(host.store,record.sourceId))return 'verified_account_changed'
    if(!config||host.settings.current().revision!==record.revision||this.fingerprint(config)!==record.fingerprint)return 'configuration_changed'
+   if(record.targetKey&&!(validTargets?.has(record.targetKey)??this.targets(config).some(target=>target.key===record.targetKey)))return 'target_changed'
    const basis=this.basis(config,record.level),old=record.basis
    if(!old||old.lifecycle!==basis.lifecycle)return 'evidence_lifecycle_changed'
    if(old.adapter!==basis.adapter)return 'adapter_changed'
@@ -98,11 +104,11 @@ export class ConnectorManagement {
    if(old.credentials!==basis.credentials)return record.level==='configuration'?'configuration_changed':'credential_changed'
   }catch{return 'configuration_changed'}
  }
- private observed(record:SavedDiagnostic){
-  const reason=this.invalidation(record)
+ private observed(record:SavedDiagnostic,reason=this.invalidation(record)){
   return reason?this.publicRecord({...record,status:reason==='credential_basis_unavailable'?'unknown':'stale',code:reason,checkedCapabilities:undefined,checkedScopes:undefined}):this.publicRecord(record)
  }
  private readonly active=new Map<string,Promise<ConnectorDiagnostic>>()
+ private readonly remoteWork=new Map<string,object>()
  private readonly controllers=new Map<string,{sourceId:string;controller:AbortController}>()
  constructor(private readonly host:()=>Runtime,private readonly options:{fetch?:typeof fetch;timeoutMs?:number;clock?:()=>number;evidenceMode?:'configured-adapter'|'fixture'}={}){}
  private now(){return this.options.clock?.()??Date.now()}
@@ -169,11 +175,51 @@ export class ConnectorManagement {
   })
  }
 
+ private account(config:SourceConfig){return this.host().store.get<VerifiedAccount>('source-identity',config.id)}
+ private allowedScopes(config:SourceConfig){
+  const definition=this.definition(config.kind)
+  const scopes=this.host().sourceRegistry.scopes(config)??(definition.scopesPath?pointer(config,definition.scopesPath):[])
+  return Array.isArray(scopes)?scopes.filter((scope):scope is string=>typeof scope==='string'&&(!config.listenScopes||config.listenScopes.includes(scope))):[]
+ }
+ private targets(config:SourceConfig,bindings=this.host().scopes.bindings()){
+  const host=this.host(),account=this.account(config),adapter=host.sources.get(config.id)
+  if(!isolatedDirectoryKinds.has(config.kind)||!config.enabled||!config.capabilities.resources||
+     !account?.namespace||accountFence(host.store,config.id)||!(adapter instanceof ProcessSource)||!adapter.pkg.manifest.methods.includes('members')||!adapter.pkg.manifest.methods.includes('identity'))return []
+  const scoped=host.scopes.enabled()
+  const activeByTarget=new Map(bindings.filter(entry=>entry.sourceId===config.id&&entry.accountNamespace===account.namespace&&host.scopes.sourceActive(entry)).map(entry=>[entry.nativeId,entry]))
+  return [...new Set(this.allowedScopes(config))].filter(nativeId=>
+   (config.kind==='slack'?/^[CGD][A-Z0-9]{1,31}$/:/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i).test(nativeId))
+   .flatMap(nativeId=>{
+    const entry=activeByTarget.get(nativeId)
+    if(scoped&&!entry)return []
+    const authority=entry?[entry.id,entry.revision,host.scopes.epoch(entry.tenantId)]:null
+    const metadata=host.store.get<{name?:string;label?:string}>('entry-label',config.id+':'+nativeId),label=metadata?.name??metadata?.label
+    const safeLabel=typeof label==='string'&&label.length<=100&&!/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(label)?label:undefined
+    return [{key:stableDigest(['connector-directory',config.id,account.namespace,account.revision,nativeId,authority]),nativeId,label:safeLabel}]
+   }).slice(0,100)
+ }
+ private probeQuota(config:SourceConfig){
+  const host=this.host(),now=this.now()
+  const account=stableDigest(this.account(config)?.namespace??null)
+  const past=host.store.get<ProbeWindow>('connector-probe-window',config.id)
+  const current=past?.account===account&&now>=past.startedAt&&now<past.startedAt+probeWindowMs
+  const startedAt=current?past.startedAt:now,used=current?past.used:0
+  return {account,startedAt,used,limit:remoteProbeLimit,remaining:Math.max(0,remoteProbeLimit-used),resetsAt:current?startedAt+probeWindowMs:null}
+ }
+ private connectorHealth(config:SourceConfig){
+  const host=this.host(),fence=accountFence(host.store,config.id)
+  const latest=host.store.get<{at:number;status:string;consecutiveFailures:number}>('source-health',config.id)
+  const quota=this.probeQuota(config)
+  const state=fence?'quarantined':!config.enabled?'disabled':latest?.status==='ok'?'ok':latest?.status==='error'?'error':latest?.status==='retrying'?'retrying':'unknown'
+  const rate=isolatedDirectoryKinds.has(config.kind)?host.store.get<{id:string;value:unknown}[]>('plugin-state',config.id)?.find(row=>row.id==='retryAt')?.value:undefined
+  const retryAt=typeof rate==='number'&&Number.isFinite(rate)&&rate>this.now()?rate:null
+  return {state,observedAt:config.enabled&&!fence&&typeof latest?.at==='number'&&latest.at>=0&&latest.at<=8.64e15?latest.at:null,quota:{limit:quota.limit,remaining:quota.remaining,resetsAt:quota.resetsAt},retryAt}
+ }
  private configured(config:SourceConfig){
   try{configSchema.shape.sources.element.parse(config);this.host().sourceRegistry.validate(config);return true}catch{return false}
  }
  snapshot(){
-  const host=this.host(),current=host.settings.current().revision
+  const host=this.host(),current=host.settings.current().revision,bindings=host.scopes.bindings()
   const definitions=host.sourceRegistry.connectionDefinitions().map(d=>({kind:d.kind,label:d.label,pluginId:'pluginId'in d?d.pluginId:undefined,version:'version'in d?d.version:undefined,setup:d.setup,scopesPath:d.scopesPath,fields:d.setup?.fields.map(f=>({...f,path:fieldPath(d,f),credential:Object.values(d.credentials).includes(fieldPath(d,f))})),network:d.network,setupAvailable:!!d.setup?.fields.length&&d.setup.fields.every(field=>writableField(d,fieldPath(d,field)))}))
   const diagnostics=host.store.list<ConnectorDiagnostic>('connector-diagnostic').map(record=>{const safe=this.publicRecord(record);return safe.status==='running'&&!this.active.has(safe.id)?{...safe,status:'interrupted' as const,code:'probe_interrupted'}:safe})
   return {revision:current,definitions,instances:host.config.sources.filter(s=>!['local','delegation'].includes(s.kind)).map(config=>{
@@ -184,8 +230,15 @@ export class ConnectorManagement {
     const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
     return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
-   const account=accountFence(host.store,config.id),verified=host.store.get<{namespace:string}>('source-identity',config.id)
-   return {accountBinding:account?{state:'quarantined' as const,reason:account.reason}:verified?{state:'verified' as const}:null,repairAvailable:!account&&this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
+   const account=accountFence(host.store,config.id),verified=this.account(config)
+   const available=this.targets(config,bindings),validTargets=new Set(available.map(target=>target.key))
+   const targets=available.map(target=>{
+    const head=host.store.get<{id:string}>('connector-diagnostic-head',config.id+':capabilities:'+target.key)
+    const saved=head?host.store.get<SavedDiagnostic>('connector-diagnostic',head.id):undefined
+    const reason=saved?this.invalidation(saved,validTargets)??'':undefined
+    return {...target,result:saved?{...this.observed(saved,reason),current:!reason}:null}
+   })
+   return {targetSelection:isolatedDirectoryKinds.has(config.kind),targets,health:this.connectorHealth(config),accountBinding:account?{state:'quarantined' as const,reason:account.reason}:verified?{state:'verified' as const,label:stableDigest(verified.namespace).slice(0,10)}:null,repairAvailable:!account&&this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
   }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them
@@ -268,6 +321,7 @@ export class ConnectorManagement {
   const source=this.source(input.sourceId)
   if(['local','delegation'].includes(source.kind))throw new ConnectorError('connector_unsupported')
   const deliberateAdmission=Object.values(source.admission).some(rule=>rule.unlistedAddressed!=='ignore'||rule.unlistedUnaddressed!=='ignore')
+  if(input.enabled&&accountFence(host.store,source.id))throw new ConnectorError('connector_target_unavailable',409)
   if(input.enabled&&source.capabilities.events&&!source.allowedActors.length&&!source.allowedBots.length&&!deliberateAdmission)throw new ConnectorError('connector_actors_required',409,[{field:'actors',code:'required'}])
   return host.store.atomic(()=>{
    this.checkRevision(input.revision)
@@ -290,18 +344,35 @@ export class ConnectorManagement {
   this.checkRevision(input.revision)
   const source=this.source(input.sourceId),adapter=host.sources.get(source.id),definition=this.definition(source.kind)
   if(!source.enabled&&input.level!=='configuration')throw new ConnectorError('connector_disabled',409)
-  if(this.controllers.size>=16)throw new ConnectorError('connector_busy',429)
-  const record:ConnectorDiagnostic&{fingerprint:string;basis:EvidenceBasis}={id:input.requestId,sourceId:source.id,revision:input.revision,fingerprint:this.fingerprint(source),basis:this.basis(source,input.level),level:input.level,status:'running',code:'probe_running',startedAt:this.now(),realCall:false,evidenceMode:this.options.evidenceMode??'configured-adapter'}
+  const target=input.targetKey?this.targets(source).find(item=>item.key===input.targetKey):undefined
+  if(input.targetKey&&!target)throw new ConnectorError('connector_target_unavailable',409)
+  if(input.level!=='configuration'&&accountFence(host.store,source.id))throw new ConnectorError('connector_target_unavailable',409)
+  const remote=input.level!=='configuration'
+  if(remote&&input.level!=='reachable'&&this.connectorHealth(source).retryAt)throw new ConnectorError('connector_probe_budget',429)
+  if(this.controllers.size>=16||remote&&(this.remoteWork.size>=16||this.remoteWork.has(source.id)))throw new ConnectorError('connector_busy',429)
+  const key=source.id+':'+input.level+(target?':'+target.key:'')
+  const record:ConnectorDiagnostic&{fingerprint:string;basis:EvidenceBasis}={id:input.requestId,sourceId:source.id,revision:input.revision,fingerprint:this.fingerprint(source),basis:this.basis(source,input.level),level:input.level,...(target?{targetKey:target.key}:{}),status:'running',code:'probe_running',startedAt:this.now(),realCall:false,evidenceMode:this.options.evidenceMode??'configured-adapter'}
+  host.store.atomic(()=>{
+   if(remote){
+    const {account,startedAt,used,remaining}=this.probeQuota(source)
+    if(!remaining)throw new ConnectorError('connector_probe_budget',429)
+    host.store.put('connector-probe-window',source.id,{account,startedAt,used:used+1} satisfies ProbeWindow)
+   }
+   host.store.put('connector-diagnostic',record.id,{...record,requestFingerprint})
+   // Keep target-specific evidence separate from legacy whole-connection evidence.
+   host.store.put('connector-diagnostic-head',key,{id:record.id})
+  })
+  const lease={}
+  if(remote)this.remoteWork.set(source.id,lease)
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),this.options.timeoutMs??20000)
   this.controllers.set(record.id,{sourceId:source.id,controller})
-  host.store.atomic(()=>{host.store.put('connector-diagnostic',record.id,{...record,requestFingerprint});host.store.put('connector-diagnostic-head',source.id+':'+input.level,{id:record.id})})
   const currentMatches=()=>{
    // During a controlled restart the getter can briefly point to the closed
    // old runtime. Diagnostic evidence must never keep that store alive or
    // turn a late reply / timeout callback into an unhandled SQLite exception.
    try{
     const current=this.host(),config=current.config.sources.find(s=>s.id===source.id)
-    return current===host&&!!config&&current.settings.current().revision===record.revision&&this.fingerprint(config)===record.fingerprint&&!this.invalidation(record)&&(input.level==='configuration'||config.enabled)&&current.store.get<{id:string}>('connector-diagnostic-head',source.id+':'+input.level)?.id===record.id
+    return current===host&&!!config&&current.settings.current().revision===record.revision&&this.fingerprint(config)===record.fingerprint&&!this.invalidation(record)&&(input.level==='configuration'||config.enabled)&&current.store.get<{id:string}>('connector-diagnostic-head',key)?.id===record.id
    }catch{return false}
   }
   const persist=(result:ConnectorDiagnostic)=>{
@@ -322,10 +393,18 @@ export class ConnectorManagement {
      else{await (this.options.fetch??fetch)(definition.setup.serviceUrl,{method:'HEAD',redirect:'error',signal:controller.signal});guard();code='service_reachable'}
     }else if(input.level==='authentication'){
      if(!adapter?.identity){status='unsupported';code='identity_probe_unavailable'}
-     else{const identity=await adapter.identity();guard();if(identity?.verified!==true){status='unknown';code='identity_unverified'}else code='identity_verified'}
+     else{
+      const identity=await adapter.identity();guard()
+      if(identity?.verified!==true){status='unknown';code='identity_unverified'}
+      else{
+       // The dedicated Slack/Linear identity RPC observes without applying
+       // workspace policy. Check the actual configured workspace at this boundary.
+       if(isolatedDirectoryKinds.has(source.kind))pinObservedAccount(host.store,source,identity)
+       code='identity_verified'
+      }
+     }
     }else{
-     const scopes=host.sourceRegistry.scopes(source)??(definition.scopesPath?pointer(source,definition.scopesPath):[])
-     const allowed=Array.isArray(scopes)?scopes.filter((scope):scope is string=>typeof scope==='string'&&(!source.listenScopes||source.listenScopes.includes(scope))):[]
+     const allowed=target?[target.nativeId]:this.allowedScopes(source)
      if(!source.capabilities.resources||!adapter?.members||!allowed.length||allowed.length>20){status='unsupported';code='directory_probe_unavailable'}
      else{
       for(const scope of allowed){guard();const members=await adapter.members(scope);guard();if(!Array.isArray(members))throw new Error('Invalid directory result')}
@@ -342,7 +421,7 @@ export class ConnectorManagement {
    if(!persist(result)&&result.status!=='stale'){result.status='interrupted';result.code='diagnostic_store_unavailable';delete result.checkedCapabilities;delete result.checkedScopes}
    // Metadata receipts cannot contain provider errors, identities or raw responses.
    return this.publicRecord(result)
-  })()
+  })().finally(()=>{if(this.remoteWork.get(source.id)===lease)this.remoteWork.delete(source.id)})
   const interrupted=new Promise<ConnectorDiagnostic>(resolve=>{controller.signal.addEventListener('abort',()=>{
    const stale=!currentMatches(),result={...record,status:stale?'stale' as const:'interrupted' as const,code:stale?(this.invalidation(record)??'configuration_changed'):'probe_interrupted',finishedAt:this.now()}
    persist(result)
@@ -353,7 +432,7 @@ export class ConnectorManagement {
   return pending
  }
  private publicRecord(record:ConnectorDiagnostic):ConnectorDiagnostic {
-  const {id,sourceId,revision,level,status,code,startedAt,finishedAt,checkedCapabilities,checkedScopes,evidenceMode}=record
-  return {id,sourceId,revision,level,status,code,startedAt,...(finishedAt!==undefined?{finishedAt}:{}),...(checkedCapabilities?{checkedCapabilities,checkedScopes}:{}),realCall:false,evidenceMode}
+  const {id,sourceId,revision,level,status,code,startedAt,finishedAt,checkedCapabilities,checkedScopes,evidenceMode,targetKey}=record
+  return {id,sourceId,revision,level,status,code,startedAt,...(finishedAt!==undefined?{finishedAt}:{}),...(checkedCapabilities?{checkedCapabilities,checkedScopes}:{}),...(targetKey?{targetKey}:{}),realCall:false,evidenceMode}
  }
 }
