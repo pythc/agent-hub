@@ -4,6 +4,7 @@ import type {Runtime} from './runtime.ts'
 import type {ScopeContext,RouterRoute} from './router-scope.ts'
 import {stableDigest} from './sources.ts'
 import type {MemoryFact} from './router-memory.ts'
+import {externalCandidateCommand,externalMemoryCandidates} from './external-memory-candidates.ts'
 
 interface Context {id:string;label:string;conversationId?:string;context:ScopeContext}
 /** Resolve the signed-in owner's private Chat and manageable public entries anew
@@ -48,6 +49,11 @@ export function memoryWorkspace(host:Runtime,owner:string){
 }
 
 export async function changeMemoryWorkspace(host:Runtime,owner:string,value:unknown){
+ if(value&&typeof value==='object'&&'action' in value&&typeof value.action==='string'&&value.action.startsWith('external-')){
+  const x=externalCandidateCommand.parse(value),entry=memoryContexts(host,owner).find(c=>c.id===x.entryId)
+  if(!entry)throw Error('Private Chat entry unavailable')
+  return externalMemoryCandidates(host,owner,entry.context,entry.conversationId,x)
+ }
  if(z.object({action:z.literal('refresh')}).strict().safeParse(value).success){
   for(const entry of memoryContexts(host,owner))host.agentMemory.settleNotes(entry.context)
   return memoryWorkspace(host,owner)

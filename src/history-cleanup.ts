@@ -4,6 +4,7 @@ import type {PersonalReset} from './personal-memory-reset.ts'
 import type {Store} from './store.ts'
 import {stableDigest} from './sources.ts'
 import type {Model} from './model.ts'
+import {externalCandidateKind} from './external-memory-candidates.ts'
 
 export interface HistoryPlan {
  personalReset?:PersonalReset
@@ -56,25 +57,28 @@ export function planHistory(store:Store,stateDir:string,scopeId:string,id:string
  for(const r of all)if(r.kind==='memory-fact'&&r.body.sources?.some((s:any)=>roots.has(s.id))&&(r.body.relation==='joint'||r.body.sources.every((s:any)=>roots.has(s.id))))roots.add(r.id)
  for(const v of [...triggers,...tickets])roots.add(v)
  for(const r of all)if(r.kind==='context-manifest'&&references(r.body,roots))roots.add(r.id)
- const plan:HistoryPlan={id,scopeId,at,roots:[...roots],records:[],tickets:[...tickets],triggers:[...triggers],sessions:[],files:[]}
+ const records:[string,string][]=sourceEvidence?[]:all.filter(r=>r.kind===externalCandidateKind&&r.body.scopeId===scopeId).map(r=>[r.kind,r.id])
+ const plan:HistoryPlan={id,scopeId,at,roots:[...roots],records,tickets:[...tickets],triggers:[...triggers],sessions:[],files:[]}
  return expandPlan(store,stateDir,plan)
 }
 /** A Chat reset starts only from this account's native conversations. */
 export function planChatHistory(store:Store,stateDir:string,scopeId:string,id:string,at:number,conversationIds:string[]):HistoryPlan {
- const conversations=new Set(conversationIds),triggers=rows(store).filter(r=>r.kind==='chat-run'&&conversations.has(r.body.conversationId)).map(r=>r.body.triggerId as string)
- return expandPlan(store,stateDir,{id,scopeId,at,roots:[...conversationIds,...triggers],tickets:[],triggers,records:[],sessions:[],files:[]})
+ const conversations=new Set(conversationIds),all=rows(store)
+ const triggers=all.filter(r=>r.kind==='chat-run'&&conversations.has(r.body.conversationId)).map(r=>r.body.triggerId as string)
+ const records:[string,string][]=all.filter(r=>r.kind===externalCandidateKind&&conversations.has(r.body.conversationId)).map(r=>[r.kind,r.id])
+ return expandPlan(store,stateDir,{id,scopeId,at,roots:[...conversationIds,...triggers],tickets:[],triggers,records,sessions:[],files:[]})
 }
 function expandPlan(store:Store,stateDir:string,plan:HistoryPlan):HistoryPlan {
  const all=rows(store),ids=new Set(plan.roots),selected=new Map(plan.records.map(([k,id])=>[k+'\0'+id,[k,id] as [string,string]]))
- const nonDocumentIds=new Set(all.filter(r=>r.kind!=='knowledge-document').map(r=>r.id))
- for(const [,id] of selected.values())ids.add(id)
+ const nonDocumentIds=new Set(all.filter(r=>r.kind!=='knowledge-document'&&r.kind!==externalCandidateKind).map(r=>r.id))
+ for(const [kind,id] of selected.values())if(kind!==externalCandidateKind)ids.add(id)
  let changed=true
  while(changed){
   // A legacy knowledge ID may be equal to an unrelated task or other record.
   // Refuse ambiguous deletion before writing the revocation ledger or clearing data.
   for(const d of all)if(d.kind==='knowledge-document'&&nonDocumentIds.has(d.id)&&(ids.has(d.id)||references(d.body,ids)))throw Error('History cleanup has an ambiguous document ID; reconcile the conflicting records before deleting')
   changed=false;for(const r of all){
-  if(excluded.test(r.kind)||selected.has(r.kind+'\0'+r.id))continue
+  if(r.kind===externalCandidateKind||excluded.test(r.kind)||selected.has(r.kind+'\0'+r.id))continue
   if(ids.has(r.id)||references(r.body,ids)){
    selected.set(r.kind+'\0'+r.id,[r.kind,r.id]);ids.add(r.id);changed=true
    if(r.kind==='ticket'){for(const a of r.body.assignments??[])ids.add(a.id)}
@@ -111,10 +115,10 @@ export class HistoryCleanup {
  }
  plans(){return this.store.list<HistoryPlan>('history-plan')}
  receipts(){return this.store.list<CleanupReceipt>('history-cleanup')}
- blocked(kind:string,id:string,value?:unknown){return this.plans().some(p=>p.records.some(([k,i])=>k===kind&&i===id)||!excluded.test(kind)&&references(value,new Set(p.roots)))}
+ blocked(kind:string,id:string,value?:unknown){return this.plans().some(p=>p.records.some(([k,i])=>k===kind&&i===id)||kind!==externalCandidateKind&&!excluded.test(kind)&&references(value,new Set(p.roots)))}
  private filter(kind:string,id:string,value:unknown){
   if(!this.blocked(kind,id,value))return value
-  if(kind.startsWith('memory-'))return {deleted:true}
+  if(kind===externalCandidateKind||kind.startsWith('memory-'))return {deleted:true}
   if(kind==='thread'){
    const v=value as any,ref=v.ref??this.store.triggers.get(id)?.threads[0]??this.store.list<any>('trigger').flatMap(t=>t.threads??[]).find(r=>r.source+':'+r.id===id)
    if(!ref)throw Error('Deleted thread requires its original source identity for reconciliation')
