@@ -1,3 +1,4 @@
+import {assertConnectorResourceAccess} from './connector-resource-access.ts'
 import {LocalDiagnostics,LocalDiagnosticError} from './local-diagnostics.ts'
 import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
@@ -277,6 +278,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(path==='/api/connectors/validate'){send(res,200,connectors.validate(input));return}
       if(path==='/api/connectors/plan'){const planned=connectors.plan(input);send(res,200,onboarding.sourcePlan(planned.revision,planned.source,planned.credentials));return}
       if(path==='/api/connectors/probe'){send(res,200,await connectors.probe(input));return}
+      if(path==='/api/connectors/resource-access'){send(res,200,connectors.setResourceAccess(input));return}
       if(path==='/api/connectors/control'){send(res,200,connectors.control(input));return}
       send(res,404,{code:'not_found'});return
     }
@@ -685,7 +687,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(input.source==='$agent'){send(res,200,await runtime.resources.read({resource:input.thread}));return}
       const source=runtime.sources.get(input.source)
       if(!source?.context||!source.config.enabled||!source.config.capabilities.resources)throw Error('Source does not provide enabled context reading')
-      send(res,200,await source.context(input.thread));return
+      assertConnectorResourceAccess(source.config,'conversation')
+      const context=await source.context(input.thread)
+      const current=runtime.sources.get(input.source);if(!current)throw Error('Source is unavailable')
+      assertConnectorResourceAccess(current.config,'conversation')
+      send(res,200,context);return
     }
     if (req.method === 'GET' && path === '/status') {
       const status=runtime.status(),client=String(req.headers['x-agenthub-client']??''),bridge=String(req.headers['x-agenthub-bridge']??''),query=new URL(req.url!,'http://localhost').searchParams

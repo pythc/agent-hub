@@ -1,3 +1,4 @@
+import {assertConnectorResourceAccess,connectorResourceAccess} from './connector-resource-access.ts'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
 import {canContinueRepositoryTask} from './repository-source.ts'
@@ -90,7 +91,8 @@ export class RouterCandidates {
  }
  private discussion(){const current=this.host.scopes.context(this.trigger,this.batch.discussion);return this.host.store.list<Trigger>('trigger').filter(t=>{if(t.source!==this.trigger.source||!t.threads.some(r=>r.source+':'+r.id===this.batch.discussion)||t.meta.delegatedBy)return false;try{this.host.scopes.assertTrigger(t);if(this.host.memory.cleanup.blocked('trigger',t.id,t))return false;const c=this.host.scopes.context(t,this.batch.discussion);return !current?!c:!!c&&c.route.entryId===current.route.entryId&&c.route.scopeId===current.route.scopeId}catch{return false}})}
  private context(){
-  const all=this.discussion(),index=all.findIndex(t=>t.id===this.batch.primary),wanted=new Set([...all.slice(0,5),...all.slice(Math.max(0,index-5),index+6)].map(t=>t.id))
+  const source=this.host.sources.get(this.trigger.source)?.config
+  const all=source&&connectorResourceAccess(source,'history')?this.discussion():this.batch.triggerIds.map(id=>this.host.store.triggers.get(id)!),index=all.findIndex(t=>t.id===this.batch.primary),wanted=new Set([...all.slice(0,5),...all.slice(Math.max(0,index-5),index+6)].map(t=>t.id))
   this.noteEvidence([...wanted,...all.slice(-50).map(t=>t.id)])
   return {batchId:this.batch.id,primary:this.batch.primary,
    triggers:this.batch.triggerIds.map(id=>{const t=this.host.store.triggers.get(id)!;return {id,actor:t.actor,at:t.at,text:clipped(t.text,id===this.batch.primary?4000:400),characters:t.text.length}}),
@@ -135,14 +137,15 @@ export class RouterCandidates {
   if(!trigger)throw Error('Evidence is outside this discussion')
   this.noteEvidence([trigger.id])
   const source=this.host.sources.get(trigger.source)!
-  if(!source.config.enabled||!source.config.capabilities.resources)throw Error('Source resource reads are disabled')
+  const checkResource=()=>{const current=this.host.sources.get(trigger.source)?.config;if(!current)throw Error('Source is unavailable');assertConnectorResourceAccess(current,input.resource);if(input.resource==='message'&&!this.batch.triggerIds.includes(trigger.id))assertConnectorResourceAccess(current,'thread')}
+  checkResource()
   const key=bodyDigest([trigger.id,input.resource])
   if(!this.cache.has(key)){
    let value:unknown
    if(input.resource==='message')value={id:trigger.id,actor:trigger.actor,at:trigger.at,text:trigger.text,meta:trigger.meta}
    else if(input.resource.startsWith('repository/'))value=await repositoryEvidence(this.host,source,input.resource)
    else value=await sourceEvidence(source,trigger,input.resource)
-   this.check();this.cache.set(key,value)
+   this.check();checkResource();this.cache.set(key,value)
   }
   const data=this.cache.get(key) as any
   if(data?.kind==='image')return data

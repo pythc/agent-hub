@@ -110,7 +110,10 @@ export function ConnectorManagement({language}:{language:'en'|'zh-CN'}){
        ['mcp','Invoke MCP tools','调用 MCP 工具']
       ] as const).map(([key,en,zh])=>{const matrix=instance.capabilityMatrix
        const state=matrix?.schema===1&&matrix.revision===data.revision&&matrix.sourceId===instance.id&&matrix.verification==='not_verified'?matrix.modes?.[key]:undefined
-       return <Fragment key={key}><dt>{L(en,zh)}</dt><dd>{state==='disabled'?L('Disabled by local settings','本地配置已禁用'):state==='requires_context'?L('Local switch is on; access unverified','本地开关已开，实际权限未核实'):state==='separate_connection'?L('Separate tool connection and authorization','工具连接与授权独立配置'):L('Unknown','未知')}</dd></Fragment>
+       return <Fragment key={key}><dt>{L(en,zh)}</dt><dd>{state==='disabled'?L('Disabled by local settings','本地配置已禁用'):state==='requires_context'?L('Local switch is on; access unverified','本地开关已开，实际权限未核实'):state==='separate_connection'?L('Separate tool connection and authorization','工具连接与授权独立配置'):L('Unknown','未知')}{(key==='history'||key==='files')&&instance.resourceAccessControls&&(state==='disabled'||state==='requires_context')?<button type="button" disabled={!!busy} onClick={()=>void run(instance.id+':'+key,async(binding,stillCurrent)=>{
+        await api(binding,'/resource-access',{sourceId:instance.id,revision:data.revision,capability:key,enabled:state==='disabled',intent:'update_resource_access',requestId:crypto.randomUUID()})
+        if(stillCurrent())setNotice(L('Connection setting saved. Existing copies are not deleted.','已保存连接设置。不会删除此前已复制的内容。'))
+       })}>{state==='disabled'?L('Allow '+en.toLowerCase(),'允许'+zh):L('Block '+en.toLowerCase(),'禁止'+zh)}</button>:null}</dd></Fragment>
       })}</dl>
      {instance.capabilityMatrix?.schema===1&&instance.capabilityMatrix.revision===data.revision&&instance.capabilityMatrix.sourceId===instance.id&&instance.capabilityMatrix.scopeModel==='scoped'?<p>{L('Within both local connection and management-scope settings: ','同时符合本地连接与管理范围的入口：')}{instance.capabilityMatrix.intersectionEntryCount} · {L('Marked as group history: ','标记为群组历史：')}{instance.capabilityMatrix.groupHistoryEntryCount}{L('. Counts are not task grants.','。这些数量不代表任务已获授权。')}</p>:null}
     </details>

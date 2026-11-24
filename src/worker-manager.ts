@@ -1,3 +1,4 @@
+import {connectorResourceAccess} from './connector-resource-access.ts'
 import {assignmentSpecSchema,previewTaskAssignment,commitTaskAssignment,assignmentContractView,currentTaskAssignment,reviseTaskAssignment} from './task-assignment-contract.ts'
 import {checkWorkerAdmission} from './backend-admission.ts'
 import {z} from 'zod'
@@ -88,7 +89,14 @@ export class WorkerManager {
   if(continuation?.action==='attach'&&(input.action==='assign'||input.action==='send'&&input.ticketId!==continuation.targetTicketId))throw Error('The admitted continuation must use its existing target task')
   if(mandate?.strength==='inferred'&&!['list','inspect','result','preview_assign','assign','send'].includes(input.action))throw Error('Inferred work cannot change Worker configuration or stop tasks')
   if(input.action==='list')return this.list(context)
-  if(input.action==='preview_assign'){if(!input.id)throw Error('Select a Worker');return previewTaskAssignment(host,input.id,context??{discussion:input.discussion??'operator'},input.assignment)}
+  if(input.action==='preview_assign'){
+   if(!input.id)throw Error('Select a Worker')
+   const preview=previewTaskAssignment(host,input.id,context??{discussion:input.discussion??'operator'},input.assignment)
+   const source=host.sources.get(preview.authority.source)?.config
+   return {...preview,platformCapabilities:source?{sourceId:source.id,revision:host.settings.current().revision,
+    local:{events:source.enabled&&source.capabilities.events,replies:source.enabled&&source.capabilities.replies,history:connectorResourceAccess(source,'history'),files:connectorResourceAccess(source,'files')},
+    mcp:{selectedConnections:preview.effective.connections,requiresSeparateToolAuthorization:true as const},providerVerified:false as const}:null}
+  }
   if(input.action==='inspect'||input.action==='result'){
    if(input.ticketId){const a=host.store.get<Delegation>('worker-assignment',input.ticketId);this.checkContext(a,context);const until=Date.now()+(input.waitMs??0);while(Date.now()<until&&!host.store.tickets.get(input.ticketId)?.ended&&!['blocked','failed'].includes(host.store.tickets.get(input.ticketId)?.assignments.at(-1)?.report?.state??''))await new Promise(r=>setTimeout(r,Math.min(100,until-Date.now())));this.checkContext(a,context);const raw=host.store.tickets.get(input.ticketId);if(!raw)throw Error('Unknown task');const ticket=taskView(host.store,raw);return {assignment:a,taskAssignment:assignmentContractView(host,input.ticketId),run:host.store.get('run',input.ticketId),report:ticket.assignments.at(-1)?.report,attention:ticket.attention,ended:ticket.ended}}
    const w=this.list(context).workers.find(w=>w.id===input.id);if(!w)throw Error('Unknown Worker');return w
