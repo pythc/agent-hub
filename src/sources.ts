@@ -1,3 +1,4 @@
+import {ConnectorOperationError,requestFailure,retryDelay} from './connector-recovery.ts'
 import { z } from 'zod'
 import { createHash } from 'node:crypto'
 import type { Trigger, OutboundMessage,Ticket } from './vendor/dsh-core/index.ts'
@@ -80,17 +81,21 @@ export class MessageSource implements Source {
   async deliver(message: OutboundMessage): Promise<void> {
     // Local deliveries are durably readable through status, CLI and MCP.
     if (this.config.kind === 'local') return
-    if (!this.config.replyUrl) throw new Error('External delivery is disabled until replyUrl is configured')
+    if (!this.config.replyUrl) throw new ConnectorOperationError('terminal', false)
     const token = this.config.tokenEnv ? process.env[this.config.tokenEnv] : undefined
+    if (this.config.tokenEnv && !token) throw new ConnectorOperationError('auth_required', false)
     try {
       const response = await fetch(this.config.replyUrl, {
         method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': message.id, ...(token ? { authorization: 'Bearer ' + token } : {}) },
         body: JSON.stringify(message), signal: AbortSignal.timeout(15_000), redirect: 'error',
       })
-      if (!response.ok) throw new UncertainDelivery('Delivery returned HTTP ' + response.status + '; check destination before replay')
+      if (!response.ok) {
+        const kind = response.status === 401 || response.status === 403 ? 'auth_required' : response.status === 429 ? 'throttled' : 'unknown'
+        // A generic reply endpoint can apply the effect before returning an error.
+        throw new ConnectorOperationError(kind, true, retryDelay(response.headers.get('retry-after')))
+      }
     } catch (error) {
-      if (error instanceof UncertainDelivery) throw error
-      throw new UncertainDelivery('Delivery outcome unknown; check destination before replay')
+      throw requestFailure(error, true)
     }
   }
 }
