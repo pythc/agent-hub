@@ -268,10 +268,11 @@ export class ProcessSource extends MessageSource {
     }
   }
   invoke(method:string,...args:unknown[]){return this.call(method,args)}
-  private call(method:string,args:unknown[],mayAct?:()=>boolean){
+  private call(method:string,args:unknown[],mayAct?:()=>boolean,diagnosticAuthority?:()=>boolean){
     if(!this.pkg.manifest.methods.includes(method as any))return Promise.reject(Error('Plugin capability is unavailable'))
     const work=this.serial.then(async()=>{
-      this.guard(method,args);if(method==='webhook'&&(this.pkg.manifest.network||Object.keys(this.pkg.manifest.credentials).length||this.pkg.manifest.methods.some(m=>m!=='webhook'&&m!=='close')))throw Error('Webhook normalizer must be isolated without network, credentials or other capabilities');await this.launch();this.guard(method,args)
+      const checkDiagnostic=()=>{if(diagnosticAuthority&&!diagnosticAuthority())throw Error('Connector diagnostic authority ended')}
+      checkDiagnostic();this.guard(method,args);if(method==='webhook'&&(this.pkg.manifest.network||Object.keys(this.pkg.manifest.credentials).length||this.pkg.manifest.methods.some(m=>m!=='webhook'&&m!=='close')))throw Error('Webhook normalizer must be isolated without network, credentials or other capabilities');await this.launch();checkDiagnostic();this.guard(method,args)
       if(!['identity','probe','close'].includes(method)&&this.hostStore&&this.pkg.manifest.methods.includes('identity')){
         // If this read-only request fails, the requested operation has not started.
         const identity=await this.request({type:'call',method:'identity',args:[],snapshot:this.snapshot(),stateAck:this.stateAck}),saved=this.hostStore.get<any>('source-identity',this.config.id)
@@ -280,7 +281,7 @@ export class ProcessSource extends MessageSource {
       }
       const authorize=()=>{this.guard(method,args);if(mayAct&&!mayAct())throw Error('Repository operation authority ended')}
       if(['resolveReview','draft','merge','applyWorkflowState'].includes(method)){authorize();this.repositoryAuthority=authorize}
-      try{const result=await this.request({type:'call',method,args,config:this.effectiveConfig(),snapshot:this.pkg.manifest.methods.includes('webhook')?[]:this.snapshot(),stateAck:this.stateAck});this.guard(method,args);return result}
+      try{checkDiagnostic();const result=await this.request({type:'call',method,args,config:this.effectiveConfig(),snapshot:this.pkg.manifest.methods.includes('webhook')?[]:this.snapshot(),stateAck:this.stateAck});this.guard(method,args);return result}
       finally{this.repositoryAuthority=undefined}
     })
     this.serial=work.catch(()=>{});return work
@@ -288,6 +289,8 @@ export class ProcessSource extends MessageSource {
   async start(context:SourceContext){this.sourceContext=context;this.hostStore=context.store;if(this.pkg.manifest.methods.includes('start'))await this.invoke('start')}
   async poll(context:SourceContext){this.sourceContext=context;this.hostStore=context.store;if(this.pkg.manifest.methods.includes('poll'))await this.invoke('poll')}
   identity(){return this.invoke('identity')}
+  diagnosticIdentity(allowed:()=>boolean){return this.call('identity',[],undefined,allowed)}
+  diagnosticMembers(target:string,allowed:()=>boolean){return this.call('members',[target],undefined,allowed)}
   workflowState(target:StatusTarget){return this.call('workflowState',[target])}
   applyWorkflowState(target:StatusTarget,expected:TransitionView,stateId:string,mayAct?:()=>boolean){return this.call('applyWorkflowState',[target,expected,stateId],mayAct)}
   probe(){return this.invoke('probe')}

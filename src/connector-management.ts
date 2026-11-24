@@ -1,4 +1,5 @@
 import {ConnectorOperationError} from './connector-recovery.ts'
+import {ConnectorCredentialHandles} from './connector-credential-handle.ts'
 import {managedConnections} from './managed-config.ts'
 import {sourceDeployment} from './connector-config.ts'
 import {ProcessSource} from './plugin-process.ts'
@@ -60,6 +61,7 @@ function setField(target:Record<string,unknown>,path:string,value:unknown){
  * It owns diagnostic evidence only; it never owns a second connection registry. */
 export class ConnectorManagement {
  private readonly evidenceKey=randomBytes(32)
+ private readonly credentialHandles=new ConnectorCredentialHandles(()=>this.now())
  private readonly identities=new WeakMap<object,string>()
  private identity(value:object){let id=this.identities.get(value);if(!id){id=randomUUID();this.identities.set(value,id)}return id}
  private sealed(value:unknown){return createHmac('sha256',this.evidenceKey).update(JSON.stringify(value)).digest('hex')}
@@ -290,7 +292,8 @@ export class ConnectorManagement {
   if(!source.enabled&&input.level!=='configuration')throw new ConnectorError('connector_disabled',409)
   if(this.controllers.size>=16)throw new ConnectorError('connector_busy',429)
   const record:ConnectorDiagnostic&{fingerprint:string;basis:EvidenceBasis}={id:input.requestId,sourceId:source.id,revision:input.revision,fingerprint:this.fingerprint(source),basis:this.basis(source,input.level),level:input.level,status:'running',code:'probe_running',startedAt:this.now(),realCall:false,evidenceMode:this.options.evidenceMode??'configured-adapter'}
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),this.options.timeoutMs??20000)
+  const ttl=Math.min(20_000,this.options.timeoutMs??20_000)
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),ttl)
   this.controllers.set(record.id,{sourceId:source.id,controller})
   host.store.atomic(()=>{host.store.put('connector-diagnostic',record.id,{...record,requestFingerprint});host.store.put('connector-diagnostic-head',source.id+':'+input.level,{id:record.id})})
   const currentMatches=()=>{
@@ -309,6 +312,19 @@ export class ConnectorManagement {
    if(!currentMatches())throw new ConnectorError('connector_conflict',409)
    controller.signal.throwIfAborted()
   }
+  const account=()=>this.sealed([host.store.get<{namespace:string}>('source-identity',source.id)?.namespace??null,record.basis.credentials??null])
+  const invokeBound=async<T>(purpose:'authentication'|'capabilities',target:string|undefined,call:(allowed:()=>boolean)=>Promise<T>):Promise<T>=>{
+   guard()
+   const scope=()=>({sourceId:source.id,account:account(),purpose,target,revision:host.settings.current().revision})
+   const handle=this.credentialHandles.issue(scope(),Math.max(1,record.startedAt+ttl-this.now()),()=>!controller.signal.aborted&&currentMatches())
+   const allowed=()=>{try{return this.credentialHandles.allows(handle,scope())}catch{return false}}
+   try{
+    if(!allowed())throw new ConnectorError('connector_conflict',409)
+    const result=await call(allowed)
+    if(!allowed())throw new ConnectorError('connector_conflict',409)
+    return result
+   }finally{this.credentialHandles.revoke(handle)}
+  }
   const work=(async()=>{
    let status:DiagnosticStatus='passed',code='configuration_valid',checkedCapabilities:ConnectorDiagnostic['checkedCapabilities'],checkedScopes:number|undefined
    try{
@@ -320,13 +336,13 @@ export class ConnectorManagement {
      else{await (this.options.fetch??fetch)(definition.setup.serviceUrl,{method:'HEAD',redirect:'error',signal:controller.signal});guard();code='service_reachable'}
     }else if(input.level==='authentication'){
      if(!adapter?.identity){status='unsupported';code='identity_probe_unavailable'}
-     else{const identity=await adapter.identity();guard();if(identity?.verified!==true){status='unknown';code='identity_unverified'}else code='identity_verified'}
+     else{const identity=await invokeBound('authentication',undefined,allowed=>adapter instanceof ProcessSource?adapter.diagnosticIdentity(allowed):adapter.identity!());guard();if(identity?.verified!==true){status='unknown';code='identity_unverified'}else code='identity_verified'}
     }else{
      const scopes=host.sourceRegistry.scopes(source)??(definition.scopesPath?pointer(source,definition.scopesPath):[])
      const allowed=Array.isArray(scopes)?scopes.filter((scope):scope is string=>typeof scope==='string'&&(!source.listenScopes||source.listenScopes.includes(scope))):[]
      if(!source.capabilities.resources||!adapter?.members||!allowed.length||allowed.length>20){status='unsupported';code='directory_probe_unavailable'}
      else{
-      for(const scope of allowed){guard();const members=await adapter.members(scope);guard();if(!Array.isArray(members))throw new Error('Invalid directory result')}
+      for(const scope of allowed){guard();const members=await invokeBound('capabilities',scope,allowed=>adapter instanceof ProcessSource?adapter.diagnosticMembers(scope,allowed):adapter.members!(scope));guard();if(!Array.isArray(members))throw new Error('Invalid directory result')}
       checkedCapabilities=['member_directory'];checkedScopes=allowed.length;code='directory_read_verified'
      }
     }

@@ -1423,7 +1423,7 @@ export class Runtime {
         });blocked.delete(channel)}catch{this.store.audit({type:'router.inbox-retry',id:message.id})}
         continue
       }
-      if(!this.store.deliveryStarted(message.id))continue
+      if(!this.store.deliveryStarted(message.id,!['local','delegation'].includes(source.config.kind)))continue
       try {
         if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
         this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }

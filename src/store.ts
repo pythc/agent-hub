@@ -15,9 +15,12 @@ export const GOAL_REPLACEMENT_DB_SCHEMA=17
 export const ASYNC_WORKER_DB_SCHEMA=18
 export const TASK_ASSIGNMENT_DB_SCHEMA=19
 export const PROJECT_INTEGRATION_DB_SCHEMA=20
-export const MAX_DB_SCHEMA=PROJECT_INTEGRATION_DB_SCHEMA
+export const CONNECTOR_EFFECT_DB_SCHEMA=22
+export const MAX_DB_SCHEMA=CONNECTOR_EFFECT_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
+const effectKind='connector-delivery-effect'
+type ConnectorEffect = {state:'started'|'acknowledged'|'rejected'|'unknown'; startedAt:number; endedAt?:number; attempt:number}
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string; recovery?: ConnectorFailure }
 export interface Run {
   ticketId: string; assignmentId: string; threadId?: string; cwd: string
@@ -152,8 +155,34 @@ export class Store implements Repositories {
   recoverJobs(): void {
     this.db.prepare("UPDATE jobs SET state=CASE WHEN kind='execute' THEN 'uncertain' ELSE 'pending' END WHERE state='running'").run()
   }
-  recoverDeliveries():void {this.db.prepare("UPDATE outbox SET status='uncertain',error='Host stopped during delivery; reconcile destination before retry' WHERE status='sending'").run()}
-  deliveryStarted(id:string):boolean{return this.db.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending'").run(id).changes===1}
+  recoverDeliveries():void {this.atomic(()=>{
+    // Existing local consumers retain their legacy diagnostics. A tracked
+    // external invocation interrupted between its effect and acknowledgement
+    // is not an invitation to repeat the request.
+    const t=Date.now()
+    const tracked=this.db.prepare("SELECT o.id FROM outbox o JOIN records r ON r.kind=? AND r.id=o.id WHERE o.status='sending'").all(effectKind)
+    for(const row of tracked){
+      const id=String(row.id), prior=this.get<ConnectorEffect>(effectKind,id)
+      if(!prior)continue
+      this.put(effectKind,id,{...prior,state:'unknown',endedAt:t})
+      this.db.prepare("UPDATE outbox SET status='uncertain',error='Host stopped during delivery; check the original destination',body=json_set(body,'$.recovery',json(?)) WHERE id=? AND status='sending'")
+        .run(JSON.stringify({kind:'unknown',effectUnknown:true}),id)
+    }
+    this.db.prepare("UPDATE outbox SET status='uncertain',error='Host stopped during delivery; reconcile destination before retry' WHERE status='sending'").run()
+  })}
+  deliveryStarted(id:string,trackEffect=false):boolean {
+    if(!trackEffect)return this.db.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending'").run(id).changes===1
+    return this.atomic(()=>{
+      const row=this.db.prepare("SELECT attempts FROM outbox WHERE id=? AND status='pending'").get(id)
+      if(!row||this.get(effectKind,id))return false
+      if(this.db.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending'").run(id).changes!==1)return false
+      // Persist before the provider call. Older hosts must not open a database
+      // where they might retry an operation without observing this fence.
+      this.db.exec('PRAGMA user_version='+Math.max(CONNECTOR_EFFECT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))
+      this.put(effectKind,id,{state:'started',startedAt:Date.now(),attempt:Number(row.attempts)+1} satisfies ConnectorEffect)
+      return true
+    })
+  }
   routePendingDelivery(id:string,channel:OutboundMessage['channel']):void{
     const row=this.db.prepare("SELECT body FROM outbox WHERE id=? AND status='pending'").get(id)
     if(row)this.db.prepare("UPDATE outbox SET body=? WHERE id=? AND status='pending'").run(JSON.stringify({...JSON.parse(String(row.body)),channel}),id)
@@ -174,15 +203,26 @@ export class Store implements Repositories {
   }
   retryDelivery(id:string):void {
     const r=this.db.prepare("SELECT status, json_extract(body, '$.recovery.effectUnknown') AS effect_unknown FROM outbox WHERE id=?").get(id)
-    if(r?.status==='uncertain'&&r.effect_unknown===1)throw Error('Delivery effect is unknown. Reconcile the original destination before issuing a new request.')
+    if(r?.status==='uncertain'&&(r.effect_unknown===1||this.get(effectKind,id)))throw Error('Delivery effect is unknown. Reconcile the original destination before issuing a new request.')
     this.db.prepare("UPDATE outbox SET status='pending',next_at=0 WHERE id=? AND status IN ('uncertain','pending')").run(id)
   }
-  delivered(id: string): void { this.db.prepare("UPDATE outbox SET status='sent',error=NULL WHERE id=?").run(id) }
+  delivered(id: string): void {
+    const effect=this.get<ConnectorEffect>(effectKind,id)
+    if(!effect){this.db.prepare("UPDATE outbox SET status='sent',error=NULL WHERE id=?").run(id);return}
+    this.atomic(()=>{
+      if(this.db.prepare("UPDATE outbox SET status='sent',error=NULL WHERE id=? AND status='sending'").run(id).changes===1)
+        this.put(effectKind,id,{...effect,state:'acknowledged',endedAt:Date.now()})
+    })
+  }
   deliveryFailed(id: string, attempts: number, error: string, uncertain = false, recovery?:ConnectorFailure): void {
     if(recovery){
       // Do not automatically replay or retarget classified external operations.
-      this.db.prepare("UPDATE outbox SET status=?,attempts=?,next_at=?,error=?,body=json_set(body,'$.recovery',json(?)) WHERE id=? AND status='sending'")
-        .run(recovery.effectUnknown?'uncertain':'dropped',attempts,Date.now()+(recovery.retryAfterMs??0),error,JSON.stringify(recovery),id)
+      this.atomic(()=>{
+        const changed=this.db.prepare("UPDATE outbox SET status=?,attempts=?,next_at=?,error=?,body=json_set(body,'$.recovery',json(?)) WHERE id=? AND status='sending'")
+          .run(recovery.effectUnknown?'uncertain':'dropped',attempts,Date.now()+(recovery.retryAfterMs??0),error,JSON.stringify(recovery),id).changes
+        const effect=this.get<ConnectorEffect>(effectKind,id)
+        if(changed&&effect)this.put(effectKind,id,{...effect,state:recovery.effectUnknown?'unknown':'rejected',endedAt:Date.now()})
+      })
       return
     }
     this.db.prepare('UPDATE outbox SET status=?,attempts=?,next_at=?,error=? WHERE id=?')
