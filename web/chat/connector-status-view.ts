@@ -29,13 +29,14 @@ export function connectorCheckLabel(state:ConnectorCheckState,layer:ConnectorLay
 }
 
 
-/** Only describe the supported missing-proof contract. Old/malformed data
- * stays unknown rather than implying a verified delivery or a failed send. */
-export function connectorMessageEvidence(record:unknown,sourceId:string,revision:number):'missing_proof'|'unknown'{
+/** Acceptance is not independent observation. Unknown evidence stays unknown. */
+export function connectorMessageEvidence(record:unknown,sourceId:string,revision:number):'missing_proof'|'accepted_unobserved'|'unknown'{
  if(!record||typeof record!=='object')return 'unknown'
  const value=record as {status?:unknown;evidence?:unknown}
  if(value.status!=='not_tested'||!value.evidence||typeof value.evidence!=='object')return 'unknown'
  const e=value.evidence as Record<string,unknown>
- return e.schema===1&&e.revision===revision&&e.sourceId===sourceId&&e.reason==='no_binding_scoped_message_receipt'&&
-  e.providerAcceptance==='unrecorded'&&e.remoteMessageId==='unrecorded'&&e.independentObservation==='unrecorded'?'missing_proof':'unknown'
+ if(e.schema!==1||e.revision!==revision||e.sourceId!==sourceId||e.independentObservation!=='unrecorded')return 'unknown'
+ if(e.reason==='no_binding_scoped_message_receipt'&&e.providerAcceptance==='unrecorded'&&e.remoteMessageId==='unrecorded')return 'missing_proof'
+ if(e.reason==='independent_observation_missing'&&e.providerAcceptance==='recorded'&&e.remoteMessageId==='recorded')return 'accepted_unobserved'
+ return 'unknown'
 }

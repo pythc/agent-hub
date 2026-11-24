@@ -1,7 +1,7 @@
 import {managedConnections} from './managed-config.ts'
 import {sourceDeployment} from './connector-config.ts'
 import {ProcessSource} from './plugin-process.ts'
-import {FeishuSource} from '../plugins/feishu/feishu.ts'
+import {FeishuSource,feishuMessageId,feishuReceiptKind,type FeishuReceipt} from '../plugins/feishu/feishu.ts'
 import {randomUUID,randomBytes,createHmac} from 'node:crypto'
 import {types as nodeTypes} from 'node:util'
 import {z} from 'zod'
@@ -170,6 +170,19 @@ export class ConnectorManagement {
  private configured(config:SourceConfig){
   try{configSchema.shape.sources.element.parse(config);this.host().sourceRegistry.validate(config);return true}catch{return false}
  }
+ /** Project only current, non-secret evidence flags, not the stored receipt. */
+ private hasMessageAcceptance(config:SourceConfig,revision:number):boolean{
+  try{
+   const host=this.host(),source=host.sources.get(config.id)
+   if(this.options.evidenceMode==='fixture'||!(source instanceof FeishuSource)||config.kind!=='feishu'||!config.enabled||!config.capabilities.replies)return false
+   const current=source.messageReceiptBinding(host.store),receipt=host.store.get<FeishuReceipt>(feishuReceiptKind,config.id)
+   return !!current&&!!receipt&&receipt.schema===1&&receipt.provider==='feishu'&&receipt.sourceId===config.id&&
+    receipt.revision===revision&&receipt.namespace===current.namespace&&receipt.namespace==='feishu:bot:'+receipt.principal&&
+    receipt.identityRevision===current.identityRevision&&receipt.adapterBasis===current.adapterBasis&&
+    typeof receipt.deliveryId==='string'&&!!receipt.deliveryId&&typeof receipt.chat==='string'&&config.feishu?.chats.includes(receipt.chat)===true&&
+    feishuMessageId(receipt.root)&&feishuMessageId(receipt.remoteId)&&receipt.remoteId!==receipt.root
+  }catch{return false}
+ }
  snapshot(){
   const host=this.host(),current=host.settings.current().revision
   const definitions=host.sourceRegistry.connectionDefinitions().map(d=>({kind:d.kind,label:d.label,pluginId:'pluginId'in d?d.pluginId:undefined,version:'version'in d?d.version:undefined,setup:d.setup,scopesPath:d.scopesPath,fields:d.setup?.fields.map(f=>({...f,path:fieldPath(d,f),credential:Object.values(d.credentials).includes(fieldPath(d,f))})),network:d.network,setupAvailable:!!d.setup?.fields.length&&d.setup.fields.every(field=>writableField(d,fieldPath(d,field)))}))
@@ -182,9 +195,8 @@ export class ConnectorManagement {
     const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
     return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
-   // Delivery completion and incoming messages are recorded independently.
-   // Neither retains a binding-scoped provider message receipt for this check.
-   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const,evidence:{schema:1 as const,revision:current,sourceId:config.id,providerAcceptance:'unrecorded' as const,remoteMessageId:'unrecorded' as const,independentObservation:'unrecorded' as const,reason:'no_binding_scoped_message_receipt' as const}},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
+   const accepted=this.hasMessageAcceptance(config,current)
+   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const,evidence:{schema:1 as const,revision:current,sourceId:config.id,providerAcceptance:accepted?'recorded' as const:'unrecorded' as const,remoteMessageId:accepted?'recorded' as const:'unrecorded' as const,independentObservation:'unrecorded' as const,reason:accepted?'independent_observation_missing' as const:'no_binding_scoped_message_receipt' as const}},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
   }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them

@@ -3,7 +3,7 @@ import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process'
 import {createInterface} from 'node:readline'
 import {imageResource} from '../../src/resources.ts'
 import { larkRequest } from './lark-cli.ts'
-import { createHash } from 'node:crypto'
+import { createHash,createHmac,randomBytes } from 'node:crypto'
 import {readFileSync,statSync} from 'node:fs'
 import {homedir} from 'node:os'
 import {join} from 'node:path'
@@ -12,6 +12,11 @@ import { MessageSource, UncertainDelivery, bodyDigest, type SourceContext } from
 import type { SourceConfig } from '../../src/config.ts'
 import type { Trigger, OutboundMessage } from '../../src/vendor/dsh-core/index.ts'
 
+export const feishuMessageId=(value:unknown):value is string=>typeof value==='string'&&/^om_[A-Za-z0-9_-]{1,197}$/.test(value)
+export interface FeishuAcceptance {principal:string;chat:string;root:string;remoteId:string}
+export interface FeishuReceiptBinding {sourceId:string;namespace:string;identityRevision:number;adapterBasis:string}
+export interface FeishuReceipt extends FeishuReceiptBinding,FeishuAcceptance {schema:1;provider:'feishu';revision:number;deliveryId:string}
+export const feishuReceiptKind='connector-feishu-acceptance'
 export type FeishuRequest=(method:string,path:string,body?:unknown,signal?:AbortSignal)=>Promise<any>
 export class FeishuSource extends MessageSource {
   override get verificationCommand(){return this.config.feishu?.command??'/agent'}
@@ -29,8 +34,10 @@ export class FeishuSource extends MessageSource {
   private identityCache?:{key:string;until:number;value:{id:string;type:string;verified:boolean}}
   private identityPending?:{key:string;value:Promise<{id:string;type:string;verified:boolean}>}
   private readonly api:FeishuRequest
+  private readonly receiptKey?:Buffer
   constructor(config:SourceConfig,api?:FeishuRequest,private credentialFingerprint?:()=>string){
     super(config);if(!config.feishu)throw Error('Feishu configuration required')
+    if(!api&&!config.feishu.cli)this.receiptKey=randomBytes(32)
     if(!api&&!credentialFingerprint)this.credentialFingerprint=()=>{
       const hash=createHash('sha256').update(JSON.stringify(this.config.feishu))
       if(this.config.feishu!.cli){
@@ -102,6 +109,17 @@ export class FeishuSource extends MessageSource {
       for(const chat of this.config.feishu!.chats){const key=this.config.id+':account-mismatch:'+expected.principal+':'+identity.id+':'+chat;const at=ctx!.store.get<number>('source-identity-mismatch',key)??Date.now();ctx!.store.put('source-identity-mismatch',key,at);ctx!.change?.({id:key,kind:'entry.unavailable',scope:chat,at})}
       throw Error('Verified connection account changed; use a separately bound source')
     }
+    return identity.verified?identity.id:undefined
+  }
+  /** Local binding only; never exposes credentials or makes a provider request. */
+  messageReceiptBinding(store:SourceContext['store']):FeishuReceiptBinding|undefined{
+    if(!this.receiptKey||this.config.feishu?.cli||!this.config.enabled||!this.config.capabilities.replies)return
+    const sourceId=this.config.id,identity=store.get<{sourceId:string;provider:string;type:string;principal:string;namespace:string;revision:number}>('source-identity',sourceId)
+    if(!identity||identity.sourceId!==sourceId||identity.provider!=='feishu'||identity.type!=='bot'||typeof identity.principal!=='string'||!/^ou_[A-Za-z0-9_-]+$/.test(identity.principal)||identity.namespace!=='feishu:bot:'+identity.principal||!Number.isSafeInteger(identity.revision)||identity.revision<1)return
+    const config=this.config.feishu,app=config?.appIdEnv?process.env[config.appIdEnv]:undefined,secret=config?.appSecretEnv?process.env[config.appSecretEnv]:undefined
+    if(!app||!secret)return
+    const adapterBasis=createHmac('sha256',this.receiptKey).update(JSON.stringify([this.config,app,secret])).digest('hex')
+    return {sourceId,namespace:identity.namespace,identityRevision:identity.revision,adapterBasis}
   }
   async members(scope?:string){
     const chat=scope??this.config.feishu!.chats[0]!
@@ -342,14 +360,21 @@ export class FeishuSource extends MessageSource {
     throw Error('Unknown Feishu resource')
   }
   async context(thread:string){const separator=thread.indexOf(':');const chat=thread.slice(0,separator);if(!this.permitted(chat))throw Error('Chat not configured');return this.config.feishu!.cli?this.api('GET','typed/threads/'+encodeURIComponent(thread.slice(separator+1))):this.api('GET','im/v1/messages/'+encodeURIComponent(thread.slice(separator+1)))}
-  async deliver(message:OutboundMessage):Promise<void>{
+  async deliver(message:OutboundMessage,onAccepted?:(receipt:FeishuAcceptance)=>void):Promise<void>{
     const id=message.channel.address.messageId
     if(!id||!this.permitted(message.channel.address.chat!))throw Error('Feishu reply is outside configured chats')
-    await this.verifiedAccount(this.sourceContext,true)
+    const appEnv=this.config.feishu?.appIdEnv,app=onAccepted&&this.receiptKey&&appEnv?process.env[appEnv]:undefined
+    const principal=await this.verifiedAccount(this.sourceContext,true)
     const original=await this.one(id),chat=message.channel.address.chat,root=original.root_id??original.message_id
     if(original.chat_id!==chat||message.channel.source!==this.config.id||message.channel.thread!==chat+':'+root)throw Error('Feishu reply destination does not match its authorized thread')
     const uuid=createHash('sha256').update(message.id).digest('hex').slice(0,32)
-    try{await this.api('POST','im/v1/messages/'+encodeURIComponent(id)+'/reply',{msg_type:'text',content:JSON.stringify({text:message.text}),reply_in_thread:true,uuid})}
+    let reply:any
+    try{reply=await this.api('POST','im/v1/messages/'+encodeURIComponent(id)+'/reply',{msg_type:'text',content:JSON.stringify({text:message.text}),reply_in_thread:true,uuid})}
     catch{throw new UncertainDelivery('Feishu reply outcome unknown; reconcile message before replay')}
+    // A malformed success response supplies no diagnostic evidence. It must
+    // not convert the existing successful send handling into an unsafe retry.
+    if(onAccepted&&app&&principal&&chat&&this.config.feishu?.chats.includes(chat)&&feishuMessageId(id)&&feishuMessageId(root)&&
+       reply?.sender?.id_type==='app_id'&&reply.sender.id===app&&reply.chat_id===chat&&reply?.root_id===root&&reply?.parent_id===id&&feishuMessageId(reply?.message_id)&&reply.message_id!==id&&reply.message_id!==root)
+      onAccepted({principal,chat,root,remoteId:reply.message_id})
   }
 }
