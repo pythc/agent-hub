@@ -1397,6 +1397,9 @@ export class Runtime {
           this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'goalContractReplaced'});blocked.delete(channel);continue
         }
       }
+      if(message.status==='pending'&&!message.channel.address.routerInbox&&this.proactive.staleMemoryNotification(replyOwner)){
+        this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'reminderMemoryChanged'});blocked.delete(channel);continue
+      }
       const notificationDelay=this.proactive.notificationDelay(message,replyOwner)
       if(notificationDelay.quiet||notificationDelay.nextAt>Date.now())continue
       if(message.ticketId&&this.replacedTask(message.ticketId)){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}

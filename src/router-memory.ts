@@ -5,7 +5,7 @@ import {appendFileSync,existsSync,readFileSync,openSync,fsyncSync,closeSync} fro
 import {join} from 'node:path'
 import type {Store} from './store.ts'
 import type {Trigger} from './vendor/dsh-core/index.ts'
-import type {RouterScopes,ScopeContext} from './router-scope.ts'
+import type {EntryBinding,RouterScopes,ScopeContext} from './router-scope.ts'
 import {stableDigest,bodyDigest,sourceChangeSchema,type SourceChange} from './sources.ts'
 import type {ToolSpec} from './model.ts'
 import {assertNoMemorySecret,memoryLearningSchema,type MemoryLearning} from './memory-policy.ts'
@@ -15,6 +15,8 @@ import {detectExplicitMemory,renderMemory,type MemoryKind} from './vendor/weknor
 const id=z.string().min(1).max(300)
 export interface MemoryEvidence {id:string;parentId?:string;tenantId:string;scopeId:string;entryId:string;sourceId:string;actor:string;version:number;hash:string;text:string;locator:string;occurredAt?:string;capturedAt:number;revoked:boolean}
 export interface MemoryFact {id:string;revision:number;tenantId:string;scopeId:string;subject:string;content:string;state:'candidate'|'active'|'disputed'|'superseded'|'expired'|'revoked'|'tombstoned';sources:{id:string;version:number}[];dependencies?:{id:string;revision:number}[];relation:'independent'|'joint';visibility:'group'|'private'|'task';owner:string;entryId:string;ticketId?:string;expiresAt?:number;generation:number;createdAt:number;kind?:MemoryKind;origin?:'explicit'|'manual'|'extracted'|'consolidated'|'experience';learning?:MemoryLearning;importance?:number;protected?:boolean;lastUsedAt?:number;replaces?:{id:string;revision:number}[];proposalAction?:'replace'|'forget';archived?:boolean;topicAliases?:string[]}
+export const memoryRevisionRefSchema=z.object({id:z.string().min(1).max(300),revision:z.number().int().positive()}).strict()
+export type MemoryRevisionRef=z.infer<typeof memoryRevisionRefSchema>
 export interface MemoryProjection extends MemoryFact {freshness:{status:'verified'|'unverified'|'unavailable'|'stale';capturedAt:number;checkedAt?:number;sourceVersions:{id:string;version:number}[]};access:{audienceEntry:string;sourceEntry:string;mode:'origin'|'published_revision';revision:number;shareId?:string}}
 export interface MemoryShare {id:string;factId:string;revision:number;targetEntry:string;active:boolean;expiresAt?:number;publishedAt?:number}
 export interface MemoryCapture {tenantId:string;scopeId:string;generation:number;epoch:number;sourceVersions:{id:string;version:number}[]}
@@ -105,7 +107,7 @@ export class RouterMemory {
   const key=stableDigest([sourceId,change.id]),fingerprint=stableDigest(change),old=this.store.get<any>('source-change-receipt',key)
   if(old){if(old.fingerprint!==fingerprint)throw Error('Source change ID reused with different content');return old}
   const previous=readRevocations(this.stateDir).at(-1),body={seq:(previous?.seq??0)+1,previous:previous?.hash??'',tenantId:entry.tenantId,scopeId:entry.scopeId,action:'source.change' as const,generation:this.generation(entry.scopeId),at:Date.now(),sourceChange:{...change,sourceId}},r={...body,hash:stableDigest(body)}
-  this.appendRevocation(r);this.store.atomic(()=>this.applyRevocation(r));return this.store.get('source-change-receipt',key)
+  this.appendRevocation(r);this.store.atomic(()=>this.applyRevocation(r));this.onMutation?.();return this.store.get('source-change-receipt',key)
  }
  private applySourceChange(r:Revocation){
   const e=r.sourceChange!,entry=this.scopes.bindings().find(b=>b.sourceId===e.sourceId&&b.nativeId===e.scope)
@@ -136,7 +138,7 @@ export class RouterMemory {
   for(const evidence of this.store.list<MemoryEvidence>('memory-evidence'))if(!e.kind.startsWith('member.')&&evidence.tenantId===r.tenantId&&evidence.locator.startsWith('trigger:')&&invalid.has(evidence.locator.slice(8))&&!evidence.revoked){invalidEvidence.add(evidence.id);this.store.put('memory-evidence',evidence.id,{...evidence,revoked:true,version:evidence.version+1})}
   for(const evidence of this.store.list<MemoryEvidence>('memory-evidence'))if(evidence.parentId&&invalidEvidence.has(evidence.parentId)&&!evidence.revoked){invalidEvidence.add(evidence.id);this.store.put('memory-evidence',evidence.id,{...evidence,revoked:true,version:evidence.version+1})}
   for(const fact of this.store.list<MemoryFact>('memory-fact'))if(fact.tenantId===r.tenantId&&fact.sources.some(s=>invalidEvidence.has(s.id))&&!this.supported(fact)&&['active','candidate','disputed'].includes(fact.state)){this.store.put('memory-version',fact.id+':'+fact.revision,fact);this.save({...fact,state:'revoked',revision:fact.revision+1})}
-  this.invalidateDerived()
+  this.invalidateDerived(r.tenantId)
   if(changed){this.scopes.bump(entry.tenantId);this.queryChanged(entry.tenantId)}
   const {sourceId,...change}=e
   this.store.put('source-change-receipt',stableDigest([sourceId,e.id]),{fingerprint:stableDigest(change),status:changed?'applied':'stale',eventId:e.id,entryId:entry.id,invalidTriggerIds:[...invalid],at:r.at})
@@ -175,17 +177,33 @@ export class RouterMemory {
   const cutoff=this.store.get<any>('source-entry-state',entry.id)?.historyCutoff??0
   return this.scopes.sourceActive(entry)&&e.entryId===c.route.entryId&&e.capturedAt>cutoff&&(!entry.privateActor||entry.privateActor===c.actor)
  }
+ derivedRefs(f:MemoryFact){
+  return [...f.dependencies??[],...(['candidate','disputed'].includes(f.state)?f.replaces??[]:[])]
+ }
+ currentRevision(ref:MemoryRevisionRef,scopeId:string,entryId:string){
+  const f=this.fact(ref.id)
+  const entry=this.store.get<EntryBinding>('entry-binding',entryId)
+  return !!f&&!!entry&&entry.scopeId===scopeId&&entry.tenantId===f.tenantId&&f.scopeId===scopeId&&f.entryId===entryId&&f.revision===ref.revision&&f.state==='active'&&!f.archived&&f.generation===this.generation(scopeId)&&(f.expiresAt===undefined||f.expiresAt>Date.now())&&this.scopes.sourceActive(entry)&&this.supported(f)
+ }
+ assertOwnedStandingRevisions(c:ScopeContext,refs:MemoryRevisionRef[]){
+  this.reconcile();this.scopes.assertCurrent(c)
+  if(!this.scopes.scope(c.route.scopeId).memoryEnabled||new Set(refs.map(r=>r.id)).size!==refs.length)throw Error('Invalid memory dependencies')
+  for(const ref of refs){
+   const f=this.fact(ref.id)
+   if(!f||f.owner!==c.actor||f.visibility==='task'||f.learning?.discussion||f.learning?.condition||!this.currentRevision(ref,c.route.scopeId,c.route.entryId)||!this.visible(f,c))throw Error('Use current standing memory revisions owned by this actor and entry')
+  }
+ }
  private supported(f:MemoryFact,seen=new Set<string>()):boolean{
   if(seen.has(f.id))return false
   const next=new Set([...seen,f.id])
-  if(f.dependencies?.some(d=>{const parent=this.fact(d.id);return !parent||parent.revision!==d.revision||parent.state!=='active'||parent.generation!==this.generation(parent.scopeId)||parent.expiresAt!==undefined&&parent.expiresAt<=Date.now()||!this.supported(parent,next)}))return false
+  if(this.derivedRefs(f).some(d=>{const parent=this.fact(d.id);return !parent||parent.archived||parent.revision!==d.revision||parent.state!=='active'||parent.generation!==this.generation(parent.scopeId)||parent.expiresAt!==undefined&&parent.expiresAt<=Date.now()||!this.supported(parent,next)}))return false
   const sources=f.sources.map(s=>this.evidence(s.id)).filter((e):e is MemoryEvidence=>!!e&&!e.revoked&&f.sources.some(s=>s.id===e.id&&s.version===e.version))
   return f.relation==='joint'?sources.length===f.sources.length&&sources.length>0:sources.length>0
  }
  private visible(f:MemoryFact,c:ScopeContext,candidates=false,seen=new Set<string>()):boolean{
   if(seen.has(f.id))return false
   const next=new Set([...seen,f.id])
-  if(f.dependencies?.some(d=>{const parent=this.fact(d.id);return !parent||parent.revision!==d.revision||!this.visible(parent,c,false,next)}))return false
+  if(this.derivedRefs(f).some(d=>{const parent=this.fact(d.id);return !parent||parent.revision!==d.revision||!this.visible(parent,c,false,next)}))return false
   if(f.archived||f.tenantId!==c.route.tenantId||f.generation!==this.generation(f.scopeId)||f.expiresAt!==undefined&&f.expiresAt<=Date.now()||!['active',...(candidates?['candidate','disputed']:[])].includes(f.state)||!this.supported(f))return false
   if(f.visibility==='private'&&(f.owner!==c.actor||this.scopes.binding(c.route.entryId).privateActor!==c.actor))return false
   if(f.visibility==='task'){
@@ -238,7 +256,7 @@ export class RouterMemory {
   return this.store.atomic(()=>{
    const old=this.store.get<{fingerprint:string;result:any;fact?:{id:string;revision:number}}>('memory-receipt',key)
    if(old){if(old.fingerprint!==fingerprint)throw Error('operationId reused with different content');if(old.fact){const f=this.fact(old.fact.id);return f&&f.revision===old.fact.revision&&this.visible(f,c,true)?f:{...old.fact,outcome:'completed',available:false}}return old.result}
-   let result=this.apply(c,x,operator);this.invalidateDerived(['forget','clear','history.delete','source.delete'].includes(x.action));this.onMutation?.()
+   let result=this.apply(c,x,operator);this.invalidateDerived(c.route.tenantId);this.onMutation?.()
    if(result&&typeof result==='object'&&'content' in result&&'id' in result)result=this.fact(String(result.id))??result
    const fact=result&&typeof result==='object'&&'content' in result&&'id' in result&&'revision' in result?{id:result.id,revision:result.revision}:undefined
    this.store.put('memory-receipt',key,{fingerprint,...(fact?{fact}:{result})});return result
@@ -332,9 +350,31 @@ export class RouterMemory {
   const next={...accepted,protected:false};this.save(next);return next
  }
  private dependsOn(fact:MemoryFact,targets:Set<string>,seen=new Set<string>()):boolean{if(targets.has(fact.id))return true;if(seen.has(fact.id))return false;seen.add(fact.id);return !!fact.dependencies?.some(ref=>{const parent=this.fact(ref.id);return !!parent&&this.dependsOn(parent,targets,seen)})}
- private invalidateDerived(wipe=false){
-  let changed=true
-  while(changed){changed=false;for(const f of this.store.list<MemoryFact>('memory-fact'))if(f.dependencies?.length&&['active','candidate','disputed'].includes(f.state)&&!this.supported(f)){this.store.put('memory-version',f.id+':'+f.revision,wipe?{...f,subject:'',content:'',learning:undefined,state:'tombstoned'}:f);this.save({...f,...(wipe?{subject:'',content:'',learning:undefined}:{}),state:'revoked',revision:f.revision+1});changed=true}}
+ invalidateRevisedDependencies(c:ScopeContext){this.scopes.assertCurrent(c);this.invalidateDerived(c.route.tenantId)}
+ private invalidateDerived(tenantId:string,wiped=new Set<string>()){
+  const facts=this.store.list<MemoryFact>('memory-fact').filter(f=>f.tenantId===tenantId)
+  const historical=wiped.size?this.store.list<MemoryFact>('memory-version').filter(f=>f.tenantId===tenantId):[]
+  const needsScrub=new Set<string>(),key=(f:MemoryRevisionRef)=>f.id+':'+f.revision
+  // Forget follows the affected revisions including prior versions, not unrelated
+  // stale notes in the tenant. An edited successor with unrelated inputs stays intact.
+  if(wiped.size){
+   const edges=new Map<string,MemoryFact[]>(),pending:string[]=[]
+   for(const f of [...facts,...historical]){
+    if(wiped.has(f.id))pending.push(key(f))
+    for(const ref of this.derivedRefs(f)){const k=key(ref),children=edges.get(k);if(children)children.push(f);else edges.set(k,[f]);if(wiped.has(ref.id))pending.push(k)}
+   }
+   for(let i=0;i<pending.length;i++){const ref=pending[i]!;if(needsScrub.has(ref))continue;needsScrub.add(ref);for(const child of edges.get(ref)??[])pending.push(key(child))}
+  }
+  const scrub=(v:MemoryFact)=>({...v,subject:'',content:'',learning:undefined,topicAliases:[]})
+  for(const v of historical)if(!wiped.has(v.id)&&needsScrub.has(key(v)))this.store.put('memory-version',key(v),{...scrub(v),state:'tombstoned'})
+  for(const f of facts){
+   if(wiped.has(f.id))continue
+   const wipe=needsScrub.has(key(f))
+   const stale=this.derivedRefs(f).length&&['active','candidate','disputed'].includes(f.state)&&!this.supported(f)
+   if(!stale&&!wipe)continue
+   this.store.put('memory-version',key(f),wipe?{...scrub(f),state:'tombstoned'}:f)
+   this.save({...(wipe?scrub(f):f),state:'revoked',revision:f.revision+1})
+  }
  }
  private queryChanged(tenantId:string){this.store.put('memory-query-version',tenantId,(this.store.get<number>('memory-query-version',tenantId)??0)+1)}
  private save(f:MemoryFact){this.queryChanged(f.tenantId);this.store.put('memory-fact',f.id,f);this.store.db.prepare('DELETE FROM memory_search WHERE id=?').run(f.id);if(f.state==='active')this.store.db.prepare('INSERT INTO memory_search(id,body) VALUES(?,?)').run(f.id,f.subject+' '+f.content)}
@@ -379,21 +419,27 @@ export class RouterMemory {
    const key=stableDigest([r.id,r.targetEntry]),share=this.store.get<MemoryShare>('memory-share',key)
    if(share)this.store.put('memory-share',key,{...share,active:false})
   }
-  if(r.action==='source.delete'){
-   for(const e of this.store.list<MemoryEvidence>('memory-evidence'))if(e.id===r.id||e.parentId===r.id)this.store.put('memory-evidence',e.id,{...e,revoked:true,text:'',version:e.version+1})
+  const revokedSources=new Set<string>(),wiped=new Set<string>()
+  if(r.action==='source.delete'&&r.id){
+   const all=this.store.list<MemoryEvidence>('memory-evidence').filter(e=>e.tenantId===r.tenantId),children=new Map<string,string[]>()
+   for(const e of all)if(e.parentId){const list=children.get(e.parentId);if(list)list.push(e.id);else children.set(e.parentId,[e.id])}
+   const queue=[r.id]
+   for(let i=0;i<queue.length;i++){const id=queue[i]!;if(revokedSources.has(id))continue;revokedSources.add(id);for(const child of children.get(id)??[])queue.push(child)}
+   for(const e of all)if(revokedSources.has(e.id)&&(!e.revoked||e.text))this.store.put('memory-evidence',e.id,{...e,revoked:true,text:'',version:e.version+1})
   }
   for(const fact of this.store.list<MemoryFact>('memory-fact')){
    if(fact.tenantId!==r.tenantId)continue
    const wipe=r.action==='forget'&&fact.id===r.id||['clear','history.delete'].includes(r.action)&&fact.scopeId===r.scopeId&&fact.generation<r.generation
-   const lost=r.action==='source.delete'&&fact.sources.some(s=>s.id===r.id)&&!this.supported(fact)
+   const lost=r.action==='source.delete'&&fact.sources.some(s=>revokedSources.has(s.id))&&!this.supported(fact)
    if(wipe||lost){
+    wiped.add(fact.id)
     this.save({...fact,subject:'',content:'',learning:undefined,topicAliases:[],state:wipe?'tombstoned':'revoked',revision:fact.revision+1})
     for(const v of this.store.list<MemoryFact>('memory-version'))if(v.id===fact.id)this.store.put('memory-version',v.id+':'+v.revision,{...v,subject:'',content:'',learning:undefined,topicAliases:[],state:'tombstoned'})
     if(r.action==='forget'&&!r.suppression)this.store.put('memory-suppression',stableDigest([fact.scopeId,fact.owner,fact.subject]),{id:fact.id,at:r.at})
    }
   }
   if(['clear','history.delete'].includes(r.action))for(const e of this.store.list<MemoryEvidence>('memory-evidence'))if(e.scopeId===r.scopeId&&e.capturedAt<=r.at)this.store.put('memory-evidence',e.id,{...e,text:'',revoked:true,version:e.version+1})
-  this.invalidateDerived(['forget','clear','history.delete','source.delete'].includes(r.action))
+  this.invalidateDerived(r.tenantId,wiped)
   if(r.cleanup)this.cleanup.apply(r.cleanup)
   this.scopes.bump(r.tenantId);this.store.put('memory-revocation-head','current',{seq:r.seq,hash:r.hash})
  }

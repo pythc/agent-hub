@@ -1,3 +1,4 @@
+import {schedulePlanState} from './schedule-lifecycle.ts'
 import {randomUUID} from 'node:crypto'
 import {z} from 'zod'
 import type {Runtime} from './runtime.ts'
@@ -17,7 +18,7 @@ import {reflectMemories,reflectionContext,reflectionView,pruneReflections} from 
 export interface MemoryObservation {id:string;kind?:'experience';parentSourceId?:string;space:string;triggerId:string;discussion:string;scopeId:string;entryId:string;actor:string;session:string;sourceId:string;start?:number;end?:number;generation:number;epoch:number;policyRevision:number;sequence:number;state:'pending'|'running'|'done'|'held'|'stale';attempts:number;nextAt:number;lease?:string;error?:string}
 interface Vector {id:string;factId:string;revision:number;generation:number;scopeId:string;model:string;vector:number[]}
 interface Topic {id:string;space:string;scopeId:string;generation:number;label:string;aliases:string[];sources:{id:string;version:number}[];sessions:string[];proposalId?:string}
-interface QueryVector {vector?:number[];mode:string;at:number;epoch:number;generation:number;policyRevision:number;signature?:string;verified?:boolean;reranked?:{id:string;revision:number;score:number}[]}
+interface QueryVector {scopeId:string;space:string;inputs:{id:string;revision:number;entryId:string;scopeId:string}[];vector?:number[];mode:string;at:number;epoch:number;generation:number;policyRevision:number;signature?:string;verified?:boolean;reranked?:{id:string;revision:number;score:number}[]}
 export class AgentMemory {
  private queries=new Map<string,QueryVector>()
  private queryLifetime=new AbortController()
@@ -34,7 +35,7 @@ export class AgentMemory {
   host.memory.learning=c=>this.learning(c)
   host.memory.personalization=(c,facts)=>reflectionContext(this,c,facts)
   host.memory.validateUse=(c,refs)=>{if(!refs.length)return;if(!this.enabled(c))throw Error('Memory use disabled');const allowed=this.applicable(c);if(refs.some(ref=>!allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))throw Error('Memory audience changed')}
-  host.memory.onMutation=()=>{this.queries.clear();this.reconcile()}
+  host.memory.onMutation=()=>this.reconcile()
   for(const row of this.observations())if(row.state==='running')this.saveObservation({...row,state:'pending',lease:undefined,nextAt:this.now()})
   host.store.atomic(()=>{for(const row of host.store.db.prepare("SELECT id,body FROM records WHERE kind='memory-consolidation'").all()){
    const report=JSON.parse(String(row.body));if(report.status!=='running')continue
@@ -170,7 +171,7 @@ export class AgentMemory {
    if(capture.generation!==this.host.memory.generation(c.route.scopeId)||revision!==this.policyRevision(c)||!this.enabled(c)||signature!==this.rankingSignature(c)){this.queries.delete(key);return}
   }
   if(this.queries.size>=100)this.queries.delete(this.queries.keys().next().value!)
-  this.queries.set(key,{vector,mode,at:this.now(),epoch:c.route.epoch,generation,policyRevision:revision,signature,reranked,verified})
+  this.queries.set(key,{vector,mode,at:this.now(),epoch:c.route.epoch,generation,policyRevision:revision,signature,reranked,verified,scopeId:c.route.scopeId,space:this.space(c),inputs:p.reranker||p.verifyRelevance?items.map(({id,revision,entryId,scopeId})=>({id,revision,entryId,scopeId})):[]})
  }
  similar(c:ScopeContext,a:MemoryFact,b:MemoryFact){const model=this.vectorModel(c),av=this.host.store.get<Vector>('memory-vector',stableDigest([a.id,model])),bv=this.host.store.get<Vector>('memory-vector',stableDigest([b.id,model]));return av?.revision===a.revision&&bv?.revision===b.revision&&av.generation===a.generation&&bv.generation===b.generation?cosine(av.vector,bv.vector):0}
  rank(c:ScopeContext,query:string,items=this.applicable(c)){
@@ -248,6 +249,7 @@ export class AgentMemory {
    for(const f of ranked.slice(p.maxItems))if(!f.protected){store.put('memory-version',f.id+':'+f.revision,f);store.put('memory-fact',f.id,{...f,archived:true,revision:f.revision+1})}
   }
   pruneReflections(this)
+  for(const [key,q] of this.queries)if(q.generation!==this.host.memory.generation(q.scopeId)||q.inputs.some(ref=>!this.host.memory.currentRevision(ref,ref.scopeId,ref.entryId)))this.queries.delete(key)
  }
  charge(c:ScopeContext){
   const key=stableDigest([c.route.scopeId,new Date(this.now()).toISOString().slice(0,10)]),used=this.host.store.get<number>('memory-call-count',key)??0
@@ -356,6 +358,34 @@ export class AgentMemory {
   this.active=run.then(()=>{},()=>{}).finally(()=>{this.active=undefined;this.controller=undefined})
   return run
  }
+ dependencyImpact(c:ScopeContext,root:MemoryProjection){
+  if(root.entryId!==c.route.entryId||root.owner!==c.actor||root.scopeId!==c.route.scopeId)throw Error('Memory impact unavailable')
+  const visible=this.authorized(c,true).filter(f=>f.entryId===root.entryId&&f.scopeId===root.scopeId&&f.owner===c.actor)
+  const edges=new Map<string,MemoryProjection[]>(),key=(ref:{id:string;revision:number})=>ref.id+':'+ref.revision
+  for(const fact of visible)for(const ref of this.host.memory.derivedRefs(fact)){
+   const k=key(ref);let children=edges.get(k);if(!children){children=[];edges.set(k,children)}children.push(fact)
+  }
+  const affected=new Set([key(root)]),queue=[root]
+  for(let i=0;i<queue.length;i++)for(const child of edges.get(key(queue[i]!))??[])if(!affected.has(key(child))){affected.add(key(child));queue.push(child)}
+  const same=(v:{scopeId:string;entryId:string})=>v.scopeId===root.scopeId&&v.entryId===root.entryId
+  const matches=(refs?:{id:string;revision:number}[])=>refs?.some(ref=>affected.has(key(ref)))??false
+  const store=this.host.store
+  const now=Date.now(),reminderDetailsLimit=8
+  const linkedReminders=this.host.scopes.binding(c.route.entryId).privateActor===c.actor
+   ?store.list<{name:string;revision:number;scopeId:string;entryId:string;memoryOwner?:string;active:boolean;nextAt?:number;reminderMemory?:{id:string;revision:number}[]}>('router-schedule')
+    .filter(r=>same(r)&&r.memoryOwner===c.actor&&matches(r.reminderMemory))
+    .map(r=>{const {state,nextDueAt}=schedulePlanState(r,now);return {name:r.name,revision:r.revision,state,nextDueAt,active:r.active,direct:r.reminderMemory?.some(ref=>key(ref)===key(root))??false}})
+   :[]
+  const ordered=linkedReminders.sort((a,b)=>(a.nextDueAt??Infinity)-(b.nextDueAt??Infinity)||Number(b.active)-Number(a.active))
+  return {
+   notes:queue.slice(1).filter(f=>f.state==='active').length,candidates:queue.filter(f=>f.state==='candidate'||f.state==='disputed').length-Number(root.state==='candidate'||root.state==='disputed'),
+   caches:[...this.queries.values()].filter(q=>q.space===this.space(c)&&matches(q.inputs)).length,
+   summaries:store.list<import('./memory-reflection.ts').MemoryReflection>('memory-reflection').filter(r=>same(r)&&r.actor===c.actor&&matches(r.inputs??r.points.flatMap(p=>p.refs))).length,
+   skills:store.list<import('./saved-skills.ts').SkillVersion>('skill-version').filter(r=>same(r)&&r.memoryOwner===c.actor&&matches(r.memoryRevisions)).length,
+   reminders:linkedReminders.filter(r=>r.active).length,
+   reminderDetails:{total:ordered.length,plans:ordered.slice(0,reminderDetailsLimit).map(({active:_,...plan})=>plan)},
+  }
+ }
  manage(c:ScopeContext,value:unknown){
   const x=z.object({action:z.enum(['inspect','configure','personal','retry','archive','unarchive','topics.forget']),expectedRevision:z.number().int().min(0).optional(),policy:memoryPolicySchema.optional(),enabled:z.boolean().optional(),id:z.string().optional()}).strict().parse(value)
   this.host.scopes.assertCurrent(c)
@@ -366,7 +396,7 @@ export class AgentMemory {
    const origin=fact?.entryId===c.route.entryId
    const evidence=origin?fact!.sources.flatMap(s=>{try{this.host.memory.capture(c,[s.id]);return [this.host.memory.evidence(s.id)!]}catch{return []}}):[]
    const versions=fact&&origin?this.host.store.list<MemoryFact>('memory-version').filter(v=>v.id===fact.id&&v.entryId===c.route.entryId&&v.sources.every(s=>{const e=this.host.memory.evidence(s.id);return e&&!e.revoked&&e.version===s.version})):[]
-   return {policy:this.policy(c),revision:this.policyRevision(c),enabled:this.enabled(c),canConfigure:this.host.scopes.canManage(c),learningAvailable:this.host.scopes.scope(c.route.scopeId).memoryEnabled&&this.host.store.get<any>('memory-personal',this.space(c))?.enabled!==false,scopeName:this.host.scopes.scope(c.route.scopeId).name,items,adaptation:{coldStart:this.learning(c).coldStart,preferences:this.applicable(c).filter(f=>f.kind==='preference'),recent:items.filter(f=>f.origin==='extracted'||f.origin==='experience').sort((a,b)=>b.createdAt-a.createdAt).slice(0,10)},detail:fact?{fact,evidence,versions}:undefined,consolidation:this.host.store.get('memory-consolidation',this.space(c)),observations:this.observations().filter(r=>r.space===this.space(c)),topics:this.host.store.list<Topic>('memory-topic').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),uses:this.host.store.list<any>('memory-use').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),archived:this.host.store.list<MemoryFact>('memory-fact').filter(f=>f.archived&&f.entryId===c.route.entryId&&f.owner===c.actor&&f.generation===this.host.memory.generation(c.route.scopeId)).map(f=>({id:f.id,revision:f.revision,kind:f.kind,createdAt:f.createdAt}))}
+   return {policy:this.policy(c),revision:this.policyRevision(c),enabled:this.enabled(c),canConfigure:this.host.scopes.canManage(c),learningAvailable:this.host.scopes.scope(c.route.scopeId).memoryEnabled&&this.host.store.get<any>('memory-personal',this.space(c))?.enabled!==false,scopeName:this.host.scopes.scope(c.route.scopeId).name,items,adaptation:{coldStart:this.learning(c).coldStart,preferences:this.applicable(c).filter(f=>f.kind==='preference'),recent:items.filter(f=>f.origin==='extracted'||f.origin==='experience').sort((a,b)=>b.createdAt-a.createdAt).slice(0,10)},detail:fact?{fact,evidence,versions,...(origin&&fact.owner===c.actor?{impact:this.dependencyImpact(c,fact)}:{})}:undefined,consolidation:this.host.store.get('memory-consolidation',this.space(c)),observations:this.observations().filter(r=>r.space===this.space(c)),topics:this.host.store.list<Topic>('memory-topic').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),uses:this.host.store.list<any>('memory-use').filter(r=>r.space===this.space(c)&&r.generation===this.host.memory.generation(c.route.scopeId)),archived:this.host.store.list<MemoryFact>('memory-fact').filter(f=>f.archived&&f.entryId===c.route.entryId&&f.owner===c.actor&&f.generation===this.host.memory.generation(c.route.scopeId)).map(f=>({id:f.id,revision:f.revision,kind:f.kind,createdAt:f.createdAt}))}
   }
   if(!this.host.scopes.canManage(c))throw Error('Memory management requires scope manager')
   if(x.action==='configure'){
@@ -388,6 +418,6 @@ export class AgentMemory {
    this.host.store.db.prepare("DELETE FROM records WHERE kind='memory-topic' AND id=?").run(topic.id);return {forgotten:true}
   }
   const f=this.host.memory.fact(x.id??'');if(!f||f.scopeId!==c.route.scopeId||f.entryId!==c.route.entryId||f.owner!==c.actor||f.revision!==x.expectedRevision||f.generation!==this.host.memory.generation(f.scopeId))throw Error('Memory revision or owner changed')
-  this.host.store.put('memory-version',f.id+':'+f.revision,f);this.host.store.put('memory-fact',f.id,{...f,archived:x.action==='archive',revision:f.revision+1});this.reconcile();return {id:f.id,archived:x.action==='archive'}
+  return this.host.store.atomic(()=>{this.host.store.put('memory-version',f.id+':'+f.revision,f);this.host.store.put('memory-fact',f.id,{...f,archived:x.action==='archive',revision:f.revision+1});this.host.memory.invalidateRevisedDependencies(c);this.reconcile();return {id:f.id,archived:x.action==='archive'}})
  }
 }

@@ -11,7 +11,7 @@ type Ref={id:string;revision:number}
 export interface ReflectionPoint {section:'communication'|'collaboration'|'working-conventions';content:string;condition:string;refs:Ref[]}
 export interface MemoryReflection {
  space:string;scopeId:string;entryId:string;actor:string;triggerId:string;discussion:string;generation:number;
- revision:number;at:number;signature:string;points:ReflectionPoint[];
+ revision:number;at:number;signature:string;inputs?:Ref[];points:ReflectionPoint[];
 }
 const schema=z.object({points:z.array(z.object({
  section:z.enum(['communication','collaboration','working-conventions']),content:z.string().min(1).max(300),condition:z.string().max(300),
@@ -38,6 +38,7 @@ export function reflectionView(engine:AgentMemory,c:ScopeContext){
  const row=engine.host.store.get<MemoryReflection>('memory-reflection',engine.space(c))
  if(!row||row.generation!==engine.host.memory.generation(c.route.scopeId)||row.actor!==c.actor||row.entryId!==c.route.entryId)return undefined
  const allowed=inputs(engine,c)
+ if(row.inputs?.some(ref=>!allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))return undefined
  const points=row.points.filter(p=>p.refs.every(ref=>allowed.some(f=>f.id===ref.id&&f.revision===ref.revision)))
  return {...row,points}
 }
@@ -72,7 +73,7 @@ export async function reflectMemories(engine:AgentMemory,c:ScopeContext,signal:A
    if(new Set(refs.map(r=>r.id)).size!==refs.length)throw Error('duplicate_reflection_source')
    return {section:p.section,content:safeMemoryText(p.content),condition:p.condition?safeMemoryText(p.condition):'',refs}
   })
-  const next:MemoryReflection={space,scopeId:c.route.scopeId,entryId:c.route.entryId,actor:c.actor,triggerId:c.trigger.id,discussion:c.route.discussion,generation,revision:(host.store.get<number>('memory-reflection-revision',space)??previous?.revision??0)+1,at:engine.now(),signature:hash,points}
+  const next:MemoryReflection={space,scopeId:c.route.scopeId,entryId:c.route.entryId,actor:c.actor,triggerId:c.trigger.id,discussion:c.route.discussion,generation,revision:(host.store.get<number>('memory-reflection-revision',space)??previous?.revision??0)+1,at:engine.now(),signature:hash,inputs:facts.map(({id,revision})=>({id,revision})),points}
   host.store.atomic(()=>{
    host.store.requireReflectionSchema()
    if(previous)host.store.put('memory-reflection-history',space+':'+previous.revision,previous)
@@ -102,7 +103,7 @@ export function pruneReflections(engine:AgentMemory){
      let cursor:string|undefined
      do{const page=host.memory.query(c,{limit:50,cursor});facts.push(...page.items);cursor=page.cursor}while(cursor)
     }else facts.push(...host.store.list<MemoryFact>('memory-fact').filter(f=>f.entryId===row.entryId&&f.owner===row.actor&&f.generation===row.generation&&!f.archived&&f.state==='active'&&f.sources.every(ref=>{const e=host.memory.evidence(ref.id);return e&&!e.revoked&&e.version===ref.version})))
-    valid=row.points.every(p=>p.refs.every(ref=>facts.some(f=>f.id===ref.id&&f.revision===ref.revision)))
+    valid=(row.inputs??row.points.flatMap(p=>p.refs)).every(ref=>facts.some(f=>f.id===ref.id&&f.revision===ref.revision))
    }
   }catch{}
   if(!valid)host.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind,raw.id!)
