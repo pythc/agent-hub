@@ -1,3 +1,4 @@
+import {accountFence,pinObservedAccount} from './connector-account.ts'
 import {randomBytes} from 'node:crypto'
 import {z} from 'zod'
 import type {Source} from './sources.ts'
@@ -18,14 +19,13 @@ export class SourceIdentities {
  constructor(private store:Store,private scopes:RouterScopes,private sources:Map<string,Source>){}
  async command(value:unknown){
   const x=identityCommandSchema.parse(value),key=stableDigest(['identity',x.operationId]),fingerprint=stableDigest(x),receipt=this.store.get<any>('identity-receipt',key)
+  if(x.action==='source.verify'&&accountFence(this.store,x.sourceId))throw Error('Connector account changed; configure a separately bound source')
   if(receipt){if(receipt.fingerprint!==fingerprint)throw Error('operationId reused with different content');return receipt.result}
   if(x.action==='source.verify'){
    const source=this.sources.get(x.sourceId);if(!source?.identity||!source.config.enabled)throw Error('Source has no enabled identity verifier')
    const identity=await source.identity()
-   if(identity.verified!==true||!identity.id)throw Error('Connector cannot verify its account identity')
-   const namespace=source.config.kind+':'+identity.type+':'+identity.id,old=this.store.get<any>('source-identity',x.sourceId)
+   const namespace=pinObservedAccount(this.store,source.config,identity),old=this.store.get<any>('source-identity',x.sourceId)
    if((old?.revision??0)!==x.expectedRevision)throw Error('Identity revision conflict')
-   if(old&&old.namespace!==namespace)throw Error('Connection account changed; create a new source identity')
    const result={sourceId:x.sourceId,namespace,provider:source.config.kind,principal:identity.id,type:identity.type,revision:(old?.revision??0)+1,verifiedAt:Date.now()}
    this.store.atomic(()=>{const current=this.store.get<any>('source-identity',x.sourceId);if((current?.revision??0)!==x.expectedRevision)throw Error('Identity changed during verification');this.store.put('source-identity',x.sourceId,result);this.store.put('identity-receipt',key,{fingerprint,result})});return result
   }

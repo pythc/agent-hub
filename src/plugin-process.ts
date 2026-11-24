@@ -1,3 +1,4 @@
+import {accountFence,pinObservedAccount} from './connector-account.ts'
 import {randomBytes,createHmac} from 'node:crypto'
 import type {StatusTarget,TransitionView} from './workflow-actions.ts'
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process'
@@ -51,10 +52,10 @@ export class ProcessSource extends MessageSource {
     if(pkg.manifest.stateKinds.some(k=>!metadataKinds.has(k)&&k!=='plugin-state'))throw Error('Plugin requests a protected host record kind')
   }
   attach(store:Store,resolveConfig?:()=>SourceConfig|undefined){this.hostStore=store;if(resolveConfig)this.resolveConfig=resolveConfig}
-  private active(){const c=this.resolveConfig();if(!c?.enabled)throw Error('Plugin connection is disabled');return c}
+  private active(){const c=this.resolveConfig();if(!c?.enabled)throw Error('Plugin connection is disabled');if(accountFence(this.hostStore??this.sourceContext?.store,c.id))throw Error('Connector account changed; configure a separately bound source');return c}
   scopes(){const c=this.resolveConfig();return c?(pointer(c,this.pkg.manifest.scopesPath) as string[]).filter(s=>!c.listenScopes||c.listenScopes.includes(s)):[]}
   get code():RepositoryAccess|undefined {
-    const declaration=this.pkg.manifest.repository;if(!declaration)return
+    const declaration=this.pkg.manifest.repository;if(!declaration||accountFence(this.hostStore,this.config.id))return
     const config=this.resolveConfig()??this.config,id=pointer(config,declaration.idPath),variable=pointer(config,declaration.pushCredentialPath)
     if(typeof id!=='string'||id!==config.repository||!this.scopes().includes(id)||typeof variable!=='string'||!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable)||!Object.values(this.pkg.manifest.credentials).includes(declaration.pushCredentialPath))throw Error('Repository capability configuration is invalid')
     return {id,remotes:declaration.remoteTemplates.map(template=>template.replace('{repository}',id)),threadPrefix:id+(this.pkg.manifest.threadSeparator??':'),pushCredential:{kind:'environment',variable,username:declaration.pushUsername}}
@@ -261,8 +262,8 @@ export class ProcessSource extends MessageSource {
     const work=this.serial.then(async()=>{
       this.guard(method,args);if(method==='webhook'&&(this.pkg.manifest.network||Object.keys(this.pkg.manifest.credentials).length||this.pkg.manifest.methods.some(m=>m!=='webhook'&&m!=='close')))throw Error('Webhook normalizer must be isolated without network, credentials or other capabilities');await this.launch();this.guard(method,args)
       if(!['identity','probe','close'].includes(method)&&this.hostStore&&this.pkg.manifest.methods.includes('identity')){
-        const identity=await this.request({type:'call',method:'identity',args:[],snapshot:this.snapshot(),stateAck:this.stateAck}),saved=this.hostStore.get<any>('source-identity',this.config.id)
-        if(saved&&saved.principal!==identity?.id)throw Error('Plugin connection account changed')
+        const identity=await this.request({type:'call',method:'identity',args:this.identityArgs(),snapshot:this.snapshot(),stateAck:this.stateAck})
+        if(this.hostStore.get('source-identity',this.config.id))pinObservedAccount(this.hostStore,this.active(),identity)
         this.guard(method,args)
       }
       const authorize=()=>{this.guard(method,args);if(mayAct&&!mayAct())throw Error('Repository operation authority ended')}
@@ -274,7 +275,8 @@ export class ProcessSource extends MessageSource {
   }
   async start(context:SourceContext){this.sourceContext=context;this.hostStore=context.store;if(this.pkg.manifest.methods.includes('start'))await this.invoke('start')}
   async poll(context:SourceContext){this.sourceContext=context;this.hostStore=context.store;if(this.pkg.manifest.methods.includes('poll'))await this.invoke('poll')}
-  identity(){return this.invoke('identity')}
+  identity(){return this.call('identity',this.identityArgs())}
+  private identityArgs(){return ['agenthub-slack','agenthub-linear'].includes(this.pkg.manifest.id)?['observe']:[]}
   workflowState(target:StatusTarget){return this.call('workflowState',[target])}
   applyWorkflowState(target:StatusTarget,expected:TransitionView,stateId:string,mayAct?:()=>boolean){return this.call('applyWorkflowState',[target,expected,stateId],mayAct)}
   probe(){return this.invoke('probe')}

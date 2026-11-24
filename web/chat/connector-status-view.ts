@@ -2,7 +2,7 @@ import type {ConnectorLayer,DiagnosticStatus} from '../../src/connector-manageme
 export type ConnectorCheckState=DiagnosticStatus|'not_checked'
 export interface ConnectorCheckView {state:ConnectorCheckState;at:number|null;fixture:boolean;code:string}
 const codes:Record<ConnectorLayer,readonly string[]>={configuration:['configuration_valid','configuration_invalid'],reachable:['service_reachable','service_unreachable','reachability_probe_unavailable'],authentication:['identity_verified','identity_unverified','authentication_not_verified','identity_probe_unavailable'],capabilities:['directory_read_verified','directory_not_verified','directory_probe_unavailable']}
-const evidenceCodes=['adapter_restart_required','credential_changed','credential_missing','adapter_changed','evidence_lifecycle_changed','credential_basis_unavailable']
+const evidenceCodes=['adapter_restart_required','credential_changed','credential_missing','adapter_changed','evidence_lifecycle_changed','credential_basis_unavailable','verified_account_changed','target_changed']
 const passedCodes:Record<ConnectorLayer,string>={configuration:'configuration_valid',reachable:'service_reachable',authentication:'identity_verified',capabilities:'directory_read_verified'}
 const states:readonly string[]=['running','passed','failed','unsupported','unknown','stale','interrupted']
 export function connectorTime(value:unknown):number|null{return typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&value<=8640000000000000?value:null}

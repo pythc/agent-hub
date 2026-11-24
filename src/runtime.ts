@@ -1,3 +1,4 @@
+import {accountFence} from './connector-account.ts'
 import {schedulerAdmission} from './scheduler-admission.ts'
 import {orderSchedulerJobs,observeSchedulerJob,recordSchedulerAdmission,type SchedulerFairness} from './scheduler-order.ts'
 import {validateTaskAssignment,bindTaskAssignmentLease,validateAssignmentLease,restrictAssignmentExecution} from './task-assignment-contract.ts'
@@ -603,7 +604,7 @@ export class Runtime {
     if(!this.sources.has(trigger.source))throw Error('Unknown source')
     return this.store.atomic(()=>{
     const source=this.sources.get(trigger.source)!
-    if(!source.config.capabilities.events)throw Error('Event reception is disabled for this source')
+    if(!source.config.capabilities.events||accountFence(this.store,source.config.id))throw Error('Event reception is disabled for this source')
     if(trigger.human)this.store.put('source-observed',trigger.source+':'+trigger.actor.id,{source:trigger.source,actor:trigger.actor.id,chat:String(trigger.meta.chat??trigger.meta.scope??''),at:Date.now()})
     const existing = this.store.triggers.get(trigger.id)
     if (existing && (existing.text !== trigger.text || existing.actor.id !== trigger.actor.id || existing.human!==trigger.human || JSON.stringify(existing.threads) !== JSON.stringify(trigger.threads))) throw new Error('Event id was reused with different content')
@@ -1422,6 +1423,9 @@ export class Runtime {
         });blocked.delete(channel)}catch{this.store.audit({type:'router.inbox-retry',id:message.id})}
         continue
       }
+      if(accountFence(this.store,source.config.id)){
+        this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'connectorAccountChanged'});blocked.delete(channel);continue
+      }
       if(!this.store.deliveryStarted(message.id))continue
       try {
         if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
@@ -1483,12 +1487,12 @@ export class Runtime {
     const migration=this.store.get<any>('scope-migration','current')
     if(migration&&(migration.phase!=='active'||this.paused))return // Preserve cursor replay while the migration window is closed to ingress.
     for(const source of this.sources.values()){
-      if(!source.config.enabled||!source.config.capabilities.events||(!source.poll&&!source.start)||this.polls.has(source.config.id)||(this.nextPoll.get(source.config.id)??0)>Date.now())continue
+      if(!source.config.enabled||accountFence(this.store,source.config.id)||!source.config.capabilities.events||(!source.poll&&!source.start)||this.polls.has(source.config.id)||(this.nextPoll.get(source.config.id)??0)>Date.now())continue
       this.nextPoll.set(source.config.id,Date.now()+source.config.pollSeconds*1000)
       const pollController=new AbortController()
       this.pollControllers.set(source.config.id,pollController)
       const context={
-        signal:AbortSignal.any([pollController.signal,this.sourceShutdown.signal]),store:this.store, receive:(event:Trigger)=>{if(event.source!==source.config.id||event.actor.source!==source.config.id)throw Error('Event is outside its configured source');new SourceIdentities(this.store,this.scopes,this.sources).recordNative(event);return this.ingestFrom(source.config.id,event)},
+        signal:AbortSignal.any([pollController.signal,this.sourceShutdown.signal]),store:this.store, receive:(event:Trigger)=>{if(accountFence(this.store,source.config.id))throw Error('Connector account changed');return this.store.atomic(()=>{new SourceIdentities(this.store,this.scopes,this.sources).recordNative(event);return this.ingestFrom(source.config.id,event)})},
         change:(event:SourceChange)=>this.sourceChanged(source.config.id,event),
         bind:(ticketId:string,thread:string,own:boolean)=>{this.engine.bindThread(ticketId,{source:source.config.id,id:thread},own)},
         closed:(thread:string,outcome:'merged'|'closed',at:string)=>this.engine.threadClosed({source:source.config.id,id:thread},outcome,at),
