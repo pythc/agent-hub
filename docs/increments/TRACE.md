@@ -79,3 +79,21 @@ The selected task's progress page now exposes its existing RecoveryManifest in a
 The UI accepts only schema 1 metadata matching the selected task ID, current settings revision and observation digest. It rejects malformed/duplicate checkpoints, replay permission, inconsistent original-session availability and non-reconciliation guidance for an unknown effect. It copies only safe fixed fields and renders fixed bilingual text; raw identity/digest values, provider content and extra payload fields are not shown. Older snapshots without a manifest render no section; mismatched information asks for refresh rather than displaying stale guidance.
 
 This is presentation of the existing captured-workspace snapshot, not another request, export, backup, restore engine or recovery authorization. Existing task actions and their server-side rechecks remain unchanged. No new controls are enabled by the manifest, and no uncertain effect is replayed. Full external-effect checkpoint coverage and executable restoration remain outside this slice. Automated rendering/validation and original transport/recovery tests are covered; actual browser interaction, narrow-screen/keyboard/reduced-motion and real provider/IM acceptance remain unverified.
+
+### Acceptance evidence binding
+
+New goal verification snapshots bind the immutable goal contract, exact
+local assignment contract revision (when retained), scoped admitted inputs and
+evidence digests. For project integration, the commit is projected only when
+the existing host project receipt validator accepts it. A commit label does
+not independently prove a check succeeded. Overall deterministic file
+checks for a project use only evidence from that final integration commit.
+Per-task status displays counts by verification method, not pass counts;
+the actual verdict remains separate.
+
+Changed snapshots become stale. A missing/unreadable binding is shown as
+unknown, not evidence that an input changed or that verification passed.
+Older rounds can still continue under their original orchestration contract
+but are not presented as newly bound current evidence. Existing repair
+allowances and dependency-scoped reconciliation are unchanged; this does not
+add a remote verification provider or synthesize old evidence.
