@@ -2,6 +2,7 @@ import {LocalDiagnostics,LocalDiagnosticError} from './local-diagnostics.ts'
 import {artifactCatalog,ArtifactCatalogCursorError} from './artifact-catalog.ts'
 import {WorkerTemplates,WorkerTemplateError} from './worker-templates.ts'
 import {ConnectorManagement,ConnectorError} from './connector-management.ts'
+import {CuratedSummaries,CuratedSummaryError,isCuratedSummary} from './curated-summary.ts'
 import {ExecutionTrace,TraceError} from './execution-trace.ts'
 import {ResourceUsage} from './resource-usage.ts'
 import {CredentialReferences} from './credential-references.ts'
@@ -24,7 +25,7 @@ import { createReadStream, statSync, readFileSync, writeFileSync } from 'node:fs
 import { join } from 'node:path'
 import { z } from 'zod'
 import { Runtime } from './runtime.ts'
-import { incomingSchema } from './sources.ts'
+import { incomingSchema, stableDigest } from './sources.ts'
 import { deliverDraft } from './delivery.ts'
 import {configSchema,type Config} from './config.ts'
 import {randomUUID} from 'node:crypto'
@@ -66,6 +67,11 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const sessions=new OperatorSessions(),entries=new EntrySetup(()=>runtime,onboarding,()=>endpoint,options.configurationPreview===true,options.clientHome,options.clientName)
   async function stopRuntime(){if(!runtimeClosed){runtimeClosed=true;closingRuntime=(async()=>{await delegationServer?.close();delegationServer=undefined;await runtime.close()})()}await closingRuntime}
   const localDiagnostics=new LocalDiagnostics(()=>runtime)
+  let summaryRuntime=runtime, summaries=new CuratedSummaries(runtime)
+  function curatedSummaries(){
+    if(summaryRuntime!==runtime){summaryRuntime=runtime;summaries=new CuratedSummaries(runtime)}
+    return summaries
+  }
   const market=new PluginMarket(()=>runtime,options.pluginGitHub)
   const templates=new WorkerTemplates(()=>runtime),connectors=new ConnectorManagement(()=>runtime),trace=new ExecutionTrace(()=>runtime)
   async function rebuild(config:Config,activationId?:string){
@@ -84,7 +90,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
   const server = createServer((request, response) => { void handle(request, response).catch(error => {
     if(response.headersSent){response.end();return}
     if(error instanceof ConnectorError){send(response,error.status,{code:error.code,error:error.code,...(error.issues?.length?{issues:error.issues}:{})});return}
-    if(error instanceof WorkerTemplateError||error instanceof TraceError||error instanceof LocalDiagnosticError){send(response,error.status,{code:error.code,error:error.code});return}
+    if(error instanceof CuratedSummaryError||error instanceof WorkerTemplateError||error instanceof TraceError||error instanceof LocalDiagnosticError){send(response,error.status,{code:error.code,error:error.code});return}
     if(error instanceof DeploymentError){send(response,error.status,{code:error.code,error:error.message});return}
     if(error instanceof MarketError){if(error.code==='market_recovery_required')unavailable=true;send(response,error.status,{error:error.message,code:error.code});return}
     if(error instanceof WebhookError){send(response,error.status,{code:error.code});return}
@@ -381,6 +387,20 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(query.source&&!runtime.config.sources.some(s=>s.id===query.source)){send(res,400,{code:'view_source_unknown'});return}
       send(res,200,workspaceViewData(runtime,query,account.status(req).user?.id??'local-operator'));return
     }
+    if(path==='/router-management/curated-summary'||path.startsWith('/router-management/curated-summary/')){
+      requireCurrentOperator(req)
+      if(options.configurationPreview){send(res,403,{code:'preview_restricted'});return}
+      const root='/router-management/curated-summary'
+      if(req.method==='GET'&&path===root){send(res,200,curatedSummaries().catalog());return}
+      if(req.method!=='POST'){send(res,405,{code:'method_not_allowed'});return}
+      const input=await operatorBody(req)
+      // Bind the preview and its receipt to this authenticated operator session.
+      const operator=stableDigest(authorized(req)?['bearer',req.headers.authorization]:['cookie',req.headers.cookie])
+      if(path===root+'/preview'){send(res,200,curatedSummaries().preview(input,operator));return}
+      if(path===root+'/confirm'){send(res,202,curatedSummaries().confirm(input,operator));return}
+      if(path===root+'/status'){send(res,200,curatedSummaries().status(input,operator));return}
+      send(res,404,{code:'not_found'});return
+    }
     if(req.method==='GET'&&path==='/router-management/catalog'){
       send(res,200,{sources:runtime.config.sources.filter(s=>s.enabled).map(s=>({id:s.id,name:s.label??s.id,kind:s.kind})),workers:runtime.manager.list().workers.map(w=>({id:w.id,label:w.label})),backends:[...new Set(runtime.manager.list().workers.map(w=>w.backend))],tasks:runtime.store.tickets.list().map(t=>({id:t.id,title:t.title})),contexts:runtime.store.list<any>('router-admission').filter(a=>a.state==='accepted'&&runtime.store.triggers.get(a.triggerId)?.human&&!runtime.memory.cleanup.blocked('trigger',a.triggerId)&&runtime.store.get<any>('router-route',a.triggerId)&&!runtime.scopes.binding(runtime.store.get<any>('router-route',a.triggerId).entryId).privateActor&&runtime.scopes.sourceActive(runtime.scopes.binding(runtime.store.get<any>('router-route',a.triggerId).entryId))).map(a=>{const route=runtime.store.get<any>('router-route',a.triggerId),entry=runtime.scopes.binding(route.entryId);return {id:a.triggerId,scopeId:route.scopeId,entryId:entry.id,title:runtime.store.triggers.get(a.triggerId)?.text.slice(0,70),conversationId:runtime.store.get<any>('chat-run',a.triggerId)?.conversationId,label:entry.nativeId+' · '+a.at}})});return
     }
@@ -638,6 +658,7 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
     }
     if(req.method==='POST'&&path==='/retry-delivery'){
       const input=z.object({id:z.string()}).strict().parse(await body(req))
+      if(isCuratedSummary(input.id))throw new CuratedSummaryError('summary_retry_disabled')
       runtime.store.retryDelivery(input.id);send(res,200,{ok:true});return
     }
     if(req.method==='POST'&&path==='/deliver-pr'){

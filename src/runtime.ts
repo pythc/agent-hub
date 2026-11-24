@@ -15,6 +15,8 @@ import { mkdirSync, openSync, writeFileSync, readFileSync, unlinkSync, closeSync
 import { join } from 'node:path'
 import { Engine, latestAssignment, runningAssignment, followupOwners, ticketStage, type Candidate, type Assignment, type Ticket, type Trigger, type TicketInput, type WorkerReport } from './vendor/dsh-core/index.ts'
 import { Store, type Run, type Job } from './store.ts'
+import { belongsToAudience, originalDestination } from './destination-binding.ts'
+import { curatedSummaryAllowed, isCuratedSummary } from './curated-summary.ts'
 import { makePolicy, makeScope } from './policy.ts'
 import { UncertainDelivery, incomingSchema, bodyDigest,stableDigest, type Source, type Incoming, type SourceChange } from './sources.ts'
 import type { Config } from './config.ts'
@@ -208,6 +210,11 @@ export class Runtime {
     this.paused = this.store.get<boolean>('settings', 'paused') ?? false
     this.toolConnections=new ToolConnections(this)
     this.scopes=new RouterScopes(this.store,config,id=>this.controllers.has(id)||[...this.controllers.keys()].some(k=>k.startsWith('router:')),this.sourceRegistry)
+    this.store.bindDestination=(message,originalTriggerId)=>{
+      if(message.channel.address.routerInbox)return
+      const owner=this.store.get<{triggerId:string}>('router-reply-owner',message.id)
+      return originalDestination(this.store,this.scopes,this.config.sources.find(s=>s.id===message.channel.source),message,originalTriggerId??owner?.triggerId)
+    }
     try{this.memory=new RouterMemory(this.store,this.scopes,config.stateDir)}catch(error){this.approvals.close();this.store.close();unlinkSync(this.lock);throw error}
     this.routerIngress=new RouterIngress(config,this.store,this.sourceRegistry,this.scopes)
     this.artifacts=new GoalArtifacts(this)
@@ -355,8 +362,8 @@ export class Runtime {
       else if(reply&&(value.state==='failed'||value.state==='blocked')){
         if(value.answers)this.engine.reply({purpose:'answer',ticketId,triggerId:value.answers,text:reply})
         else{
-          const channel=this.store.triggers.get(ticket.origin.triggerId)?.channel??ticket.channels[0]
-          if(channel)this.store.outbox.send({id:'failure:'+bodyDigest([ticketId,latestAssignment(ticket)?.id,value.state,reply]),ticketId,channel,kind:'reply',text:reply})
+          const origin=this.store.triggers.get(ticket.origin.triggerId)
+          if(origin?.channel)this.store.outbox.send({id:'failure:'+bodyDigest([ticketId,latestAssignment(ticket)?.id,value.state,reply]),ticketId,channel:origin.channel,kind:'reply',text:reply},origin.id)
         }
       }
       if(ticket.attention&&ticket.attention.id!==previous?.id){
@@ -1373,6 +1380,11 @@ export class Runtime {
       if(message.status==='sending'||message.status==='uncertain'||message.attempts<3)blocked.add(channel)
       if(this.closing)return
       if (message.status !== 'pending') continue
+      if(!curatedSummaryAllowed(this,message)){
+        this.store.blockDelivery(message.id,'The curated summary approval or audience is no longer current')
+        this.store.audit({type:'router.curated-summary-blocked',id:message.id})
+        blocked.delete(channel);continue
+      }
       const replyOwner=this.store.get<{goalId?:string;discussion:string;triggerId:string;inputs:string[];workerEvents?:string[];manifest?:ContextManifest;manifests?:ContextManifest[]}>('router-reply-owner',message.id)
       // Old queued derived notices lack the context used to compose them; a
       // current input must recreate them instead of assuming their provenance.
@@ -1403,11 +1415,11 @@ export class Runtime {
       const ticket = message.ticketId && this.store.tickets.get(message.ticketId)
       if (ticket && (ticket.ended?.by === 'human' || this.store.get<Run>('run', ticket.id)?.phase === 'human')) continue
       const source=this.sources.get(message.channel.source)
-      if(!source?.config.enabled)continue
-      if(!message.channel.address.routerInbox&&!source.config.capabilities.replies)continue
-      const event=ticket?this.store.triggers.get(ticket.origin.triggerId):replyOwner?this.store.triggers.get(replyOwner.triggerId):undefined
-      const row=event?.meta.scope??'default'
-      if(source.config.listenScopes&&!source.config.listenScopes.includes(String(row))){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
+      if(message.channel.address.routerInbox){
+        if(!source?.config.enabled)continue
+        const event=ticket?this.store.triggers.get(ticket.origin.triggerId):undefined
+        if(source.config.listenScopes&&!source.config.listenScopes.includes(String(event?.meta.scope??'default'))){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
+      }
       const workerEvent=this.workerMessageEvent(message.id,message.ticketId)
       if(workerEvent===false){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
       if(message.channel.address.routerInbox){
@@ -1422,11 +1434,34 @@ export class Runtime {
         });blocked.delete(channel)}catch{this.store.audit({type:'router.inbox-retry',id:message.id})}
         continue
       }
+      // Internal Worker -> Router transport above cannot become an external send.
+      // For a connector, re-resolve the exact persisted origin and deny any
+      // missing, revoked, or changed binding. Never try another conversation.
+      const {destinationBinding,...outbound}=message
+      const configured=this.config.sources.find(s=>s.id===outbound.channel.source)
+      const legacyLocal=!destinationBinding&&configured?.kind==='local'
+      const current=originalDestination(this.store,this.scopes,configured,outbound,destinationBinding?.triggerId??replyOwner?.triggerId??(ticket||undefined)?.origin.triggerId)
+      const manifests=[...(replyOwner?.manifest?[replyOwner.manifest]:[]),...replyOwner?.manifests??[]]
+      const entry=current?.entry
+      if(!source?.config.enabled||!source.config.capabilities.replies||!current||
+        (!legacyLocal&&stableDigest(current)!==stableDigest(destinationBinding??null))||
+        replyOwner?.inputs.some(id=>{const input=this.store.triggers.get(id);return !input||!belongsToAudience(this.scopes,current,input)})||
+        manifests.some(m=>!entry||m.entryId!==entry.id||m.tenantId!==entry.tenantId||
+          !!entry.privateActorDigest&&stableDigest(m.actor)!==entry.privateActorDigest)){
+        this.store.blockDelivery(message.id,'Original reply destination or audience is unavailable; a fresh message from the intended conversation is required')
+        this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'destinationOrAudienceUnavailable'});blocked.delete(channel);continue
+      }
       if(!this.store.deliveryStarted(message.id))continue
       try {
-        if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
+        if(source.config.kind==='delegation')await this.delegation.deliver(outbound);else await source.deliver(outbound)
         this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
-      catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
+      catch (error) {
+        // A curator approves one release, not provider retries. Even a generic
+        // adapter error could occur after its message was delivered.
+        const summary=isCuratedSummary(message.id), uncertain=summary||error instanceof UncertainDelivery
+        this.store.deliveryFailed(message.id,message.attempts+1,summary?'Curated summary send outcome unknown; reconcile the destination':String(error).slice(0,300),uncertain)
+        if(!uncertain&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel)
+      }
     }
   }
   private holdLegacyTask(ticketId:string){

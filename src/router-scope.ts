@@ -203,6 +203,12 @@ export class RouterScopes {
  checkTaskEntry(owner:TaskOwnership,entryId:string,capability:'context'|'request'|'result',allowHeld=false){
   const entry=this.binding(entryId),channel=this.store.get<TaskChannel>('task-channel',stableDigest([owner.ticketId,entryId]))
   const controlledHold=allowHeld&&owner.state==='held'&&owner.reason==='context_permissions_changed'
+  if(capability!=='request'){
+   const last=this.store.get<{manifest:{entryId:string}}>('task-context',owner.ticketId)?.manifest.entryId
+   // A task-channel grant is not approval to expose the raw private conversation
+   // or Worker result composed from it in another entry.
+   if([owner.originEntry,last].some(id=>id&&id!==entryId&&this.binding(id).privateActor))throw Error('Private task context cannot be read outside its entry')
+  }
   if(owner.state!=='active'&&!controlledHold||entry.tenantId!==owner.tenantId||!this.sourceActive(entry)||!channel?.active||!channel[capability]||capability==='result'&&(channel.dataRevision??1)!==(owner.dataRevision??1))throw Error('Task is outside this entry permission')
  }
  checkTask(ticketId:string,c:ScopeContext,mutate=false,allowHeld=false){

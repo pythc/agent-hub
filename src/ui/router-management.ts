@@ -5,6 +5,23 @@ export const routerManagementPage=String.raw`<!doctype html><html lang="zh-CN"><
 <section><h2>群与入口</h2><div id="entries" class="table"></div><details><summary>绑定一个入口</summary><form id="entry-form"><div class="row"><label>管理范围<select aria-label="管理范围" name="scope" class="scope-select"></select></label><label>来源<select aria-label="来源" name="source" id="entry-sources"></select></label><label>连接账号<input name="account" placeholder="远程接入时自动核验"></label><label>群或入口标识<input name="native" required placeholder="平台提供的原生群标识"></label></div><p>首次绑定不导入旧聊天；改绑只影响新工作，现有任务仍由原 Router 负责。</p><button type="submit">绑定入口</button></form></details></section>
 <section><h2>Router 设置</h2><form id="router-form"><div class="row"><label>设置所属团队<select aria-label="设置所属团队" name="scope" id="router-scope" class="scope-select"></select></label><label>Router 后端<select aria-label="Router 后端" id="router-backend" name="backend"></select></label><label>Router 模型<input name="model" id="router-model" placeholder="沿用后端默认"></label><label>思考强度<select aria-label="思考强度" name="effort" id="router-effort"><option value="">沿用默认</option><option value="none">关闭</option><option value="minimal">最低</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">更高</option></select></label><label>完整上下文字节上限<input type="number" name="budget" id="router-budget" min="4096" max="10000000" required></label></div><label>允许接管的资料入口<select multiple aria-label="允许接管的资料入口" name="data" id="data-entries"></select></label><p>资料许可用于任务转交核对；不会自动发布群记忆。</p><button type="submit">保存 Router 设置</button></form></section>
 <section><h2>任务归属</h2><div id="tasks" class="table"></div><p>任务转交、资料许可和待发回复须单独核对。未核实的任务会继续保留并暂停处理。</p><form id="task-form"><div class="row"><label>选择任务<select aria-label="选择任务" id="task-select" name="task"></select></label><label>目标入口<select aria-label="目标入口" id="task-entry" name="entry"></select></label><label>入口用途<select aria-label="入口用途" name="permission"><option value="read">查看结果</option><option value="followup">查看并请求复核</option><option value="revoke">撤销许可</option></select></label><button type="submit">更新任务入口</button></div></form><form id="transfer-form"><div class="row"><label>转交任务<select aria-label="转交任务" id="transfer-task" name="task"></select></label><label>新的负责团队<select aria-label="新的负责团队" name="scope" class="scope-select"></select></label><button type="submit">核对并转交</button></div></form><div id="held-replies"></div></section>
+<section id="curated-summary" aria-labelledby="summary-heading"><h2 id="summary-heading">人工跨渠道摘要</h2>
+<p>仅复制你亲手输入、确认可分享的摘要。不会读取或转发原聊天、附件或任务结果。来源和目标必须在同一管理范围，且能核对近期已准入的会话。</p>
+<div class="actions"><button type="button" class="secondary" id="summary-load">查找可用会话</button></div>
+<form id="summary-form" hidden><fieldset id="summary-fields" style="border:0;padding:0;margin:12px 0">
+<div class="row"><label>原会话<select id="summary-origin" required></select></label><label>目标会话<select id="summary-destination" required></select></label></div>
+<label>可分享的摘要<textarea id="summary-text" rows="4" maxlength="1200" required placeholder="仅填写已确认可分享的内容，不要粘贴聊天原文"></textarea></label>
+<div class="actions"><button type="submit" class="secondary">预览，不发送</button></div>
+</fieldset></form>
+<div id="summary-review" hidden><h3>核对唯一收件会话</h3><p id="summary-audience" style="overflow-wrap:anywhere;white-space:pre-wrap"></p>
+<p>以下是将要发送的完整内容：</p><pre id="summary-preview" tabindex="0" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+<label style="display:block"><input id="summary-consent" type="checkbox"> 我确认此摘要可以发给上面选定的会话。</label>
+<div class="actions"><button type="button" id="summary-send" disabled>确认并加入发送队列</button><button type="button" class="secondary" id="summary-edit">返回修改</button><button type="button" class="secondary" id="summary-check" hidden>查看发送结果</button></div>
+</div><p id="summary-status" role="status" aria-live="polite"></p>
+<details><summary>按编号核对既有发送记录</summary><form id="summary-lookup" class="row">
+<label>发送记录编号<input id="summary-receipt" maxlength="36" autocomplete="off" required></label>
+<button type="submit" class="secondary">核对状态，只读</button>
+</form><p>仅原确认会话可以核对。发送结果不明时，先核对收件会话，不要重新发送。</p></details></section>
 <section><h2>迁移与恢复</h2><div id="migration"></div><p>格式迁移在停机窗口通过命令行预览与应用。此页不会自动迁移、重启或重放旧任务。</p></section></main><script>
 (()=>{'use strict';let snapshot,catalog;const $=s=>document.querySelector(s),notice=(text,error=false)=>{$('#notice').textContent=text;$('#notice').className=error?'error':''};
 async function api(path,data){const response=await fetch(path,{method:data?'POST':'GET',headers:data?{'content-type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const value=await response.json();if(!response.ok)throw Error(value.error||'请从已登录的工作台进入');return value}
@@ -21,4 +38,108 @@ $('#router-scope').addEventListener('change',routerFields);
 $('#router-form').addEventListener('submit',async e=>{e.preventDefault();try{const f=new FormData(e.target),s=snapshot.scopes.find(s=>s.id===f.get('scope'));if(!s)throw Error('请先选择团队');const {routerId,revision,epoch,...scope}=s,router={...s.router,backend:f.get('backend')};if(f.get('model'))router.model=f.get('model');else delete router.model;if(f.get('effort'))router.effort=f.get('effort');else delete router.effort;await api('/router-scopes',{action:'scope.put',operationId:crypto.randomUUID(),expectedRevision:revision,scope:{...scope,router,contextBytes:Number(f.get('budget')),dataEntryIds:f.getAll('data')}});await load();notice('Router 设置已保存；现有 Worker 后端保持原绑定。')}catch(e){notice(e.message,true)}});
 $('#task-form').addEventListener('submit',async e=>{e.preventDefault();try{const f=new FormData(e.target),ticketId=f.get('task'),entryId=f.get('entry'),old=snapshot.channels.find(c=>c.ticketId===ticketId&&c.entryId===entryId),active=f.get('permission')!=='revoke';await api('/router-scopes',{action:'task.channel',operationId:crypto.randomUUID(),expectedRevision:old?.revision||0,ticketId,entryId,context:active,request:f.get('permission')==='followup',result:active,active});await load();notice('任务入口许可已更新。')}catch(e){notice(e.message,true)}});
 $('#transfer-form').addEventListener('submit',async e=>{e.preventDefault();try{const f=new FormData(e.target),task=snapshot.tasks.find(t=>t.ticketId===f.get('task'));if(!task)throw Error('请选择任务');await api('/router-scopes',{action:'task.transfer',operationId:crypto.randomUUID(),expectedRevision:task.ownerEpoch,ticketId:task.ticketId,scopeId:f.get('scope')});await load();notice('任务已转交；原任务和 Worker 线程已保留。')}catch(e){notice(e.message,true)}});
+const summaryApi='/router-management/curated-summary',summaryForm=$('#summary-form'),summaryReview=$('#summary-review')
+const summaryFields=$('#summary-fields'),summaryLoad=$('#summary-load'),summarySend=$('#summary-send')
+const summaryEdit=$('#summary-edit'),summaryCheck=$('#summary-check'),summaryConsent=$('#summary-consent')
+const summaryOrigin=$('#summary-origin'),summaryDestination=$('#summary-destination'),summaryText=$('#summary-text')
+let anchors=[], summaryApproval, summaryBusy=false, summaryAttempted=false, summaryAccepted=false, summaryTerminal=false
+const summaryMessage=(text,error=false)=>{$('#summary-status').textContent=text;$('#summary-status').className=error?'error':''}
+const anchorLabel=a=>a.provider+' / '+a.sourceId+' / '+a.account+' / '+a.room+' / '+a.thread+(a.private?'（私聊）':'')
+const summaryErrors={
+  summary_audience_unavailable:'入口或受众已变化。请查找可用会话并重新选择。',
+  summary_preview_required:'本次预览已失效，未再次排队。重新预览后才能确认。',
+  summary_preview_stale:'这次预览已过期或权限发生变化，没有排队。',
+  summary_host_paused:'宿主处于暂停状态，没有排队。',
+  summary_text_invalid:'摘要超长或包含无法安全预览的控制字符。',
+  summary_queue_unavailable:'摘要未加入发送队列。',
+  summary_release_unknown:'当前还找不到排队记录。若刚才网络中断，只可重试同一次确认。',
+  preview_restricted:'配置预览不支持外发摘要。',
+  validation_error:'请检查原会话、目标会话和摘要。',
+}
+function summaryButtons(){
+  summaryLoad.disabled=summaryBusy||!!summaryApproval
+  summaryFields.disabled=summaryBusy||!!summaryApproval
+  summaryConsent.disabled=summaryBusy||summaryAttempted
+  summarySend.disabled=summaryBusy||!summaryConsent.checked||summaryAccepted
+  summaryEdit.disabled=summaryBusy||(summaryAttempted&&!summaryTerminal)
+  summaryCheck.hidden=!summaryAttempted
+  summaryCheck.disabled=summaryBusy
+}
+function summaryTargets(){
+  const origin=anchors.find(a=>a.triggerId===summaryOrigin.value)
+  const allowed=origin?anchors.filter(a=>a.canReceive&&a.scopeId===origin.scopeId&&a.entryId!==origin.entryId&&
+    !(a.provider===origin.provider&&a.account===origin.account&&a.room===origin.room)):[]
+  options(summaryDestination,[['','请选择目标会话'],...allowed.map(a=>[a.triggerId,anchorLabel(a)])])
+}
+function clearSummary(){
+  summaryApproval=undefined;summaryAttempted=false;summaryAccepted=false;summaryTerminal=false;summaryConsent.checked=false
+  summaryReview.hidden=true;$('#summary-audience').textContent='';$('#summary-preview').textContent=''
+  summaryButtons()
+}
+function summaryStatusText(status){
+  const text={
+    pending:'已加入发送队列，尚未确认送达。',sending:'正在请求目标连接器，尚未确认送达。',
+    sent:'目标连接器报告发送成功。',dropped:'发送前被阻止，没有改投其他会话。',
+    uncertain:'连接器未能确认结果。请先核对目标会话，不要重新发送。',
+    failed:'发送未完成，请先核对目标会话。',unavailable:'找不到发送状态，请先核对目标会话。',
+  }
+  return text[status]||text.unavailable
+}
+function showSummaryResult(result){
+  summaryAccepted=true
+  summaryMessage(summaryStatusText(result.status)+' 记录编号：'+result.id)
+  // Never clear an uncertain operation automatically; retain its receipt for lookup.
+  summaryTerminal=result.status==='sent'||result.status==='dropped'
+  if(summaryTerminal)summaryEdit.textContent='结束此记录'
+}
+summaryLoad.addEventListener('click',async()=>{
+  summaryBusy=true;summaryButtons()
+  try{
+    const result=await api(summaryApi);anchors=result.anchors
+    options(summaryOrigin,[['','请选择原会话'],...anchors.map(a=>[a.triggerId,anchorLabel(a)])]);summaryTargets()
+    summaryForm.hidden=!anchors.length
+    summaryMessage(anchors.length?'已找到 '+anchors.length+' 个可核对的近期会话。':'没有可用会话。请检查入口绑定及近期 Router 准入记录。')
+  }catch(e){summaryMessage(summaryErrors[e.message]||'暂时无法读取可用会话。',true)}
+  finally{summaryBusy=false;summaryButtons()}
+})
+summaryOrigin.addEventListener('change',summaryTargets)
+summaryForm.addEventListener('submit',async e=>{
+  e.preventDefault();if(summaryBusy||summaryApproval)return
+  summaryBusy=true;summaryButtons()
+  try{
+    const approval=await api(summaryApi+'/preview',{originTriggerId:summaryOrigin.value,destinationTriggerId:summaryDestination.value,summary:summaryText.value})
+    summaryApproval=approval;summaryConsent.checked=false;summaryReview.hidden=false;summaryEdit.textContent='返回修改'
+    $('#summary-audience').textContent='来源：'+anchorLabel(approval.origin)+'\n目标：'+anchorLabel(approval.destination)
+    $('#summary-preview').textContent=approval.summary
+    $('#summary-preview').focus();summaryMessage('预览有效期 5 分钟。尚未发送。')
+  }catch(e){summaryMessage(summaryErrors[e.message]||'暂时无法生成预览。',true)}
+  finally{summaryBusy=false;summaryButtons()}
+})
+summaryConsent.addEventListener('change',summaryButtons)
+summaryEdit.addEventListener('click',()=>{if(summaryBusy)return;if(summaryAccepted)summaryText.value='';clearSummary();summaryMessage('已退出预览。');summaryText.focus()})
+summarySend.addEventListener('click',async()=>{
+  if(!summaryApproval||!summaryConsent.checked||summaryBusy||summaryAccepted)return
+  summaryAttempted=true;summaryBusy=true;summaryButtons()
+  $('#summary-receipt').value=summaryApproval.id
+  try{const result=await api(summaryApi+'/confirm',{id:summaryApproval.id,confirmed:true});showSummaryResult(result)}
+  catch(e){
+    if(['summary_preview_required','summary_preview_stale','summary_audience_unavailable','summary_queue_unavailable','summary_host_paused'].includes(e.message))summaryAttempted=false
+    summaryMessage(summaryErrors[e.message]||'请求结果未知。先核对发送状态；只重试本次确认，不要新建发送。记录编号：'+summaryApproval.id,true)
+  }finally{summaryBusy=false;summaryButtons()}
+})
+summaryCheck.addEventListener('click',async()=>{
+  if(!summaryApproval||summaryBusy||!summaryAttempted)return
+  summaryBusy=true;summaryButtons()
+  try{const result=await api(summaryApi+'/status',{id:summaryApproval.id});showSummaryResult(result)}
+  catch(e){summaryMessage(summaryErrors[e.message]||'暂时无法确认发送状态。请不要重新发一条。',true)}
+  finally{summaryBusy=false;summaryButtons()}
+})
+$('#summary-lookup').addEventListener('submit',async e=>{
+  e.preventDefault();if(summaryBusy)return
+  const id=$('#summary-receipt').value.trim(), submit=e.submitter
+  if(submit)submit.disabled=true
+  try{const result=await api(summaryApi+'/status',{id});summaryMessage(summaryStatusText(result.status)+' 记录编号：'+result.id)}
+  catch(error){summaryMessage(summaryErrors[error.message]||'暂时无法确认发送状态。',true)}
+  finally{if(submit)submit.disabled=false}
+})
 load().catch(e=>notice(e.message,true));})();</script></body></html>`

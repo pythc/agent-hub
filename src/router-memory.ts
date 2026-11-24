@@ -187,6 +187,7 @@ export class RouterMemory {
   const next=new Set([...seen,f.id])
   if(f.dependencies?.some(d=>{const parent=this.fact(d.id);return !parent||parent.revision!==d.revision||!this.visible(parent,c,false,next)}))return false
   if(f.archived||f.tenantId!==c.route.tenantId||f.generation!==this.generation(f.scopeId)||f.expiresAt!==undefined&&f.expiresAt<=Date.now()||!['active',...(candidates?['candidate','disputed']:[])].includes(f.state)||!this.supported(f))return false
+  if(f.entryId!==c.route.entryId&&this.scopes.binding(f.entryId).privateActor)return false
   if(f.visibility==='private'&&(f.owner!==c.actor||this.scopes.binding(c.route.entryId).privateActor!==c.actor))return false
   if(f.visibility==='task'){
    if(!f.ticketId)return false
@@ -315,7 +316,7 @@ export class RouterMemory {
    const next={...fact,state:'active' as const,protected:true,revision:fact.revision+1};this.store.put('memory-version',fact.id+':'+fact.revision,fact);this.save(next);return next
   }
   if(x.action==='forget'){this.revoke(c,{action:'forget',id:fact.id,generation:this.generation(fact.scopeId)});return {status:'stopped_using',localMemory:'verified',conversationHistory:'retained',external:'not_managed'}}
-  if(!manager||fact.visibility==='private')throw Error('Publishing requires the group data manager; private memory is not group knowledge')
+  if(!manager||fact.visibility==='private'||this.scopes.binding(fact.entryId).privateActor)throw Error('Publishing requires the group data manager; private memory is not group knowledge')
   const target=this.scopes.binding(x.targetEntry)
   if(target.tenantId!==fact.tenantId||!this.scopes.sourceActive(target))throw Error('Sharing target is outside tenant or unavailable')
   if(x.action==='unshare'){this.revoke(c,{action:'unshare',id:fact.id,targetEntry:target.id,generation:this.generation(fact.scopeId)});return {active:false}}
@@ -454,14 +455,14 @@ export class RouterMemory {
   this.reconcile()
   if(manifest.epoch!==this.scopes.epoch(manifest.tenantId)||manifest.generation!==this.generation(manifest.scopeId)||!this.scopes.sourceActive(this.scopes.binding(manifest.entryId)))throw Error('Context expired')
   const trigger=this.store.triggers.get(manifest.triggerId)
-  if(!trigger)throw Error('Context source unavailable')
+  if(!trigger||this.scopes.entry(trigger)?.id!==manifest.entryId||this.scopes.actor(trigger)!==manifest.actor)throw Error('Context source unavailable or outside its original audience')
   this.scopes.assertTrigger(trigger)
   const context:ScopeContext={trigger,actor:manifest.actor,route:{triggerId:trigger.id,discussion:trigger.source+':'+trigger.threads[0]!.id,entryId:manifest.entryId,tenantId:manifest.tenantId,scopeId:manifest.scopeId,routerId:manifest.routerId,epoch:manifest.epoch,bindingRevision:this.scopes.binding(manifest.entryId).revision}}
   this.validateUse?.(context,manifest.facts)
   this.validateKnowledge?.(context,manifest.knowledge??[])
   for(const ref of manifest.inputEvidence??[]){
-   const e=this.evidence(ref.id),entry=e&&this.scopes.binding(e.entryId)
-   if(!e||e.revoked||e.version!==ref.version||e.tenantId!==manifest.tenantId||!entry||!this.scopes.sourceActive(entry)||e.capturedAt<=(this.store.get<any>('source-entry-state',entry.id)?.historyCutoff??0))throw Error('Context input expired')
+   const e=this.evidence(ref.id)
+   if(!e||e.version!==ref.version||!this.canEvidence(e,context))throw Error('Context input expired or is outside the reply audience')
    const input=e.locator.startsWith('trigger:')&&this.store.triggers.get(e.locator.slice(8))
    if(!input)throw Error('Context input unavailable')
    this.scopes.assertTrigger(input)

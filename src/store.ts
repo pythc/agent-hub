@@ -1,6 +1,7 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
+import type { DestinationBinding } from './destination-binding.ts'
 import type { Repositories, Trigger, TriggerDisposition, Thread, Ticket, Decision, OutboundMessage } from './vendor/dsh-core/index.ts'
 // 8/9 are reserved for Webhook grants/continuations. Delegation must fence
 // Webhook-only releases from reopening service-authorized delegated work.
@@ -14,10 +15,11 @@ export const GOAL_REPLACEMENT_DB_SCHEMA=17
 export const ASYNC_WORKER_DB_SCHEMA=18
 export const TASK_ASSIGNMENT_DB_SCHEMA=19
 export const PROJECT_INTEGRATION_DB_SCHEMA=20
-export const MAX_DB_SCHEMA=PROJECT_INTEGRATION_DB_SCHEMA
+export const CURATED_SUMMARY_DB_SCHEMA=21
+export const MAX_DB_SCHEMA=CURATED_SUMMARY_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
-export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
+export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string; destinationBinding?: DestinationBinding }
 export interface Run {
   ticketId: string; assignmentId: string; threadId?: string; cwd: string
   phase: 'idle' | 'starting' | 'running' | 'background' | 'interrupted' | 'uncertain' | 'human' | 'delivering' | 'merging'
@@ -32,6 +34,7 @@ export interface Run {
 export class Store implements Repositories {
   readonly db: DatabaseSync
   bodyFilter?:(kind:string,id:string,value:any)=>any
+  bindDestination?:(message:OutboundMessage,originalTriggerId?:string)=>DestinationBinding|undefined
   readonly recordObservers=new Map<string,(id:string,value:any,previous:any)=>void>()
   private depth = 0
   private readonly readRecord: StatementSync
@@ -91,6 +94,8 @@ export class Store implements Repositories {
     return row ? JSON.parse(String(row.body)) as T : undefined
   }
   /** An older verifier would ignore an unknown check and could release a waiting goal. */
+  /** Older hosts would not enforce the cross-channel approval envelope. */
+  requireCuratedSummarySchema(){this.db.exec('PRAGMA user_version='+Math.max(CURATED_SUMMARY_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireTaskAssignmentSchema(){this.db.exec('PRAGMA user_version='+Math.max(TASK_ASSIGNMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireAsyncWorkerSchema(){this.db.exec('PRAGMA user_version='+Math.max(ASYNC_WORKER_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireGoalReplacementSchema(){this.db.exec('PRAGMA user_version='+Math.max(GOAL_REPLACEMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
@@ -158,7 +163,12 @@ export class Store implements Repositories {
     if(row)this.db.prepare("UPDATE outbox SET body=? WHERE id=? AND status='pending'").run(JSON.stringify({...JSON.parse(String(row.body)),channel}),id)
   }
   readonly outbox = {
-    send: (message: OutboundMessage) => { const filtered=this.bodyFilter?.('outbox',message.id,message)??message;this.db.prepare('INSERT OR IGNORE INTO outbox(id,body,status) VALUES(?,?,?)').run(message.id, JSON.stringify(filtered),filtered===message?'pending':'dropped') },
+    send: (message: OutboundMessage,originalTriggerId?:string) => {
+      const filtered=this.bodyFilter?.('outbox',message.id,message)??message
+      const destinationBinding=filtered===message?this.bindDestination?.(message,originalTriggerId):undefined
+      const body=destinationBinding?{...filtered,destinationBinding}:filtered
+      this.db.prepare('INSERT OR IGNORE INTO outbox(id,body,status) VALUES(?,?,?)').run(message.id,JSON.stringify(body),filtered===message?'pending':'dropped')
+    },
     status: (id: string) => {
       const r = this.db.prepare('SELECT status FROM outbox WHERE id=?').get(id)
       return r?.status === 'sent' ? 'sent' as const : r?.status === 'dropped' ? 'dropped' as const : r ? 'pending' as const : undefined
@@ -170,6 +180,9 @@ export class Store implements Repositories {
       ...JSON.parse(String(r.body)), status: String(r.status), attempts: Number(r.attempts), nextAt: Number(r.next_at),
       ...(r.error ? { error: String(r.error) } : {}),
     }))
+  }
+  blockDelivery(id:string,reason:string):void{
+    this.db.prepare("UPDATE outbox SET status='dropped',error=? WHERE id=? AND status='pending'").run(reason,id)
   }
   retryDelivery(id:string):void { this.db.prepare("UPDATE outbox SET status='pending',next_at=0 WHERE id=? AND status IN ('uncertain','pending')").run(id) }
   delivered(id: string): void { this.db.prepare("UPDATE outbox SET status='sent',error=NULL WHERE id=?").run(id) }
