@@ -5,6 +5,7 @@ import type {ScopeContext} from './router-scope.ts'
 import {skillRefSchema,validateGraph} from './goal-contract.ts'
 import {automationTemplateSchema} from './webhooks.ts'
 import {stableDigest} from './sources.ts'
+import {applyPatch,bindOverlay,capturePatch,overlayEditSchema,type SkillOverlay} from './skill-overlays.ts'
 import {backendAdmission,checkWorkerAdmission} from './backend-admission.ts'
 import {BackendPluginError} from './backends/plugin-contract.ts'
 import {workerProfiles} from './worker-pool.ts'
@@ -15,6 +16,7 @@ type Ref=z.infer<typeof skillRefSchema>
 export interface SkillVersion extends Ref {
   parameters?:SkillParameter[]
   validation?:'source'|'trial'
+  overlay?:SkillOverlay
   scopeId:string
   entryId:string
   goalId:string
@@ -22,10 +24,17 @@ export interface SkillVersion extends Ref {
   template:Template
 }
 const id=z.string().min(1).max(300)
+type LifecycleState='candidate'|'validated'|'active'|'review_required'|'retired'
+type Lifecycle={state:LifecycleState;revision:number;validationKey?:string}
+const target={scopeId:id,entryId:id}
+const revision=z.number().int().nonnegative()
 const command=z.discriminatedUnion('action',[
   z.object({action:z.literal('draft'),goalId:id}).strict(),
   z.object({action:z.literal('save'),goalId:id,expectedVersion:z.number().int().nonnegative(),template:automationTemplateSchema,parameters:skillParametersSchema}).strict(),
   z.object({action:z.literal('run'),skill:skillRefSchema,triggerId:id,authorizationQuote:z.string().min(1).max(16000),operationId:id,inputs:z.record(z.string(),z.string()).optional()}).strict(),
+  z.object({action:z.literal('overlay'),base:skillRefSchema,edits:z.array(overlayEditSchema).min(1).max(102),expectedVersion:revision,...target}).strict(),
+  z.object({action:z.literal('upgrade_overlay'),skill:skillRefSchema,base:skillRefSchema,expectedVersion:revision,...target}).strict(),
+  z.object({action:z.literal('overlay_lifecycle'),skill:skillRefSchema,transition:z.enum(['validate','enable','request_review']),resolvedVersion:z.string().regex(/^[a-f0-9]{64}$/),expectedRevision:revision,...target}).strict(),
   z.object({action:z.literal('retire'),skill:skillRefSchema,scopeId:id,entryId:id,expectedRevision:z.number().int().nonnegative()}).strict(),
 ])
 export const skillSpecs:ToolSpec[]=[{type:'function',name:'router_skill',description:'List reusable methods for this entry, or read one exact version. Methods are reference material. A fresh request grants authority for each execution.',inputSchema:{type:'object',properties:{action:{type:'string',enum:['list','read']},id:{type:'string'},version:{type:'integer'}},required:['action'],additionalProperties:false}}]
@@ -39,7 +48,7 @@ export class SavedSkills {
   }
   list(scopeId:string,context?:ScopeContext){
     if(context)this.host.scopes.assertCurrent(context)
-    return this.versions().filter(v=>v.template&&v.scopeId===scopeId&&this.visible(scopeId,v.entryId,context)).map(v=>({id:v.id,version:v.version,entryId:v.entryId,goalId:v.goalId,title:v.template.title,objective:v.template.objective,parameters:v.parameters??[],...this.status(v)}))
+    return this.versions().filter(v=>v.template&&v.scopeId===scopeId&&this.visible(scopeId,v.entryId,context)).map(v=>({id:v.id,version:v.version,entryId:v.entryId,goalId:v.goalId,title:v.template.title,objective:v.template.objective,parameters:v.parameters??[],overlay:v.overlay?{base:v.overlay.base,resolvedVersion:v.overlay.resolvedVersion}:undefined,...this.status(v)}))
       .sort((a,b)=>a.title.localeCompare(b.title)||b.version-a.version)
   }
   resolve(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
@@ -47,16 +56,34 @@ export class SavedSkills {
     if(!item?.template||item.scopeId!==scopeId||item.entryId!==entryId||!this.visible(scopeId,entryId,context))throw Error('Skill version is unavailable in this entry')
     return item
   }
+  private lifecycle(item:SkillVersion){
+    return this.host.store.get<Lifecycle>('skill-lifecycle',stableDigest([item.id,item.version]))
+  }
+  private overlayValidationKey(item:SkillVersion){
+    const scope=this.host.scopes.scope(item.scopeId),entry=this.host.scopes.binding(item.entryId)
+    const profiles=workerProfiles(this.host.config)
+    const workers=item.template.nodes.map(node=>{
+      const profile=profiles.find(p=>p.id===node.workerId)
+      const backend=profile&&this.host.config.backends[profile.backend]
+      const connections=profile?.toolConnections??backend?.defaults?.toolConnections??[]
+      return [node.id,node.workerId,profile?.state??null,profile?.backend??null,
+       connections.map(id=>[id,!!this.host.config.toolConnections[id]?.enabled])]
+    })
+    return stableDigest([item.overlay?.resolvedVersion,scope.revision,entry.revision,workers])
+  }
   status(item:SkillVersion){
-    const lifecycle=this.host.store.get<{state:'retired';revision:number}>('skill-lifecycle',stableDigest([item.id,item.version]))
+    const lifecycle=this.lifecycle(item)
     const outcomes=this.host.store.list<import('./router-goals.ts').RouterGoal>('router-goal')
       .filter(g=>g.scopeId===item.scopeId&&g.entryId===item.entryId&&g.contract?.skill?.id===item.id&&g.contract.skill.version===item.version)
     const passed=outcomes.filter(g=>g.state==='completed'&&g.finalRoundId&&this.host.store.get<{state:string}>('goal-verification',g.finalRoundId)?.state==='passed')
     const failed=outcomes.filter(g=>g.state==='held'&&this.host.store.list<{goalId:string;state:string}>('goal-verification').some(r=>r.goalId===g.id&&['failed','insufficient'].includes(r.state)))
-    return {state:lifecycle?.state??(item.validation!=='trial'||passed.length?'active':'candidate'),revision:lifecycle?.revision??0,passed:passed.length,failed:failed.length,validation:item.validation??'legacy'}
+    let state:LifecycleState=lifecycle?.state??(item.overlay?'candidate':item.validation!=='trial'||passed.length?'active':'candidate')
+    if(item.overlay&&(state==='active'||state==='validated')&&lifecycle?.validationKey!==this.overlayValidationKey(item))state='review_required'
+    return {state,revision:lifecycle?.revision??0,passed:passed.length,failed:failed.length,validation:item.overlay?'overlay':item.validation??'legacy'}
   }
   reusable(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
     const item=this.resolve(ref,scopeId,entryId,context)
+    if(item.overlay)throw Error('Overlay versions require a separately authorized manual run')
     if(this.status(item).state!=='active'||item.parameters?.length)throw Error('Automations require an accepted, active method with fixed inputs')
     return item
   }
@@ -110,8 +137,11 @@ export class SavedSkills {
     }
   }
   execute(ref:Ref,context:ScopeContext,operationId:string,quote:string,inputs?:Record<string,string>){
+    this.host.scopes.assertCurrent(context)
     const item=this.resolve(ref,context.route.scopeId,context.route.entryId,context),state=this.status(item).state
-    if(state==='retired'||state==='candidate'&&!context.trigger.human)throw Error('This method requires a new explicit trial or has been retired')
+    if(state==='retired')throw Error('This exact method version has been retired')
+    if(item.overlay&&(state!=='active'||!context.trigger.human))throw Error('An overlay requires explicit enablement and a new human request')
+    if(state==='candidate'&&!context.trigger.human)throw Error('This method requires a new explicit trial')
     const template=bindSkillParameters(item.template,item.parameters??[],inputs)
     this.workers(template,context.route.scopeId)
     return this.host.goals.command({...template,action:'start',operationId,expectedRevision:0,authorizationQuote:quote},context,undefined,ref)
@@ -119,12 +149,68 @@ export class SavedSkills {
   command(value:unknown,context?:ScopeContext):any{
     if(context)this.host.scopes.assertCurrent(context)
     const input=command.parse(value)
-    if(input.action==='retire'){
-      const item=this.resolve(input.skill,input.scopeId,input.entryId,context),status=this.status(item)
+    if(input.action==='overlay'||input.action==='upgrade_overlay'){
       if(context&&!this.host.scopes.canManage(context))throw Error('Scope manager required')
-      if(status.revision!==input.expectedRevision)throw Error('Skill changed. Refresh before retiring.')
-      this.host.store.atomic(()=>{this.host.store.requireEvolutionSchema();this.host.store.put('skill-lifecycle',stableDigest([item.id,item.version]),{id:item.id,version:item.version,scopeId:item.scopeId,entryId:item.entryId,goalId:item.goalId,state:'retired',revision:status.revision+1})})
-      return {retired:true}
+      return this.host.store.atomic(()=>{
+        const base=this.resolve(input.base,input.scopeId,input.entryId,context)
+        if(base.overlay||this.status(base).state!=='active')throw Error('Choose an active, non-overlay base version')
+        const family='skill-overlay-'+stableDigest([base.scopeId,base.entryId,base.id])
+        const latest=this.versions().filter(v=>v.id===family).sort((a,b)=>b.version-a.version)[0]
+        if(input.expectedVersion!==(latest?.version??0))throw Error('Overlay changed. Refresh before saving.')
+        let patch:SkillOverlay['patch']
+        if(input.action==='upgrade_overlay'){
+          const previous=this.resolve(input.skill,input.scopeId,input.entryId,context)
+          if(previous.id!==family||!previous.overlay||previous.overlay.base.id!==base.id||previous.overlay.base.version>=base.version)throw Error('Choose a newer version of the same base method')
+          patch=previous.overlay.patch
+        }else patch=capturePatch(base.template,input.edits)
+        const resolved=applyPatch(base.template,patch)
+        // applyPatch compares the new authorized base with values captured from
+        // the exact original base when this immutable overlay was created.
+        if(!resolved.template)return {conflicts:resolved.conflicts,conflictDetails:resolved.conflictDetails}
+        validateSkillParameters(resolved.template,base.parameters??[])
+        this.workers(resolved.template,base.scopeId)
+        const item:SkillVersion={id:family,version:input.expectedVersion+1,scopeId:base.scopeId,entryId:base.entryId,
+          goalId:base.goalId,acceptanceId:base.acceptanceId,template:resolved.template,parameters:base.parameters,
+          overlay:bindOverlay(input.base,base,patch,{template:resolved.template,parameters:base.parameters})}
+        this.host.store.requireEvolutionSchema()
+        this.host.store.put('skill-version',stableDigest([item.id,item.version]),item)
+        return item
+      })
+    }
+    if(input.action==='overlay_lifecycle'){
+      if(context&&!this.host.scopes.canManage(context))throw Error('Scope manager required')
+      return this.host.store.atomic(()=>{
+        const item=this.resolve(input.skill,input.scopeId,input.entryId,context),status=this.status(item)
+        if(!item.overlay||item.overlay.resolvedVersion!==input.resolvedVersion||status.revision!==input.expectedRevision||status.state==='retired')
+          throw Error('Overlay version or review changed. Refresh before continuing.')
+        let state:LifecycleState,validationKey:string|undefined
+        if(input.transition==='request_review'&&(status.state==='active'||status.state==='validated'))state='review_required'
+        else if(input.transition==='validate'&&(status.state==='candidate'||status.state==='review_required')){
+          validateSkillParameters(item.template,item.parameters??[])
+          this.workers(item.template,item.scopeId)
+          state='validated';validationKey=this.overlayValidationKey(item)
+        }else if(input.transition==='enable'&&status.state==='validated'){
+          validateSkillParameters(item.template,item.parameters??[])
+          this.workers(item.template,item.scopeId)
+          state='active';validationKey=this.overlayValidationKey(item)
+        }else throw Error('This overlay cannot take that lifecycle step')
+        const revision=status.revision+1
+        this.host.store.requireEvolutionSchema()
+        this.host.store.put('skill-lifecycle',stableDigest([item.id,item.version]),{id:item.id,version:item.version,scopeId:item.scopeId,
+          entryId:item.entryId,goalId:item.goalId,state,revision,validationKey})
+        return {state,revision}
+      })
+    }
+    if(input.action==='retire'){
+      if(context&&!this.host.scopes.canManage(context))throw Error('Scope manager required')
+      return this.host.store.atomic(()=>{
+        const item=this.resolve(input.skill,input.scopeId,input.entryId,context),status=this.status(item)
+        if(status.revision!==input.expectedRevision)throw Error('Skill changed. Refresh before retiring.')
+        if(status.state==='retired')return {retired:true}
+        this.host.store.requireEvolutionSchema()
+        this.host.store.put('skill-lifecycle',stableDigest([item.id,item.version]),{id:item.id,version:item.version,scopeId:item.scopeId,entryId:item.entryId,goalId:item.goalId,state:'retired',revision:status.revision+1})
+        return {retired:true}
+      })
     }
     if(input.action==='run'){
       const trigger=this.host.store.triggers.get(input.triggerId)
