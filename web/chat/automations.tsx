@@ -46,6 +46,16 @@ function stateLabel(state:string,L:L) {
   return labels[state]?L(...labels[state]):state;
 }
 const formatDate=(at:number,language:string)=>new Date(at).toLocaleString(language,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+function CompletionCheck({poll,language,L}:{poll?:Snapshot['completionPoll'];language:string;L:L}) {
+  const time=(at?:number|null)=>at==null?L('Unknown','未知'):formatDate(at,language);
+  const coverage=poll?.coverage==='complete'?L('Current sweep complete','本轮已核对所有已留存记录'):poll?.coverage==='partial'?L('Still checking','本轮仅核对了部分记录'):L('Unknown','未知');
+  return <div className="automation-record"><h2>{L('Local completion check','本地完成状态核对')}</h2><dl className="automation-properties">
+    <dt>{L('Last attempt','最近尝试')}</dt><dd>{time(poll?.lastAttempt)}</dd>
+    <dt>{L('Last full success','最近完整通过')}</dt><dd>{time(poll?.lastSuccess)}</dd>
+    <dt>{L('Coverage','覆盖情况')}</dt><dd>{coverage}</dd>
+    <dt>{L('Next eligible','下次可核对')}</dt><dd>{time(poll?.nextEligible)}</dd>
+  </dl></div>
+}
 function JsonDetails({title,value}:{title:string;value:unknown}) {return <details><summary>{title}</summary><pre>{JSON.stringify(value,null,2)}</pre></details>}
 function Field({label,children}:{label:string;children:ReactNode}) {return <label className="automation-field"><span>{label}</span>{children}</label>}
 function ReceiverSetup({L}:{L:L}) {return <details className="automation-receiver-setup"><summary>{L('Enable event receiver','启用方式')}</summary><p>{L('Add a receiver port to the startup configuration, restart Roppo, then refresh.','在启动配置中添加接收端口，重启 Roppo 后刷新。')}</p><pre>{JSON.stringify({webhooks:{port:4338}},null,2)}</pre></details>}
@@ -53,17 +63,20 @@ function ReceiverSetup({L}:{L:L}) {return <details className="automation-receive
 export function AutomationWorkspace({language}:{language:'en'|'zh-CN'}) {
   const L:L=(en,zh)=>language==='en'?en:zh;
   const [snapshot,setSnapshot]=useState<Snapshot>(),[selected,setSelected]=useState<string>(),[detail,setDetail]=useState<Detail>();
+  const [selectedTab,setSelectedTab]=useState<'tasks'|'events'>('tasks');
   const [creating,setCreating]=useState(new URLSearchParams(location.search).has('skill'));
   const [query,setQuery]=useState(''),[filter,setFilter]=useState('all'),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const [snapshotFailed,setSnapshotFailed]=useState(false),[detailFailed,setDetailFailed]=useState(false);
   const alive=useRef(false),working=useRef(false),pendingControls=useRef(new Map<string,string>());
   const generation=useRef(0),detailVersion=useRef(0),heading=useRef<HTMLHeadingElement>(null);
-  const load=async()=>{const v=++generation.current;const data=await request<Snapshot>('/webhooks');if(alive.current&&v===generation.current)setSnapshot(data)};
-  const readDetail=async(id:string)=>{const v=++detailVersion.current;const data=await request<Detail>('/webhooks/detail?id='+encodeURIComponent(id));if(alive.current&&v===detailVersion.current)setDetail(data)};
+  const load=async()=>{const v=++generation.current;try{const data=await request<Snapshot>('/webhooks');if(alive.current&&v===generation.current){setSnapshot(data);setSnapshotFailed(false)}}catch(e){if(alive.current&&v===generation.current)setSnapshotFailed(true);throw e}};
+  const readDetail=async(id:string)=>{const v=++detailVersion.current;try{const data=await request<Detail>('/webhooks/detail?id='+encodeURIComponent(id));if(alive.current&&v===detailVersion.current){setDetail(data);setDetailFailed(false)}}catch(e){if(alive.current&&v===detailVersion.current)setDetailFailed(true);throw e}};
   const run:Run=async action=>{if(working.current||!alive.current)return;working.current=true;setBusy(true);setError('');setNotice('');try{await action()}catch(e){if(alive.current)setError(errorMessage(e,L))}finally{working.current=false;if(alive.current)setBusy(false)}};
   useEffect(()=>{alive.current=true;void load().catch(e=>{if(alive.current)setError(errorMessage(e,L))});return()=>{alive.current=false;generation.current++;detailVersion.current++}},[]);
-  useEffect(()=>{setDetail(undefined);if(selected)void readDetail(selected).catch(e=>{if(alive.current)setError(errorMessage(e,L))});return()=>{detailVersion.current++}},[selected]);
+  useEffect(()=>{setDetail(undefined);setDetailFailed(false);if(selected)void readDetail(selected).catch(e=>{if(alive.current)setError(errorMessage(e,L))});return()=>{detailVersion.current++}},[selected]);
   useEffect(()=>{heading.current?.focus()},[selected,creating]);
   const refresh=async()=>{await load();if(selected)await readDetail(selected)};
+  const openGrant=(id:string,tab:'tasks'|'events'='tasks')=>{setSelectedTab(tab);setSelected(id);setNotice('');setError('')};
   const reset=()=>{setSelected(undefined);setCreating(false);setError('');setNotice('');history.replaceState(null,'','/configure#automations')};
   const grant=snapshot?.grants.find(g=>g.id===selected);
   const results=snapshot?.grants.filter(g=>(filter==='all'||automationState(g)===filter)&&[g.template.title,g.namespace,g.id].some(v=>v.toLowerCase().includes(query.toLowerCase())));
@@ -77,17 +90,29 @@ export function AutomationWorkspace({language}:{language:'en'|'zh-CN'}) {
       {error?<p className="automation-message" role="alert">{error} <button onClick={()=>void run(refresh)}>{L('Refresh','刷新')}</button></p>:null}
       {notice?<p className="automation-message" role="status">{notice}</p>:null}
       {!snapshot&&!error?<div className="automation-loading" role="status" aria-label={L('Loading automations','正在加载自动化')}><span/><span/><span/></div>:null}
-      {creating&&snapshot&&!snapshot.configured?<div className="automation-empty"><h2>{L('Event receiver is not enabled','事件接收未启用')}</h2><ReceiverSetup L={L}/></div>:creating?<AutomationEditor language={language} cancel={reset} saved={grant=>{setSnapshot(s=>({...s!,grants:[...s!.grants.filter(g=>g.id!==grant.id),grant]}));setCreating(false);setSelected(grant.id);setNotice(grant.receiving?L('Automation created. Check its current receiving state.','自动化已创建，请核对当前接收状态。'):L('Created with receiving paused. Rehearse an event, then explicitly start receiving.','已创建并暂停接收。请先预演事件，再显式开始接收。'));history.replaceState(null,'','/configure#automations')}}/>:selected?grant&&detail?<AutomationDetail key={grant.id} grant={grant} detail={detail} snapshot={snapshot!} language={language} run={run} busy={busy} control={control} refresh={refresh} notice={setNotice}/>:<div className="automation-loading" role="status" aria-label={L('Loading details','正在加载详情')}><span/><span/></div>:snapshot?.grants.length===0?<div className="automation-empty"><Zap size={28}/><h2>{snapshot.configured?L('No automations yet','暂无自动化'):L('Event receiver is not enabled','事件接收未启用')}</h2>{snapshot.configured?<button className="automation-primary" onClick={()=>{setCreating(true);setNotice('');setError('')}}><Plus size={16}/>{L('New automation','新建自动化')}</button>:<ReceiverSetup L={L}/>}</div>:snapshot?<>
+      {creating&&snapshot&&!snapshot.configured?<div className="automation-empty"><h2>{L('Event receiver is not enabled','事件接收未启用')}</h2><ReceiverSetup L={L}/></div>:creating?<AutomationEditor language={language} cancel={reset} saved={grant=>{setSnapshot(s=>({...s!,grants:[...s!.grants.filter(g=>g.id!==grant.id),grant]}));setCreating(false);openGrant(grant.id);setNotice(grant.receiving?L('Automation created. Check its current receiving state.','自动化已创建，请核对当前接收状态。'):L('Created with receiving paused. Rehearse an event, then explicitly start receiving.','已创建并暂停接收。请先预演事件，再显式开始接收。'));history.replaceState(null,'','/configure#automations')}}/>:selected?grant&&detail?.grant.id===grant.id?<AutomationDetail key={grant.id} initialTab={selectedTab} grant={grant} detail={detail} hideRecoveredCompletions={snapshotFailed||detailFailed} snapshot={snapshot!} language={language} run={run} busy={busy} control={control} refresh={refresh} notice={setNotice}/>:<div className="automation-loading" role="status" aria-label={L('Loading details','正在加载详情')}><span/><span/></div>:snapshot?.grants.length===0?<div className="automation-empty"><Zap size={28}/><h2>{snapshot.configured?L('No automations yet','暂无自动化'):L('Event receiver is not enabled','事件接收未启用')}</h2>{snapshot.configured?<button className="automation-primary" onClick={()=>{setCreating(true);setNotice('');setError('')}}><Plus size={16}/>{L('New automation','新建自动化')}</button>:<ReceiverSetup L={L}/>}</div>:snapshot?<>
+        {!snapshotFailed&&snapshot.recentCompletionNotices?.length?<section aria-label={L('Recent recovered completions','近期补记完成状态')}>
+          <h2>{L('Recent recovered completions','近期补记完成状态')}</h2>
+          {snapshot.recentCompletionNotices.map(n=>{
+            const g=snapshot.grants.find(g=>g.id===n.grantId);
+            if(!g)return null;
+            return <article className="automation-record" key={n.completionEventId}>
+              <div className="automation-record-title"><strong>{g.template.title}</strong><span>{n.confirmed?L('Callback confirmed','回传已确认'):L('Callback unconfirmed','回传尚未确认')}</span><time>{formatDate(n.observedAt,language)}</time></div>
+              <div className="automation-actions"><button onClick={()=>openGrant(g.id,'events')}>{L('View event history','查看事件记录')}</button></div>
+            </article>;
+          })}
+        </section>:null}
         <div className="automation-toolbar"><label className="automation-search"><Search size={17}/><input type="search" aria-label={L('Search automations','搜索自动化')} placeholder={L('Search automations','搜索自动化')} value={query} onChange={e=>setQuery(e.target.value)}/></label><select aria-label={L('Status','状态')} value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">{L('All statuses','全部状态')}</option>{['active','stopped','expired','revoked'].map(s=><option key={s} value={s}>{stateLabel(s,L)}</option>)}</select></div>
-        <div className="automation-list" aria-label={L('Automations','自动化列表')}>{results?.map(g=>{const recent=snapshot.receipts.find(r=>r.grantId===g.id);return <button className="automation-row" key={g.id} onClick={()=>{setSelected(g.id);setNotice('');setError('')}}><span className="automation-row-name"><strong>{g.template.title}</strong><span>{g.eventTypes.join(', ')}</span></span><span className="automation-state" data-state={automationState(g)}>{stateLabel(automationState(g),L)}</span><time>{recent?formatDate(recent.at,language):L('No events','暂无事件')}</time><ChevronRight size={16}/></button>})}{results?.length===0?<p className="automation-no-results">{L('No matching automations','没有匹配的自动化')}</p>:null}</div>
+        <div className="automation-list" aria-label={L('Automations','自动化列表')}>{results?.map(g=>{const recent=snapshot.receipts.find(r=>r.grantId===g.id);return <button className="automation-row" key={g.id} onClick={()=>openGrant(g.id)}><span className="automation-row-name"><strong>{g.template.title}</strong><span>{g.eventTypes.join(', ')}</span></span><span className="automation-state" data-state={automationState(g)}>{stateLabel(automationState(g),L)}</span><time>{recent?formatDate(recent.at,language):L('No events','暂无事件')}</time><ChevronRight size={16}/></button>})}{results?.length===0?<p className="automation-no-results">{L('No matching automations','没有匹配的自动化')}</p>:null}</div>
       </>:null}
-      {!creating&&!selected&&snapshot&&snapshot.grants.length>0?<details className="automation-maintenance"><summary>{L('Maintenance','维护')}</summary><button disabled={busy} onClick={()=>void run(async()=>{await request('/webhooks/reconcile',{});await refresh();setNotice(L('Delivery records reconciled.','投递记录已核对。'))})}>{L('Reconcile delivery records','核对投递记录')}</button><JsonDetails title={L('Protocol details','协议详情')} value={{protocol:snapshot.protocol,reconciliation:snapshot.reconciliation}}/></details>:null}
+      {!creating&&!selected&&snapshot&&snapshot.grants.length>0?<CompletionCheck poll={snapshotFailed?undefined:snapshot.completionPoll} language={language} L={L}/>:null}
+      {!creating&&!selected&&snapshot&&snapshot.grants.length>0?<details className="automation-maintenance"><summary>{L('Maintenance','维护')}</summary><button disabled={busy} onClick={()=>void run(async()=>{await request('/webhooks/reconcile',{});await refresh();setNotice(L('Local records refreshed. See coverage above.','已刷新本地记录，请查看上方覆盖情况。'))})}>{L('Reconcile delivery records','核对投递记录')}</button><JsonDetails title={L('Protocol details','协议详情')} value={{protocol:snapshot.protocol,reconciliation:snapshot.reconciliation}}/></details>:null}
     </div>
   </section>;
 }
 
-function AutomationDetail({grant:g,detail,snapshot,language,run,busy,control,refresh,notice}:{grant:Grant;detail:Detail;snapshot:Snapshot;language:string;run:Run;busy:boolean;control:(g:Grant,action:string,extra?:Record<string,unknown>)=>Promise<void>;refresh:()=>Promise<void>;notice:(text:string)=>void}) {
-  const L:L=(en,zh)=>language==='en'?en:zh,[tab,setTab]=useState<'tasks'|'events'|'connection'>('tasks'),[confirmation,setConfirmation]=useState<{title:string;action:()=>Promise<void>}|null>(null);
+function AutomationDetail({grant:g,detail,initialTab,hideRecoveredCompletions,snapshot,language,run,busy,control,refresh,notice}:{grant:Grant;detail:Detail;initialTab:'tasks'|'events';hideRecoveredCompletions:boolean;snapshot:Snapshot;language:string;run:Run;busy:boolean;control:(g:Grant,action:string,extra?:Record<string,unknown>)=>Promise<void>;refresh:()=>Promise<void>;notice:(text:string)=>void}) {
+  const L:L=(en,zh)=>language==='en'?en:zh,[tab,setTab]=useState<'tasks'|'events'|'connection'>(initialTab),[confirmation,setConfirmation]=useState<{title:string;action:()=>Promise<void>}|null>(null);
   const alive=useRef(false);useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[g.id]);
   const [rehearsalInvalidated,setRehearsalInvalidated]=useState(false);
   const rehearsing=useRef(false),invalidatedSnapshot=useRef<Snapshot|null>(null);
@@ -117,6 +142,8 @@ function AutomationDetail({grant:g,detail,snapshot,language,run,busy,control,ref
       {detail.receipts.slice().reverse().map(r=><article className="automation-record" key={r.id}><div className="automation-record-title"><strong>{r.event.type}</strong><span>{stateLabel(r.state,L)}</span><time>{formatDate(r.at,language)}</time></div>{r.error?<p>{r.error}</p>:null}{r.state==='held'&&r.error==='dispatch_failed'&&!r.goalId?<button disabled={busy} onClick={()=>void run(async()=>{await request('/webhooks/replay',{receiptId:r.id,operationId:crypto.randomUUID()});await refresh();notice(L('Event queued again.','事件已重新排队。'))})}>{L('Retry event','重试事件')}</button>:null}<JsonDetails title={L('Event data','事件内容')} value={r.event}/></article>)}
       {!detail.receipts.length?<p className="automation-no-results">{L('No events yet','暂无事件')}</p>:null}
       {deliveries.length?<><h2>{L('Result deliveries','结果回传')}</h2>{deliveries.map(d=><article className="automation-record" key={String(d.id)}><div className="automation-record-title"><strong>{stateLabel(String(d.state),L)}</strong><span>{String(d.attempts)} {L('attempts','次尝试')}</span></div>{d.error?<p>{String(d.error)}</p>:null}{['dead','held'].includes(String(d.state))?<button disabled={busy||!live} onClick={()=>void run(()=>control(g,'retry_delivery',{deliveryId:d.id}))}>{L('Retry delivery','重试回传')}</button>:null}<JsonDetails title={L('Delivery details','投递详情')} value={snapshot.attempts.filter(a=>a.delivery_id===d.id)}/></article>)}</>:null}
+      {!hideRecoveredCompletions&&live&&detail.completionNotices?.items.length?<div aria-label={L('Recovered completions','补记完成状态')}><h2>{L('Recovered completions','补记完成状态')}</h2>{detail.completionNotices.items.map(n=><article className="automation-record" key={n.completionEventId}><div className="automation-record-title"><strong>{L('Completion found in local records','已从本地记录补记完成')}</strong><span>{n.confirmed?L('Callback confirmed','回传已确认'):L('Callback unconfirmed','回传尚未确认')}</span><time>{formatDate(n.observedAt,language)}</time></div><code>{n.completionEventId}</code></article>)}</div>:null}
+      {!hideRecoveredCompletions&&live&&detail.completionNotices?.partial?<p className="automation-message">{L('Showing only recent recovered completions.','仅显示最近补记的完成记录。')}</p>:null}
       <JsonDetails title={L('Technical history','技术记录')} value={detail.events}/>
     </section>:null}
     {tab==='connection'?<section aria-label={L('Connection settings','接入设置')}>
