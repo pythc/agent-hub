@@ -40,13 +40,19 @@ function CleanupImpactPanel({reference,L}:{reference:ArtifactReference;L:Localiz
   <button type="button" aria-expanded={open} disabled={readSignal.aborted} onClick={()=>{setResult(null);setError(false);setOpen(v=>!v)}}>{open?L('Hide cleanup impact','收起清理影响'):L('Preview cleanup impact','预览清理影响')}</button>
   {open&&!readSignal.aborted?<section aria-label={L('Cleanup impact','清理影响')}>
    <p>{L('Read-only preview. This does not delete anything or revoke any link.','仅预览，不会删除内容或撤回链接。')}</p>
-   {error?<p role="status">{L('Preview unavailable for this version. Refresh to try again.','此版本暂不能预览，请刷新重试。')}</p>:result?<ul>
-    <li>{L('This version: ','只看此版本：')}{result.retained?L('retained local bytes','本地仍保留文件内容'):L('no retained local bytes','本地未保留文件内容')}</li>
-    <li>{L('All versions of this same task output: ','同一任务产物的全部版本：')}{result.series.truncated?L('sample only: ','仅为部分记录：'):null}{L(`${result.series.versions} visible versions; ${result.series.retainedVersions} with local bytes`,`可见 ${result.series.versions} 个版本，其中 ${result.series.retainedVersions} 个保留本地内容`)}</li>
-    <li>{L('Removing a card is not a separate action. This preview cannot delete a version or a series.','当前不支持单独移除卡片；此预览不能删除单个版本或全部版本。')}</li>
-    <li>{L('Link revocation is separate and this source does not track published links. Downloaded, cached, and third-party copies are not managed here.','链接撤回是独立操作；此来源没有发布链接记录，已下载、缓存及第三方副本不在管理范围内。')}</li>
-    <li>{L('No per-artifact recovery period is available.','暂不支持按产物恢复，没有可承诺的恢复期限。')}</li>
-   </ul>:<p role="status">{L('Reading cleanup impact…','正在读取清理影响…')}</p>}
+   {error?<p role="status">{L('Preview unavailable for this version. Refresh to try again.','此版本暂不能预览，请刷新重试。')}</p>:result?<>
+    <dl>
+     <dt>{L('Clear local contents of this version','清理此版本的本地内容')}</dt>
+     <dd>{result.retained?L('One local file version has contents that could be affected.','这一个版本仍有本地文件内容，清理可能影响它。'):L('This version has no retained local contents to clear.','此版本没有保留可清理的本地内容。')}{' '}{L('Other versions are outside this scope.','范围不包含其他版本。')}</dd>
+     <dt>{L('Clear all retained local versions of this output','清理此产物保留的全部本地版本')}</dt>
+     <dd>{result.series.truncated?L(`Partial scan: ${result.series.retainedVersions} of ${result.series.versions} visible sampled versions have local contents. The full count is unknown.`,`仅扫描部分记录：抽查到的 ${result.series.versions} 个可见版本中，${result.series.retainedVersions} 个保留本地内容；总数未知。`):L(`${result.series.retainedVersions} of ${result.series.versions} visible versions have local contents at the time of this preview.`,`预览时可见的 ${result.series.versions} 个版本中，${result.series.retainedVersions} 个保留本地内容。`)}</dd>
+     <dt>{L('Remove the card','移除卡片')}</dt>
+     <dd>{L('Card removal is not available as a separate action here. It is not the same as clearing local file versions.','这里不支持单独移除卡片。移除卡片和清理本地文件版本是不同的操作。')}</dd>
+     <dt>{L('Revoke an external link','撤回外部链接')}</dt>
+     <dd>{L('This preview does not track external links, so their existence and revocation status are unknown. Clearing local versions does not verify revocation.','此预览不跟踪外部链接，因此无法确认链接是否存在或已撤回；清理本地版本不等于确认链接已撤回。')}</dd>
+    </dl>
+    <p>{L('Downloaded copies, caches and third-party copies are outside this preview’s control. It cannot verify whether any of them are still available. No per-artifact recovery window is available.','已下载的文件、缓存和第三方副本不受此预览控制，也无法确认它们是否仍可访问。这里未提供单个产物的恢复期限。')}</p>
+   </>:<p role="status">{L('Reading cleanup impact…','正在读取清理影响…')}</p>}
   </section>:null}
  </div>
 }
