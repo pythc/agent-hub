@@ -29,7 +29,7 @@ export function peopleIndex(host:Runtime,entryId:string,actorId?:string){
  const source=host.sources.get(entry.sourceId)?.config
  const identity=store.get<VerifiedSource>('source-identity',entry.sourceId)
  const health=store.get<{status:string;at:number}>('source-health',entry.sourceId)
- const now=Date.now(),settingsAt=Date.parse(host.settings.current().at),since=Math.max(now-freshnessMs,settingsAt)
+ const now=Date.now(),settings=host.settings.current(),settingsAt=Date.parse(settings.at),since=Math.max(now-freshnessMs,settingsAt)
  if(!scope||scope.tenantId!==entry.tenantId||!scope.sourceIds.includes(entry.sourceId)||
   !source?.enabled||!source.capabilities.events||!identity||identity.sourceId!==source.id||identity.provider!==source.kind||
   identity.namespace!==entry.accountNamespace||!Number.isSafeInteger(identity.verifiedAt)||identity.verifiedAt>now||
@@ -50,6 +50,8 @@ export function peopleIndex(host:Runtime,entryId:string,actorId?:string){
  const allowed=new Set(source.allowedActors),bots=new Set(source.allowedBots)
  const withheld=new Set(store.list<{triggers?:string[]}>('history-plan').flatMap(plan=>plan.triggers??[]))
  const people=new Map<string,Person>()
+ // Treat this as a short-lived display snapshot, never as enduring authority.
+ let expiresAt=Math.min(now+15_000,health.at+freshnessMs)
  for(const row of rows.slice(0,candidateLimit)){
   if(people.size>=resultLimit)break
   const proof=JSON.parse(String(row.proof)) as NativeProof,route=JSON.parse(String(row.route)) as RouterRoute
@@ -64,6 +66,7 @@ export function peopleIndex(host:Runtime,entryId:string,actorId?:string){
    scopes.triggerRestriction(trigger)||stableDigest(trigger)!==proof.hash)continue
   const sentAt=Date.parse(trigger.at)
   if(!Number.isFinite(sentAt)||sentAt<since||sentAt>now||sentAt<identity.verifiedAt)continue
+  expiresAt=Math.min(expiresAt,proof.at+freshnessMs,sentAt+freshnessMs)
   people.set(proof.actorId,{
    id:stableDigest([entry.tenantId,entry.scopeId,entry.id,entry.sourceId,entry.accountNamespace,proof.actorId]),
    actorId:proof.actorId,sourceId:entry.sourceId,verifiedAt:proof.at,evidence:'native-entry-activity',
@@ -72,7 +75,7 @@ export function peopleIndex(host:Runtime,entryId:string,actorId?:string){
     Number.isSafeInteger(member.at)&&member.at>=since&&member.at>=identity.verifiedAt&&member.at<=sentAt?{membership:'observed-added' as const}:{}),
   })
  }
- return {schema:1 as const,availability:'partial' as const,entryId:entry.id,
+ return {schema:1 as const,availability:'partial' as const,entryId:entry.id,settingsRevision:settings.revision,expiresAt,
   team:{id:scope.id,label:scope.name,kind:'management-scope' as const},observedAt:now,people:[...people.values()],
   truncated:rows.length>candidateLimit||people.size>=resultLimit}
 }

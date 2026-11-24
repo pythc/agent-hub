@@ -24,6 +24,17 @@ Results are always partial or unavailable. No unobserved person, alias,
 organizational claim or unknown membership is promoted to a known fact. An
 unreported external removal cannot be ruled out inside the short observation
 window. This is not an input to an authorization decision, task routing,
-recipient resolution, chat/model context or permission assignment. External
-organization connectors, human confirmation workflows, aliases and UI remain
-outside this slice.
+recipient resolution, chat/model context or permission assignment.
+
+In Connections, the operator may enter exactly one binding ID from the
+existing Router management Groups and entries table, then request recent
+observations. The panel does not enumerate, prefetch or poll any people's
+records, and is available only when the current connection settings show an
+enabled event source. The server still determines entry eligibility for each
+read. The display is cleared on an entry change, workspace/session invalidation,
+settings revision change, plugin changes, page hiding or after the earliest
+evidence expiry, capped at 15 seconds. It never keeps the last result after
+a failed read. Revocations on the host that have not yet reached the workspace
+are reflected on the next read; the bounded display is not live monitoring.
+External organization connectors, human confirmation workflows and aliases
+remain outside this slice.

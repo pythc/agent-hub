@@ -6,6 +6,7 @@ import {readCredentialInformation,credentialInformationLabel,type CredentialInfo
 import {useWorkspaceTransport,type WorkspacePageContext} from './workspace-context.tsx'
 import type {WorkspaceBinding} from './workspace-transport.ts'
 import './connector-management.css'
+import {EntryPeople} from './entry-people.tsx'
 type Snapshot=ReturnType<ConnectorService['snapshot']>
 type Definition=Snapshot['definitions'][number]
 type InformationView={owner:string;data:CredentialInformation|null;phase:'loading'|'ready'|'failed'|'stale'|'changed'}
@@ -98,6 +99,8 @@ export function ConnectorManagement({language}:{language:'en'|'zh-CN'}){
   {!data?<p className="connector-loading">{!error?<LoaderCircle className="connector-spin" size={18}/>:null}{error?L('Connections are unavailable. Try refreshing.','暂时无法读取连接，请重试刷新。'):L('Loading connections…','正在读取连接…')}</p>:<>
    {!data.instances.length?<div className="connector-empty"><Plug size={28}/><h2>{L('Connect your first app','连接第一个应用')}</h2><p>{L('Choose an installed app. More platforms are available through plugins.','选择已安装应用，其他平台可通过插件添加。')}</p><button onClick={()=>{if(current(workspace))setCreating(true)}}>{L('Choose an installed app','选择已安装应用')}<ChevronRight size={16}/></button></div>:null}
    <div className="connector-information-note" aria-live="polite"><p>{L('Service access is not verified by this check.','此项检查不代表服务可用。')}</p>{information.owner===workspace.contextKey&&['failed','stale'].includes(information.phase)?<p role="status">{L('Information check unavailable','暂时无法检查资料')}</p>:null}{information.owner===workspace.contextKey&&information.data?.settingsRevision===data.revision?<time dateTime={new Date(information.data.observedAt).toISOString()}>{information.phase==='stale'?L('Earlier record · ','先前记录 · '):L('Read at · ','读取于 · ')}{time(information.data.observedAt)}</time>:null}</div>
+   {data.instances.some(instance=>instance.enabled&&instance.capabilities.events)&&!busy&&!error
+    ?<EntryPeople key={workspace.contextKey+':'+data.revision} language={language} settingsRevision={data.revision}/>:null}
    <div className="connector-grid">{data.instances.map(instance=><article className="connector-card" key={instance.id} data-source-id={instance.id}>
     <header><div>{(data.definitions.find(d=>d.kind===instance.kind)?.label??instance.kind)!==instance.label?<span className="connector-kind">{data.definitions.find(d=>d.kind===instance.kind)?.label??instance.kind}</span>:null}<h2>{instance.label}</h2></div><span className={'connector-pill '+(instance.enabled?'is-enabled':'')}>{instance.enabled?L('Enabled','已启用'):L('Disabled','已停用')}</span></header>
     {!instance.enabled?<p className="connector-detail">{L('Review access before enabling this connection.','启用连接前，请先核对访问权限。')}</p>:null}
