@@ -47,6 +47,7 @@ type CompletionPoll={lastAttempt:number|null;lastSuccess:number|null;coverage:'u
 type CompletionNotice={completionEventId:string;grantId:string;goalId:string;observedAt:number}
 const completionPage=100
 const completionDisplayLimit=100
+const completionOverviewLimit=10
 const emptyCompletionPoll:CompletionPoll={lastAttempt:null,lastSuccess:null,coverage:'unknown',nextEligible:null,cursor:0,through:null}
 
 /** Host-owned grants, durable inbox and callback outbox. No second task engine. */
@@ -344,13 +345,29 @@ export class Webhooks {
   const acknowledged=this.host.store.db.prepare('SELECT 1 FROM webhook_attempts WHERE delivery_id=? AND status BETWEEN 200 AND 299 LIMIT 1').get(deliveryId)
   return {confirmed:!!acknowledged,state:typeof s?.state==='string'?s.state:null}
  }
+ private visibleCompletionNotice(notice:CompletionNotice){
+  const {completionEventId,grantId,goalId}=notice
+  if(!this.currentCompletion(completionEventId,grantId,goalId))return undefined
+  return {...notice,confirmed:this.completionDelivery(completionEventId,grantId).confirmed}
+ }
  private completionNotices(grantId:string){
   const rows=this.host.store.db.prepare("SELECT body FROM records WHERE kind='webhook-completion-notice' AND json_extract(body,'$.grantId')=? ORDER BY json_extract(body,'$.observedAt') DESC,id DESC LIMIT ?").all(grantId,completionDisplayLimit+1)
   return {partial:rows.length>completionDisplayLimit,items:rows.slice(0,completionDisplayLimit).flatMap(r=>{
-   const notice=JSON.parse(String(r.body)) as CompletionNotice
-   if(!this.currentCompletion(notice.completionEventId,grantId,notice.goalId))return []
-   return [{...notice,confirmed:this.completionDelivery(notice.completionEventId,grantId).confirmed}]
+   const notice=this.visibleCompletionNotice(JSON.parse(String(r.body)) as CompletionNotice)
+   return notice?[notice]:[]
   })}
+ }
+ private recentCompletionNotices(){
+  const rows=this.host.store.db.prepare("SELECT body FROM records WHERE kind='webhook-completion-notice' ORDER BY json_extract(body,'$.observedAt') DESC,id DESC LIMIT ?").all(completionDisplayLimit)
+  const items:{completionEventId:string;grantId:string;observedAt:number;confirmed:boolean}[]=[]
+  for(const row of rows){
+   const notice=this.visibleCompletionNotice(JSON.parse(String(row.body)) as CompletionNotice)
+   if(!notice)continue
+   const {completionEventId,grantId,observedAt,confirmed}=notice
+   items.push({completionEventId,grantId,observedAt,confirmed})
+   if(items.length===completionOverviewLimit)break
+  }
+  return items
  }
  /** Existing maintenance can run this; this observer only writes local facts. */
  private checkCompletions(nextEligible:number){
@@ -387,7 +404,7 @@ export class Webhooks {
    try{this.host.store.put('webhook-completion-poll',key,this.completionPollFailure)}catch{}
   }
  }
- snapshot(){return {completionPoll:this.completionPollStatus(),configured:!!this.host.config.webhooks,protocol:webhookProtocol(this.host.store.db),waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id),rehearsal:this.rehearsalStatus(g)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
+ snapshot(){return {completionPoll:this.completionPollStatus(),recentCompletionNotices:this.recentCompletionNotices(),configured:!!this.host.config.webhooks,protocol:webhookProtocol(this.host.store.db),waits:this.continuations.list(),reconciliation:this.host.store.get('webhook-reconciliation','latest'),grants:this.host.store.list<WebhookGrant>('webhook-grant').map(g=>({...g,keys:this.host.store.get('webhook-keys',g.id),rehearsal:this.rehearsalStatus(g)})),receipts:this.receipts().slice(-1000).reverse().map(r=>({...this.publicReceipt(r),grantId:r.grantId,error:r.error,at:r.at,waitId:r.waitId})),deliveries:this.host.store.db.prepare('SELECT id,event_id,grant_id,goal_id,state,attempts,next_at,created_at,error,payload_hash FROM webhook_deliveries ORDER BY created_at DESC LIMIT 1000').all(),attempts:this.host.store.db.prepare('SELECT * FROM webhook_attempts ORDER BY at DESC LIMIT 1000').all()}}
  flush(){
   if(this.closing||this.host.isPaused)return
   for(const row of this.host.store.db.prepare("SELECT d.id FROM webhook_deliveries d JOIN records g ON g.kind='webhook-grant' AND g.id=d.grant_id WHERE d.state='pending' AND d.next_at<=? AND json_extract(g.body,'$.deliveryPaused')=0 ORDER BY d.created_at LIMIT 20").all(this.now())){

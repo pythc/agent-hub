@@ -14,9 +14,14 @@ when its callback record is missing, held or dead and has no 2xx receipt.
 The CloudEvent id used by the callback is the notice's completionEventId and
 persistent key. Rechecking never appends another notice for that event; a later
 2xx receipt updates its display in place. Existing Event Automations detail
-shows the latest notices under Events, after another authority check. Revoked
-or stale evidence is not displayed. The notice contains no event payload,
-artifact, credentials, or callback target.
+shows the latest notices under Events. The automation overview shows up to ten
+recent notices from at most the latest hundred retained candidates; a notice
+opens its automation's Events tab. Both views recheck current authority on
+each server read. Revoked or stale evidence is not displayed. Overview items
+contain only the completion ID, grant ID, observation time and callback
+confirmation, not the goal ID, event payload, artifact, credentials or target.
+The overview and detail read the same stored notice; recovery updates it in
+place, rather than creating a second notice.
 
 The completion observer does not dispatch a task, initiate or retry a callback,
 or send a new message. Existing explicitly authorized callback maintenance,
