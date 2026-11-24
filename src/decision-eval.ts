@@ -61,7 +61,16 @@ function pairedMetrics(pairs:readonly Pair[],field:(typeof metrics)[number]){
 
 function summary(pairs:readonly Pair[]){
  const labeled=pairs.filter(row=>row.shadow.auxiliary.status==='ok')
+ const pairedRouting={bothCorrect:0,offOnlyCorrect:0,shadowOnlyCorrect:0,neitherCorrect:0}
+ const auxiliaryStatus={ok:0,unavailable:0,stale:0,skipped:0}
+ for(const {fixture,off,shadow} of pairs){
+  const offCorrect=off.hostRoute===fixture.expectedRoute,shadowCorrect=shadow.hostRoute===fixture.expectedRoute
+  pairedRouting[offCorrect?(shadowCorrect?'bothCorrect':'offOnlyCorrect'):(shadowCorrect?'shadowOnlyCorrect':'neitherCorrect')]++
+  auxiliaryStatus[shadow.auxiliary.status]++
+ }
  return {
+  pairedRouting,
+  auxiliaryStatus,
   cases:pairs.length,
   offHostMisroutes:pairs.filter(row=>row.off.hostRoute!==row.fixture.expectedRoute).length,
   shadowHostMisroutes:pairs.filter(row=>row.shadow.hostRoute!==row.fixture.expectedRoute).length,

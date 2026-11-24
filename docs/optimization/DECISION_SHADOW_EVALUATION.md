@@ -43,6 +43,11 @@ unknown fields and never serializes malformed input into output.
   and drift in host route, gate or effect. A denied action with any effect,
   or either observation diverging from the expected gate/effect, also fails
   the observational invariant even if both modes made the same error.
+- Overall and category summaries also show paired host accuracy: both correct,
+  only off correct, only shadow correct, or neither correct. Opposite changes
+  can cancel out in aggregate misroute totals; neither correctness nor equal
+  totals relax the existing host drift and fence checks. Auxiliary coverage is
+  split into labeled, unavailable, stale and skipped observations.
 - Use same-boundary per-case wall-clock router latency (ms), auxiliary latency
   (ms, off may be observed zero), rework turns, and total modeled cost in USD
   millionths. Use explicit `null` if evidence for a metric isn't known
