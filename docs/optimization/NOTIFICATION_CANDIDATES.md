@@ -24,3 +24,24 @@ resolver in this slice. Those paths retain existing behavior; no cross-channel
 dedupe, new provider reads, automatic remediation, or external freshness is
 claimed. Delivery already in flight or uncertain cannot be cancelled or
 silently replayed by this guard. Retained outbox rows define the dedupe horizon.
+
+## Host execution holds
+
+The normal turn controller now persists a typed hold cause when the
+autonomous turn allowance or repeated-failure threshold stops a goal.
+It evaluates the authorized original audience, current causal evidence and
+retained outbox state before evaluating the copy callback. A repeat of
+the same cause is not news; repeated failures after a delivered
+turn-allowance notice are a separate fact and the text explains the change.
+Pending notices are rechecked even during quiet time; a resumed,
+replaced, or no-longer-authorized goal does not send its old hold notice.
+No model-authored reason string is enough to mint a fact. Explicit silent
+mode suppresses these notifications. Existing schedule policies and
+delivery mechanics still apply after the candidate passes.
+
+This does not convert arbitrary goal errors, model-generated scheduled
+findings, or provider PR lifecycle events into facts. Only host-owned
+project review and turn-controller state are resolved. The host does not
+fetch GitHub state in this path, so a remotely merged PR alone is not a
+supported invalidation signal. An unresolved current local review has no
+arbitrary expiration; current evidence is revalidated before delivery.

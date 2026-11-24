@@ -1398,11 +1398,11 @@ export class Runtime {
           this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'goalContractReplaced'});blocked.delete(channel);continue
         }
       }
-      const notificationDelay=this.proactive.notificationDelay(message,replyOwner)
-      if(notificationDelay.quiet||notificationDelay.nextAt>Date.now())continue
       if((message.id.startsWith(candidateNoticePrefix)||replyOwner?.candidate)&&!this.goals.currentNotification(message.id,replyOwner?.goalId,message.channel,replyOwner?.candidate)){
         this.store.outbox.withdraw(message.id);this.store.audit({type:'router.reply-withdrawn',id:message.id,reason:'notificationFactSuperseded'});blocked.delete(channel);continue
       }
+      const notificationDelay=this.proactive.notificationDelay(message,replyOwner)
+      if(notificationDelay.quiet||notificationDelay.nextAt>Date.now())continue
       if(message.ticketId&&this.replacedTask(message.ticketId)){this.store.outbox.withdraw(message.id);blocked.delete(channel);continue}
       const ticket = message.ticketId && this.store.tickets.get(message.ticketId)
       if (ticket && (ticket.ended?.by === 'human' || this.store.get<Run>('run', ticket.id)?.phase === 'human')) continue
