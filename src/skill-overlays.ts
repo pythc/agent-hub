@@ -37,11 +37,15 @@ export function capturePatch(template:Template,edits:Edit[]):Patch[]{
   return patch
 }
 
-export function applyPatch(template:Template,patch:Patch[]){
-  const conflictDetails=patch.flatMap(({edit,expected})=>{
+export function overlayConflicts(template:Template,patch:Patch[]){
+  return patch.flatMap(({edit,expected})=>{
     const next=read(template,edit)
     return next===expected?[]:[{field:key(edit),oldBase:expected,overlay:edit.value,newBase:next??null}]
   })
+}
+
+export function applyPatch(template:Template,patch:Patch[]){
+  const conflictDetails=overlayConflicts(template,patch)
   if(conflictDetails.length)return {conflicts:conflictDetails.map(conflict=>conflict.field),conflictDetails}
   const resolved={...template,nodes:template.nodes.map(node=>({...node}))}
   for(const {edit} of patch){
