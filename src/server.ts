@@ -277,6 +277,13 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(path==='/api/connectors/validate'){send(res,200,connectors.validate(input));return}
       if(path==='/api/connectors/plan'){const p=connectors.newConnectionPlan(input);send(res,200,{...onboarding.sourcePlan(p.revision,p.source,p.credentials,p.revalidate),review:p.review});return}
       if(path==='/api/connectors/probe'){send(res,200,await connectors.probe(input));return}
+      if(path==='/api/connectors/targets/discover'){
+        const controller=new AbortController(),closed=()=>controller.abort()
+        res.once('close',closed)
+        try{const found=await connectors.discoverTargets(input,()=>requireCurrentOperator(req),controller.signal);if(!res.destroyed){requireCurrentOperator(req);res.setHeader('Cache-Control','no-store');send(res,200,found)}}
+        finally{res.removeListener('close',closed)}
+        return
+      }
       if(path==='/api/connectors/activation/review'){send(res,200,connectors.activationReview(input));return}
       if(path==='/api/connectors/control'){send(res,200,connectors.control(input));return}
       send(res,404,{code:'not_found'});return
