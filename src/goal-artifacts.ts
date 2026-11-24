@@ -112,6 +112,35 @@ export class GoalArtifacts {
       return {schema:1,kind:'goal-artifact',id:artifact.id,version:artifact.version,sha256:artifact.sha256,name:basename(artifact.path),mediaType:artifact.mime,bytes:artifact.size,category,visibility:'operator_workspace',retention:'subject_to_history_cleanup',availability:retained?'retained':'unavailable',publication:'not_tracked',downloadPath:retained?'/goal-artifacts/'+encodeURIComponent(artifact.id):null}
     }))
   }
+  /** Read-only inventory for a pinned task file. This is not a deletion plan or grant. */
+  cleanupImpact(id:string){
+    return this.host.scopes.readOnly(()=>this.host.memory.readOnly(()=>{
+      const anchor=this.operatorVersion(id)
+      const store=this.host.store
+      if(this.host.memory.cleanup.blocked('goal-artifact',id,anchor))throw Error('Artifact version unavailable')
+      const retained=!!store.db.prepare('SELECT 1 FROM goal_artifact_bytes WHERE id=?').get(id)
+      // A series is exactly one goal/node/path. Never group globally by file name,
+      // task title, hash equality, or the mutable latest pointer.
+      const sampleLimit=200
+      const rows=store.db.prepare(`SELECT r.id,r.body, b.id IS NOT NULL AS retained FROM records r
+        LEFT JOIN goal_artifact_bytes b ON b.id=r.id
+        WHERE r.kind='goal-artifact' AND json_extract(r.body,'$.goalId')=?
+          AND json_extract(r.body,'$.nodeId')=? AND json_extract(r.body,'$.path')=?
+          AND json_type(r.body,'$.mime')='text'
+        ORDER BY r.id LIMIT ?`).all(anchor.goalId,anchor.nodeId,anchor.path,sampleLimit+1)
+      let versions=0,retainedVersions=0
+      for(const row of rows.slice(0,sampleLimit)){
+        const version=JSON.parse(String(row.body)) as ArtifactVersion
+        if(String(row.id)!==version.id||
+          this.host.memory.cleanup.blocked('goal-artifact',String(row.id),version))continue
+        versions++;if(row.retained)retainedVersions++
+      }
+      return {schema:1 as const,artifactId:anchor.id,version:anchor.version,retained,
+        series:{versions,retainedVersions,truncated:rows.length>sampleLimit},
+        card:'not_supported' as const,linkRevocation:'not_tracked' as const,recovery:'not_supported' as const,
+        thirdPartyCopies:'outside_management' as const,mutationAvailable:false as const}
+    }))
+  }
   download(id:string){
     const artifact=this.operatorVersion(id)
     return {artifact,bytes:this.bytes(id)}

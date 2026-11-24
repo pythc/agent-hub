@@ -1,9 +1,62 @@
 import {useEffect,useState} from 'react'
 import type {ArtifactCatalog} from '../../src/artifact-catalog.ts'
+import type {GoalArtifacts} from '../../src/goal-artifacts.ts'
+import type {ArtifactReference} from '../../src/artifact-reference.ts'
 import {useWorkspaceTransport} from './workspace-context.tsx'
 import {parseArtifactCatalog} from './artifact-catalog-model.ts'
 import {ArtifactReferenceDetails} from './artifact-reference-details.tsx'
 import './worker-templates.css'
+type CleanupImpact=ReturnType<GoalArtifacts['cleanupImpact']>
+type Localize=(en:string,zh:string)=>string
+
+function parseCleanupImpact(value:unknown,ref:ArtifactReference):CleanupImpact|null{
+ const p=value as CleanupImpact
+ if(!p||p.schema!==1||p.artifactId!==ref.id||p.version!==ref.version||typeof p.retained!=='boolean'||
+   p.card!=='not_supported'||p.linkRevocation!=='not_tracked'||p.recovery!=='not_supported'||
+   p.thirdPartyCopies!=='outside_management'||p.mutationAvailable!==false||!p.series||
+   typeof p.series.truncated!=='boolean'||!Number.isInteger(p.series.versions)||
+   p.series.versions<0||p.series.versions>200||!Number.isInteger(p.series.retainedVersions)||
+   p.series.retainedVersions<0||p.series.retainedVersions>p.series.versions)return null
+ return p
+}
+
+function CleanupImpactPanel({reference,L}:{reference:ArtifactReference;L:Localize}){
+ const {binding,contextKey,readSignal}=useWorkspaceTransport()
+ const [open,setOpen]=useState(false),[result,setResult]=useState<CleanupImpact|null>(null),[error,setError]=useState(false)
+ const {id,version}=reference
+ useEffect(()=>{
+  if(!open)return
+  const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal])
+  setError(false);setResult(null)
+  void binding.request<unknown>('/goal-artifact-versions/'+encodeURIComponent(id)+'/cleanup-impact',undefined,false,undefined,signal).then(data=>{
+   if(signal.aborted)return
+   const impact=parseCleanupImpact(data,reference)
+   if(!impact)throw Error('cleanup_impact_unavailable')
+   setResult(impact)
+  }).catch(()=>{if(!signal.aborted)setError(true)})
+  return()=>controller.abort()
+ },[binding,contextKey,id,version,open,readSignal])
+ return <div>
+  <button type="button" aria-expanded={open} disabled={readSignal.aborted} onClick={()=>{setResult(null);setError(false);setOpen(v=>!v)}}>{open?L('Hide cleanup impact','收起清理影响'):L('Preview cleanup impact','预览清理影响')}</button>
+  {open&&!readSignal.aborted?<section aria-label={L('Cleanup impact','清理影响')}>
+   <p>{L('Read-only preview. This does not delete anything or revoke any link.','仅预览，不会删除内容或撤回链接。')}</p>
+   {error?<p role="status">{L('Preview unavailable for this version. Refresh to try again.','此版本暂不能预览，请刷新重试。')}</p>:result?<>
+    <dl>
+     <dt>{L('Clear local contents of this version','清理此版本的本地内容')}</dt>
+     <dd>{result.retained?L('One local file version has contents that could be affected.','这一个版本仍有本地文件内容，清理可能影响它。'):L('This version has no retained local contents to clear.','此版本没有保留可清理的本地内容。')}{' '}{L('Other versions are outside this scope.','范围不包含其他版本。')}</dd>
+     <dt>{L('Clear all retained local versions of this output','清理此产物保留的全部本地版本')}</dt>
+     <dd>{result.series.truncated?L(`Partial scan: ${result.series.retainedVersions} of ${result.series.versions} visible sampled versions have local contents. The full count is unknown.`,`仅扫描部分记录：抽查到的 ${result.series.versions} 个可见版本中，${result.series.retainedVersions} 个保留本地内容；总数未知。`):L(`${result.series.retainedVersions} of ${result.series.versions} visible versions have local contents at the time of this preview.`,`预览时可见的 ${result.series.versions} 个版本中，${result.series.retainedVersions} 个保留本地内容。`)}</dd>
+     <dt>{L('Remove the card','移除卡片')}</dt>
+     <dd>{L('Card removal is not available as a separate action here. It is not the same as clearing local file versions.','这里不支持单独移除卡片。移除卡片和清理本地文件版本是不同的操作。')}</dd>
+     <dt>{L('Revoke an external link','撤回外部链接')}</dt>
+     <dd>{L('This preview does not track external links, so their existence and revocation status are unknown. Clearing local versions does not verify revocation.','此预览不跟踪外部链接，因此无法确认链接是否存在或已撤回；清理本地版本不等于确认链接已撤回。')}</dd>
+    </dl>
+    <p>{L('Downloaded copies, caches and third-party copies are outside this preview’s control. It cannot verify whether any of them are still available. No per-artifact recovery window is available.','已下载的文件、缓存和第三方副本不受此预览控制，也无法确认它们是否仍可访问。这里未提供单个产物的恢复期限。')}</p>
+   </>:<p role="status">{L('Reading cleanup impact…','正在读取清理影响…')}</p>}
+  </section>:null}
+ </div>
+}
+
 export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
  const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh
@@ -32,6 +85,7 @@ export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
    <h2>{label[language]}</h2>
    <a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#artifact-view/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current workspace view','打开当前工作区视图')}</a>
    {reference.kind==='workspace-view'?<p><a href={'#artifact-view-version/'+reference.id+'/'+reference.version} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{L('Inspect this fixed version','查看此固定版本')}</a></p>:null}
+   {reference.kind==='goal-artifact'?<CleanupImpactPanel key={contextKey+':'+reference.id+':'+reference.version} reference={reference} L={L}/>:null}
    <ArtifactReferenceDetails reference={reference} current={reference.kind==='goal-artifact'&&reference.availability==='unavailable'?'unavailable':'unchecked'} L={L}/>
   </article>)}
  </section>

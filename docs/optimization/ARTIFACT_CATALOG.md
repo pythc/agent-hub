@@ -19,3 +19,24 @@ No writes, new object grants, publication, external delivery, history retention 
 - Browser visual, mobile, keyboard and reduced-motion interaction checks and real IM: deferred, not passed.
 
 O32 remains open: this slice is not a persistent cross-kind registry, does not globally index conversation attachments and does not add historical attachment/View resolution. Overall completed-item count is unchanged.
+
+## O36 cleanup impact preview (task file slice)
+
+The operator catalog now offers an on-demand, read-only preview for a pinned
+task file version. It reuses the same operator, goal-context and read-only
+guards as file metadata plus the cleanup fence. The series is identified by
+the authorized version's exact goal/node/path, not by user input or filename
+alone. The response gives only counts for a bounded sample of that series and
+whether the selected version has retained local bytes; no paths, other record
+identifiers, file bytes, unpublished links, or third-party details are shown.
+The flag for a partial sample is explicit. This is not a stable snapshot or
+authorization for any destructive action.
+
+The preview distinguishes the selected version, the whole series, card removal,
+link revocation, and recovery. The base lacks independently scoped per-artifact
+delete/card mutations, a registry of published links for this source, and a
+per-artifact restore window. Those capabilities are not added here. Local bytes
+do not describe backup, cache, downloaded or third-party copies. Whole-history
+cleanup is governed by its existing separate confirmation and revocation flow.
+Conversation attachments, Workspace View history, publication/revocation
+producers, and any restore flow remain outside this slice.

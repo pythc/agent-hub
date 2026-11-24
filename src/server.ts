@@ -394,6 +394,13 @@ export async function serve(runtime: Runtime,options:{configurationPreview?:bool
       if(cursor!==undefined&&!/^[a-f0-9-]{36}$/.test(cursor)){send(res,400,{code:'catalog_cursor_expired'});return}
       try{send(res,200,artifactCatalog(runtime,cursor))}catch(error){if(error instanceof ArtifactCatalogCursorError){send(res,400,{code:'catalog_cursor_expired'});return}throw error}return
     }
+    const cleanupImpact=path.match(/^\/goal-artifact-versions\/([a-f0-9]{64})\/cleanup-impact$/)
+    if(cleanupImpact){
+      if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
+      if(new URL(req.url!,'http://localhost').search){send(res,400,{code:'invalid_artifact_cleanup_query'});return}
+      try{send(res,200,runtime.artifacts.cleanupImpact(cleanupImpact[1]!))}
+      catch{send(res,404,{code:'artifact_unavailable'})}return
+    }
     if(path.startsWith('/goal-artifact-versions/')){
       if(req.method!=='GET'){send(res,405,{code:'method_not_allowed'});return}
       try{send(res,200,runtime.artifacts.describe(path.slice('/goal-artifact-versions/'.length)))}
