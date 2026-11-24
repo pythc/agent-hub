@@ -79,3 +79,17 @@ The selected task's progress page now exposes its existing RecoveryManifest in a
 The UI accepts only schema 1 metadata matching the selected task ID, current settings revision and observation digest. It rejects malformed/duplicate checkpoints, replay permission, inconsistent original-session availability and non-reconciliation guidance for an unknown effect. It copies only safe fixed fields and renders fixed bilingual text; raw identity/digest values, provider content and extra payload fields are not shown. Older snapshots without a manifest render no section; mismatched information asks for refresh rather than displaying stale guidance.
 
 This is presentation of the existing captured-workspace snapshot, not another request, export, backup, restore engine or recovery authorization. Existing task actions and their server-side rechecks remain unchanged. No new controls are enabled by the manifest, and no uncertain effect is replayed. Full external-effect checkpoint coverage and executable restoration remain outside this slice. Automated rendering/validation and original transport/recovery tests are covered; actual browser interaction, narrow-screen/keyboard/reduced-motion and real provider/IM acceptance remain unverified.
+
+### Managed work cancellation evidence
+The current assignment's trace distinguishes a stop request, unconfirmed shutdown,
+and confirmed managed-work shutdown. This does not cancel a previously committed
+external action. Earlier effects may remain and must be checked independently.
+
+Workspace-write managed commands reserve canonical local workspace keys, including
+an existing Git common directory shared by linked worktrees. A competing write
+fails before launch; after shutdown, reread the workspace before retrying. Reads
+and different workspace roots remain independent. This is a host-side guard,
+not a remote idempotency mechanism. Nested roots, unmanaged processes, browser
+sessions, and external writes are not coordinated by this reservation. Browser
+handoff retains its existing controls. No write reservation is released on an
+elapsed timer alone.

@@ -1,7 +1,7 @@
 import type {TaskStatusProjection} from '../../src/execution-status.ts'
 
 export type StatusState<K extends 'execution'|'effects'|'acceptance'|'delivery'>=TaskStatusProjection[K]['state']|'unknown'
-export type StatusView={observedAt:number|null;available:boolean;execution:StatusState<'execution'>;effects:StatusState<'effects'>;receiptCount:number|null;acceptance:StatusState<'acceptance'>;freshness:TaskStatusProjection['acceptance']['freshness'];delivery:StatusState<'delivery'>;counts:TaskStatusProjection['delivery']['counts']|null;scope:TaskStatusProjection['delivery']['scope']|'unknown';hostRecord:boolean}
+export type StatusView={observedAt:number|null;available:boolean;execution:StatusState<'execution'>;effects:StatusState<'effects'>;receiptCount:number|null;acceptance:StatusState<'acceptance'>;freshness:TaskStatusProjection['acceptance']['freshness'];delivery:StatusState<'delivery'>;counts:TaskStatusProjection['delivery']['counts']|null;scope:TaskStatusProjection['delivery']['scope']|'unknown';hostRecord:boolean;cancellation?:TaskStatusProjection['execution']['cancellation']}
 const object=(value:unknown):Record<string,unknown>|undefined=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:undefined
 function statusState<S extends string>(value:unknown,allowed:readonly S[]):S|'unknown'{return typeof value==='string'&&(allowed as readonly string[]).includes(value)?value as S:'unknown'}
 const count=(value:unknown):number|null=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null
@@ -43,5 +43,6 @@ export function readTaskStatus(value:unknown):StatusView{
  const counts=deliveryCounts(delivery?.counts),scope=statusState(delivery?.scope,['local','external','mixed','not_recorded'] as const)
  const validDelivery=counts!==null&&compatibleDelivery(deliveryState,counts,scope,delivery?.evidence)
  if(!validDelivery)deliveryState='unknown'
- return {available:true,observedAt,execution:statusState(execution?.state,['not_started','queued','running','waiting_input','interrupted','failed','cancelled','finished'] as const),effects:effectState,receiptCount,acceptance:acceptanceState,freshness,delivery:deliveryState,counts:validDelivery?counts:null,scope:validDelivery?scope:'unknown',hostRecord:validDelivery&&delivery?.evidence==='host_record'}
+ const cancellation=statusState(execution?.cancellation,['requested','stopped','unconfirmed'] as const)
+ return {available:true,observedAt,...(cancellation!=='unknown'?{cancellation}:{}),execution:statusState(execution?.state,['not_started','queued','running','waiting_input','interrupted','failed','cancelled','finished'] as const),effects:effectState,receiptCount,acceptance:acceptanceState,freshness,delivery:deliveryState,counts:validDelivery?counts:null,scope:validDelivery?scope:'unknown',hostRecord:validDelivery&&delivery?.evidence==='host_record'}
 }

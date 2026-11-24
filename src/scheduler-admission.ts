@@ -73,7 +73,7 @@ export function schedulerAdmission(host:Host,candidate:SchedulerCandidate,inFlig
  for(const f of inFlight){const set=hintSets.get(f.ticketId)??new Set<string>();set.add(f.backendId);hintSets.set(f.ticketId,set)}
  const hint=(id:string)=>{const set=hintSets.get(id);return set?.size===1?[...set][0]:undefined}
  const workItems=host.store.list<WorkItem>('work')
- const unresolved=(ticketId:string)=>workItems.some(w=>w.ticketId===ticketId&&(['starting','running'].includes(w.state)||w.state==='interrupted'&&!w.schedulerReleasedAt))
+ const unresolved=(ticketId:string)=>workItems.some(w=>w.ticketId===ticketId&&(['starting','running'].includes(w.state)||(w.state==='interrupted'||w.cancellation?.state==='unconfirmed'||!!w.resourceKeys?.length)&&!w.schedulerReleasedAt))
  const project=(id:string)=>{let p=projects.get(id);if(!p){p=projectIdentity(host,id);projects.set(id,p)}return p}
  const add=(ticketId:string,state:Occupant['state'],backend?:string,cwd?:string)=>{
   const p=project(ticketId);let target:Identity|undefined
@@ -88,7 +88,7 @@ export function schedulerAdmission(host:Host,candidate:SchedulerCandidate,inFlig
  for(const item of workItems){
   if(item.ticketId===candidate.ticketId&&item.id===candidate.excludeWorkId)continue
   if(['starting','running'].includes(item.state))add(item.ticketId,'used',workBackend(host,item)??(item.kind==='shell'?hint(item.ticketId):undefined),item.cwd)
-  else if(item.state==='interrupted'&&!item.schedulerReleasedAt)add(item.ticketId,'reserved',workBackend(host,item)??(item.kind==='shell'?hint(item.ticketId):undefined),item.cwd)
+  else if((item.state==='interrupted'||item.cancellation?.state==='unconfirmed'||!!item.resourceKeys?.length)&&!item.schedulerReleasedAt)add(item.ticketId,'reserved',workBackend(host,item)??(item.kind==='shell'?hint(item.ticketId):undefined),item.cwd)
  }
  for(const flight of inFlight)add(flight.ticketId,'reserved',flight.backendId)
  const cp=project(candidate.ticketId);let cw:Identity|undefined
