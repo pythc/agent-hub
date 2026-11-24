@@ -5,6 +5,10 @@ export type StatusView={observedAt:number|null;available:boolean;execution:Statu
 const object=(value:unknown):Record<string,unknown>|undefined=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:undefined
 function statusState<S extends string>(value:unknown,allowed:readonly S[]):S|'unknown'{return typeof value==='string'&&(allowed as readonly string[]).includes(value)?value as S:'unknown'}
 const count=(value:unknown):number|null=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null
+function verdictCounts(value:unknown,total:number|null){
+ const row=object(value),passed=count(row?.passed),failed=count(row?.failed),insufficient=count(row?.insufficient)
+ return total!==null&&passed!==null&&failed!==null&&insufficient!==null&&passed<=total&&failed<=total-passed&&insufficient===total-passed-failed?{passed,failed,insufficient}:undefined
+}
 const buckets=['pending','retry_wait','sending','uncertain','held','dropped','recorded'] as const
 function deliveryCounts(value:unknown):TaskStatusProjection['delivery']['counts']|null{
  const raw=object(value),keys=['total',...buckets] as const
@@ -40,7 +44,8 @@ export function readTaskStatus(value:unknown):StatusView{
  if(freshness==='stale'||freshness==='not_recorded'&&['passed','failed','insufficient','errored'].includes(acceptanceState))acceptanceState='stale'
  const bound=freshness==='current'?object(acceptance?.evidence):null,program=count(bound?.program),independent=count(bound?.independent)
  const integrationCommit=typeof bound?.integrationCommit==='string'&&/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(bound.integrationCommit)?bound.integrationCommit:undefined
- const acceptanceEvidence=program!==null&&independent!==null?{program,independent,...(integrationCommit?{integrationCommit}:{})}:undefined
+ const singleTaskResults=object(bound?.singleTaskResults),programResults=verdictCounts(singleTaskResults?.program,program),independentResults=verdictCounts(singleTaskResults?.independent,independent)
+ const acceptanceEvidence=program!==null&&independent!==null?{program,independent,...(integrationCommit?{integrationCommit}:{}),...(programResults&&independentResults?{singleTaskResults:{program:programResults,independent:independentResults}}:{})}:undefined
  let effectState=statusState(effects?.state,['not_recorded','in_progress','recorded','unknown'] as const)
  if(effectState==='recorded'&&(receiptCount===null||receiptCount===0))effectState='unknown'
  let deliveryState:StatusState<'delivery'>=statusState(delivery?.state,['not_recorded','pending','retry_wait','sending','uncertain','held','dropped','recorded','partial'] as const)

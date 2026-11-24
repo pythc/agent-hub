@@ -8,12 +8,13 @@ export type ExecutionStatus='not_started'|'queued'|'running'|'waiting_input'|'in
 export type EffectStatus='not_recorded'|'in_progress'|'recorded'|'unknown'
 export type AcceptanceStatus='not_recorded'|'pending'|'running'|'passed'|'failed'|'insufficient'|'errored'|'stale'
 export type DeliveryStatus='not_recorded'|'pending'|'retry_wait'|'sending'|'uncertain'|'held'|'dropped'|'recorded'|'partial'
+export type CheckVerdictCounts={passed:number;failed:number;insufficient:number}
 export interface TaskStatusProjection {
  schema:1
  observedAt:number
  execution:{state:ExecutionStatus}
  effects:{state:EffectStatus;receiptCount:number}
- acceptance:{state:AcceptanceStatus;freshness:'current'|'stale'|'unknown'|'not_recorded';evidence?:{program:number;independent:number;integrationCommit?:string}}
+ acceptance:{state:AcceptanceStatus;freshness:'current'|'stale'|'unknown'|'not_recorded';evidence?:{program:number;independent:number;integrationCommit?:string;singleTaskResults?:{program:CheckVerdictCounts;independent:CheckVerdictCounts}}}
  delivery:{state:DeliveryStatus;counts:{total:number;pending:number;retry_wait:number;sending:number;uncertain:number;held:number;dropped:number;recorded:number};evidence:'none'|'host_record';scope:'local'|'external'|'mixed'|'not_recorded'}
 }
 
@@ -90,9 +91,22 @@ function acceptance(host:Runtime,ticket:Ticket):TaskStatusProjection['acceptance
   if(freshness==='unknown')return {...unknownAcceptance}
   if(freshness==='stale')return {state:'stale',freshness}
   const integration=snapshot.binding?.integration
+  const program=round.checks.filter(c=>c.method==='program'),independent=round.checks.filter(c=>c.method==='agent')
+  const summarize=(checks:VerificationRound['checks']):CheckVerdictCounts=>({
+   passed:checks.filter(c=>c.verdict==='passed').length,
+   failed:checks.filter(c=>c.verdict==='failed').length,
+   insufficient:checks.filter(c=>c.verdict==='insufficient').length
+  })
+  // A task view can explain its own round, not disclose detailed results
+  // of other tasks mixed into a shared goal verification round.
+  const singleTask=round.ticketIds.length===1&&snapshot.tasks.length===1&&
+   !round.delegationIds?.length&&!snapshot.delegations?.length&&
+   program.length+independent.length===round.checks.length&&
+   round.checks.every(c=>c.verdict==='passed'||c.verdict==='failed'||c.verdict==='insufficient')
   return {state:round.state as AcceptanceStatus,freshness,evidence:{
-   program:round.checks.filter(c=>c.method==='program').length,
-   independent:round.checks.filter(c=>c.method==='agent').length,
+   program:program.length,
+   independent:independent.length,
+   ...(singleTask?{singleTaskResults:{program:summarize(program),independent:summarize(independent)}}:{}),
    ...(integration?.state==='recorded'?{integrationCommit:integration.commit}:{})
   }}
  }catch{return {...unknownAcceptance}}
