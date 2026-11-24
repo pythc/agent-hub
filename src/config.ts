@@ -35,6 +35,7 @@ const sourceSchema = z.object({
   allowedActors: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
   capabilities:sourceCapabilitiesSchema,
+  resourceAccess:z.object({history:z.boolean().optional(),files:z.boolean().optional()}).strict().optional(),
   options:z.record(z.string(),z.unknown()).prefault({}),
   observed:z.boolean().optional(),
   allowedBots: z.array(z.string()).default([]),

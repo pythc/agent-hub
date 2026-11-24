@@ -39,7 +39,12 @@ export class Settings {
         const previous=saved.config.sources.find(s=>s.id===source.id)
         if(!previous)return source
         const keys=['allowedActors','allowedBots','enabled','admission','listenScopes','pollSeconds','memberSync']
-        return {...source,...Object.fromEntries(keys.filter(k=>k in previous).map(k=>[k,(previous as any)[k]]))}
+        // A changed deployment cannot inherit an operator's previous allow.
+        // Keep explicit revocations fail-closed until the new source is reviewed.
+        const resourceAccess=JSON.stringify(sourceDeployment(source))===JSON.stringify(sourceDeployment(previous))
+          ? previous.resourceAccess??source.resourceAccess
+          : {...source.resourceAccess,...(previous.resourceAccess?.history===false?{history:false}:{}),...(previous.resourceAccess?.files===false?{files:false}:{})}
+        return {...source,...Object.fromEntries(keys.filter(k=>k in previous).map(k=>[k,(previous as any)[k]])),...(resourceAccess===undefined?{}:{resourceAccess})}
       })
       Object.assign(config,configSchema.parse({...config,...dynamic,sources}));validateBackendSelection(config);normalizeWorkerCount(config)
       store.put('settings','current',{...saved,config})
@@ -53,6 +58,12 @@ export class Settings {
     const next=this.store.atomic(()=>{
       const previous=this.current()
       if(previous.revision!==expected)throw new SettingsError('settings_conflict','Settings conflict. Read current revision before saving.',409)
+      // Legacy settings editors may omit the split controls; omission does
+      // not revoke a prior local restriction.
+      if(update.sources)update.sources=update.sources.map(source=>{
+        const previous=this.config.sources.find(s=>s.id===source.id)?.resourceAccess
+        return previous?{...source,resourceAccess:{...previous,...source.resourceAccess}}:source
+      })
       const config=configSchema.parse({...this.config,...update})
       validateBackendSelection(config)
       normalizeWorkerCount(config)

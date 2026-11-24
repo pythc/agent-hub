@@ -1,3 +1,4 @@
+import {connectorResourceAccess,supportsConnectorResourceControls} from './connector-resource-access.ts'
 import {managedConnections} from './managed-config.ts'
 import {sourceDeployment} from './connector-config.ts'
 import {ProcessSource} from './plugin-process.ts'
@@ -8,6 +9,7 @@ import {z} from 'zod'
 import {Ajv2020} from 'ajv/dist/2020.js'
 import {configSchema,type SourceConfig} from './config.ts'
 import type {Runtime} from './runtime.ts'
+import type {ManagementScope} from './router-scope.ts'
 import {pointer} from './plugin-package.ts'
 import {stableDigest} from './sources.ts'
 
@@ -16,6 +18,7 @@ const revision=z.number().int().nonnegative()
 const credentialPresent=(name:string)=>Object.hasOwn(process.env,name)&&typeof process.env[name]==='string'&&process.env[name]!.length>0
 const draftSchema=z.object({revision,kind:id,label:z.string().trim().min(1).max(100),actors:z.array(z.string().trim().min(1).max(200)).max(100),intent:z.literal('draft').optional(),fields:z.record(z.string().max(100),z.union([z.string().max(16000),z.array(z.string().max(300)).max(100)])).default({}),credentials:z.record(z.string().max(100),z.string().min(1).max(16000)).default({}),credentialMode:z.enum(['value','environment']).default('value')}).strict()
 export const connectorProbeSchema=z.object({sourceId:id,revision,level:z.enum(['configuration','reachable','authentication','capabilities']),requestId:z.string().uuid()}).strict()
+const resourceAccessSchema=z.object({sourceId:id,revision,capability:z.enum(['history','files']),enabled:z.boolean(),intent:z.literal('update_resource_access'),requestId:z.string().uuid()}).strict()
 const controlSchema=z.object({sourceId:id,revision,enabled:z.boolean(),requestId:z.string().uuid()}).strict()
 export type ConnectorLayer=z.infer<typeof connectorProbeSchema>['level']
 export type DiagnosticStatus='running'|'passed'|'failed'|'unsupported'|'unknown'|'stale'|'interrupted'
@@ -43,7 +46,7 @@ function writableField(definition:Definition,path:string){
  const parts=path.slice(1).split('/'),root=parts[0]
  // Setup fields may edit only a plugin-specific subtree. Identity, authority,
  // grants, workspace and instance switches remain host-controlled.
- const reserved=new Set(['id','label','kind','allowedActors','allowedBots','enabled','cwd','workspace','sandbox','capabilities','observed','admission','listenScopes','pollSeconds','memberSync','repository','replyUrl','tokenEnv'])
+ const reserved=new Set(['id','label','kind','allowedActors','allowedBots','enabled','cwd','workspace','sandbox','capabilities','observed','admission','listenScopes','resourceAccess','pollSeconds','memberSync','repository','replyUrl','tokenEnv'])
  return !!root&&parts.length>1&&!reserved.has(root)&&!parts.some(part=>['__proto__','prototype','constructor'].includes(part))&&(root==='options'||definition.scopesPath?.startsWith('/'+root+'/')===true)
 }
 function setField(target:Record<string,unknown>,path:string,value:unknown){
@@ -173,6 +176,8 @@ export class ConnectorManagement {
  snapshot(){
   const host=this.host(),current=host.settings.current().revision
   const definitions=host.sourceRegistry.connectionDefinitions().map(d=>({kind:d.kind,label:d.label,pluginId:'pluginId'in d?d.pluginId:undefined,version:'version'in d?d.version:undefined,setup:d.setup,scopesPath:d.scopesPath,fields:d.setup?.fields.map(f=>({...f,path:fieldPath(d,f),credential:Object.values(d.credentials).includes(fieldPath(d,f))})),network:d.network,setupAvailable:!!d.setup?.fields.length&&d.setup.fields.every(field=>writableField(d,fieldPath(d,field)))}))
+  const managementScopes=new Map(host.store.list<ManagementScope>('management-scope').map(scope=>[scope.id,scope]))
+  const entries=host.scopes.bindings()
   const diagnostics=host.store.list<ConnectorDiagnostic>('connector-diagnostic').map(record=>{const safe=this.publicRecord(record);return safe.status==='running'&&!this.active.has(safe.id)?{...safe,status:'interrupted' as const,code:'probe_interrupted'}:safe})
   return {revision:current,definitions,instances:host.config.sources.filter(s=>!['local','delegation'].includes(s.kind)).map(config=>{
    const definition=this.definition(config.kind),scopes=host.sourceRegistry.scopes(config)??(definition.scopesPath?pointer(config,definition.scopesPath):[])??[]
@@ -182,8 +187,21 @@ export class ConnectorManagement {
     const saved=record?host.store.get<SavedDiagnostic>('connector-diagnostic',record.id):undefined
     return [level,saved?{...this.observed(saved),current:!this.invalidation(saved)}:null]
    }))
-   return {repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
-  }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
+   // Display only the intersection of current local configuration and active
+   // bindings. No scope IDs, task grants, or inferred provider access.
+   const bound=entries.filter(entry=>{
+    const owner=managementScopes.get(entry.scopeId)
+    return entry.sourceId===config.id&&entry.provider===config.kind&&!!owner&&owner.tenantId===entry.tenantId&&owner.sourceIds.includes(config.id)&&host.scopes.sourceActive(entry)
+   })
+   const mode=(configured:boolean)=>!config.enabled||!configured?'disabled' as const:'requires_context' as const
+   const capabilityMatrix={schema:1 as const,revision:current,sourceId:config.id,
+    verification:'not_verified' as const,scopeModel:managementScopes.size?'scoped' as const:'legacy' as const,
+    intersectionEntryCount:bound.length,groupHistoryEntryCount:bound.filter(entry=>entry.history==='group'&&!entry.privateActor).length,
+    modes:{events:mode(config.capabilities.events),replies:mode(config.capabilities.replies),
+     history:mode(connectorResourceAccess(config,'history')),files:mode(connectorResourceAccess(config,'files')),
+     mcp:'separate_connection' as const}}
+   return {resourceAccessControls:supportsConnectorResourceControls(config.kind)&&config.enabled&&config.capabilities.resources,repairAvailable:this.repairAvailable(config),id:config.id,kind:config.kind,label:config.label??definition.label,enabled:config.enabled,configured:this.configured(config),scopeCount:Array.isArray(scopes)?scopes.length:0,capabilities:config.capabilities,capabilityMatrix,layers,realCall:{status:'not_tested' as const},credentialReferences:Object.values(definition.credentials).filter(path=>typeof pointer(config,path)==='string').map(path=>({field:definition.setup?.fields.find(f=>fieldPath(definition,f)===path)?.label??'Credential',available:credentialPresent(String(pointer(config,path)))}))}
+  }),tools:host.toolConnections.configured().map(({id,label,enabled,transport,allowedTools})=>({id,label,enabled,transport,toolCount:allowedTools.length,authorization:enabled?'requires_worker_and_task' as const:'disabled' as const,verification:'not_tested' as const})),diagnostics:diagnostics.slice(-100)}
  }
  /** Secret values stay in this host-only return value. The server passes them
   * directly to Onboarding.sourcePlan and returns only its reviewed plan. */
@@ -257,6 +275,20 @@ export class ConnectorManagement {
  validate(value:unknown){
   try{const plan=this.plan(value);return {valid:true,revision:plan.revision,code:'configuration_valid',networkTested:false,realCall:false,startsDisabled:true,credentialAvailability:this.credentialAvailability(plan)}}
   catch(error){if(error instanceof ConnectorError&&error.code==='connector_invalid')return {valid:false,code:error.code,networkTested:false,realCall:false,issues:error.issues??[]};throw error}
+ }
+ setResourceAccess(value:unknown){
+  const input=safeParse(resourceAccessSchema,value),host=this.host(),fingerprint=stableDigest(input)
+  return host.store.atomic(()=>{
+   const previous=host.store.get<{fingerprint:string;result:unknown}>('connector-resource-control',input.requestId)
+   if(previous){if(previous.fingerprint!==fingerprint)throw new ConnectorError('connector_request_conflict',409);return previous.result}
+   this.checkRevision(input.revision)
+   const source=this.source(input.sourceId)
+   if(!supportsConnectorResourceControls(source.kind)||!source.enabled||!source.capabilities.resources)throw new ConnectorError('connector_unsupported',409)
+   const saved=host.updateSettings(input.revision,{sources:host.config.sources.map(s=>s.id===source.id?{...s,resourceAccess:{...s.resourceAccess,[input.capability]:input.enabled}}:s)})
+   const result={sourceId:source.id,capability:input.capability,enabled:input.enabled,revision:saved.revision}
+   host.store.put('connector-resource-control',input.requestId,{fingerprint,result});host.store.audit({type:'connector.resource-control',...result})
+   return result
+  })
  }
  control(value:unknown){
   const input=safeParse(controlSchema,value),host=this.host(),fingerprint=stableDigest(input),receipt=host.store.get<{fingerprint:string;result:unknown}>('connector-control',input.requestId)

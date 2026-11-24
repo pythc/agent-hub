@@ -1,3 +1,4 @@
+import {assertConnectorResourceAccess,connectorResourceAccess} from '../connector-resource-access.ts'
 import {WSClient, decryptFile, type WSClientOptions} from '@wecom/aibot-node-sdk'
 import {createHash} from 'node:crypto'
 import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs'
@@ -117,8 +118,10 @@ export class WecomSource extends MessageSource {
    try{await this.client!.replyStream(frame,'receipt-'+digest(key),'消息已送达后台，结果稍后返回本会话。',true);record.receipt='sent'}catch{record.receipt='uncertain'}
    ctx.store.put('wecom-inbox',key,record)
    for(const [i,asset] of assets.entries()){
+    if(!connectorResourceAccess(this.config,'files')){asset.error='Connection file access is disabled';continue}
     try{
      const d=downloads[i]!,downloaded=await this.download(d.url,d.key,this.options.downloadHosts,this.abort.signal),data=Buffer.isBuffer(downloaded)?downloaded:downloaded.buffer
+     if(!connectorResourceAccess(this.config,'files')){asset.error='Connection file access is disabled';continue}
      if(!Buffer.isBuffer(downloaded)&&downloaded.filename)asset.name=basename(downloaded.filename).slice(0,120)
      if(data.length>8_000_000)throw Error('Oversized media')
      const state=ctx.store.get<{config:{stateDir:string}}>('settings','current')?.config.stateDir
@@ -131,10 +134,12 @@ export class WecomSource extends MessageSource {
   this.ingest(record)
  }
  async context(thread:string){
+  assertConnectorResourceAccess(this.config,'conversation')
   if(!this.validThread(thread)||!this.ctx)throw Error('WeCom conversation is not available')
   return this.ctx.store.list<Inbox>('wecom-inbox').filter(r=>r.trigger.source===this.config.id&&r.trigger.threads[0]?.id===thread).sort((a,b)=>a.receivedAt-b.receivedAt).slice(-20).map(r=>r.view)
  }
  async read(request:{resource:string;trigger?:Trigger;pageSize:number}){
+  assertConnectorResourceAccess(this.config,request.resource)
   const t=request.trigger;if(!t||t.source!==this.config.id||!this.ctx)throw Error('An anchored WeCom trigger is required')
   if(!this.validThread(t.threads[0]?.id??''))throw Error('WeCom conversation is no longer configured')
   const r=this.ctx.store.get<Inbox>('wecom-inbox',String(t.meta.messageKey));if(!r||r.trigger.id!==t.id)throw Error('WeCom message unavailable')

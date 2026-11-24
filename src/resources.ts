@@ -1,3 +1,4 @@
+import {assertConnectorResourceAccess,connectorResourceAccess,supportsConnectorResourceControls} from './connector-resource-access.ts'
 import {taskView,type TaskContinuation} from './task-context.ts'
 import {randomUUID} from 'node:crypto'
 import {readFileSync,readdirSync,realpathSync,statSync,mkdirSync,writeFileSync} from 'node:fs'
@@ -106,26 +107,48 @@ export class Resources {
    const threadId=principal.agentId?this.host.store.get<{threadId?:string}>('work',principal.agentId)?.threadId:run?.threadId
    return {resources:resourceCatalog,worker:!!principal.ticketId,backend:this.host.model.describe?.(threadId,principal.agentId?'subagent':'worker'),commandSandbox:{driver:this.host.config.work.sandboxDriver,enabled:this.host.config.work.sandboxDriver!=='disabled'}}
   }
+  const sourceResource=this.connectorResource(resource)
+  const checkConnector=()=>{if(!sourceResource)return;const current=this.host.sources.get(sourceResource.sourceId)?.config;if(!current)throw Error('Source is unavailable');assertConnectorResourceAccess(current,sourceResource.operation)}
+  checkConnector()
   if(input.cursor){
    const cached=this.host.store.get<any>('resource-page',input.cursor)
    if(!cached||cached.expires<Date.now()||cached.resource!==resource||cached.principal!==JSON.stringify(principal)||cached.scopeSignature!==signature)throw Error('Unknown or expired page cursor')
    return this.textPage(cached.text,offset,limit,input.cursor,resource)
   }
   let data=await this.load(resource,principal,pageSize)
+  checkConnector()
   if(scopeSignature()!==signature)throw Error('Context changed during resource read')
   if(data?.kind==='file'){
    const bytes=Buffer.from(data.data,'base64');if(bytes.length>8000000)throw Error('Attachment exceeds 8 MB')
+   if(sourceResource){const source=this.host.sources.get(sourceResource.sourceId)?.config;if(!source||!connectorResourceAccess(source,'files'))throw Error('Connection file access is disabled')}
    const id=randomUUID(),name=attachmentName(data.name)
    const directory=join(this.host.config.stateDir,'assets',id);mkdirSync(directory,{recursive:true,mode:0o700})
    const path=join(directory,name==='.'||name==='..'?'attachment':name);writeFileSync(path,bytes,{mode:0o600})
-   data={id,name,bytes:bytes.length,path,ticketId:principal.ticketId,resource:'asset/'+id}
+   data={id,name,bytes:bytes.length,path,ticketId:principal.ticketId,resource:'asset/'+id,...(sourceResource?{connectorSourceId:sourceResource.sourceId}:{})}
    this.host.store.put('asset',id,data)
   }
-  if(data&&typeof data==='object'&&data.kind==='image')return data
+  if(data&&typeof data==='object'&&data.kind==='image'){if(sourceResource){const source=this.host.sources.get(sourceResource.sourceId)?.config;if(!source||!connectorResourceAccess(source,'files'))throw Error('Connection file access is disabled')}return data}
   if(Array.isArray(data))return {items:data.slice(offset,offset+pageSize),nextOffset:offset+pageSize<data.length?offset+pageSize:null,total:data.length,resource}
   const text=typeof data==='string'?data:JSON.stringify(data,null,2),cursor=randomUUID()
   this.host.store.put('resource-page',cursor,{resource,principal:JSON.stringify(principal),scopeSignature:signature,text,expires:Date.now()+3600000})
   return this.textPage(text,offset,limit,cursor,resource)
+ }
+ private connectorResource(resource:string){
+  const [head,id,...tail]=resource.split('/')
+  if(!id)return
+  if(head==='asset'){
+   const asset=this.host.store.get<{connectorSourceId?:string;kind?:string;uploadId?:string;artifactId?:string}>('asset',id)
+   if(asset?.connectorSourceId)return {sourceId:asset.connectorSourceId,operation:'asset/'+id}
+   // Old materializations had no connector provenance. Never assume an unidentified
+   // file is unrelated to a currently revoked connection.
+   if(asset&&!asset.kind&&!asset.uploadId&&!asset.artifactId&&this.host.config.sources.some(s=>supportsConnectorResourceControls(s.kind)&&s.resourceAccess?.files===false))throw Error('Legacy attachment source is unknown after connection file access was revoked')
+   return
+  }
+  if(head==='source')return {sourceId:id,operation:tail.join('/')}
+  if(head==='trigger-source'||head==='wecom'||head==='feishu'){
+   const trigger=this.host.store.triggers.get(id)
+   if(trigger)return {sourceId:trigger.source,operation:tail.join('/')}
+  }
  }
  private textPage(text:string,offset:number,limit:number,cursor:string,resource:string){return {text:text.slice(offset,offset+limit),characters:text.length,offset,nextOffset:offset+limit<text.length?offset+limit:null,cursor,resource}}
  private async load(resource:string,p:Principal,pageSize:number):Promise<any>{
@@ -249,6 +272,7 @@ export class Resources {
  authorizeSourceRead(p:Principal,triggerId:string,resource:string){
    const trigger=this.reached(p,triggerId),source=this.host.sources.get(trigger.source)
    if(!source?.read||!source.config.enabled||!source.config.capabilities.resources)throw Error('Source does not provide enabled resource reads')
+   assertConnectorResourceAccess(source.config,resource)
    if(!this.host.sourceRegistry.allowsScope(source.config,String(trigger.meta.scope??trigger.meta.chat)))throw Error('Source scope is unavailable')
    if(p.ticketId)this.sourcePermission(this.ticket(p),trigger.source,resource)
    this.scopedSourceRead(p,resource,trigger)
