@@ -2,7 +2,15 @@
 
 Quiet hours apply to wholly scheduled outbox notices, never to a direct human
 reply or an internal Worker transfer. They are evaluated against the IANA
-wall clock, optionally restricted to an existing source or plan topic. The
+wall clock, optionally restricted by source, plan, exact topic label and
+importance (`normal` / `high`). Operators can set topic and importance on
+each plan. The stored run revision supplies this classification, so plan
+edits do not reclassify older notices. Legacy notices without a classification
+still match unfiltered rules but cannot match a filter on a missing field.
+All selected dimensions must match the same run. If only some runs in a
+combined notice match, delay the notice intact rather than replacing it
+with digest metadata. Classifying a plan as high importance is not an urgent
+exception. The
 legacy default holds eligible notices for their normal delivery after the
 quiet window. Operators can opt into a metadata-only workbench digest. This
 atomically drops each not-yet-attempted original outbox candidate and records

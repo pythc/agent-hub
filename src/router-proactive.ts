@@ -1,6 +1,6 @@
 import {schedulePlanState,scheduledRunLifecycle} from './schedule-lifecycle.ts'
 import {z} from 'zod'
-import {quietHoursSchema,quietUntil} from './notification-quiet-hours.ts'
+import {notificationImportanceSchema,notificationTopicSchema,quietHoursSchema,quietUntil} from './notification-quiet-hours.ts'
 import type {Delivery} from './store.ts'
 import type {Runtime} from './runtime.ts'
 import type {Trigger,Mandate} from './vendor/dsh-core/index.ts'
@@ -18,7 +18,7 @@ import {timingSchema,nextTime,latestDue,type Timing} from './schedule-time.ts'
 const id=z.string().min(1).max(300)
 const dutySchema=z.object({id,name:id,entryIds:z.array(id).min(1),instruction:z.string().min(1).max(16000),mode:z.enum(['off','observe','auto']).default('observe')}).strict()
 const settingsSchema=z.object({quietHours:quietHoursSchema.nullable().optional(),enabled:z.boolean(),debounceMs:z.number().int().min(0).max(30000).default(1500),maxWaitMs:z.number().int().min(1).max(60000).default(5000),cooldownMs:z.number().int().min(0).max(3600000).default(60000)}).strict().refine(x=>x.maxWaitMs>=x.debounceMs,'maxWaitMs must cover debounceMs')
-const scheduleSchema=z.object({id,name:id,triggerId:id,skill:skillRefSchema.optional(),prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true),quietPriority:z.enum(['normal','urgent']).optional()}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
+const scheduleSchema=z.object({id,name:id,triggerId:id,skill:skillRefSchema.optional(),prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true),notificationTopic:notificationTopicSchema.optional(),notificationImportance:notificationImportanceSchema.optional(),quietPriority:z.enum(['normal','urgent']).optional()}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
 export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.snooze','schedule.end','schedule.run','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),snoozeUntil:z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional()}).strict()
 type Command=z.infer<typeof proactiveCommandSchema>
 type Duty=z.infer<typeof dutySchema>&{scopeId:string;revision:number}
@@ -30,7 +30,7 @@ export interface MessageBatch {id:string;scopeId:string;entryId:string;discussio
 export type Intervention=Assessment|{action:'clarify';reason:string;question:string}
 const terminal=new Set(['completed','failed','cancelled','skipped'])
 const defaults={enabled:false,debounceMs:1500,maxWaitMs:5000,cooldownMs:60000,revision:0}
-export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing only affects future runs; schedule.snooze delays future occurrences and scheduled sends until snoozeUntil (Unix milliseconds), schedule.end permanently ends a plan and withdraws unsent notices, and run.cancel stops a selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm,handling:delay|digest,sourceId?,scheduleId?} for wholly scheduled notifications only; null disables it. Only the operator UI can grant a specific plan the urgent quiet-hours exception. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},snoozeUntil:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
+export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing only affects future runs; schedule.snooze delays future occurrences and scheduled sends until snoozeUntil (Unix milliseconds), schedule.end permanently ends a plan and withdraws unsent notices, and run.cancel stops a selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm,handling:delay|digest,sourceId?,scheduleId?,topic?,importance:normal|high (optional)} for wholly scheduled notifications only; null disables it. Plans may set notificationTopic (lowercase letters/digits separated by hyphens, underscores or dots) and notificationImportance (normal/high), which never grant quiet-hours bypass. Only the operator UI can grant a specific plan the urgent quiet-hours exception. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},snoozeUntil:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
 
 /** Durable host extension. Time creates source events; Eval itself never schedules a wake. */
 export class RouterProactive {
@@ -237,12 +237,18 @@ export class RouterProactive {
   }
   const scopeId=runs?.[0]?.scopeId,rule=scopeId?this.controls(scopeId).quietHours:undefined
   const sourceMatch=!rule?.sourceId||rule.sourceId===message.channel.source
-  const topicMatch=!rule?.scheduleId||runs?.some(r=>r.scheduleId===rule.scheduleId)
+  // Match all selected dimensions on the same historical run; current
+  // plan edits must not silently reclassify already queued notifications.
+  const matchingRuns=runs?.filter(r=>(!rule?.scheduleId||r.scheduleId===rule.scheduleId)&&
+   (!rule?.topic||r.spec.notificationTopic===rule.topic)&&
+   (!rule?.importance||r.spec.notificationImportance===rule.importance))
+  const anyMatch=!!matchingRuns?.length
+  const allMatch=anyMatch&&matchingRuns?.length===runs?.length
   // Urgency is an operator grant on the exact plan revision, not a model
   // or message label. A mixed grant can never lift quiet hours for the group.
   const sameEntry=!!runs?.every(r=>r.spec.entryId===runs[0]!.spec.entryId)
   const urgent=sameEntry&&!!runs?.every((r,i)=>r.spec.quietPriority==='urgent'&&plans[i]?.quietPriority==='urgent'&&plans[i]?.revision===r.revision)
-  const raw=sourceMatch&&topicMatch&&!urgent?rule:undefined,key=stableDigest(raw??null),minute=Math.floor(now/60000)
+  const raw=sourceMatch&&anyMatch&&!urgent?rule:undefined,key=stableDigest(raw??null),minute=Math.floor(now/60000)
   let cached=this.quietCache.get(key)
   if(!cached||cached.minute!==minute){
    const parsed=quietHoursSchema.nullable().optional().safeParse(raw)
@@ -250,7 +256,9 @@ export class RouterProactive {
    if(this.quietCache.size>=256)this.quietCache.clear()
    this.quietCache.set(key,cached)
   }
-  if(cached.until!==undefined&&raw?.handling==='digest'&&owner&&runs&&sameEntry&&message.attempts===0){
+  if(cached.until!==undefined&&raw?.handling==='digest'&&owner&&runs&&sameEntry&&allMatch&&message.attempts===0){
+   // A mixed notification cannot be split safely; delay it rather than
+   // replacing its non-matching contents with digest metadata.
    // Digest metadata shares the actual outbox owner's provenance/tombstones.
    // It is never a new outbound message and never contains the original text.
    const quietDigest={runIds:runs.map(r=>r.id),at:now,sourceId:message.channel.source}
