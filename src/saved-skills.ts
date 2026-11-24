@@ -5,7 +5,7 @@ import type {ScopeContext} from './router-scope.ts'
 import {skillRefSchema,validateGraph} from './goal-contract.ts'
 import {automationTemplateSchema} from './webhooks.ts'
 import {stableDigest} from './sources.ts'
-import {applyPatch,bindOverlay,capturePatch,overlayEditSchema,type SkillOverlay} from './skill-overlays.ts'
+import {applyPatch,bindOverlay,capturePatch,methodDigest,overlayConflicts,overlayEditSchema,type SkillOverlay} from './skill-overlays.ts'
 import {backendAdmission,checkWorkerAdmission} from './backend-admission.ts'
 import {BackendPluginError} from './backends/plugin-contract.ts'
 import {workerProfiles} from './worker-pool.ts'
@@ -91,6 +91,28 @@ export class SavedSkills {
     const input=skillRefSchema.extend({scopeId:id,entryId:id}).parse(value)
     return this.inspect(input,input.scopeId,input.entryId)
   }
+  private inspectOverlayImpact(item:SkillVersion){
+    const pinned=item.overlay
+    if(pinned){
+      const base=this.host.store.get<SkillVersion>('skill-version',stableDigest([pinned.base.id,pinned.base.version]))
+      const sameEntry=base?.template&&base.scopeId===item.scopeId&&base.entryId===item.entryId&&!base.overlay
+      return {kind:'overlay' as const,base:pinned.base,integrity:!sameEntry?'unavailable' as const:methodDigest(base!)===pinned.baseDigest?'matches' as const:'mismatch' as const}
+    }
+    const related=this.versions().filter(v=>v.template&&v.scopeId===item.scopeId&&v.entryId===item.entryId&&
+      v.overlay?.base.id===item.id&&v.overlay.base.version<=item.version)
+      .sort((a,b)=>b.overlay!.base.version-a.overlay!.base.version||b.version-a.version||a.id.localeCompare(b.id))
+    const baseDigest=related.some(v=>v.overlay?.base.version===item.version)?methodDigest(item):undefined
+    const rows=related.slice(0,50).map(v=>{
+      const overlay=v.overlay!
+      const pinnedHere=overlay.base.version===item.version
+      const state=this.lifecycle(v)?.state
+      const conflictingFields=pinnedHere?[]:overlayConflicts(item.template,overlay.patch).map(c=>c.field)
+      return {id:v.id,version:v.version,title:v.template.title,baseVersion:overlay.base.version,retired:state==='retired',conflictingFields,
+        relation:pinnedHere?(overlay.baseDigest===baseDigest?'pinned_here' as const:'pin_mismatch' as const):
+          conflictingFields.length?'text_conflict' as const:'no_text_conflict' as const}
+    })
+    return {kind:'base' as const,total:related.length,rows}
+  }
   /** Read-only preflight, never an authorization or a promise of provider availability. */
   inspect(ref:Ref,scopeId:string,entryId:string,context?:ScopeContext){
     if(context)this.host.scopes.assertCurrent(context)
@@ -119,7 +141,7 @@ export class SavedSkills {
       // Do not disclose configuration for an inaccessible Worker or connection.
       return {nodeId:node.id,state:reason?'blocked':'configured',...(reason?{reason}:{workerId:profile!.id,backendId:profile!.backend}),authorization:'not_granted' as const,connections}
     })
-    return {...item,inspection:{digest:stableDigest(item),status:this.status(item),dependencies,
+    return {...item,inspection:{digest:stableDigest(item),status:this.status(item),dependencies,overlayImpact:this.inspectOverlayImpact(item),
       dependencyCoverage:'configured_workers_and_selected_connections_only',implicitMethodRequirements:'not_inferred',parameters:item.parameters??[],authorization:'fresh_request_required',providerVerification:'not_tested',
       grants:[],changesConfiguration:false}}
   }
