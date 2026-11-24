@@ -207,7 +207,14 @@ function resourcePaintAccounting(element,data,format,date){
  addLine('Retained tool calls: ','保留的工具调用：',format(tools.retainedCalls)+' · '+L('running / completed / failed / interrupted / unknown: ','运行／完成／失败／中断／未知：')+[tools.states.running,tools.states.completed,tools.states.failed,tools.states.interrupted,tools.unknownState].map(format).join(' / '))
  addLine('Latest polling health: ','最近轮询状态：',poll.observedSources===0?unavailable:L('healthy / retrying / error: ','健康／重试／错误：')+[poll.healthy,poll.retrying,poll.error].map(format).join(' / ')+' · '+date(poll.lastCheckAt))
  element.append(el('p','resource-note',L('Polling call counts and cost are not metered here. Tool rows are retained activity, not invoices.','这里没有轮询调用量或费用计量；工具记录也不是账单。')))
- if(context)addLine('Last context check: ','最近一次上下文检查：',date(context.at)+' · '+context.basis+' · '+L('measured / reserved / hard limit','实测／预留／硬上限')+': '+[context.measuredBytes,context.reservedBytes,context.hardLimitBytes].map(format).join(' / ')+' B · '+(context.status==='exceeded'?L('over limit','已超限'):L('within limit','未超限')))
+ if(context){
+ addLine('Last context check: ','最近一次上下文检查：',date(context.at)+' · '+context.basis+' · '+L('measured / reserved / hard limit','实测／预留／硬上限')+': '+[context.measuredBytes,context.reservedBytes,context.hardLimitBytes].map(format).join(' / ')+' B · '+(context.status==='exceeded'?L('over limit','已超限'):L('within limit','未超限')))
+  // The three inputs are checked safe integers, but the sum may not be.
+  const delta=BigInt(context.hardLimitBytes)-BigInt(context.reservedBytes)-BigInt(context.measuredBytes)
+  if(delta<0n)addLine('Above the hard limit at that check: ','当次检查超出硬上限：',format(-delta)+' B')
+  else addLine('Space below the hard limit at that check: ','当次检查距硬上限：',format(delta)+' B')
+  element.append(el('p','resource-note',L('This difference includes the reservation for that recorded check. It is not current capacity, remaining tokens, or a billing estimate.','该差值计入当次检查的预留量，不代表当前可用空间、剩余 token 或费用估算。')))
+ }
  addLine('Estimated or billed cost: ','估算费用或实际账单：',L('unavailable; no price or invoice evidence.','不可用，缺少单价或账单凭据。'))
 }
 function resourceSnapshot(value){
