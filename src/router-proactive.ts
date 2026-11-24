@@ -19,8 +19,10 @@ const id=z.string().min(1).max(300)
 const dutySchema=z.object({id,name:id,entryIds:z.array(id).min(1),instruction:z.string().min(1).max(16000),mode:z.enum(['off','observe','auto']).default('observe')}).strict()
 const settingsSchema=z.object({quietHours:quietHoursSchema.nullable().optional(),enabled:z.boolean(),debounceMs:z.number().int().min(0).max(30000).default(1500),maxWaitMs:z.number().int().min(1).max(60000).default(5000),cooldownMs:z.number().int().min(0).max(3600000).default(60000)}).strict().refine(x=>x.maxWaitMs>=x.debounceMs,'maxWaitMs must cover debounceMs')
 const reminderSchema=z.object({id,name:id,triggerId:id,timezone:z.string(),startAt:z.string()}).strict()
+const commitmentSchema=reminderSchema.extend({time:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)}).strict()
+const isDailyCommitment=(plan:{reminder?:true;timing:Timing})=>plan.reminder===true&&plan.timing.kind==='daily'
 const scheduleSchema=z.object({id,name:id,triggerId:id,skill:skillRefSchema.optional(),prompt:z.string().min(1).max(16000),timing:timingSchema,mode:z.enum(['standalone','continue']),ticketId:id.optional(),notification:z.enum(['always','findings','silent']).default('findings'),active:z.boolean().default(true)}).strict().refine(x=>x.mode!=='continue'||!!x.ticketId,'Continuation requires ticketId')
-export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.run','schedule.cancel','reminder.put','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional(),reminder:reminderSchema.optional()}).strict()
+export const proactiveCommandSchema=z.object({action:z.enum(['list','settings.put','duty.put','schedule.put','schedule.pause','schedule.resume','schedule.run','schedule.cancel','reminder.put','commitment.put','run.cancel']),scopeId:id,operationId:id.optional(),expectedRevision:z.number().int().min(0).optional(),id:id.optional(),settings:settingsSchema.optional(),duty:dutySchema.optional(),schedule:scheduleSchema.optional(),reminder:reminderSchema.optional(),commitment:commitmentSchema.optional()}).strict()
 type Command=z.infer<typeof proactiveCommandSchema>
 type Duty=z.infer<typeof dutySchema>&{scopeId:string;revision:number}
 type Controls=z.infer<typeof settingsSchema>&{scopeId:string;revision:number}
@@ -31,7 +33,7 @@ export interface MessageBatch {id:string;scopeId:string;entryId:string;discussio
 export type Intervention=Assessment|{action:'clarify';reason:string;question:string}
 const terminal=new Set(['completed','failed','cancelled','skipped'])
 const defaults={enabled:false,debounceMs:1500,maxWaitMs:5000,cooldownMs:60000,revision:0}
-export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. Create a simple one-time reminder only after an unambiguous request by the current human, using reminder.put with {id,name,triggerId,timezone,startAt} from exact /remind <ISO time with offset> <IANA zone> <text>, with no model turn on delivery. Hypothetical requests are not reminders. schedule.cancel retires an unpromoted plan, unlike pause. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing a schedule only affects future runs; run.cancel stops the selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm} for scheduled external notifications only; null disables it. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'},reminder:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
+export const proactiveSpecs:ToolSpec[]=[{type:'function',name:'router_manage',description:'Manage this Router scope: list duties, batch settings, schedules and run receipts. Mutations require an explicit human scope manager, operationId and current expectedRevision. Create a simple one-time reminder only after an unambiguous request by the current human, using reminder.put with {id,name,triggerId,timezone,startAt} from exact /remind <ISO time with offset> <IANA zone> <text>, with no model turn on delivery. Create a daily lightweight commitment using commitment.put with {id,name,triggerId,timezone,startAt,time} only from exact /commit-daily <ISO start with offset> <IANA zone> <HH:mm local> <text>. Its notices repeat in the same conversation without Worker or Goal execution. For this kind, the original conversation uses /pause-commitment, /resume-commitment or /cancel-commitment followed by the encoded ID. Hypothetical requests are not reminders or commitments. schedule.cancel retires an unpromoted plan, unlike pause. A schedule requires a real explicit triggerId, prompt, mode standalone or continue, notification always/findings/silent, and timing {kind:once/interval/daily/weekly,timezone:IANA,startAt:ISO with offset,endAt?,intervalSeconds?,time:HH:mm,weekdays?:0=Sunday}. Continue requires ticketId and never restarts ended work. Pausing a schedule only affects future runs; run.cancel stops the selected run. settings.quietHours optionally sets {timezone:IANA,start:HH:mm,end:HH:mm} for scheduled external notifications only; null disables it. Work and direct replies are not delayed. Duties are scoped written instructions, mode off/observe/auto; global observe/off remains a ceiling.',inputSchema:{type:'object',properties:{action:{type:'string',enum:proactiveCommandSchema.shape.action.options},scopeId:{type:'string'},operationId:{type:'string'},expectedRevision:{type:'integer'},id:{type:'string'},settings:{type:'object'},duty:{type:'object'},schedule:{type:'object'},reminder:{type:'object'},commitment:{type:'object'}},required:['action','scopeId'],additionalProperties:false}}]
 
 /** Durable host extension. Time creates source events; Eval itself never schedules a wake. */
 export class RouterProactive {
@@ -125,7 +127,18 @@ export class RouterProactive {
   if(context){this.host.scopes.assertCurrent(context);if(context.route.scopeId!==x.scopeId)throw Error('Outside Router scope')}
   if(x.action==='list')return this.snapshot(x.scopeId,context)
   this.requireManager(x.scopeId,context)
-  if(context?.trigger.text.trim().startsWith('/remind ')&&x.action!=='reminder.put')throw Error('Use the reminder action for this request')
+  const commandText=context?.trigger.text.trim()
+  if(commandText?.startsWith('/remind ')&&x.action!=='reminder.put')throw Error('Use the reminder action for this request')
+  if(commandText?.startsWith('/commit-daily ')&&x.action!=='commitment.put')throw Error('Use the commitment action for this request')
+  const dailyControl=commandText?.match(/^\/(pause|resume|cancel)-commitment /)?.[1]
+  if(dailyControl){
+   const plan=this.host.store.get<Schedule>('router-schedule',stableDigest([x.scopeId,x.id??'']))
+   if(x.action!=='schedule.'+dailyControl||!plan||!isDailyCommitment(plan)||commandText!=='/'+dailyControl+'-commitment '+encodeURIComponent(plan.id))throw Error('Use the exact command for an existing daily commitment')
+  }
+  if(context&&x.action==='run.cancel'){
+   const run=this.host.store.get<ScheduledRun>('router-schedule-run',x.id??'')
+   if(run&&run.scopeId===x.scopeId&&isDailyCommitment(run.spec))throw Error('Use the commitment control command for daily notices')
+  }
   if(!x.operationId||x.expectedRevision===undefined)throw Error('Mutation requires operationId and expectedRevision')
   const key=stableDigest([x.scopeId,context?.actor??'operator',context?.route.entryId??'operator',x.operationId]),fingerprint=stableDigest(x)
   return this.host.store.atomic(()=>{
@@ -152,6 +165,17 @@ export class RouterProactive {
    const run=store.get<ScheduledRun>('router-schedule-run',x.id??'');if(!run||run.scopeId!==x.scopeId)throw Error('Unknown run');this.revision(run.revision,x.expectedRevision)
    this.checkControlEntry(run.spec.entryId,context)
    if(run.spec.reminder)this.checkPlanOwner(run.spec,context)
+   if(isDailyCommitment(run.spec)){
+    // A deterministic notice did not spawn Router work. Never abort a live,
+    // unrelated Router turn that happens to share its original discussion.
+    const messageId='schedule-reminder:'+run.id
+    const row=store.db.prepare('SELECT status FROM outbox WHERE id=?').get(messageId)
+    if(row?.status!=='pending')return run
+    store.outbox.withdraw(messageId)
+    const next={...run,state:'cancelled' as const,finishedAt:this.now()}
+    store.put('router-schedule-run',run.id,next)
+    return next
+   }
    if(terminal.has(run.state)&&!this.unsettled(run)&&!this.pendingNotifications(run))return run
    const taskIds=this.ownedTasks(run)
    const goal=run.goalId&&this.host.goals.get(run.goalId)
@@ -176,17 +200,44 @@ export class RouterProactive {
    store.put('router-schedule',key,next)
    return next
   }
+  if(x.action==='commitment.put'){
+   const spec=x.commitment
+   if(!spec||x.reminder||x.schedule||x.expectedRevision!==0)throw Error('A new daily commitment requires commitment details and revision zero')
+   const {id,name,triggerId,timezone,startAt,time}=spec
+   const anchor=store.triggers.get(triggerId)
+   if(!anchor?.channel)throw Error('The authorized conversation has no reply channel')
+   if(context&&(context.trigger.id!==triggerId||context.trigger.text.trim()!=='/commit-daily '+startAt+' '+timezone+' '+time+' '+name))throw Error('Use /commit-daily <ISO time with offset> <IANA zone> <HH:mm local> <text>, or create it in the management panel')
+   const timing=timingSchema.parse({kind:'daily',timezone,startAt,time}),key=stableDigest([x.scopeId,id])
+   const same=(p:Schedule)=>isDailyCommitment(p)&&p.triggerId===triggerId&&p.name===name&&stableDigest(p.timing)===stableDigest(timing)
+   const existing=store.get<Schedule>('router-schedule',key)
+   if(existing){this.checkControlEntry(existing.entryId,context);this.checkPlanOwner(existing,context);if(same(existing))return existing;throw Error('Commitment ID already exists')}
+   if(context){
+    const previous=store.list<Schedule>('router-schedule').find(p=>p.scopeId===x.scopeId&&p.triggerId===triggerId&&isDailyCommitment(p))
+    if(previous){if(same(previous))return previous;throw Error('This authorization already created a different commitment')}
+   }
+   const plan=this.apply({...x,action:'schedule.put',commitment:undefined,schedule:{id,name,triggerId,prompt:name,timing,mode:'standalone',notification:'always',active:true}},context) as Schedule
+   store.requireDailyCommitmentSchema()
+   // Reuse the deterministic notice path, but fence older hosts that do
+   // not implement the recurring plan's pause and unsettled-delivery checks.
+   const next={...plan,reminder:true as const}
+   store.put('router-schedule',key,next)
+   return next
+  }
   const planId=x.schedule?.id??x.id??'',key=stableDigest([x.scopeId,planId]),old=store.get<Schedule>('router-schedule',key)
   if(old){this.checkControlEntry(old.entryId,context);if(old.reminder||old.promotion||old.cancelledAt)this.checkPlanOwner(old,context)}
   this.revision(old?.revision??0,x.expectedRevision)
   if(old?.promotion)throw Error('The commitment was promoted; manage the goal instead')
   if(old?.cancelledAt)throw Error('The commitment is cancelled; create a new one')
-  if(old?.reminder&&(x.action==='schedule.put'||x.action==='schedule.run'||x.action==='schedule.resume'&&store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===old.scopeId&&r.scheduleId===old.id)))throw Error('A one-time reminder cannot be edited or run again; cancel and create a new one')
+  if(old?.reminder&&(x.action==='schedule.put'||x.action==='schedule.run'||!isDailyCommitment(old)&&x.action==='schedule.resume'&&store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===old.scopeId&&r.scheduleId===old.id)))throw Error('A lightweight reminder or commitment cannot be edited or run manually; cancel and create a new one')
+  if(old&&isDailyCommitment(old)&&context){
+   const verb=x.action==='schedule.pause'?'pause':x.action==='schedule.resume'?'resume':x.action==='schedule.cancel'?'cancel':undefined
+   if(verb&&context.trigger.text.trim()!=='/'+verb+'-commitment '+encodeURIComponent(old.id))throw Error('Use the exact commitment control command in the original conversation')
+  }
   if(x.action==='schedule.cancel'){
    if(!old)throw Error('Unknown schedule')
    this.checkPlanOwner(old,context)
    // Cancel each settled/active receipt and withdraw queued notifications using the existing run control.
-   for(const run of store.list<ScheduledRun>('router-schedule-run'))if(run.scopeId===old.scopeId&&run.scheduleId===old.id&&(this.unsettled(run)||this.pendingNotifications(run))){
+   for(const run of store.list<ScheduledRun>('router-schedule-run'))if(run.scopeId===old.scopeId&&run.scheduleId===old.id&&(this.unsettled(run)||this.pendingNotifications(run)||isDailyCommitment(old)&&store.outbox.status('schedule-reminder:'+run.id)==='pending')){
     this.apply({...x,action:'run.cancel',id:run.id,expectedRevision:run.revision},context)
    }
    store.requireCommitmentLayersSchema()
@@ -214,7 +265,14 @@ export class RouterProactive {
   if(!['schedule.pause','schedule.resume'].includes(x.action))throw Error('Unknown action')
   const active=x.action==='schedule.resume'
   if(active)this.validatePlan(old)
-  const next={...old,active,revision:old.revision+1,...(active?{nextAt:nextTime(old.timing,this.now())}:{})}
+  const daily=isDailyCommitment(old)
+  if(daily&&old.active===active)return old
+  if(daily&&!active){
+   for(const run of store.list<ScheduledRun>('router-schedule-run'))if(run.scopeId===old.scopeId&&run.scheduleId===old.id&&store.outbox.status('schedule-reminder:'+run.id)==='pending'){
+    this.apply({...x,action:'run.cancel',id:run.id,expectedRevision:run.revision},context)
+   }
+  }
+  const next={...old,active,revision:old.revision+1,...(active?{nextAt:nextTime(old.timing,this.now()+(daily?1:0))}:daily?{nextAt:undefined}:{})}
   if(active&&next.nextAt===undefined)throw Error('Schedule has no future occurrence')
   store.put('router-schedule',key,next);return next
  }
@@ -254,7 +312,7 @@ export class RouterProactive {
   const run=this.runForTrigger(id);if(!run)return
   if(run.spec.reminder){
    const plan=this.host.store.get<Schedule>('router-schedule',stableDigest([run.scopeId,run.scheduleId]))
-   if(!plan?.reminder||plan.cancelledAt||plan.promotion)throw Error('Reminder is no longer authorized')
+   if(!plan?.reminder||plan.cancelledAt||plan.promotion||isDailyCommitment(plan)&&(!plan.active||plan.revision!==run.spec.revision))throw Error('Reminder or commitment is no longer authorized')
    this.validatePlan(plan)
   }
   if(['cancelled','skipped','failed'].includes(run.state))throw Error('Scheduled run is no longer authorized')
@@ -330,6 +388,13 @@ export class RouterProactive {
   }
   for(const p of store.list<Schedule>('router-schedule'))if(p.active&&p.nextAt!==undefined&&p.nextAt<=now){
    store.atomic(()=>{
+    if(isDailyCommitment(p)){
+     try{this.validatePlan(p)}catch{
+      store.put('router-schedule',stableDigest([p.scopeId,p.id]),{...p,active:false,nextAt:undefined,revision:p.revision+1})
+      store.audit({type:'router.commitment.authority_unavailable',scopeId:p.scopeId,planId:p.id})
+      return
+     }
+    }
     const due=latestDue(p.timing,p.nextAt!,Math.min(now,p.timing.endAt?Date.parse(p.timing.endAt):now))
     const next={...p,nextAt:nextTime(p.timing,Math.max(now,due)+1)}
     // Consume the occurrence before dispatch, in the same transaction as its receipt and job.
@@ -343,7 +408,7 @@ export class RouterProactive {
   const store=this.host.store,id=stableDigest([p.scopeId,p.id,p.revision,scheduledAt,suffix]),previous=store.get<ScheduledRun>('router-schedule-run',id);if(previous)return previous
   const run:ScheduledRun={id,scheduleId:p.id,scopeId:p.scopeId,revision:p.revision,scheduledAt,createdAt:this.now(),firstDueAt,triggerKind:suffix.startsWith('manual:')?'manual':'scheduled',spec:p,state:'queued',taskIds:[],delivery:'none'}
   const skip=(reason:string)=>{run.state='skipped';run.reason=reason;run.finishedAt=this.now();store.put('router-schedule-run',id,run);return run}
-  if(store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===p.scopeId&&r.scheduleId===p.id&&this.unsettled(r)))return skip('Previous run is still active')
+  if(store.list<ScheduledRun>('router-schedule-run').some(r=>r.scopeId===p.scopeId&&r.scheduleId===p.id&&(this.unsettled(r)||isDailyCommitment(p)&&store.outbox.status('schedule-reminder:'+r.id)==='pending')))return skip('Previous run or delivery is still unsettled')
   if(p.timing.endAt&&this.now()>Date.parse(p.timing.endAt))return skip('Schedule end time passed')
   try{
    const {trigger:anchor,mandate,context}=this.validatePlan(p)

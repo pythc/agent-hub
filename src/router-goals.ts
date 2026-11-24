@@ -537,6 +537,7 @@ export class RouterGoals {
   if(!x.operationId||x.expectedRevision===undefined)throw Error('Goal mutation requires operationId and expectedRevision')
   const human=c.trigger.human&&this.host.routerIngress.authority(c.trigger.id).strength==='explicit'
   if((x.details||x.supersedes||x.promotesSchedule)&&!human)throw Error('Contract details, replacement and promotion require current explicit human input')
+  if(/^\/(?:commit-daily|(?:pause|resume|cancel)-commitment) /.test(c.trigger.text.trim()))throw Error('Use the lightweight commitment action for this request')
   if(x.action==='start'&&!x.promotesSchedule&&c.trigger.text.trim().startsWith('/promote-reminder '))throw Error('Start a promotion using promotesSchedule, not a separate goal')
   if(x.promotesSchedule){
    const [command,...request]=c.trigger.text.trim().split(/\r?\n/)

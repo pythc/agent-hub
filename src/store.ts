@@ -15,7 +15,8 @@ export const ASYNC_WORKER_DB_SCHEMA=18
 export const TASK_ASSIGNMENT_DB_SCHEMA=19
 export const PROJECT_INTEGRATION_DB_SCHEMA=20
 export const COMMITMENT_LAYERS_DB_SCHEMA=21
-export const MAX_DB_SCHEMA=COMMITMENT_LAYERS_DB_SCHEMA
+export const DAILY_COMMITMENT_DB_SCHEMA=23
+export const MAX_DB_SCHEMA=DAILY_COMMITMENT_DB_SCHEMA
 
 export interface Job { id: string; kind: string; payload: unknown; state: string; attempts: number; nextAt: number }
 export interface Delivery extends OutboundMessage { status: string; attempts: number; nextAt: number; error?: string }
@@ -92,6 +93,7 @@ export class Store implements Repositories {
     return row ? JSON.parse(String(row.body)) as T : undefined
   }
   /** An older verifier would ignore an unknown check and could release a waiting goal. */
+  requireDailyCommitmentSchema(){this.db.exec('PRAGMA user_version='+Math.max(DAILY_COMMITMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireCommitmentLayersSchema(){this.db.exec('PRAGMA user_version='+Math.max(COMMITMENT_LAYERS_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireTaskAssignmentSchema(){this.db.exec('PRAGMA user_version='+Math.max(TASK_ASSIGNMENT_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
   requireAsyncWorkerSchema(){this.db.exec('PRAGMA user_version='+Math.max(ASYNC_WORKER_DB_SCHEMA,Number(this.db.prepare('PRAGMA user_version').get()!.user_version)))}
