@@ -28,6 +28,7 @@ import {appendAgentPrompt,managedShellEnvironment} from './managed-instructions.
 import {SourceRegistry} from './source-plugins.ts'
 import {activatePluginPackages} from './plugin-package.ts'
 import {ProcessSource} from './plugin-process.ts'
+import {FeishuSource,feishuReceiptKind,type FeishuAcceptance,type FeishuReceipt,type FeishuReceiptBinding} from '../plugins/feishu/feishu.ts'
 import {ToolConnections} from './tool-connections.ts'
 import type {Model,ModelRequest,ModelResult} from './model.ts'
 import {BackendRegistry} from './backends/registry.ts'
@@ -1424,8 +1425,25 @@ export class Runtime {
       }
       if(!this.store.deliveryStarted(message.id))continue
       try {
-        if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
-        this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel) }
+        let binding:FeishuReceiptBinding|undefined,revision:number|undefined
+        const evidence:{accepted?:FeishuAcceptance}={}
+        if(source instanceof FeishuSource){
+          try{binding=source.messageReceiptBinding(this.store);if(binding)revision=this.settings.current().revision}catch{/* Diagnostics cannot prevent delivery. */}
+          await source.deliver(message,binding?receipt=>{evidence.accepted=receipt}:undefined)
+        }else if(source.config.kind==='delegation')await this.delegation.deliver(message);else await source.deliver(message)
+        this.store.atomic(()=>{this.chat.deliveredClarification(message);this.chat.deliveredWorker(message);this.store.delivered(message.id)});blocked.delete(channel)
+        // Best effort after the normal, durable acknowledgement. A receipt
+        // write must never change outbox status or induce transmission again.
+        const {accepted}=evidence
+        if(source instanceof FeishuSource&&binding&&accepted&&revision!==undefined)try{
+          const current=source.messageReceiptBinding(this.store)
+          if(this.settings.current().revision===revision&&this.sources.get(binding.sourceId)===source&&
+             current?.namespace===binding.namespace&&current?.identityRevision===binding.identityRevision&&current?.adapterBasis===binding.adapterBasis&&
+             binding.namespace==='feishu:bot:'+accepted.principal&&message.channel.source===binding.sourceId&&
+             message.channel.address.chat===accepted.chat&&message.channel.thread===accepted.chat+':'+accepted.root)
+            this.store.put(feishuReceiptKind,binding.sourceId,{...binding,...accepted,schema:1,provider:'feishu',revision,deliveryId:message.id} satisfies FeishuReceipt)
+        }catch{/* Preserve the existing acknowledgement even if receipt storage fails. */}
+      }
       catch (error) { this.store.deliveryFailed(message.id, message.attempts + 1, String(error).slice(0,300), error instanceof UncertainDelivery);if(!(error instanceof UncertainDelivery)&&message.attempts+1>=3)blocked.delete(channel);else blocked.add(channel) }
     }
   }
