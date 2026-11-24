@@ -32,7 +32,7 @@ export function ArtifactCatalogPage({language='en'}:{language?:'en'|'zh-CN'}){
    <h2>{label[language]}</h2>
    <a href={reference.kind==='goal-artifact'?'#artifact/'+reference.id:'#artifact-view/'+reference.id} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{reference.kind==='goal-artifact'?L('Open this file version','打开此文件版本'):L('Open current workspace view','打开当前工作区视图')}</a>
    {reference.kind==='workspace-view'?<p><a href={'#artifact-view-version/'+reference.id+'/'+reference.version} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{L('Inspect this fixed version','查看此固定版本')}</a></p>:null}
-   {reference.kind==='workspace-view'&&previousVersions?.length?<details><summary>{L('Previous version references','旧版本引用')}</summary><ul>{previousVersions.map(version=><li key={version.version}><a href={'#artifact-view-version/'+reference.id+'/'+version.version} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{version.packageVersion} · {version.version.slice(0,12)}</a></li>)}</ul></details>:null}
+   {reference.kind==='workspace-view'&&previousVersions?.length?<details><summary>{L('Previous version references','旧版本引用')}</summary><ul>{previousVersions.map(version=><li key={version.version}><a href={'#artifact-view-version/'+reference.id+'/'+version.version} onClick={event=>{if(readSignal.aborted)event.preventDefault()}}>{version.packageVersion} · {version.version.slice(0,12)}</a>{' · '}{L('Availability checked on open','打开时检查可用性')}</li>)}</ul></details>:null}
    <ArtifactReferenceDetails reference={reference} registrationState={registrationState} current={reference.kind==='goal-artifact'&&reference.availability==='unavailable'?'unavailable':'unchecked'} L={L}/>
   </article>)}
  </section>
