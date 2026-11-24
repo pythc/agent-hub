@@ -196,3 +196,20 @@ These are proposed implementation slices; this document save performs none of th
 ## 7. Evidence and scope limits
 
 This document supplies source/type references, proposed interfaces, compatibility risks and a small-commit order. It contains no runtime or CI/AppArmor edits, no database migration, no new tests, no actual-service verification and no completed O07/O08/O09 claim. Historical trace tests and prior screenshots do not validate future slices. G01 can be reviewed as a draft while G00 is blocked; final freeze and release/acceptance gates remain separate.
+
+### O48a: managed source plugin changes and evidence
+
+Marketplace activation, including rollback, does not carry a connection's grant
+into a newly declared capability. With existing connections, permission
+additions and changes to credential bindings, tool resource/input contracts, or
+repository/scoping declarations block automatic activation. Keeping the current
+version is safe; broader access requires a separate migration, not a second click
+on the same plan. Startup-managed plugins are outside this marketplace rule.
+
+New entry verification receipts bind to the exact connection definition and
+installed plugin revision. After an applicable change, the original receipt
+remains readable but cannot mark the current connection verified. Old unpinned
+receipts cannot verify packaged sources; unrelated connections are unaffected.
+This is not a replacement for a live check, and does not infer remote credential
+rotation behind an unchanged reference. Skill overlay dependency graphs remain
+separate from this source-plugin slice.

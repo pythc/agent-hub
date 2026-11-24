@@ -9,6 +9,7 @@ import {delimiter,resolve} from 'node:path'
 import {z} from 'zod'
 import {configSchema,type Config} from './config.ts'
 import type {Runtime} from './runtime.ts'
+import {stableDigest} from './sources.ts'
 import {Onboarding,OnboardingError,setupWorkspace} from './onboarding.ts'
 import {clientIds,clientInfo,clientConfig,type ClientId,type ClientOptions} from './clients.ts'
 import {inspectClient,installEntryClient} from './client-setup.ts'
@@ -21,7 +22,7 @@ export const entryIds=['feishu','wecom','codex','cursor','vscode','workbuddy','g
 const entryId=z.enum(entryIds)
 export const entryPlanSchema=z.object({revision:z.number().int().min(0),entryId,sourceId:z.string().optional(),name:z.string().trim().min(1).max(100).optional(),scopeIds:z.array(z.string().min(1).max(200)).max(50).default([]),actors:z.array(z.string().min(1).max(200)).max(50).default([]),command:z.string().regex(/^\/[a-z][a-z0-9_-]{0,30}$/).optional(),credentials:z.object({appId:z.string().trim().min(1).max(16000).optional(),appSecret:z.string().trim().min(1).max(16000).optional(),botId:z.string().trim().min(1).max(16000).optional(),secret:z.string().trim().min(1).max(16000).optional()}).strict().optional(),repository:z.string().optional(),workspace:z.string().min(1).max(4000).optional()}).strict()
 type Check={id:string;status:'ok'|'required'|'pending';code:string}
-type Verification={id:string;entryId:string;sourceId:string;code:string;createdAt:number;language?:'en'|'zh'}
+type Verification={id:string;entryId:string;sourceId:string;code:string;createdAt:number;language?:'en'|'zh';configuration?:string}
 const catalog=()=>entryIds.map(id=>({id,label:names[id]!,category:['feishu','wecom'].includes(id)?'office':id==='github'?'source':'client',docs:id in officeDocs?officeDocs[id as keyof typeof officeDocs]:clientInfo[id as ClientId].docs}))
 
 /** Entry inventory, deployment and evidence. Never sends an artificial test task from the web page. */
@@ -150,10 +151,19 @@ export class EntrySetup {
   }catch(error){if(error instanceof OnboardingError)throw error;throw new OnboardingError('client_install_failed','The client connection could not be installed. Existing entries were retained; inspect its private backup.',409)}finally{this.installing=false}
  }
  clientConfig(id:string){entryId.parse(id);if(!clientIds.includes(id as ClientId))throw new OnboardingError('client_required','Select a client.');const c=clientConfig(this.options(id as ClientId));return {entryId:id,text:c.text,device:'host',containsOperatorToken:false,portable:false,docs:c.info.docs,remoteHelp:{en:'For another computer, first establish an SSH local tunnel to the host and install AgentHub there. Generate configuration on that computer; host file paths cannot be copied directly. This personal connection requires operator access.',zh:'在另一台电脑使用时，先建立到宿主的 SSH 本地隧道，并在该电脑安装 AgentHub 桥接程序，在该电脑生成配置。不要直接复制宿主文件路径；此个人连接需要操作员权限。'}}}
+ private verificationConfiguration(host:Runtime,source:Config['sources'][number]){
+  const pkg=host.sourceRegistry.packages.find(p=>p.manifest.kind===source.kind)
+  const installation=host.store.get<{digest:string;revision:number}>('plugin-installation',source.id)
+  // Label edits leave the same configured authority intact. Package pin and
+  // installation revision prevent a rollback from reviving a previous receipt.
+  const {label:_,...definition}=source
+  return {packageBacked:!!pkg,fingerprint:stableDigest([definition,pkg?.digest??null,installation?.revision??null])}
+ }
  beginVerification(id:string,sourceId?:string,language:'en'|'zh'='en'){
   entryId.parse(id);const source=sourceId?this.host().config.sources.find(s=>s.id===sourceId):this.host().config.sources.find(s=>s.kind===(clientIds.includes(id as ClientId)?'local':id)&&s.enabled)
   if(!source||source.kind!==(clientIds.includes(id as ClientId)?'local':id))throw new OnboardingError('source_missing','Configure this entry before sending a test request.')
-  const record:Verification={id:randomUUID(),entryId:id,sourceId:source.id,code:'AGH-'+randomBytes(5).toString('hex').toUpperCase(),createdAt:Date.now(),language}
+  const configuration=this.verificationConfiguration(this.host(),source).fingerprint
+  const record:Verification={configuration,id:randomUUID(),entryId:id,sourceId:source.id,code:'AGH-'+randomBytes(5).toString('hex').toUpperCase(),createdAt:Date.now(),language}
   this.host().store.put('entry-verification',record.id,record);return this.verification(record.id)
  }
  verification(id:string){
@@ -166,12 +176,15 @@ export class EntrySetup {
   const allowed=trigger&&host.config.sources.find(s=>s.id===v.sourceId)?.allowedActors.includes(trigger.actor.id)
   const source=host.config.sources.find(s=>s.id===v.sourceId),expired=Date.now()-v.createdAt>24*60*60*1000
   const stages=[{id:'received',status:trigger?'ok':'pending'},{id:'authorized',status:ticket?'ok':trigger&&!allowed?'required':'pending'},{id:'executed',status:executed?'ok':assignment?.report&&['failed','blocked'].includes(assignment.report.state)?'required':'pending'},{id:'replied',status:replied?'ok':'pending'}] as {id:string;status:'ok'|'required'|'pending'}[]
+  const current=source&&this.verificationConfiguration(host,source)
+  const stale=!current||(v.configuration?current.fingerprint!==v.configuration:current.packageBacked)
+  const {configuration:_,...receipt}=v
   const prefix=source?.github?.command??source?.feishu?.command??'',instructions={en:(prefix+' This is a connection check. '+v.code+' is only a correlation marker, not a task ID. Reply only “Connection verified.” Do not call tools or modify files.').trim(),zh:(prefix+' 这是接入连通性测试。标记 '+v.code+' 仅用于关联本次测试，不是任务编号。请只回复“接入验收成功。”，不要调用工具或修改文件。').trim()}
   if(clientIds.includes(v.entryId as ClientId)){
    instructions.en='Use AgentHub to forward the message below to the background assistant with agent_request. Then use agent_status with the returned discussion and requestId to check completion and show the actual reply. The no-tools instruction applies only to the background assistant.\n\nMessage to forward:\n'+instructions.en
    instructions.zh='请使用 AgentHub 的 agent_request 把下面这段消息转交给后台助手，再用返回的 discussion 和 requestId 调用 agent_status 查询完成情况，并展示后台实际回复。“不要调用工具”仅约束后台助手。\n\n要转交的消息：\n'+instructions.zh
   }
-  return {...v,expired,instructions,instruction:instructions[v.language??'zh'],stages,verified:!this.preview&&!!source?.enabled&&!expired&&stages.every(s=>s.status==='ok'),...(trigger&&!allowed?{observedSender:{sourceId:v.sourceId,actor:trigger.actor.id}}:{}),...(ticket?{ticketId:ticket.id}:{})}
+  return {...receipt,expired,stale,instructions,instruction:instructions[v.language??'zh'],stages,verified:!this.preview&&!!source?.enabled&&!expired&&!stale&&stages.every(s=>s.status==='ok'),...(trigger&&!allowed?{observedSender:{sourceId:v.sourceId,actor:trigger.actor.id}}:{}),...(ticket?{ticketId:ticket.id}:{})}
  }
  allow(revision:number,sourceId:string,actor:string){
   const host=this.host(),source=host.config.sources.find(s=>s.id===sourceId),observed=host.store.get<any>('source-observed',sourceId+':'+actor)
