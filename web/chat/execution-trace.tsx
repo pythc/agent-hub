@@ -176,6 +176,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  const L=(en:string,zh:string)=>language==='en'?en:zh,word=(names:[string,string])=>names[language==='en'?0:1]
  const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmResume,setConfirmResume]=useState(''),[confirmStop,setConfirmStop]=useState(''),[truncated,setTruncated]=useState(false)
  const [motion,setMotion]=useState<{id:string;cue:MotionCue}|null>(null)
+ const [liveActivity,setLiveActivity]=useState<{id:string;cue:MotionCue;workerBlocked:boolean}|null>(null)
  const taskNumbers=useRef(new Map<string,number>())
  const taskName=(item:TraceTask)=>{if(!taskNumbers.current.has(item.id))taskNumbers.current.set(item.id,taskNumbers.current.size+1);return workerName(item.workerId,language)+L(' · Task ',' · 任务 ')+taskNumbers.current.get(item.id)}
  const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<(retryPage?:boolean)=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
@@ -190,7 +191,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   const reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)')
   let continuity=0,lastSettled:number|null=null,lastServerRead:number|null=null,motionTimer:ReturnType<typeof setTimeout>|undefined
   const clearCue=()=>{clearTimeout(motionTimer);setMotion(null)}
-  const clearMotion=()=>{continuity++;lastSettled=null;lastServerRead=null;clearCue()}
+  const clearMotion=()=>{continuity++;lastSettled=null;lastServerRead=null;clearCue();setLiveActivity(null)}
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!signal.aborted
   clearMotion();cursor.current=0;visibility.current='';latestBasis.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop('');setConfirmResume('');setBusy(false)
   const resetTimeline=()=>{clearMotion();cursor.current=0;hasMore=false;pageFailed=false;setEvents([]);setMore(false);setTruncated(false)}
@@ -210,9 +211,12 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
    const latest=data.events.at(-1),recordedAt=latest?Date.parse(latest.at):NaN
    // Only the latest row may pulse: an earlier success in this batch may
    // already be superseded by a failure or another state transition.
-   if(live&&!reducedMotion.matches&&lastServerRead!==null&&latest&&latest.cursor>requestedCursor&&recordedAt>=lastServerRead&&recordedAt<=data.at){
-    const cue=traceMotion(latest)
-    if(cue){
+   if(latest&&latest.cursor>requestedCursor){
+    const cue=live&&lastServerRead!==null&&recordedAt>=lastServerRead&&recordedAt<=data.at?traceMotion(latest):undefined
+    // A separate status region stays available even when the timeline is
+    // inside collapsed details or visual motion is disabled.
+    setLiveActivity(cue?{id:latest.id,cue,workerBlocked:latest.workerEvent?.kind==='blocked'}:null)
+    if(cue&&!reducedMotion.matches){
      clearTimeout(motionTimer)
      setMotion({id:latest.id,cue})
      motionTimer=setTimeout(()=>{if(isCurrent())setMotion(null)},650)
@@ -278,6 +282,12 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  }
  const guidance=task?.next==='reconcile'?L('Check the actual outcome before trying again.','请先核查实际结果，再决定是否重试。'):task?.next==='answer_approval'?L('This task needs permission. Use its existing approval controls.','任务需要授权，请在原任务中处理。'):task?.next==='reconnect'?L('Review the connection and verify authentication before continuing.','请先检查连接配置并验证认证状态。'):task?.next==='review_context'?L('Access changed. Review it before continuing.','访问权限已变更，请核对后再继续。'):task?.next==='follow_up'?L('The Worker needs your reply in the original conversation.','Worker 等待你的回复，请回到原会话继续。'):null
  const receiptLabels={progress:L('Worker progress','Worker 进展'),blocked:L('Worker blocked','Worker 受阻'),result:L('Worker result','Worker 结果')}
+ const liveActivityLabel=liveActivity?({
+  dispatch:L('New activity: task dispatched.','有新动态：任务已分派。'),
+  attention:liveActivity.workerBlocked?L('New activity: a Worker is blocked.','有新动态：Worker 执行受阻。'):L('New activity: a task needs your attention.','有新动态：有任务需要处理。'),
+  acceptance:L('New activity: acceptance passed.','有新动态：验收已通过。'),
+  result:L('New activity: a result was saved.','有新动态：结果已保留。'),
+ })[liveActivity.cue]:null
  const timeline=<>
   <div className="trace-timeline-heading"><h2>{L('Activity','动态记录')}</h2></div>
   {loading&&!events.length?<div className="trace-empty" role="status"><LoaderCircle size={23} className="trace-spin"/><p>{L('Loading activity…','正在加载动态…')}</p></div>:events.length?<ol className="trace-timeline">{events.map(event=><li key={event.id} data-state={event.state} data-live-cue={motion?.id===event.id?motion.cue:undefined}><div className="trace-event-icon" aria-hidden="true"><StageIcon stage={event.stage}/></div><div className="trace-event-main"><div><strong>{event.workerEvent?receiptLabels[event.workerEvent.kind]:word(stageNames[event.stage])}</strong><span className="trace-state" data-state={event.state}>{event.workerEvent?.disposition==='archived'?L('Archived only','仅归档'):word(stateNames[event.state])}</span></div><p>{event.ticketId?(()=>{const item=snapshot?.tasks.find(t=>t.id===event.ticketId);return item?taskName(item):L('Earlier task','较早任务')})():L('Team activity','团队动态')}{event.baseline?' · '+L('First recorded state','首次记录的状态'):''}{event.hasResult?' · '+L('Result saved','结果已保留'):''}{event.stage==='delivery'&&event.state==='sent'?' · '+L('Receipt is unconfirmed','尚未确认对方收到'):''}</p></div><time dateTime={event.at} title={new Date(event.at).toLocaleString(language)}>{new Date(event.at).toLocaleTimeString(language,{hour:'2-digit',minute:'2-digit'})}</time></li>)}</ol>:<div className="trace-empty"><Activity size={32} strokeWidth={1.3}/><h2>{L('Your team’s progress appears here','团队进展会显示在这里')}</h2><p>{L('Choose a task to see its progress and next steps.','选择任务，查看进展和下一步。')}</p><a href="/chat">{L('Return to the conversation','返回会话')}<ArrowRight size={15}/></a></div>}
@@ -285,6 +295,7 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
   {truncated?<p className="trace-muted">{L('Showing the latest 600 loaded activities. Reload to read earlier records.','显示最近加载的 600 条动态，重新加载可查看较早记录。')}</p>:null}
  </>
  return <section className="trace-page" aria-labelledby="trace-title">
+  <div className="trace-live-status" role="status" aria-atomic="true">{liveActivity&&<span key={liveActivity.id}>{liveActivityLabel}</span>}</div>
   <header className="trace-heading"><div><h1 id="trace-title">{L('Task progress','任务进展')}</h1></div><button type="button" disabled={loading||busy} onClick={()=>{setActionError('');void refreshRef.current(true)}}><RefreshCw size={16} className={loading?'trace-spin':''}/>{L('Refresh','刷新')}</button></header>
   <div className="trace-summary" aria-label={L('Shown task counts','当前所示任务统计')}><div><Activity size={17}/><strong>{active}</strong><span>{L('Working','正在执行')}</span></div><div><ShieldQuestion size={17}/><strong>{waiting}</strong><span>{L('Needs input','等待处理')}</span></div><div data-attention={uncertain>0}><History size={17}/><strong>{uncertain}</strong><span>{L('Needs checking','待核查结果')}</span></div></div>
   {actionError||error?<p className="trace-notice trace-error" role="alert">{failure(actionError||error)}<button onClick={()=>{setActionError('');void refreshRef.current(true)}}>{L('Try refresh','重试刷新')}</button></p>:null}
