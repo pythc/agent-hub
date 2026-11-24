@@ -15,13 +15,19 @@ function parse(value:unknown):Snapshot{
 }
 export function LocalDiagnostics({language}:{language:'en'|'zh-CN'}){
  const workspace=useWorkspaceTransport(),L=(en:string,zh:string)=>language==='en'?en:zh
- const [data,setData]=useState<{owner:string;binding:typeof workspace.binding;value:Snapshot}|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false)
+ const [data,setData]=useState<{owner:string;binding:typeof workspace.binding;value:Snapshot;change?:'host'|'settings'}|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false)
  const lifetime=useRef<{signal:AbortSignal;binding:typeof workspace.binding;owner:string}|null>(null),generation=useRef(0),working=useRef(false)
  const current=(token:NonNullable<typeof lifetime.current>)=>lifetime.current===token&&!token.signal.aborted
- const load=async()=>{
+ const load=async(previous?:Snapshot)=>{
   const token=lifetime.current;if(!token||!current(token)||working.current)return
   const turn=++generation.current;setData(null);setError('')
-  try{const value=parse(await token.binding.request('/api/local-diagnostics',undefined,false,undefined,token.signal));if(current(token)&&turn===generation.current)setData({owner:token.owner,binding:token.binding,value})}
+  try{
+   const value=parse(await token.binding.request('/api/local-diagnostics',undefined,false,undefined,token.signal))
+   if(!current(token)||turn!==generation.current)return
+   // Compare only an explicit refresh within this workspace lifetime.
+   const change=previous?.environment&&value.environment?(previous.environment.ref!==value.environment.ref?'host':previous.revision!==value.revision?'settings':undefined):undefined
+   setData({owner:token.owner,binding:token.binding,value,change})
+  }
   catch{if(current(token)&&turn===generation.current)setError('read')}
  }
  useEffect(()=>{
@@ -29,7 +35,8 @@ export function LocalDiagnostics({language}:{language:'en'|'zh-CN'}){
   lifetime.current=token;working.current=false;setBusy(false);setData(null);setError('');void load()
   return()=>{controller.abort();if(lifetime.current===token)lifetime.current=null}
  },[workspace.binding,workspace.contextKey,workspace.readSignal])
- const value=!workspace.readSignal.aborted&&data?.owner===workspace.contextKey&&data.binding===workspace.binding?data.value:null
+ const snapshot=!workspace.readSignal.aborted&&data?.owner===workspace.contextKey&&data.binding===workspace.binding?data:null
+ const value=snapshot?.value??null
  const probe=async()=>{
   const token=lifetime.current;if(!token||!current(token)||!value||working.current||value.busy||value.environment?.eligibility.sandboxCheck===false)return
   working.current=true;setBusy(true);setError('');setData(null);++generation.current
@@ -45,10 +52,11 @@ export function LocalDiagnostics({language}:{language:'en'|'zh-CN'}){
  }
  const result=value?.result,environment=value?.environment
  return <section className="connector-page" aria-label={L('Current environment','当前环境')}>
-  <header className="connector-heading"><h1>{L('Current environment','当前环境')}</h1><button type="button" disabled={busy} onClick={()=>void load()}>{L('Refresh','刷新')}</button></header>
+  <header className="connector-heading"><h1>{L('Current environment','当前环境')}</h1><button type="button" disabled={busy} onClick={()=>void load(value??undefined)}>{L('Refresh','刷新')}</button></header>
   <p className="connector-notice">{L('Only the host serving this workspace is checked. No other computer, website, account login or model is contacted. Results do not grant task permissions.','仅检查服务当前工作区的宿主，不联系其他电脑、网站、账号登录或模型。检查结果不授予任务权限。')}</p>
   {error?<p role="alert" className="connector-error">{error==='changed'?L('Settings or host changed. Refresh before checking again.','配置或宿主已变化，请刷新后重新检查。'):error==='busy'?L('A check is already running. Refresh to see its result.','已有检查正在运行，请刷新查看结果。'):L('The check is unavailable. Refresh and try again.','暂时无法完成检查，请刷新后重试。')}</p>:null}
   {busy?<p role="status">{L('Checking the local sandbox… Leaving this page hides the result; the bounded host check may still finish.','正在检查本地沙箱……离开页面后不再展示结果，有时限的宿主检查仍可能完成。')}</p>:!value&&!error?<p role="status">{L('Loading current environment…','正在读取当前环境……')}</p>:null}
+  {snapshot?.change?<p role="status" className="connector-notice">{snapshot.change==='host'?L('The current host changed since your last view. The results below are for this host only.','当前宿主较上次查看已变化。下方结果仅对应当前宿主。'):L('Settings changed since your last view. The results below are for the current settings only.','配置较上次查看已变化。下方结果仅对应当前配置。')}</p>:null}
   {value?<><p className="connector-detail">{L('Platform','平台')}: {value.platform} · Node {value.nodeVersion} · {L('Settings revision','配置版本')}: {value.revision}</p>
    <div className="connector-grid">{environment?<article className="connector-card"><h2>{L('Workspace binding','工作区绑定')}</h2>
     <p>{L('Current host only. If this workspace disconnects, there is no automatic fallback.','仅限当前宿主。此工作区断开时不会自动切换。')}</p>
