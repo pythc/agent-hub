@@ -10,7 +10,7 @@ export const skillSection=`<section aria-labelledby="skill-heading"><h2 id="skil
 <label>输入参数（每行 name = 名称）<textarea name="parameters" placeholder="file = 文件路径"></textarea></label><button>保存新版本</button> <button type="button" class="secondary" id="close-skill">收起</button></form>
 <form id="skill-overlay" hidden><h3>基于固定版本创建私有覆盖层</h3><p>仅覆盖名称、目标和步骤说明。Worker、连接和原执行权限不会被更改。留空表示继承基础版本。</p>
 <div id="skill-overlay-fields"></div><button>保存候选版本</button> <button type="button" id="close-skill-overlay">取消</button></form>
-<form id="skill-overlay-upgrade" hidden><h3>升级覆盖层的基础版本</h3><p role="status" id="skill-overlay-conflicts"></p>
+<form id="skill-overlay-upgrade" hidden><h3>升级覆盖层的基础版本</h3><p role="status" id="skill-overlay-conflicts"></p><div id="skill-overlay-conflict-details"></div>
 <label>新版基础版本<select name="base" required></select></label><button>尝试升级为新候选</button> <button type="button" id="close-skill-overlay-upgrade">取消</button></form>
 <form id="skill-run" hidden><h3>运行选定版本</h3><label>本次授权对话<select name="anchor" required></select></label>
 <label>本次请求原文<input name="quote" required></label><div id="skill-inputs"></div><button>启动实际任务</button></form></section>`
@@ -48,10 +48,32 @@ async function changeOverlayState(s,transition){
   await api('/router-skills',{action:'overlay_lifecycle',...skillLocation(s),skill:skillRef(s),transition,resolvedVersion:s.overlay.resolvedVersion,expectedRevision:s.revision})
   await load()
 }
+function clearOverlayConflicts(){
+  $('#skill-overlay-conflicts').textContent=''
+  $('#skill-overlay-conflict-details').replaceChildren()
+}
+function showOverlayConflicts(saved){
+  $('#skill-overlay-conflicts').textContent='这些字段不能自动迁移：'+saved.conflicts.join('、')+'。旧版保持不变。可对照文本后，在新版基础上手动创建覆盖层。'
+  const list=$('#skill-overlay-conflict-details')
+  for(const conflict of saved.conflictDetails??[]){
+    const group=document.createElement('details'),heading=document.createElement('summary')
+    const field=conflict.field
+    heading.textContent=field==='title'?'名称':field==='objective'?'目标':'步骤说明 · '+field.slice('instruction:'.length)
+    group.append(heading)
+    for(const [label,value] of [['原基础版本',conflict.oldBase],['当前覆盖层',conflict.overlay],['新基础版本',conflict.newBase]]){
+      const name=document.createElement('h4'),content=document.createElement('pre')
+      name.textContent=label
+      content.textContent=value===null?'该步骤在新基础版本中已移除。':value
+      content.style.whiteSpace='pre-wrap';content.style.overflowWrap='anywhere'
+      group.append(name,content)
+    }
+    list.append(group)
+  }
+}
 function clearSkillPreview(){skillRequest++;$('#skill-preview').hidden=true;$('#skill-preview-content').textContent=''}
 function clearSkills(){
   skillRequest++;editingSkill=runSkill=overlayBase=upgradingOverlay=undefined
-  $('#skill-overlay').hidden=true;$('#skill-overlay-upgrade').hidden=true;$('#skill-overlay-conflicts').textContent=''
+  $('#skill-overlay').hidden=true;$('#skill-overlay-upgrade').hidden=true;clearOverlayConflicts()
   $('#skill-editor').hidden=true;$('#skill-run').hidden=true;$('#skill-preview').hidden=true;$('#skill-preview-content').textContent=''
 }
 function readVersion(s){
@@ -139,17 +161,19 @@ $('#skill-overlay').onsubmit=async e=>{
     clearSkills();await load();notice('已保存覆盖候选 v'+saved.version)
   }catch(error){if(generation===skillRequest)notice(error.message,true)}finally{submit.disabled=false}
 }
+$('#skill-overlay-upgrade').elements.base.onchange=clearOverlayConflicts
 $('#skill-overlay-upgrade').onsubmit=async e=>{
-  e.preventDefault();const selection=upgradingOverlay,generation=skillRequest,submit=e.target.querySelector('button')
+  e.preventDefault();const selection=upgradingOverlay,generation=skillRequest,submit=e.target.querySelector('button'),picker=e.target.elements.base
   if(!selection||submit.disabled)return
-  submit.disabled=true
+  clearOverlayConflicts()
+  submit.disabled=true;picker.disabled=true
   try{
-    const base=JSON.parse(e.target.elements.base.value)
+    const base=JSON.parse(picker.value)
     const saved=await api('/router-skills',{action:'upgrade_overlay',skill:selection.skill,base,...selection.location,expectedVersion:selection.expectedVersion})
     if(generation!==skillRequest)return
-    if(saved.conflicts){$('#skill-overlay-conflicts').textContent='以下字段已改变或不存在：'+saved.conflicts.join('、')+'。没有自动升级，旧版不变。请查看两版后，从新版基础手动创建覆盖层。';return}
+    if(saved.conflicts){showOverlayConflicts(saved);return}
     clearSkills();await load();notice('已保存升级候选 v'+saved.version+'，需要重新校验和启用')
-  }catch(error){if(generation===skillRequest)notice(error.message,true)}finally{submit.disabled=false}
+  }catch(error){if(generation===skillRequest)notice(error.message,true)}finally{submit.disabled=false;picker.disabled=false}
 }
 $('#skill-run').onsubmit=async e=>{
   e.preventDefault();const f=new FormData(e.target),submit=e.target.querySelector('button');submit.disabled=true

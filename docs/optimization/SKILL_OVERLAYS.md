@@ -10,7 +10,10 @@ A base edit or upgrade never changes a saved overlay automatically. An operator
 may explicitly upgrade to a newer version of the same base method. All customized
 fields must still equal their recorded old values on the new base, including
 the existence of customized step IDs. A conflict returns a list and creates
-nothing. Review both versions and deliberately create a new overlay on the new
+nothing. Each conflict expands into a read-only comparison of the original
+base text captured in the immutable overlay, the overlay text, and the new
+base text (or a removed-step marker). Selecting a different base or closing
+the form clears the comparison. Deliberately create a new overlay on the new
 base when the change cannot be carried over unambiguously. Old references stay
 pinned and keep their own history.
 

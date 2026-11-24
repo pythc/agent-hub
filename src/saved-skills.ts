@@ -164,7 +164,9 @@ export class SavedSkills {
           patch=previous.overlay.patch
         }else patch=capturePatch(base.template,input.edits)
         const resolved=applyPatch(base.template,patch)
-        if(!resolved.template)return {conflicts:resolved.conflicts}
+        // applyPatch compares the new authorized base with values captured from
+        // the exact original base when this immutable overlay was created.
+        if(!resolved.template)return {conflicts:resolved.conflicts,conflictDetails:resolved.conflictDetails}
         validateSkillParameters(resolved.template,base.parameters??[])
         this.workers(resolved.template,base.scopeId)
         const item:SkillVersion={id:family,version:input.expectedVersion+1,scopeId:base.scopeId,entryId:base.entryId,

@@ -38,8 +38,11 @@ export function capturePatch(template:Template,edits:Edit[]):Patch[]{
 }
 
 export function applyPatch(template:Template,patch:Patch[]){
-  const conflicts=patch.filter(({edit,expected})=>read(template,edit)!==expected).map(({edit})=>key(edit))
-  if(conflicts.length)return {conflicts}
+  const conflictDetails=patch.flatMap(({edit,expected})=>{
+    const next=read(template,edit)
+    return next===expected?[]:[{field:key(edit),oldBase:expected,overlay:edit.value,newBase:next??null}]
+  })
+  if(conflictDetails.length)return {conflicts:conflictDetails.map(conflict=>conflict.field),conflictDetails}
   const resolved={...template,nodes:template.nodes.map(node=>({...node}))}
   for(const {edit} of patch){
     if('nodeId' in edit)resolved.nodes.find(n=>n.id===edit.nodeId)!.instruction=edit.value
