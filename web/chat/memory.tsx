@@ -4,6 +4,7 @@ import {NoteDetail,memoryTitle,type Note} from './memory-note.tsx';
 import {download,request,type Entry,type Labels} from './memory-api.ts';
 import {MemoryFile,personaRequest,type PersonaFile,type PersonaFiles} from './memory-files.tsx';
 import {Methods} from './memory-methods.tsx';
+import {ExternalMemoryCandidates} from './external-memory-candidates.tsx';
 import './memory.css';
 
 type FileTab='MEMORY.md'|'USER.md'|PersonaFile;
@@ -41,6 +42,7 @@ export function MemorySettings({L}:{L:Labels}){
   </div>
   <div className="memory-file-tabs" role="tablist" aria-label={L('Memory and personality files','记忆与人格文件')} onKeyDown={e=>{if(!['ArrowRight','ArrowLeft','Home','End'].includes(e.key)||editing)return;e.preventDefault();const i=files.indexOf(file),next=e.key==='Home'?0:e.key==='End'?files.length-1:(i+(e.key==='ArrowRight'?1:-1)+files.length)%files.length;chooseFile(files[next]!);document.getElementById(id+'-'+files[next])?.focus();}}>{files.map(name=><button id={id+'-'+name} key={name} role="tab" aria-selected={file===name} aria-controls={id+'-panel'} tabIndex={file===name?0:-1} disabled={editing} onClick={()=>chooseFile(name)}>{name}</button>)}</div>
   <p className="memory-file-hint">{noteHint}</p>
+  {file==='MEMORY.md'&&actualScope==='personal'&&!editing&&!error&&visible.length>0&&<ExternalMemoryCandidates key={revision} entries={visible} L={L}/>}
   {error&&<p className="memory-error" role="alert">{error}<button className="text-button" onClick={()=>refresh(v=>v+1)}>{L('Refresh','刷新')}</button></p>}
   <div id={id+'-panel'} role="tabpanel" aria-labelledby={id+'-'+file}>
    {entries===null||!persona?<p className="memory-empty" role="status">{error?L('Memory is unavailable.','记忆暂不可用。'):L('Loading…','加载中…')}</p>:personal?notes.length&&current?<div className="memory-reader" data-detail={mobileDetail}>
