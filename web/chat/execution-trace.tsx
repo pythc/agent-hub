@@ -11,6 +11,19 @@ import './execution-trace.css'
 type Snapshot={visibility:string;at:number;revision:number;cursor:number;total:number;offset:number;more:boolean;tasks:TraceTask[]}
 type Events={visibility:string;events:TraceEvent[];cursor:number;head:number;more:boolean;at:number}
 type Action=TraceTask['actions'][number]
+type MotionCue='dispatch'|'attention'|'acceptance'|'result'
+const TRACE_POLL_MS=3000
+// A delayed/suspended browser must catch up silently, even when it never
+// received an offline or visibility event.
+const LIVE_WINDOW_MS=2*TRACE_POLL_MS
+function traceMotion(event:TraceEvent):MotionCue|undefined{
+ if(event.baseline||!event.ticketId)return
+ if(event.workerEvent)return event.workerEvent.kind==='blocked'&&event.workerEvent.disposition==='applied'?'attention':undefined
+ if((event.stage==='task'&&event.state==='waiting')||(event.stage==='approval'&&event.state==='pending'))return 'attention'
+ if(event.stage==='assignment'&&event.state==='running')return 'dispatch'
+ if(event.stage==='acceptance'&&event.state==='passed')return 'acceptance'
+ if(event.stage==='result'&&event.entity==='goal-delivery'&&event.state==='ready')return 'result'
+}
 const recoveryBasis=(task:TraceTask)=>JSON.stringify([task.id,task.observed,task.revision])
 class TraceRequestError extends Error {constructor(readonly code:string){super(code)}}
 async function request<T>(binding:WorkspaceBinding,path:string,isCurrent:()=>boolean,signal?:AbortSignal,body?:unknown):Promise<T>{
@@ -162,6 +175,8 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  const {binding,contextKey,readSignal}=useWorkspaceTransport()
  const L=(en:string,zh:string)=>language==='en'?en:zh,word=(names:[string,string])=>names[language==='en'?0:1]
  const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<TraceEvent[]>([]),[selected,setSelected]=useState(''),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[actionError,setActionError]=useState(''),[notice,setNotice]=useState(''),[confirmResume,setConfirmResume]=useState(''),[confirmStop,setConfirmStop]=useState(''),[truncated,setTruncated]=useState(false)
+ const [motion,setMotion]=useState<{id:string;cue:MotionCue}|null>(null)
+ const [liveActivity,setLiveActivity]=useState<{id:string;cue:MotionCue;workerBlocked:boolean}|null>(null)
  const taskNumbers=useRef(new Map<string,number>())
  const taskName=(item:TraceTask)=>{if(!taskNumbers.current.has(item.id))taskNumbers.current.set(item.id,taskNumbers.current.size+1);return workerName(item.workerId,language)+L(' · Task ',' · 任务 ')+taskNumbers.current.get(item.id)}
  const cursor=useRef(0),visibility=useRef(''),generation=useRef(0),refreshRef=useRef<(retryPage?:boolean)=>Promise<void>>(async()=>{}),eventRef=useRef<()=>Promise<void>>(async()=>{})
@@ -173,22 +188,51 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  useEffect(()=>{
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,readSignal]),current=++generation.current;let fetching=false,hasMore=false,pageFailed=false,retryQueued=false
   pageRead.current=signal
+  const reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)')
+  let continuity=0,lastSettled:number|null=null,lastServerRead:number|null=null,motionTimer:ReturnType<typeof setTimeout>|undefined
+  const clearCue=()=>{clearTimeout(motionTimer);setMotion(null)}
+  const clearMotion=()=>{continuity++;lastSettled=null;lastServerRead=null;clearCue();setLiveActivity(null)}
   const isCurrent=()=>generation.current===current&&pageCurrent()&&!signal.aborted
-  cursor.current=0;visibility.current='';latestBasis.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop('');setConfirmResume('');setBusy(false)
-  const resetTimeline=()=>{cursor.current=0;hasMore=false;pageFailed=false;setEvents([]);setMore(false);setTruncated(false)}
-  const readEvents=async()=>{
+  clearMotion();cursor.current=0;visibility.current='';latestBasis.current='';setEvents([]);setLoading(true);setMore(false);setTruncated(false);setNotice('');setActionError('');setConfirmStop('');setConfirmResume('');setBusy(false)
+  const resetTimeline=()=>{clearMotion();cursor.current=0;hasMore=false;pageFailed=false;setEvents([]);setMore(false);setTruncated(false)}
+  const readEvents=async(polling=false)=>{
    if(!isCurrent())return
-   const query=new URLSearchParams({cursor:String(cursor.current),limit:'100',...(selected?{ticketId:selected}:{})})
+   const requestedCursor=cursor.current,start=performance.now(),generationAtRead=continuity
+   const query=new URLSearchParams({cursor:String(requestedCursor),limit:'100',...(selected?{ticketId:selected}:{})})
    const data=await request<Events>(binding,'/events?'+query,isCurrent,signal)
    if(!isCurrent())return
    if(visibility.current&&visibility.current!==data.visibility){visibility.current=data.visibility;resetTimeline();return}
+   // Only a periodic read after a complete, recent read at the head is live.
+   // Manual reads, pagination, visibility changes and reconnects establish a
+   // new baseline; they are never allowed to highlight catch-up records.
+   const now=performance.now(),visibleOnline=!document.hidden&&navigator.onLine
+   const live=polling&&!data.more&&visibleOnline&&continuity===generationAtRead&&lastSettled!==null&&lastServerRead!==null
+    &&now-lastSettled<=LIVE_WINDOW_MS&&now-start<=TRACE_POLL_MS&&data.at>=lastServerRead&&data.at-lastServerRead<=LIVE_WINDOW_MS
+   const latest=data.events.at(-1),recordedAt=latest?Date.parse(latest.at):NaN
+   // Only the latest row may pulse: an earlier success in this batch may
+   // already be superseded by a failure or another state transition.
+   if(latest&&latest.cursor>requestedCursor){
+    const cue=live&&lastServerRead!==null&&recordedAt>=lastServerRead&&recordedAt<=data.at?traceMotion(latest):undefined
+    // A separate status region stays available even when the timeline is
+    // inside collapsed details or visual motion is disabled.
+    setLiveActivity(cue?{id:latest.id,cue,workerBlocked:latest.workerEvent?.kind==='blocked'}:null)
+    if(cue&&!reducedMotion.matches){
+     clearTimeout(motionTimer)
+     setMotion({id:latest.id,cue})
+     motionTimer=setTimeout(()=>{if(isCurrent())setMotion(null)},650)
+    }
+   }
+   const settled=visibleOnline&&!data.more&&continuity===generationAtRead&&now-start<=TRACE_POLL_MS
+   lastSettled=settled?now:null;lastServerRead=settled?data.at:null
    visibility.current=data.visibility;cursor.current=data.cursor;hasMore=data.more;pageFailed=false;setMore(data.more)
    setEvents(previous=>{const seen=new Set(previous.map(e=>e.id)),all=[...previous,...data.events.filter(e=>!seen.has(e.id))];if(all.length>600)setTruncated(true);return all.slice(-600)})
   }
-  const refresh=async(retryPage=false)=>{
+  const refresh=async(retryPage=false,polling=false)=>{
    if(!isCurrent())return
+   if(!polling)clearMotion()
    if(fetching){if(retryPage&&pageFailed)retryQueued=true;return}
    fetching=true
+   const generationAtRefresh=continuity
    try{
     const data=await request<Snapshot>(binding,'?limit=100',isCurrent,signal)
     if(!isCurrent())return
@@ -196,9 +240,9 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
     const observedTask=data.tasks.find(t=>t.id===selected),observedBasis=observedTask?recoveryBasis(observedTask):''
     if(latestBasis.current!==observedBasis){latestBasis.current=observedBasis;setConfirmStop('');setConfirmResume('')}
     visibility.current=data.visibility;setSnapshot(data)
-    if(!hasMore||(retryPage&&pageFailed))await readEvents()
+    if(!hasMore||(retryPage&&pageFailed))await readEvents(polling&&generationAtRefresh===continuity)
     if(isCurrent()&&!pageFailed)setError('')
-   }catch(cause){if(isCurrent()){const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead')resetTimeline()}}
+   }catch(cause){if(isCurrent()){clearMotion();const code=cause instanceof TraceRequestError?cause.code:'trace_refresh_failed';setError(code);if(code==='trace_task_missing'){setEvents([]);setSelected('')}if(code==='trace_cursor_ahead')resetTimeline()}}
    finally{if(isCurrent()){setLoading(false);finishRead()}}
   }
   const finishRead=()=>{
@@ -207,9 +251,20 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
    if(retryQueued){retryQueued=false;if(pageFailed)void refresh(true)}
   }
   refreshRef.current=refresh
-  eventRef.current=async()=>{if(fetching||!isCurrent())return;fetching=true;try{await readEvents();if(isCurrent())setError('')}catch(cause){if(isCurrent()){if(cause instanceof TraceRequestError&&cause.code==='trace_cursor_ahead'){resetTimeline();setError(cause.code)}else{pageFailed=true;setError('trace_refresh_failed')}}}finally{finishRead()}}
-  void refresh();const timer=setInterval(()=>void refresh(),3000)
-  return()=>{controller.abort();clearInterval(timer);if(generation.current===current)generation.current++}
+  eventRef.current=async()=>{if(fetching||!isCurrent())return;clearMotion();fetching=true;try{await readEvents();if(isCurrent())setError('')}catch(cause){if(isCurrent()){if(cause instanceof TraceRequestError&&cause.code==='trace_cursor_ahead'){resetTimeline();setError(cause.code)}else{pageFailed=true;setError('trace_refresh_failed')}}}finally{finishRead()}}
+  const invalidate=()=>{if(isCurrent())clearMotion()}
+  window.addEventListener('online',invalidate)
+  window.addEventListener('offline',invalidate)
+  document.addEventListener('visibilitychange',invalidate)
+  reducedMotion.addEventListener('change',invalidate)
+  void refresh();const timer=setInterval(()=>void refresh(false,true),TRACE_POLL_MS)
+  return()=>{
+   controller.abort();clearInterval(timer);clearTimeout(motionTimer)
+   window.removeEventListener('online',invalidate);window.removeEventListener('offline',invalidate)
+   document.removeEventListener('visibilitychange',invalidate)
+   reducedMotion.removeEventListener('change',invalidate)
+   if(generation.current===current)generation.current++
+  }
  },[selected,binding,contextKey,readSignal])
  const failure=(code:string)=>code==='trace_changed'||code==='trace_settings_conflict'?L('This task changed. Review its current state before trying again.','任务状态已变更，请核对最新状态后重试。'):code==='trace_reconcile_required'?L('Check the external outcome before repeating any work.','请先核查外部结果，再决定是否重复执行。'):code==='trace_recovery_uncertain'?L('The action could not be confirmed. Check the current task and original session.','操作结果尚未确认，请检查当前任务和原会话。'):code==='trace_action_unavailable'?L('This action is no longer available. Review the latest task state.','此操作已不可用，请查看最新任务状态。'):code==='trace_repair_confirmation_required'?L('Confirm that you have checked or repaired the reported problem before a single manual continuation.','请确认已核查或修复所报问题，再手动继续一次。'):code==='trace_cursor_ahead'?L('The saved history changed. Refresh to reload the timeline.','历史记录已变更，请刷新以重新加载轨迹。'):L('Updates are unavailable. Your last known state is still shown.','暂时无法更新，当前显示最近一次已知状态。')
  async function recover(action:Action,repairConfirmed=false,confirmedBasis?:string){
@@ -227,13 +282,20 @@ export function ExecutionTrace({language='en'}:{language?:'en'|'zh-CN'}){
  }
  const guidance=task?.next==='reconcile'?L('Check the actual outcome before trying again.','请先核查实际结果，再决定是否重试。'):task?.next==='answer_approval'?L('This task needs permission. Use its existing approval controls.','任务需要授权，请在原任务中处理。'):task?.next==='reconnect'?L('Review the connection and verify authentication before continuing.','请先检查连接配置并验证认证状态。'):task?.next==='review_context'?L('Access changed. Review it before continuing.','访问权限已变更，请核对后再继续。'):task?.next==='follow_up'?L('The Worker needs your reply in the original conversation.','Worker 等待你的回复，请回到原会话继续。'):null
  const receiptLabels={progress:L('Worker progress','Worker 进展'),blocked:L('Worker blocked','Worker 受阻'),result:L('Worker result','Worker 结果')}
+ const liveActivityLabel=liveActivity?({
+  dispatch:L('New activity: task dispatched.','有新动态：任务已分派。'),
+  attention:liveActivity.workerBlocked?L('New activity: a Worker is blocked.','有新动态：Worker 执行受阻。'):L('New activity: a task needs your attention.','有新动态：有任务需要处理。'),
+  acceptance:L('New activity: acceptance passed.','有新动态：验收已通过。'),
+  result:L('New activity: a result was saved.','有新动态：结果已保留。'),
+ })[liveActivity.cue]:null
  const timeline=<>
   <div className="trace-timeline-heading"><h2>{L('Activity','动态记录')}</h2></div>
-  {loading&&!events.length?<div className="trace-empty" role="status"><LoaderCircle size={23} className="trace-spin"/><p>{L('Loading activity…','正在加载动态…')}</p></div>:events.length?<ol className="trace-timeline">{events.map(event=><li key={event.id} data-state={event.state}><div className="trace-event-icon"><StageIcon stage={event.stage}/></div><div className="trace-event-main"><div><strong>{event.workerEvent?receiptLabels[event.workerEvent.kind]:word(stageNames[event.stage])}</strong><span className="trace-state" data-state={event.state}>{event.workerEvent?.disposition==='archived'?L('Archived only','仅归档'):word(stateNames[event.state])}</span></div><p>{event.ticketId?(()=>{const item=snapshot?.tasks.find(t=>t.id===event.ticketId);return item?taskName(item):L('Earlier task','较早任务')})():L('Team activity','团队动态')}{event.baseline?' · '+L('First recorded state','首次记录的状态'):''}{event.hasResult?' · '+L('Result saved','结果已保留'):''}{event.stage==='delivery'&&event.state==='sent'?' · '+L('Receipt is unconfirmed','尚未确认对方收到'):''}</p></div><time dateTime={event.at} title={new Date(event.at).toLocaleString(language)}>{new Date(event.at).toLocaleTimeString(language,{hour:'2-digit',minute:'2-digit'})}</time></li>)}</ol>:<div className="trace-empty"><Activity size={32} strokeWidth={1.3}/><h2>{L('Your team’s progress appears here','团队进展会显示在这里')}</h2><p>{L('Choose a task to see its progress and next steps.','选择任务，查看进展和下一步。')}</p><a href="/chat">{L('Return to the conversation','返回会话')}<ArrowRight size={15}/></a></div>}
+  {loading&&!events.length?<div className="trace-empty" role="status"><LoaderCircle size={23} className="trace-spin"/><p>{L('Loading activity…','正在加载动态…')}</p></div>:events.length?<ol className="trace-timeline">{events.map(event=><li key={event.id} data-state={event.state} data-live-cue={motion?.id===event.id?motion.cue:undefined}><div className="trace-event-icon" aria-hidden="true"><StageIcon stage={event.stage}/></div><div className="trace-event-main"><div><strong>{event.workerEvent?receiptLabels[event.workerEvent.kind]:word(stageNames[event.stage])}</strong><span className="trace-state" data-state={event.state}>{event.workerEvent?.disposition==='archived'?L('Archived only','仅归档'):word(stateNames[event.state])}</span></div><p>{event.ticketId?(()=>{const item=snapshot?.tasks.find(t=>t.id===event.ticketId);return item?taskName(item):L('Earlier task','较早任务')})():L('Team activity','团队动态')}{event.baseline?' · '+L('First recorded state','首次记录的状态'):''}{event.hasResult?' · '+L('Result saved','结果已保留'):''}{event.stage==='delivery'&&event.state==='sent'?' · '+L('Receipt is unconfirmed','尚未确认对方收到'):''}</p></div><time dateTime={event.at} title={new Date(event.at).toLocaleString(language)}>{new Date(event.at).toLocaleTimeString(language,{hour:'2-digit',minute:'2-digit'})}</time></li>)}</ol>:<div className="trace-empty"><Activity size={32} strokeWidth={1.3}/><h2>{L('Your team’s progress appears here','团队进展会显示在这里')}</h2><p>{L('Choose a task to see its progress and next steps.','选择任务，查看进展和下一步。')}</p><a href="/chat">{L('Return to the conversation','返回会话')}<ArrowRight size={15}/></a></div>}
   {more?<button className="trace-load-more" disabled={busy||loading} onClick={()=>void eventRef.current()}>{L('Load more','加载更多')}</button>:null}
   {truncated?<p className="trace-muted">{L('Showing the latest 600 loaded activities. Reload to read earlier records.','显示最近加载的 600 条动态，重新加载可查看较早记录。')}</p>:null}
  </>
  return <section className="trace-page" aria-labelledby="trace-title">
+  <div className="trace-live-status" role="status" aria-atomic="true">{liveActivity&&<span key={liveActivity.id}>{liveActivityLabel}</span>}</div>
   <header className="trace-heading"><div><h1 id="trace-title">{L('Task progress','任务进展')}</h1></div><button type="button" disabled={loading||busy} onClick={()=>{setActionError('');void refreshRef.current(true)}}><RefreshCw size={16} className={loading?'trace-spin':''}/>{L('Refresh','刷新')}</button></header>
   <div className="trace-summary" aria-label={L('Shown task counts','当前所示任务统计')}><div><Activity size={17}/><strong>{active}</strong><span>{L('Working','正在执行')}</span></div><div><ShieldQuestion size={17}/><strong>{waiting}</strong><span>{L('Needs input','等待处理')}</span></div><div data-attention={uncertain>0}><History size={17}/><strong>{uncertain}</strong><span>{L('Needs checking','待核查结果')}</span></div></div>
   {actionError||error?<p className="trace-notice trace-error" role="alert">{failure(actionError||error)}<button onClick={()=>{setActionError('');void refreshRef.current(true)}}>{L('Try refresh','重试刷新')}</button></p>:null}
