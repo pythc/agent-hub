@@ -13,7 +13,7 @@ import {readPluginPackage,installPluginPackage,type PluginManifest} from './plug
 import {readViewPackage,installViewPackage,viewArtifactReference,type ViewManifest} from './workspace-view-package.ts'
 import {PluginGitHub,githubLocation} from './plugin-github.ts'
 import {extractPluginArchive} from './plugin-archive.ts'
-import {compatible,compareVersion,latestCompatible,marketId,type CatalogPlugin,type InstalledPlugin,type MarketOperation,type MarketPlan,type MarketRelease,type SourceCompatibility} from './plugin-market-contract.ts'
+import {compatible,compareVersion,latestCompatible,marketId,type CatalogPlugin,type InstalledPlugin,type MarketOperation,type MarketPlan,type MarketRelease,type SourceCompatibility,type SourceAuthorityChange} from './plugin-market-contract.ts'
 import {marketState,objectDirectory,applyMarketConfig,recoverMarket,type ManagedMarketState,type MarketActivation} from './plugin-market-state.ts'
 
 export class MarketError extends Error {constructor(readonly code:string,message:string,readonly status=409){super(message)}}
@@ -89,7 +89,7 @@ export class PluginMarket {
   }
   private sourceCompatibility(installed:InstalledPlugin,target:MarketRelease):SourceCompatibility {
     const host=this.host(),connections=host.config.sources.filter(s=>s.kind===installed.kind)
-    const blocked=(code:SourceCompatibility['code']):SourceCompatibility=>({state:'blocked',code,connections:connections.map(s=>({id:s.id,compatible:false}))})
+    const blocked=(code:SourceCompatibility['code'],authorityChanges?:SourceAuthorityChange[]):SourceCompatibility=>({state:'blocked',code,connections:connections.map(s=>({id:s.id,compatible:false})),...(authorityChanges?.length?{authorityChanges}:{})})
     let pkg:ReturnType<typeof readPluginPackage>
     try{pkg=readPluginPackage(objectDirectory(host.config,target.digest),target.digest)}catch{return blocked('package_unavailable')}
     const manifest=pkg.manifest
@@ -99,18 +99,19 @@ export class PluginMarket {
     const before=installed.active
     const added=target.permissions.some(permission=>!before?.permissions.includes(permission))
     if(connections.length&&before?.digest!==target.digest){
-      if(added||!before)return blocked('permission_migration_required')
+      if(!before)return blocked('permission_migration_required',['no_active_version'])
       try{
         const prior=readPluginPackage(objectDirectory(host.config,before.digest),before.digest).manifest
-        const changed=manifest.scopesPath!==prior.scopesPath||
-          (manifest.repository!==undefined&&stableDigest(manifest.repository)!==stableDigest(prior.repository??null))||
-          Object.entries(manifest.credentials).some(([key,path])=>prior.credentials[key]!==path)||
-          manifest.tools.some(tool=>{
-            const old=prior.tools.find(t=>t.name===tool.name)
-            return !old||old.resource!==tool.resource||stableDigest(old.inputSchema)!==stableDigest(tool.inputSchema)
-          })
-        if(changed)return blocked('permission_migration_required')
-      }catch{return blocked('package_unavailable')}
+        const changes:SourceAuthorityChange[]=added?['added_permission']:[]
+        if(manifest.scopesPath!==prior.scopesPath)changes.push('scope_binding')
+        if(manifest.repository!==undefined&&stableDigest(manifest.repository)!==stableDigest(prior.repository??null))changes.push('repository_binding')
+        if(Object.entries(manifest.credentials).some(([key,path])=>prior.credentials[key]!==path))changes.push('credential_binding')
+        if(manifest.tools.some(tool=>{
+          const old=prior.tools.find(t=>t.name===tool.name)
+          return !old||old.resource!==tool.resource||stableDigest(old.inputSchema)!==stableDigest(tool.inputSchema)
+        }))changes.push('tool_contract')
+        if(changes.length)return blocked('permission_migration_required',changes)
+      }catch{return added?blocked('permission_migration_required',['added_permission']):blocked('package_unavailable')}
     }
     if(installed.stateVersion!==manifest.stateVersion||connections.some(s=>{const previous=host.store.get<{pluginId:string;stateVersion:number}>('plugin-installation',s.id);return previous&&(previous.pluginId!==manifest.id||previous.stateVersion!==manifest.stateVersion)}))return blocked('state_version_mismatch')
     try{

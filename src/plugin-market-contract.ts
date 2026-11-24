@@ -34,7 +34,8 @@ export interface InstalledPlugin {
 }
 export interface MarketState {format:1;revision:number;catalogs:MarketCatalog[];installed:InstalledPlugin[]}
 export type MarketAction='install'|'activate'|'disable'|'enable'|'rollback'|'uninstall'|'ignore'
-export interface SourceCompatibility {state:'passed'|'blocked'|'not_checked';code:'declared_compatible'|'download_required'|'package_unavailable'|'identity_mismatch'|'permission_migration_required'|'state_version_mismatch'|'schema_invalid'|'connections_incompatible';connections:{id:string;compatible:boolean}[]}
+export type SourceAuthorityChange='no_active_version'|'added_permission'|'scope_binding'|'repository_binding'|'credential_binding'|'tool_contract'
+export interface SourceCompatibility {authorityChanges?:SourceAuthorityChange[];state:'passed'|'blocked'|'not_checked';code:'declared_compatible'|'download_required'|'package_unavailable'|'identity_mismatch'|'permission_migration_required'|'state_version_mismatch'|'schema_invalid'|'connections_incompatible';connections:{id:string;compatible:boolean}[]}
 export interface MarketPlan {
   id:string;action:MarketAction;pluginId:string;catalogId?:string;revision:number;settingsRevision:number;expiresAt:number;
   plugin?:CatalogPlugin;origin?:MarketOrigin;target?:MarketRelease;permissionsAdded:string[];permissionsRemoved?:string[];invalidatedConnectionEvidence?:string[];restart:boolean;connections:string[];sourceCompatibility?:SourceCompatibility;
