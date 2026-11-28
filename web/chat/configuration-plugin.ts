@@ -1,3 +1,4 @@
+import {providerDefaults, guideApiFormats} from '../../src/model-provider-presets.ts'
 import { readFileSync } from "node:fs";
 import type { Plugin } from "vite";
 import postcss from "postcss";
@@ -38,6 +39,7 @@ export function configurationContent(): Plugin {
       return `export function mount(configurationHost){
       const style=document.createElement('style');style.textContent=${JSON.stringify(css.toString())};document.head.append(style);
       const executionAssets=${JSON.stringify(executionAssets)};
+      const providerDefaults=${JSON.stringify(providerDefaults)}, guideApiFormats=${JSON.stringify(guideApiFormats)};
       ${configurationScripts.filter(name => name !== "form-menus.js").map((name) => (name === "application.js" ? asset(name).replace("void startEntrySession()", "const configurationReady=startEntrySession()") : asset(name))).join("\n")}
       return {transport:workspaceBridge(),activate(language){lang=language;applyWorkspaceLocation();render()}, language(language){lang=language;render()},
         async openTask(id,isCurrent){await configurationReady;if(!configurationHost.active()||!isCurrent())return false;await openOperatorTask(id,isCurrent);return operator.drawer?.id===id},

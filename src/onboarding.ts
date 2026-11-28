@@ -1,3 +1,4 @@
+import {workerPoolDefault} from './execution-limits.ts'
 import {BackendRegistry} from './backends/registry.ts'
 import {randomUUID} from 'node:crypto'
 import {existsSync,mkdirSync,realpathSync,statSync,accessSync,constants} from 'node:fs'
@@ -61,6 +62,23 @@ export class Onboarding {
    }
   }
   return this.view(plan)
+ }
+ /** Terminal setup preserves existing Workers; a new personal host starts with one. */
+ terminalPlan(value:unknown){
+  const input=onboardingPlanSchema.pick({revision:true,connection:true,name:true}).extend({target:z.enum(['router','library']).default('router')}).strict().parse(value)
+  if(input.connection.kind==='codex')throw new OnboardingError('connection_not_supported','Choose the existing Codex connection to use its local sign-in.')
+  const view=this.connectionPlan({revision:input.revision,connection:input.connection,name:input.name,select:false}),plan=this.plans.get(view.id)!,host=this.host()
+  if(input.target==='router'){
+   const initial=host.config.execution.router?.mode!=='host',backend=plan.connection.id
+   plan.next.execution={...host.config.execution,...(initial?{backend,management:{maxWorkers:workerPoolDefault,...host.config.execution.management,enabled:true},workers:host.config.execution.workers??[{id:'worker-1',label:'Worker 1',backend}]}:{}),router:{...host.config.execution.router,backend,model:undefined,effort:null,parameters:undefined,nativeTool:undefined,mode:'host'}}
+   plan.next.models=Object.fromEntries(Object.entries(host.config.models).filter(([key])=>key!=='router'))
+  }
+  return {...view,target:input.target}
+ }
+ async applyTerminal(id:string,rebuild:(config:Config)=>Promise<void>,authorize:()=>void){
+  if(!this.host().store.get('onboarding-deployment',id)&&!this.current(id).lastCheck?.ok)
+   throw new OnboardingError('connection_check_required','Test this connection successfully before saving it.')
+  return this.apply(id,rebuild,authorize)
  }
  /** Entry setup adds a source while retaining the selected execution backend and all existing conversations. */
  sourcePlan(revision:number,source:Config['sources'][number],credentials:Record<string,string>={}){

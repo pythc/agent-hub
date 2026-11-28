@@ -113,7 +113,7 @@ npm ci
 
 这会构建含 Chromium 和 Bubblewrap 的 Linux 运行环境，创建持久数据卷，并打印本地配置链接。[Docker 部署与升级](docs/DOCKER.md) · [重新打开已有安装](docs/OPERATIONS.md#start-the-right-instance)
 
-在项目仓库中运行 `npm link` 安装终端命令，执行 `roppo login` 连接账号。输入 `roppo` 续接网页端的个人对话，`roppo lang zh` 可将终端界面设为中文。使用 `roppo --cwd .` 进入当前项目的工作环境。[Roppo CLI 使用指南](docs/TERMINAL.md)
+在项目仓库中运行 `npm link` 安装终端命令，执行 `roppo login` 连接账号。输入 `roppo` 续接网页端的个人对话，终端界面使用英文。`-c` 和 `-p` 默认使用同一段个人对话，Worker 协作留在后台。[Roppo CLI 使用指南](docs/TERMINAL.md)。终端支持可搜索的 `/config`、`/model`、`/effort`、`/permissions`、`/resume` 菜单、主题设置，以及供脚本使用的 `--output-format stream-json`。
 
 ## 使用自己的模型
 

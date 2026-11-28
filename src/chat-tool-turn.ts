@@ -83,7 +83,7 @@ export class ChatToolTurn {
     })
     this.updates.push(run.id)
   }
-  offer(run:ChatRun,quotedRun?:string){
+  offer(run:ChatRun,quotedRun?:string,steer=false){
     if(!this.accepting||(!this.activeTools&&this.dispatches().length>0)||this.host.config.execution.chatInterjections===false||
       this.host.shuttingDown||this.host.schedulingPaused||this.controller.signal.aborted||
       quotedRun&&quotedRun!==this.parent.id)return
@@ -97,6 +97,7 @@ export class ChatToolTurn {
       if(!this.stop(run,source.c,source.message.text))this.save(run,'queued')
       return
     }
+    if(steer){this.recordUpdate(run);return}
     this.save(run,'pending')
     this.schedule(run.id)
   }

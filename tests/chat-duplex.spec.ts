@@ -517,6 +517,29 @@ it('fences a proposed assignment until a mixed follow-up is read, then continues
  expect(manager).toHaveBeenCalledTimes(2)
 })
 
+it('applies explicit steering to the active writer without a classification turn',async()=>{
+ const entered=gate(),release=gate();let corrected=false
+ const f=fixture(async r=>{
+  const input=JSON.parse(r.input)
+  expect(input.kind).not.toBe('chat_interjection')
+  if(input.kind==='chat_task_update'){
+   expect(input.messages.map((m:any)=>m.text)).toEqual(['Focus on B instead.']);corrected=true;return {reply:'Checked B.'}
+  }
+  await r.onTool!('worker_manage',{action:'list'},'first-read')
+  return {reply:'Original result'}
+ },true)
+ const call=f.h.manager.call.bind(f.h.manager)
+ vi.spyOn(f.h.manager,'call').mockImplementation(async(...args)=>{entered.release();await release.wait;return call(...args)})
+ const parent=f.send('Check A.');await f.h.tick();await entered.wait
+ try{
+  const result=f.h.chat.send(f.c.id,'local-operator',{clientMessageId:randomUUID(),text:'Focus on B instead.',steer:true})
+  expect(result).toMatchObject({delivery:'steered'})
+  expect(f.h.store.get('chat-run',result.runId)).toMatchObject({interjection:{parentId:parent.runId,state:'update'}})
+ }finally{release.release()}
+ await settle(f.h,()=>!f.view().reply);expect(corrected).toBe(true)
+ expect(f.view().messages.some(message=>message.text==='Checked B.')).toBe(true)
+})
+
 it('honors an explicit stop during a Router read without accepting its next action',async()=>{
  const firstRead=gate(),release=gate()
  const f=fixture(async r=>{

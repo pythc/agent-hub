@@ -40,6 +40,7 @@ versions and integrity hashes are retained in package-lock.json.
 - Browser execution uses agent-browser (Apache-2.0) and ws (MIT). See
   [docs/THIRD_PARTY_BROWSER.md](docs/THIRD_PARTY_BROWSER.md).
 - Roppo includes OpenCode 1.19.5 for managed file tools. Its MIT notice ships in the installed opencode-ai package. [OpenCode](https://github.com/anomalyco/opencode)
+- The interactive CLI uses OpenTUI 0.9.9 (MIT) and the bundled Bun 1.4.5 runtime. Their installed packages retain their licenses and runtime third-party notices. [OpenTUI](https://github.com/anomalyco/opentui), [Bun](https://github.com/oven-sh/bun)
 - The MCP SDK and other installed dependencies retain the licenses shipped
   in their npm packages. This list is not a replacement for those notices.
 
