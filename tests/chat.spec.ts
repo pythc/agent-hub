@@ -2472,3 +2472,123 @@ it.each([true,false])('answers an explicit question once with a text-only recove
  expect(answer[0]!.text).toBe(replies?'在，我收到了。':'我在，已收到你这条消息。')
  expect(f.h.store.tickets.list()).toHaveLength(0)
 })
+
+it('plans through clarification turns without tools, delegation or automatic execution',async()=>{
+ const {h,calls}=fixture(async r=>({reply:JSON.parse(r.input).request.includes('budget')?'Detailed plan: requirements, steps, tests and acceptance.':'What outcome and budget do you need?'}))
+ const c=h.chat.space('owner',true).conversation!
+ h.chat.setMode(c.id,'owner','plan')
+ const first=send(h,c.id,'Build a personal website')
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(calls[0]!.tools).toEqual([]);expect(calls[0]!.onTool).toBeUndefined()
+ expect(calls[0]!.options?.tools).toEqual([]);expect(calls[0]!.allowNativeTools).toBe(false)
+ expect(calls[0]!.instructions).toContain('PLAN MODE')
+ expect(h.store.tickets.list()).toEqual([])
+ send(h,c.id,'My budget is 100 and it must work on mobile')
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(JSON.parse(calls[1]!.input).conversation.some((m:any)=>m.text==='What outcome and budget do you need?')).toBe(true)
+ expect(h.chat.view(c.id,'owner').messages.at(-1)?.text).toContain('Detailed plan')
+ h.chat.setMode(c.id,'owner','act')
+ expect(h.chat.view(c.id,'owner').conversation.mode).toBe('act')
+ expect(calls).toHaveLength(2)
+ expect(h.store.get<any>('chat-run',first.runId).mode).toBe('plan')
+})
+
+it('clears only conversation messages and working context, preserving memory and live schedules',async()=>{
+ const {h,calls}=fixture(async()=>({reply:'OK'})),c=h.chat.space('owner',true).conversation!
+ h.scopes.command({action:'scope.put',operationId:'seed',expectedRevision:0,scope:{id:'local',tenantId:'local',name:'Local',managers:[JSON.stringify(['local','operator'])],sourceIds:['local'],workerIds:[],backendIds:['codex']}})
+ const {runId}=send(h,c.id,'Remember my favorite color and remind me later'),trigger=h.store.triggers.get(runId)!
+ const context=h.scopes.context(trigger,'local:chat:'+c.id)!,e=h.memory.ingest(context)
+ const fact=h.memory.command(context,{action:'remember',operationId:'remember',expectedRevision:0,subject:'Color',content:'Blue',sourceIds:[e.id],candidate:false},true) as any
+ h.proactive.command({action:'schedule.put',scopeId:context.route.scopeId,operationId:'schedule',expectedRevision:0,schedule:{id:'reminder',name:'Reminder',triggerId:runId,prompt:'Review the plan',mode:'standalone',notification:'always',timing:{kind:'once',startAt:new Date(Date.now()+3600000).toISOString()}}},context)
+ expect(()=>h.chat.clearConversation(c.id,'owner',randomUUID(),h.chat.view(c.id,'owner').conversation.sequence)).toThrow('Finish or stop')
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ const op=randomUUID(),before=h.chat.view(c.id,'owner').conversation
+ expect(()=>h.chat.clearConversation(c.id,'owner',op,before.sequence-1)).toThrow('New messages')
+ expect(()=>h.chat.clearConversation(c.id,'other',op,before.sequence)).toThrow()
+ h.chat.clearConversation(c.id,'owner',op,before.sequence)
+ expect(h.chat.space('owner').conversation?.id).toBe(c.id)
+ expect(h.chat.view(c.id,'owner').messages).toEqual([])
+ expect(h.chat.view(c.id,'owner').run).toBeNull()
+ expect(h.memory.fact(fact.id)?.content).toBe('Blue')
+ expect(JSON.stringify(h.chat.memory(c.id,'owner'))).toContain('Blue')
+ expect(h.chat.view(c.id,'owner').schedules).toMatchObject([{id:'reminder',active:true}])
+ h.chat.changeSchedule(c.id,'owner',{id:'reminder',active:false,expectedRevision:1,operationId:randomUUID()})
+ h.chat.changeSchedule(c.id,'owner',{id:'reminder',active:true,expectedRevision:2,operationId:randomUUID()})
+ const scheduled=h.proactive.command({action:'schedule.run',scopeId:context.route.scopeId,id:'reminder',expectedRevision:3,operationId:'launch'},context) as {triggerId:string}
+ h.chat.reply('reminder-after-clear',scheduled.triggerId,'Reminder still works')
+ expect(h.chat.view(c.id,'owner').messages.at(-1)?.text).toBe('Reminder still works')
+ h.chat.reply('late-old-reply',runId,'Old context must not return')
+ expect(h.chat.view(c.id,'owner').messages.some(m=>m.text==='Old context must not return')).toBe(false)
+ const fresh=send(h,c.id,'New conversation context')
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ const latest=calls.findLast(r=>r.input.includes('New conversation context'))!
+ expect(latest.threadId).toBeUndefined()
+ expect(h.chat.history(fresh.runId).map(m=>m.text)).not.toContain('Remember my favorite color and remind me later')
+ h.chat.clearConversation(c.id,'owner',op,before.sequence)
+ expect(h.chat.view(c.id,'owner').messages.some(m=>m.text==='New conversation context')).toBe(true)
+})
+
+it.each([false,true])('compacts personal context without deleting messages, resumes with the summary, and preserves settings (scoped=%s)',async scoped=>{
+ const {h,calls}=fixture(async r=>(r.schema.properties as any)?.summary?{summary:'Goal: plan a quiet trip. Constraint: budget 500. Next: confirm dates.'}:{reply:'Noted '+JSON.parse(r.input).trigger.text})
+ if(scoped)h.scopes.command({action:'scope.put',operationId:'scope',expectedRevision:0,scope:{id:'team',tenantId:'local',name:'Team',managers:[JSON.stringify(['local','operator'])],workerIds:['research','review'],sourceIds:['local'],backendIds:['codex']}})
+ const c=h.chat.create('owner')
+ for(let i=0;i<5;i++){send(h,c.id,'Trip detail '+i+' '+('quiet trip, budget 500. '.repeat(20)));await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')}
+ const before=h.chat.view(c.id,'owner').messages
+ h.updateSettings(h.settings.current().revision,{execution:{...h.config.execution,router:{...h.config.execution.router,model:'router-updated'}}})
+ const result=await h.chat.compact(c.id,'owner') as any
+ expect(result.status).toBe('compacted')
+ expect(h.chat.view(c.id,'owner').messages).toEqual(before)
+ const summary=calls.find(r=>(r.schema.properties as any)?.summary)!
+ expect(summary.model).toBe('router-updated');expect(result.running).toBe(false)
+ expect(summary.tools).toEqual([]);expect(summary.allowNativeTools).toBe(false);expect(summary.threadId).toBeUndefined()
+ send(h,c.id,'Confirm the dates');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ const request=calls.at(-1)!
+ expect(request.threadId).toBeUndefined();expect(request.input).toContain('Next: confirm dates')
+ expect(request.input).not.toContain('Trip detail 0')
+ expect(request.input).toContain('Confirm the dates')
+ h.chat.compaction.configure('owner',{automatic:false,threshold:0.7})
+ expect(h.chat.compactionStatus(c.id,'owner').settings).toEqual({automatic:false,threshold:0.7})
+ expect(()=>h.chat.compactionStatus(c.id,'someone-else')).toThrow()
+ h.chat.clearConversation(c.id,'owner',randomUUID(),h.chat.view(c.id,'owner').conversation.sequence)
+ expect(h.chat.compactionStatus(c.id,'owner').last).toBeNull()
+})
+it('automatically compacts at measured capacity before the next turn and does not repeatedly compact an old reading',async()=>{
+ const {h,calls}=fixture(async r=>(r.schema.properties as any)?.summary?{summary:'Keep budget 500 and find dates.'}:{reply:'Acknowledged '+JSON.parse(r.input).trigger.text})
+ const c=h.chat.create('owner')
+ for(let i=0;i<4;i++){send(h,c.id,'Budget 500 '+('saved detail '.repeat(30)));await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')}
+ const reading=vi.spyOn(h.chat,'contextUsage').mockReturnValue({inputTokens:850,capacity:1000,activity:'measured',at:Date.now(),model:'router-one',composition:null,budget:null,previous:false})
+ send(h,c.id,'Choose the dates');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(h.chat.compactionStatus(c.id,'owner').last?.reason).toBe('automatic')
+ expect(calls.filter(r=>(r.schema.properties as any)?.summary)).toHaveLength(1)
+ send(h,c.id,'Use next month');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(calls.filter(r=>(r.schema.properties as any)?.summary)).toHaveLength(1)
+ reading.mockRestore()
+})
+it('retains working context when summary generation fails and refuses manual compaction during a Router turn',async()=>{
+ let fail=true
+ const {h}=fixture(async r=>{if((r.schema.properties as any)?.summary){if(fail)throw Error('Provider unavailable');return {summary:'Keep the original budget.'}}return {reply:'Acknowledged '+JSON.parse(r.input).trigger.text}})
+ const c=h.chat.create('owner')
+ send(h,c.id,'First detail')
+ await expect(h.chat.compact(c.id,'owner')).rejects.toThrow('Wait for the Router')
+ await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ for(let i=0;i<4;i++){send(h,c.id,'Budget 500 '+('detail '.repeat(30)));await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')}
+ const messages=h.chat.view(c.id,'owner').messages
+ await expect(h.chat.compact(c.id,'owner')).rejects.toThrow('Provider unavailable')
+ expect(h.chat.view(c.id,'owner').messages).toEqual(messages)
+ expect(h.chat.compactionStatus(c.id,'owner').last).toBeNull()
+ fail=false;await h.chat.compact(c.id,'owner')
+ expect(h.chat.compactionStatus(c.id,'owner').last).not.toBeNull()
+})
+it('honors the automatic switch and falls back to byte budgets when model token capacity is unavailable',async()=>{
+ const {h,calls}=fixture(async r=>(r.schema.properties as any)?.summary?{summary:'Preserve the budget and unresolved dates.'}:{reply:'Noted '+JSON.parse(r.input).trigger.text})
+ const c=h.chat.create('owner')
+ for(let i=0;i<4;i++){send(h,c.id,'Budget 500 '+('detail '.repeat(30)));await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')}
+ h.chat.compaction.configure('owner',{automatic:false,threshold:0.7})
+ const reading=vi.spyOn(h.chat,'contextUsage').mockImplementation(()=>({inputTokens:null,capacity:null,activity:'measured',at:Date.now(),model:'router-one',composition:null,budget:{bytes:7000,reservedBytes:1000,maxBytes:10000},previous:false}))
+ send(h,c.id,'Keep going');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(calls.filter(r=>(r.schema.properties as any)?.summary)).toHaveLength(0)
+ h.chat.compaction.configure('owner',{automatic:true,threshold:0.7})
+ send(h,c.id,'Choose dates');await settle(h,()=>h.chat.view(c.id,'owner').run?.state==='completed')
+ expect(calls.filter(r=>(r.schema.properties as any)?.summary)).toHaveLength(1)
+ reading.mockRestore()
+})

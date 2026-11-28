@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { realpath } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { managedWorkspacePath } from '../workspace.ts'
 import type { Runtime } from '../runtime.ts'
-import type { CodeReceipt } from '../project-code.ts'
+import { projectWorkspace, type CodeReceipt } from '../project-code.ts'
 import type { Run } from '../store.ts'
 import type { Approval } from '../approvals.ts'
 import { ChatError } from '../chat-errors.ts'
@@ -71,17 +72,15 @@ export async function terminalTask(
   if (receipt)
     return { diff: receipt.diff!.text, truncated: receipt.diff!.truncated, head: receipt.head }
   const run = host.store.get<Run>('run', ticket)
-  const expected = join(
-    host.config.stateDir,
-    'work',
-    createHash('sha256').update(ticket).digest('hex').slice(0, 20)
-  )
-  if (
-    !run ||
-    !view.conversation.project ||
-    (await realpath(run.cwd).catch(() => null)) !== (await realpath(expected).catch(() => undefined))
-  )
-    throw new ChatError('diff_unavailable', 'No isolated Git changes are available for this task.', 404)
+  const task = host.store.tickets.get(ticket)!
+  const source = host.sources.get(task.mandate.actor.source)!.config
+  const project = host.goals.forTask(ticket)?.project
+  const expected = project ? projectWorkspace(host.config.stateDir, ticket)
+    : managedWorkspacePath(host.config.stateDir, run?.workspaceId ?? ticket)
+  const root = view.conversation.project ?? source.cwd
+  if (!run || !existsSync(join(run.cwd, '.git')) ||
+    (await realpath(run.cwd).catch(() => null)) !== (await realpath(expected).catch(() => undefined)))
+    throw new ChatError('diff_unavailable', 'No Git diff is available for this Worker task. Use /files for delivered files.', 404)
   const git = async (cwd: string, args: string[]) =>
     (
       await exec('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-C', cwd, ...args], {
@@ -89,8 +88,8 @@ export async function terminalTask(
         maxBuffer: 2_000_000
       })
     ).stdout
-  const head = (await git(view.conversation.project, ['rev-parse', 'HEAD'])).trim()
-  const base = (await git(run.cwd, ['merge-base', head, 'HEAD'])).trim()
+  const head = (await git(root, ['rev-parse', 'HEAD'])).trim()
+  const base = project?.base ?? (await git(run.cwd, ['merge-base', head, 'HEAD'])).trim()
   const diff = await git(run.cwd, ['diff', '--no-ext-diff', '--no-textconv', base, '--'])
   const untracked = (await git(run.cwd, ['ls-files', '--others', '--exclude-standard', '-z']))
     .split('\0')

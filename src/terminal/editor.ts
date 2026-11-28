@@ -1,11 +1,11 @@
+import { byName } from './list-order.ts'
 import {messageCharacters} from '../execution-limits.ts'
-import { ui } from './language.ts'
 import type { CapabilitySnapshot } from '../capability-types.ts'
 import { EventEmitter } from 'node:events'
 import { emitKeypressEvents, type Key } from 'node:readline'
 import { Readable } from 'node:stream'
 import { clean, type Snapshot } from './client.ts'
-import { projectFiles, suggestions, type Suggestions } from './suggestions.ts'
+import { projectFiles, suggestions, type Suggestions, type Choice } from './suggestions.ts'
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 export type Menu = Suggestions & { selected: number }
@@ -17,6 +17,9 @@ export class TerminalEditor extends EventEmitter {
   cursor = 0
   menu?: Menu
   expanded = false
+  private pickerDraft?: { line: string; cursor: number }
+  private stashed?: { line: string; cursor: number }
+  private lastInterrupt = 0
   private library?: CapabilitySnapshot
   private libraryRead?: Promise<void>
   private libraryExpiry = 0
@@ -28,6 +31,7 @@ export class TerminalEditor extends EventEmitter {
   private historyAt = 0
   private scratch = ''
   private paste?: string[]
+  private mouse?: string
   private pastedLength = 0
   private closed = false
   private raw: boolean
@@ -44,15 +48,36 @@ export class TerminalEditor extends EventEmitter {
     emitKeypressEvents(input)
     input.setRawMode(true)
     input.on('keypress', this.keypress)
+    input.resume()
     input.once('end', this.close)
     process.once('SIGTERM', this.close)
     process.once('SIGHUP', this.close)
     process.once('SIGINT', this.close)
-    this.output.write('\x1b[?2004h')
+    this.output.write('\x1b[?2004h\x1b[?1000h\x1b[?1006h')
     this.updateMenu()
   }
   [Symbol.asyncIterator]() {
     return this.queue[Symbol.asyncIterator]() as AsyncIterableIterator<string>
+  }
+  pick(title: string, items: Choice[]) {
+    this.pickerDraft = { line: this.line, cursor: this.cursor }
+    this.line = ''
+    this.cursor = 0
+    this.choices = (query) => ({ title, start: 0, end: query.length,
+      items: items.filter(item => (item.label + ' ' + item.detail).toLowerCase().includes(query.toLowerCase())),
+      empty: 'No matches' })
+    this.updateMenu()
+    this.emit('change')
+  }
+  get picking() { return !!this.choices }
+  private dismissPicker() {
+    if (!this.pickerDraft) { this.close(); return }
+    const draft = this.pickerDraft
+    this.pickerDraft = undefined
+    this.choices = undefined
+    this.line = draft.line
+    this.cursor = draft.cursor
+    this.menu = undefined
   }
   setView(view: Snapshot) {
     this.view = view
@@ -78,7 +103,7 @@ export class TerminalEditor extends EventEmitter {
     process.off('SIGHUP', this.close)
     process.off('SIGINT', this.close)
     this.input.setRawMode(this.raw)
-    this.output.write('\x1b[?2004l')
+    this.output.write('\x1b[?1006l\x1b[?1000l\x1b[?2004l')
     this.queue.push(null)
     this.emit('close')
   }
@@ -93,6 +118,7 @@ export class TerminalEditor extends EventEmitter {
           this.view,
           this.library
         )
+    if (next && this.choices && next.title !== 'Search history') next.items = byName(next.items, item => item.label)
     const previous = this.menu?.items[this.menu.selected]?.value
     this.menu = next
       ? {
@@ -149,7 +175,7 @@ export class TerminalEditor extends EventEmitter {
   private edit(value: string, start = this.cursor, end = this.cursor) {
     const room = messageCharacters - (this.line.length - end + start)
     if (value.length > room) {
-      this.emit('notice', ui('Draft exceeds 256,000 characters.', '输入内容超过256,000 字符。'))
+      this.emit('notice', 'Draft exceeds 256,000 characters.')
       return
     }
     this.line = this.line.slice(0, start) + value + this.line.slice(end)
@@ -197,7 +223,15 @@ export class TerminalEditor extends EventEmitter {
     const menu = this.menu,
       item = menu?.items[menu.selected]
     if (this.choices) {
-      if (item && !tab) this.submit(item.value)
+      if (item && !tab) {
+        if (this.pickerDraft) {
+          this.dismissPicker()
+          if (menu?.title === 'Search history') {
+            this.line = item.value
+            this.cursor = item.value.length
+          } else this.queue.push(item.value)
+        } else this.submit(item.value)
+      }
       return
     }
     if (!tab && this.line.endsWith('\\') && this.cursor === this.line.length) {
@@ -219,6 +253,26 @@ export class TerminalEditor extends EventEmitter {
   private keypress = (text: string | undefined, key: Key) => {
     if (this.closed || !key) return
     const seq = key.sequence ?? text ?? ''
+    // readline splits SGR mouse reports into keypresses. Consume the complete
+    // report so wheel/click coordinates never become part of the draft.
+    if (!this.paste && seq === '\x1b[<') {
+      this.mouse = ''
+      return
+    }
+    if (this.mouse !== undefined) {
+      this.mouse += seq
+      if (/^[\d;]*$/.test(this.mouse)) return
+      const report = /^(\d+);\d+;\d+M$/.exec(this.mouse)
+      this.mouse = undefined
+      if (report && (Number(report[1]) & 64)) {
+        const direction = Number(report[1]) & 1 ? 1 : -1
+        if (this.menu?.items.length) {
+          this.vertical(direction)
+          this.emit('change')
+        } else this.emit('page', direction, 3)
+      }
+      return
+    }
     if (this.paste) {
       if (key.name !== 'paste-end') {
         this.pastedLength += seq.length
@@ -228,7 +282,7 @@ export class TerminalEditor extends EventEmitter {
       const parts = this.paste
       this.paste = undefined
       if (this.pastedLength > messageCharacters)
-        this.emit('notice', ui('Paste exceeds 256,000 characters.', '粘贴内容超过256,000 字符。'))
+        this.emit('notice', 'Paste exceeds 256,000 characters.')
       else this.edit(clean(parts.join('').replace(/\r\n?/g, '\n')).replace(/\t/g, '  '))
       if (!this.choices) this.menu = undefined
     } else if (key.name === 'paste-start') {
@@ -242,14 +296,30 @@ export class TerminalEditor extends EventEmitter {
     ) {
       if (!this.choices) this.edit('\n')
     } else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
-      if (this.choices) this.close()
+      if (this.choices) this.dismissPicker()
       else if (this.menu && key.name === 'escape') this.menu = undefined
-      else if (key.ctrl && this.line) this.edit('', 0, this.line.length)
-      else if (key.ctrl) this.close()
-      else this.emit('interrupt')
+      else if (this.view?.run && ['running', 'queued', 'waiting', 'cancel_requested'].includes(this.view.run.state)) this.emit('interrupt')
+      else if (key.ctrl && this.line) { this.edit('', 0, this.line.length); this.menu = undefined }
+      else if (key.ctrl) {
+        if (Date.now() - this.lastInterrupt < 1000) this.close()
+        else { this.lastInterrupt = Date.now(); this.emit('notice', 'Press Ctrl+C again to exit.') }
+      } else this.emit('interrupt')
     } else if (key.ctrl && key.name === 'd' && !this.line) this.close()
     else if (key.name === 'pageup' || key.name === 'pagedown')
       this.emit('page', key.name === 'pageup' ? -1 : 1)
+    else if (key.ctrl && key.name === 'l') this.emit('redraw')
+    else if (key.ctrl && key.name === 's' && !this.choices) {
+      if (this.stashed && !this.line) {
+        this.line = this.stashed.line; this.cursor = this.stashed.cursor; this.stashed = undefined
+      } else if (this.line) {
+        this.stashed = { line: this.line, cursor: this.cursor }; this.line = ''; this.cursor = 0
+      }
+      this.updateMenu()
+    }
+    else if (key.ctrl && key.name === 'r' && !this.choices) this.pick('Search history',
+      [...new Set(this.history)].reverse().map(value => ({label: value, detail: '', value})))
+    else if (key.meta && key.name === 'p' && !this.choices) this.queue.push('/model')
+    else if ((seq === '\x1b[Z' || key.name === 'tab' && key.shift) && !this.choices) this.queue.push('/permissions')
     else if (key.ctrl && key.name === 'o') this.expanded = !this.expanded
     else if (key.name === 'return' || key.name === 'enter' || key.name === 'tab')
       this.enter(key.name === 'tab')

@@ -8,11 +8,13 @@
     "node": ">=22.19"
   },
   "scripts": {
+    "setup:terminal-font": "node bin/install-terminal-font.mjs",
     "start": "tsx src/cli.ts",
     "verify-recovery-package": "node --import tsx/esm src/recovery-package-cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && npm run typecheck:chat && npm run typecheck:ui",
-    "check": "npm run typecheck && npm test",
+    "check": "npm run typecheck && npm test && npm run test:tui",
+    "test:tui": "bun tests/terminal-tui.ts && bun tests/terminal-attachments-tui.ts",
     "demo": "tsx examples/native-smoke.ts",
     "build:chat": "vite build --config web/chat/vite.config.ts",
     "dev:ui": "vite --config web/component-preview/vite.config.ts",
@@ -28,10 +30,12 @@
     "@ffmpeg-installer/ffmpeg": "1.1.0",
     "@larksuiteoapi/node-sdk": "1.76.0",
     "@modelcontextprotocol/sdk": "1.32.2",
+    "@opentui/core": "0.9.9",
     "@wecom/aibot-node-sdk": "1.0.7",
     "adm-zip": "0.6.1",
     "agent-browser": "0.27.0",
     "ajv": "8.20.0",
+    "bun": "1.4.5",
     "esbuild": "0.28.2",
     "jsonc-parser": "3.3.1",
     "katex": "0.19.1",
@@ -74,5 +78,8 @@
   },
   "bin": {
     "roppo": "bin/roppo.mjs"
+  },
+  "allowScripts": {
+    "bun@1.4.5": true
   }
 }

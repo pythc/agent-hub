@@ -83,7 +83,7 @@ export class RouterProactive {
     ORDER BY kind='task-routing',rowid`)
   host.routerIngress.rulesFor=t=>this.rules(t)
   host.routerIngress.ruleExecutionAllowed=ids=>ids.every(id=>host.config.rules.some(r=>r.id===id)||this.duties().some(d=>this.ruleId(d)===id&&d.mode==='auto'))
-  host.routerIngress.defer=(a,t)=>this.collect(a,t)
+  host.routerIngress.defer=(a,t)=>host.chat.planningInput(t)?false:this.collect(a,t)
   host.routerIngress.scheduledAuthority=id=>this.authority(id)
   // Older versions exhausted their eight-day search at a weekly DST gap.
   // Restore only the next future occurrence, never replay the missed week or

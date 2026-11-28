@@ -27,3 +27,6 @@ __pycache__/
 *.py[cod]
 /docs/design/
 /docs/brand/
+
+# Per-project terminal preferences.
+.roppo/settings.local.json

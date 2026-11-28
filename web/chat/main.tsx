@@ -993,6 +993,7 @@ function Chat(p: ChatProps) {
   const alive = useRef(true),
     fetchVersion = useRef(0),
     messagesRef = useRef<Snapshot["messages"]>([]),
+    contextVersionRef = useRef(0),
     restoredPending = useRef<ReturnType<typeof savedPending>>(null),
     bodyRef = useRef<HTMLDivElement>(null),
     threadRef = useRef<HTMLDivElement>(null),
@@ -1161,7 +1162,10 @@ function Chat(p: ChatProps) {
     if (oldest) query.set("decisionsFrom", String(oldest));
     const data = await api<Snapshot>("/conversations/" + id + "?"+query,undefined,"GET",signal);
     if (signal?.aborted || !alive.current || version !== fetchVersion.current) return;
-    const older = messagesRef.current.filter(
+    if (data.conversation.contextVersion < contextVersionRef.current) return;
+    const sameContext = data.conversation.contextVersion === contextVersionRef.current;
+    contextVersionRef.current = data.conversation.contextVersion;
+    const older = (sameContext ? messagesRef.current : []).filter(
       (m) => m.sequence < (data.messages[0]?.sequence ?? Infinity),
     );
     const updates=new Map((data.earlierCards??[]).map(card=>[card.id,card]));
@@ -1201,7 +1205,7 @@ function Chat(p: ChatProps) {
   },[id,accepted,readonly,around]);
   useEffect(() => {
     alive.current = true;
-    messagesRef.current=[];setLoading(!!id);setSnapshot(s=>s?{...s,messages:[]}:s);
+    messagesRef.current=[];contextVersionRef.current=0;setLoading(!!id);setSnapshot(s=>s?{...s,messages:[]}:s);
     if (!id) {
       setConnected(true);
       return () => {
@@ -1402,7 +1406,7 @@ function Chat(p: ChatProps) {
           "/messages?before=" +
           snapshot.messages[0]!.sequence + (participantFilter ? "&participant="+encodeURIComponent(participantFilter) : ""),
       );
-      if (!alive.current||version!==viewRef.current) return;
+      if (!alive.current||version!==viewRef.current||data.conversation.contextVersion!==contextVersionRef.current) return;
       const ids = new Set(messagesRef.current.map((m) => m.id));
       const messages = [
         ...data.messages.filter((m) => !ids.has(m.id)),

@@ -1,4 +1,12 @@
+import {chooseSetupTheme,withSetupPages} from './setup-welcome.ts'
+import {themeNames} from './themes.ts'
+import {saveTerminalSetting} from './settings.ts'
+import {accountSetup,configureConnection,setupClient,terminalSetupUI,SetupCancelled} from './setup.ts'
+import { loadTerminalSettings, type TerminalSettings, type OutputFormat } from './settings.ts'
+import { controlCommand } from './controls.ts'
+import { PrintEvents } from './output.ts'
 import {messageCharacters} from '../execution-limits.ts'
+import { isApprovalPending } from '../chat-workflow.ts'
 import type { CapabilitySnapshot } from '../capability-types.ts'
 import { TerminalEditor } from './editor.ts'
 import { TerminalLayout } from './presentation.ts'
@@ -12,51 +20,35 @@ import { createInterface as promptInterface } from 'node:readline/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { TerminalClient, CliError, clean, type Snapshot, type Conversation } from './client.ts'
 import { command, mentionedFiles, runResult } from './commands.ts'
-import { configureLanguage, parseLanguage, saveLanguage, ui, type Language } from './language.ts'
 
 const help = () =>
-  ui(
-    `Roppo — work with your Router and Workers from this directory.
+  `Roppo — your personal agent, shared with web Chat.
 
   roppo [prompt]                  Continue the conversation shared with web Chat
-  roppo -c                        Continue the latest conversation in this project
-  roppo -r [id]                   Choose or resume a project conversation
+  roppo -c                        Continue your personal conversation
+  roppo -r [id]                   Choose or resume a personal conversation
   roppo -p "prompt"               Print the result of one request
-  git diff | roppo -p "Review"    Send piped text with an instruction
+  cat notes.txt | roppo -p "Summarize"   Send piped text with an instruction
   roppo login | logout | init     Connect an account or start local setup
 
-  --json                         Return a single JSON result in print mode
+  --output-format FORMAT         text, json or stream-json (print mode)
+  --json                         Alias for --output-format json
+  --settings JSON_OR_FILE        Override terminal preferences for this launch
+  --theme NAME                    Terminal color theme
+  --verbose                      Expand tool activity by default
   --file PATH                    Attach a file (repeatable)
   --trust-project                Register the project on first use
   --timeout SECONDS              Wait limit for print mode (default 600)
-  --cwd DIRECTORY                Select a project directory
+  --cwd DIRECTORY                Explicit project mode (optional)
   --host URL                     Select a local Roppo instance
-  roppo lang zh | en              Save the interface language
-  --lang zh | en                  Interface language for this invocation
   --help, --version
 
-  In a conversation, type /help for tasks, diffs, tools and approvals.`,
-    `Roppo — 在终端里继续与 Router 和 Worker 对话。
-
-  roppo [消息]                 打开网页端的同一段对话，自动加载历史
-  roppo --cwd 目录             在指定项目中开始对话
-  roppo -c                     继续当前项目最近的会话
-  roppo -r [会话 ID]           选择一个已有项目会话
-  roppo -p "消息"              运行一次并输出回复，可接收管道输入
-  roppo login | logout | init  登录、退出账号或初始化本机实例
-  roppo lang zh | en           保存界面语言
-
-  --lang zh | en               仅切换此次运行的界面语言
-  --file 路径                  添加附件，可重复使用
-  --json                       输出 JSON 结果
-  --trust-project              首次使用时注册项目
-  --timeout 秒                 单次运行的等待时限（默认 600 秒）
-  --host URL                   选择本机实例
-  --help, --version            查看帮助或版本
-
-  对话中输入 /help 查看命令。`
-  )
+  In a conversation, type /help for settings, files and pending requests.`
 interface Options {
+  settings?: string
+  preferences: TerminalSettings
+  settingsSources: string[]
+  outputFormat?: OutputFormat
   print: boolean
   json: boolean
   latest: boolean
@@ -65,7 +57,6 @@ interface Options {
   timeout: number
   cwd: string
   explicitProject?: boolean
-  language?: Language
   host?: string
   files: string[]
   prompt: string
@@ -73,6 +64,8 @@ interface Options {
 }
 export function parseArgs(args: string[]): Options {
   const o: Options = {
+      preferences: {},
+      settingsSources: [],
       print: false,
       json: false,
       latest: false,
@@ -87,7 +80,7 @@ export function parseArgs(args: string[]): Options {
     const a = args[i]!,
       value = () => {
         if (i + 1 >= args.length || args[i + 1]!.startsWith('--'))
-          throw new CliError(ui('Missing value for ', '该选项缺少参数：') + a, 'usage', 2)
+          throw new CliError('Missing value for ' + a, 'usage', 2)
         return args[++i]!
       }
     if (a === '--') {
@@ -97,36 +90,48 @@ export function parseArgs(args: string[]): Options {
     if (a === '--help' || a === '-h') o.action = 'help'
     else if (a === '--version' || a === '-V') o.action = 'version'
     else if (a === '--print' || a === '-p') o.print = true
-    else if (a === '--json') o.json = true
+    else if (a === '--json') { o.json = true; o.outputFormat = 'json' }
+    else if (a === '--output-format') {
+      const format = value()
+      if (!['text', 'json', 'stream-json'].includes(format)) throw new CliError('Choose --output-format text|json|stream-json', 'usage', 2)
+      o.outputFormat = format as OutputFormat
+      o.json = format !== 'text'
+      o.print = true
+    }
+    else if (a === '--settings') o.settings = value()
+    else if (a === '--verbose') o.preferences.verbose = true
+    else if (a === '--theme') {
+      const theme = value()
+      if (!themeNames.some(name => name === theme)) throw new CliError('Choose a theme: ' + themeNames.join(', '), 'usage', 2)
+      o.preferences.theme = theme as TerminalSettings['theme']
+    }
     else if (a === '--continue' || a === '-c') o.latest = true
     else if (a === '--resume' || a === '-r')
       o.resume = args[i + 1] && !args[i + 1]!.startsWith('-') ? args[++i] : ''
     else if (a === '--trust-project') o.trust = true
-    else if (a === '--lang') o.language = parseLanguage(value())
+    else if (a === '--lang') throw new CliError('The Roppo CLI uses English. Remove --lang to continue.')
     else if (a === '--cwd') {
       o.cwd = resolve(value())
       o.explicitProject = true
     } else if (a === '--host') o.host = value()
     else if (a === '--timeout') {
       o.timeout = Number(value())
+      o.preferences.timeout = o.timeout
       if (!Number.isFinite(o.timeout) || o.timeout <= 0 || o.timeout > 86400)
         throw new CliError(
-          ui(
-            'Choose a timeout between 0 and 86400 seconds.',
-            '等待时限须大于 0 秒且不超过 86400 秒。'
-          ),
+          'Choose a timeout between 0 and 86400 seconds.',
           'usage',
           2
         )
     } else if (a === '--file') o.files.push(value())
     else if (a.startsWith('-'))
-      throw new CliError(ui('Unknown option ', '未知选项：') + a, 'usage', 2)
+      throw new CliError('Unknown option ' + a, 'usage', 2)
     else if (!words.length && !o.action && ['init', 'login', 'logout', 'lang'].includes(a))
       o.action = a
     else words.push(a)
   }
   if (o.latest && o.resume !== undefined)
-    throw new CliError(ui('Choose either -c or -r.', '-c 与 -r 只能使用一个。'), 'usage', 2)
+    throw new CliError('Choose either -c or -r.', 'usage', 2)
   o.prompt = words.join(' ')
   return o
 }
@@ -141,43 +146,41 @@ async function ask(text: string) {
 async function selectConversation(
   client: TerminalClient,
   o: Options,
-  project: string,
+  project: string | undefined,
   tty: boolean
 ) {
-  if (!o.latest && o.resume === undefined) return client.create(project)
+  if (!project && o.resume === undefined) {
+    const { conversation } = await client.request<{ conversation: Conversation }>('/api/chat/space', {})
+    return conversation
+  }
+  if (!o.latest && o.resume === undefined) return client.create(project!)
   const list = await client.list(project)
   if (!list.length)
     throw new CliError(
-      ui(
-        'No saved conversations in this project. Start one with roppo --cwd .',
-        '这个项目还没有会话，可用 roppo --cwd . 新建。'
-      )
+      'No saved conversations here. Start one with roppo.'
     )
   if (o.latest) return list[0]!
   if (o.resume) {
     const match = list.find((c) => c.id === o.resume)
     if (match) return match
-    throw new CliError(ui('Conversation not found in this project.', '这个项目中找不到该会话。'))
+    throw new CliError(project ? 'Conversation not found in this project.' : 'Personal conversation not found.')
   }
   if (!tty)
     throw new CliError(
-      ui(
-        'Pass a conversation ID with -r when running a script.',
-        '在脚本中使用 -r 时请提供会话 ID。'
-      ),
+      'Pass a conversation ID with -r when running a script.',
       'usage',
       2
     )
   if (process.env.TERM !== 'dumb') {
-    const input = new TerminalEditor(process.stdin, process.stderr, project, (query) => ({
-      title: ui('Resume conversation', '继续项目会话'),
+    const input = new TerminalEditor(process.stdin, process.stderr, project ?? o.cwd, (query) => ({
+      title: 'Resume conversation',
       start: 0,
       end: query.length,
-      empty: ui('No matching conversations', '没有匹配的会话'),
+      empty: 'No matching conversations',
       items: list
         .filter((c) => (c.title + ' ' + c.id).toLowerCase().includes(query.toLowerCase()))
         .map((c) => ({
-          label: c.title || ui('New conversation', '新会话'),
+          label: c.title || 'New conversation',
           detail: new Date(c.updatedAt).toLocaleString(),
           value: c.id,
           submit: true
@@ -202,21 +205,21 @@ async function selectConversation(
     !!process.stderr.isTTY && !process.env.NO_COLOR && process.env.TERM !== 'dumb'
   )
   const choices = [
-    ...layout.result(ui('Resume a conversation · ', '继续项目会话 · ') + basename(project))
+    ...layout.result('Resume a conversation · ' + (project ? basename(project) : 'Personal chat'))
   ]
   for (const [i, c] of list.entries()) {
     choices.push(
       ...layout.message(
-        String(i + 1) + '. ' + (c.title || ui('New conversation', '新会话')),
+        String(i + 1) + '. ' + (c.title || 'New conversation'),
         c.id,
         true
       )
     )
   }
   process.stderr.write(choices.join('\n') + '\n\n')
-  const n = Number(await ask(ui('Resume number › ', '输入会话序号 › ')))
+  const n = Number(await ask('Resume number › '))
   if (!Number.isInteger(n) || !list[n - 1])
-    throw new CliError(ui('Invalid selection.', '选择无效。'))
+    throw new CliError('Invalid selection.')
   return list[n - 1]!
 }
 const locale = () => Intl.DateTimeFormat().resolvedOptions().locale
@@ -228,32 +231,49 @@ async function printRun(client: TerminalClient, c: Conversation, o: Options) {
     o.files.map((f) => resolve(o.cwd, f)),
     locale()
   )
-  const wait = AbortSignal.timeout(Math.max(1, Math.ceil(o.timeout * 1000)))
+  const cancelled = new AbortController()
+  const wait = AbortSignal.any([cancelled.signal, AbortSignal.timeout(Math.max(1, Math.ceil(o.timeout * 1000)))])
+  let cancellation: Promise<unknown> | undefined
+  const interrupt = () => {
+    cancelled.abort()
+    cancellation ??= client.request('/api/chat/conversations/' + c.id + '/cancel', { runId: sent.runId })
+      .catch(error => process.stderr.write(clean((error as Error).message) + '\n'))
+  }
+  process.once('SIGINT', interrupt)
+  const events = o.outputFormat === 'stream-json' ? new PrintEvents(event => console.log(JSON.stringify(event))) : undefined
+  if (events) console.log(JSON.stringify({ type: 'system', subtype: 'init', conversationId: c.id, runId: sent.runId, url: client.link(c.id) }))
   let view: Snapshot | undefined
   let status = 'timeout'
-  while (!wait.aborted) {
-    try {
-      view = await client.view(c.id, sent.runId, wait)
-      if (view.run && terminalStates.includes(view.run.state)) {
-        status = view.run.state
-        break
-      }
-    } catch (error) {
-      if (
-        !wait.aborted &&
-        !(
-          error instanceof CliError &&
-          ['host_unavailable', 'configuration_restarting'].includes(error.code)
+  try {
+    while (!wait.aborted) {
+      try {
+        view = await client.view(c.id, sent.runId, wait)
+        events?.update(view, sent.runId)
+        if (view.run && terminalStates.includes(view.run.state)) {
+          status = view.run.state
+          break
+        }
+      } catch (error) {
+        if (
+          !wait.aborted &&
+          !(
+            error instanceof CliError &&
+            ['host_unavailable', 'configuration_restarting'].includes(error.code)
+          )
         )
-      )
-        throw error
+          throw error
+      }
+      await delay(600, undefined, { signal: wait }).catch(() => {})
     }
-    await delay(600, undefined, { signal: wait }).catch(() => {})
+  } finally {
+    process.off('SIGINT', interrupt)
+    await cancellation
   }
+  if (cancelled.signal.aborted) status = 'cancelled'
   const result = view
     ? runResult(view, sent.runId, status)
     : { conversationId: c.id, runId: sent.runId, status, text: '', tasks: [], deliveries: [] }
-  if (o.json) console.log(JSON.stringify({ ...result, url: client.link(c.id) }))
+  if (o.json) console.log(JSON.stringify({ ...(events ? { type: 'result' } : {}), ...result, url: client.link(c.id) }))
   else {
     if (result.text) console.log(clean(result.text))
     for (const delivery of result.deliveries)
@@ -275,6 +295,10 @@ async function printRun(client: TerminalClient, c: Conversation, o: Options) {
   }
 }
 async function interactive(client: TerminalClient, c: Conversation, o: Options) {
+  if (process.env.TERM !== 'dumb' && process.env.ROPPO_LEGACY_TUI !== '1') {
+    const { interactiveTui } = await import('./tui.ts')
+    return interactiveTui(client, c, o)
+  }
   const plain = process.env.TERM === 'dumb'
   const editor = plain
     ? undefined
@@ -291,7 +315,10 @@ async function interactive(client: TerminalClient, c: Conversation, o: Options) 
     : undefined
   const rl = editor ?? basic!
   const lines: AsyncIterable<string> = rl
-  const display = new SessionDisplay(process.stdout, rl, plain)
+  if (editor) editor.expanded = o.preferences.verbose ?? false
+  const display = new SessionDisplay(process.stdout, rl, plain, false, o.preferences.theme)
+  display.motion = o.preferences.motion ?? 'full'
+  let nextConversation: Conversation | undefined
   const stream = new AbortController()
   let stopped = false,
     buffer = '',
@@ -310,8 +337,16 @@ async function interactive(client: TerminalClient, c: Conversation, o: Options) 
   let oldest: number | undefined,
     hasOlder = false,
     loadingOlder = false
-  editor?.on('page', async (direction: number) => {
-    if (!display.scroll(direction) || !hasOlder || oldest === undefined || loadingOlder) return
+  const syncAnimation = () => {
+    const waiting = latest?.run?.state === 'waiting' || latest?.approvals.some(a => isApprovalPending(a))
+    const busy = display.sending || display.loading || !waiting && (latest?.run?.state === 'running' || latest?.run?.state === 'queued' ||
+      latest?.run?.state === 'cancel_requested' || latest?.tasks.some(t => ['queued', 'running'].includes(t.state)))
+    const animate = editor && busy && display.motion !== 'reduced'
+    if (animate && !tick) tick = setInterval(requestDraw, 150).unref()
+    if (!animate && tick) { clearInterval(tick); tick = undefined }
+  }
+  editor?.on('page', async (direction: number, lines?: number) => {
+    if (!display.scroll(direction, lines) || !hasOlder || oldest === undefined || loadingOlder) return
     const revision = display.scrollPositionRevision
     loadingOlder = true
     try {
@@ -339,22 +374,25 @@ async function interactive(client: TerminalClient, c: Conversation, o: Options) 
     latest = view
     editor?.setView(view)
     display.update(view)
-    const busy =
-      view.run?.state === 'running' ||
-      view.run?.state === 'queued' ||
-      view.tasks.some((t) => ['queued', 'running'].includes(t.state))
-    if (editor && busy && !tick) tick = setInterval(requestDraw, 150).unref()
-    if (!busy && tick) {
-      clearInterval(tick)
-      tick = undefined
-    }
+    syncAnimation()
   }
   const say = (value: string, error = false) => {
     if (!stopped) display.notice((l) => l.result(value, error))
   }
-  const send = async (text: string, files: string[] = []) =>
-    client.send(c.id, text, [...files, ...mentionedFiles(text, o.cwd)], locale())
+  const send = async (text: string, files: string[] = []) => {
+    display.sending = true
+    display.paint()
+    syncAnimation()
+    try {
+      await client.send(c.id, text, [...files, ...mentionedFiles(text, o.cwd)], locale())
+    } finally {
+      display.sending = false
+      display.paint()
+      syncAnimation()
+    }
+  }
   editor?.on('change', requestDraw)
+  editor?.on('redraw', () => display.redraw())
   editor?.on('notice', (message) => say(message, true))
   editor?.on('interrupt', async () => {
     const run = latest?.run
@@ -415,8 +453,29 @@ async function interactive(client: TerminalClient, c: Conversation, o: Options) 
       }
       try {
         if (text.startsWith('/') && !text.includes('\n')) {
-          if (!text.startsWith('/choose ') && !text.startsWith('/tools --inspect '))
+          display.loading = true
+          display.paint()
+          syncAnimation()
+          if (!['/choose ', '/tools --inspect ', '/approvals ', '/approve ', '/decline ', '/answer '].some(prefix => text.startsWith(prefix)))
             display.notice((l) => l.message('You', text, true))
+          const control = await controlCommand(client, c, text, o.cwd, o.preferences, o.settingsSources)
+          if (control) {
+            if (control.next) { nextConversation = control.next; break }
+            if (control.preferences) {
+              Object.assign(o.preferences, control.preferences)
+              if (control.preferences.theme) display.setTheme(control.preferences.theme)
+              if (control.preferences.motion) display.motion = control.preferences.motion
+              if (editor && control.preferences.verbose !== undefined) editor.expanded = control.preferences.verbose
+            }
+            if (control.menu) {
+              if (editor) editor.pick(control.menu.title, control.menu.items)
+              else say(control.menu.title + '\n' + control.menu.items.map(item => item.value + '  ' + item.label).join('\n'))
+            }
+            if (control.text && (!control.menu || !editor || text.startsWith('/model ') || text.startsWith('/approvals '))) say(control.text)
+            await refresh()
+            basic?.prompt()
+            continue
+          }
           const result = await command(client, c.id, text)
           if (result)
             display.notice((l) => (text.startsWith('/diff ') ? l.diff(result) : l.result(result)))
@@ -427,8 +486,11 @@ async function interactive(client: TerminalClient, c: Conversation, o: Options) 
       } catch (e) {
         editor?.restoreDraft(text)
         say((e as Error).message, true)
+      } finally {
+        display.loading = false
+        syncAnimation()
+        display.paint()
       }
-      display.paint()
       basic?.prompt()
     }
   } finally {
@@ -442,19 +504,14 @@ async function interactive(client: TerminalClient, c: Conversation, o: Options) 
     process.stdin.pause()
     await watch
   }
-  return 0
+  return nextConversation
 }
 export async function main(args: string[]): Promise<number> {
-  let json = args.includes('--json')
+  let json = args.includes('--json') || ['json', 'stream-json'].includes(args[args.indexOf('--output-format') + 1] ?? '')
+  let streaming = args[args.indexOf('--output-format') + 1] === 'stream-json'
   try {
-    configureLanguage()
     const o = parseArgs(args)
-    if (o.language) configureLanguage(o.language)
-    if (o.action === 'lang') {
-      saveLanguage(parseLanguage(o.prompt))
-      console.log(ui('Interface language: English', '界面语言已设为中文'))
-      return 0
-    }
+    if (o.action === 'lang') { console.log('The Roppo CLI uses English.'); return 0 }
     json = o.json
     if (o.action === 'help') {
       console.log(help())
@@ -466,30 +523,40 @@ export async function main(args: string[]): Promise<number> {
       )
       return 0
     }
+    const loaded = loadTerminalSettings(o.cwd, o.settings, o.preferences)
+    o.preferences = loaded.settings
+    o.settingsSources = loaded.sources
+    o.timeout = o.preferences.timeout ?? 600
+    o.outputFormat ??= o.preferences.outputFormat ?? 'text'
+    const session = async (conversation: Conversation): Promise<number> => {
+      let current: Conversation | undefined = conversation
+      while (current) {
+        current = await interactive(client, current, o)
+        o.prompt = ''
+        o.files = []
+      }
+      return 0
+    }
     const tty = !!(process.stdin.isTTY && process.stdout.isTTY)
+    const print = o.print || o.json || !tty
+    o.json = print && o.outputFormat !== 'text'
+    json = o.json
+    streaming = print && o.outputFormat === 'stream-json'
     const screen = tty && process.env.TERM !== 'dumb' && !o.print && !o.json
     const clearScreen = '\x1b[2J\x1b[H'
-    if (screen && o.action !== 'logout') process.stdout.write(clearScreen)
-    if (o.action === 'init') {
-      const child = spawn(fileURLToPath(new URL('../../start.sh', import.meta.url)), ['setup'], {
-        stdio: 'inherit'
-      })
-      return await new Promise<number>((resolve, reject) => {
-        child.on('error', reject)
-        child.on('exit', (code) => resolve(code ?? 1))
-      })
-    }
-    const client = new TerminalClient(o.host)
+    if (screen && process.env.ROPPO_LEGACY_TUI === '1' && o.action !== 'logout') process.stdout.write(clearScreen)
+    if (o.action === 'init' && !tty) throw new CliError('Run roppo init in an interactive terminal.','usage',2)
+    const dialog = !print || o.action === 'init' ? terminalSetupUI() : undefined
+    const client = dialog ? await setupClient(o.host,dialog) : new TerminalClient(o.host)
     if (o.action === 'login') {
       await client.login()
-      process.stderr.write(ui('Connected to ', '已连接 ') + client.base + '\n')
+      process.stderr.write('Connected to ' + client.base + '\n')
       return 0
     }
     if (o.action === 'logout') {
       await client.logout()
       return 0
     }
-    const print = o.print || o.json || !tty
     if (print && !process.stdin.isTTY) {
       let bytes = 0
       const chunks: Buffer[] = []
@@ -497,7 +564,7 @@ export async function main(args: string[]): Promise<number> {
         bytes += chunk.length
         if (bytes > messageCharacters * 4)
           throw new CliError(
-            ui('Input exceeds 256,000 characters.', '输入内容超过256,000 字符。'),
+            'Input exceeds 256,000 characters.',
             'usage',
             2
           )
@@ -508,40 +575,44 @@ export async function main(args: string[]): Promise<number> {
     }
     if (o.prompt.length > messageCharacters || (print && !o.prompt && !o.files.length))
       throw new CliError(
-        ui(
-          'Provide a prompt or file (up to 256,000 characters).',
-          '请提供消息或文件，消息最多256,000 字符。'
-        ),
+        'Provide a prompt or file (up to 256,000 characters).',
         'usage',
         2
       )
     const needsLogin = !client.signedIn && !print
-    if (needsLogin) await client.login()
-    if (!print && !o.explicitProject && !o.trust && !o.latest && o.resume === undefined) {
+    if (dialog) {
+      const needsConnection = o.action === 'init' || needsLogin ||
+        !(await client.request<{ready:boolean}>('/api/terminal/setup')).ready
+      if (needsConnection) await withSetupPages(dialog,o.preferences,async pages => {
+        await accountSetup(client,pages)
+        if (o.action === 'init' || !needsLogin || !(await client.request<{ready:boolean}>('/api/terminal/setup')).ready)
+          await configureConnection(client,pages)
+      })
+      if (!loaded.hasTheme) {
+        const appearance = await chooseSetupTheme(dialog,o.preferences)
+        for (const [key,value] of Object.entries(appearance)) saveTerminalSetting(o.cwd,key,String(value))
+        Object.assign(o.preferences,appearance)
+      }
+      if (o.action === 'init') return 0
+    }
+    if (!o.explicitProject && !o.trust) {
       if (screen && needsLogin) process.stdout.write(clearScreen)
-      const { conversation } = await client.request<{ conversation: Conversation }>(
-        '/api/chat/space',
-        {}
-      )
-      return await interactive(client, conversation, o)
+      const conversation = await selectConversation(client, o, undefined, tty && !print)
+      if (!conversation) return 0
+      if (o.resume !== undefined) await client.request('/api/terminal/session', { id: conversation.id })
+      return print ? await printRun(client, conversation, o) : await session(conversation)
     }
     const project = await client.project(o.cwd, o.trust)
     if (!project.registered) {
       if (print)
         throw new CliError(
-          ui(
-            'First use of this project. Run roppo --cwd . or pass --trust-project.',
-            '项目尚未注册，请先运行 roppo --cwd . 或使用 --trust-project。'
-          ),
+          'First use of this project. Run roppo --cwd . or pass --trust-project.',
           'project_trust_required'
         )
       if (
         !/^y(es)?$/i.test(
           await ask(
-            ui(
-              'Register ' + project.cwd + ' with ' + project.sandbox + ' access? [y/N] ',
-              '以 ' + project.sandbox + ' 权限注册 ' + project.cwd + '？[y/N] '
-            )
+            ('Register ' + project.cwd + ' with ' + project.sandbox + ' access? [y/N] ')
           )
         )
       )
@@ -551,12 +622,14 @@ export async function main(args: string[]): Promise<number> {
     if (screen && (needsLogin || !project.registered)) process.stdout.write(clearScreen)
     const c = await selectConversation(client, o, project.cwd, tty && !print)
     if (!c) return 0
-    return print ? await printRun(client, c, o) : await interactive(client, c, o)
+    return print ? await printRun(client, c, o) : await session(c)
   } catch (e) {
+    if (e instanceof SetupCancelled) { process.stderr.write(e.message+'\n'); return 0 }
     const err = e as Error
     if (json)
       console.log(
         JSON.stringify({
+          ...(streaming ? { type: 'result' } : {}),
           status: 'error',
           code: e instanceof CliError ? e.code : 'cli_error',
           error: err.message
